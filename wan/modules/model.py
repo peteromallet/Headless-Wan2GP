@@ -6,6 +6,8 @@ import torch.cuda.amp as amp
 import torch.nn as nn
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
+import numpy as np
+from typing import Union,Optional
 
 from .attention import pay_attention
 
@@ -25,7 +27,49 @@ def sinusoidal_embedding_1d(dim, position):
     return x
 
 
-# @amp.autocast(enabled=False)
+
+
+def identify_k( b: float, d: int, N: int):
+    """
+    This function identifies the index of the intrinsic frequency component in a RoPE-based pre-trained diffusion transformer.
+
+    Args:
+        b (`float`): The base frequency for RoPE.
+        d (`int`): Dimension of the frequency tensor
+        N (`int`): the first observed repetition frame in latent space
+    Returns:
+        k (`int`): the index of intrinsic frequency component
+        N_k (`int`): the period of intrinsic frequency component in latent space
+    Example:
+        In HunyuanVideo, b=256 and d=16, the repetition occurs approximately 8s (N=48 in latent space).
+        k, N_k = identify_k(b=256, d=16, N=48)
+        In this case, the intrinsic frequency index k is 4, and the period N_k is 50.
+    """
+
+    # Compute the period of each frequency in RoPE according to Eq.(4)
+    periods = []
+    for j in range(1, d // 2 + 1):
+        theta_j = 1.0 / (b ** (2 * (j - 1) / d))
+        N_j = round(2 * torch.pi / theta_j)
+        periods.append(N_j)
+
+    # Identify the intrinsic frequency whose period is closed to N（see Eq.(7)）
+    diffs = [abs(N_j - N) for N_j in periods]
+    k = diffs.index(min(diffs)) + 1
+    N_k = periods[k-1]
+    return k, N_k
+
+def rope_params_riflex(max_seq_len, dim, theta=10000, L_test=30, k=6):
+    assert dim % 2 == 0
+    exponents = torch.arange(0, dim, 2, dtype=torch.float64).div(dim)
+    inv_theta_pow = 1.0 / torch.pow(theta, exponents)
+    
+    inv_theta_pow[k-1] = 0.9 * 2 * torch.pi / L_test
+        
+    freqs = torch.outer(torch.arange(max_seq_len), inv_theta_pow)
+    freqs = torch.polar(torch.ones_like(freqs), freqs)
+    return freqs
+
 def rope_params(max_seq_len, dim, theta=10000):
     assert dim % 2 == 0
     freqs = torch.outer(
@@ -588,20 +632,35 @@ class WanModel(ModelMixin, ConfigMixin):
         self.head = Head(dim, out_dim, patch_size, eps)
 
         # buffers (don't use register_buffer otherwise dtype will be changed in to())
-        assert (dim % num_heads) == 0 and (dim // num_heads) % 2 == 0
-        d = dim // num_heads
-        self.freqs = torch.cat([    
-            rope_params(1024, d - 4 * (d // 6)),
-            rope_params(1024, 2 * (d // 6)),
-            rope_params(1024, 2 * (d // 6))
-        ],
-                               dim=1)
 
         if model_type == 'i2v':
             self.img_emb = MLPProj(1280, dim)
 
         # initialize weights
         self.init_weights()
+
+
+        # self.freqs = torch.cat([    
+        #     rope_params(1024, d - 4 * (d // 6)), #44
+        #     rope_params(1024, 2 * (d // 6)), #42
+        #     rope_params(1024, 2 * (d // 6)) #42
+        # ],dim=1)
+
+
+    def get_rope_freqs(self, nb_latent_frames, RIFLEx_k = None):
+        dim = self.dim
+        num_heads = self.num_heads 
+        d = dim // num_heads
+        assert (dim % num_heads) == 0 and (dim // num_heads) % 2 == 0
+
+        
+        freqs = torch.cat([    
+            rope_params_riflex(1024, dim= d - 4 * (d // 6), L_test=nb_latent_frames, k = RIFLEx_k ), #44
+            rope_params(1024, 2 * (d // 6)), #42
+            rope_params(1024, 2 * (d // 6)) #42
+        ],dim=1)
+
+        return freqs
 
     def forward(
         self,
@@ -611,6 +670,7 @@ class WanModel(ModelMixin, ConfigMixin):
         seq_len,
         clip_fea=None,
         y=None,
+        freqs = None,
         pipeline = None,
     ):
         r"""
@@ -638,8 +698,8 @@ class WanModel(ModelMixin, ConfigMixin):
             assert clip_fea is not None and y is not None
         # params
         device = self.patch_embedding.weight.device
-        if self.freqs.device != device:
-            self.freqs = self.freqs.to(device)
+        if freqs.device != device:
+            freqs = freqs.to(device)
 
         if y is not None:
             x = [torch.cat([u, v], dim=0) for u, v in zip(x, y)]
@@ -683,7 +743,7 @@ class WanModel(ModelMixin, ConfigMixin):
             e=e0,
             seq_lens=seq_lens,
             grid_sizes=grid_sizes,
-            freqs=self.freqs,
+            freqs=freqs,
             context=context,
             context_lens=context_lens)
 

@@ -143,7 +143,9 @@ class WanI2V:
                 n_prompt="",
                 seed=-1,
                 offload_model=True,
-                callback = None         
+                callback = None,
+                enable_RIFLEx = False
+        
                 ):
         r"""
         Generates video frames from input image and text prompt using diffusion process.
@@ -262,104 +264,107 @@ class WanI2V:
         no_sync = getattr(self.model, 'no_sync', noop_no_sync)
 
         # evaluation mode
-        with amp.autocast(dtype=self.param_dtype), torch.no_grad(), no_sync():
 
-            if sample_solver == 'unipc':
-                sample_scheduler = FlowUniPCMultistepScheduler(
-                    num_train_timesteps=self.num_train_timesteps,
-                    shift=1,
-                    use_dynamic_shifting=False)
-                sample_scheduler.set_timesteps(
-                    sampling_steps, device=self.device, shift=shift)
-                timesteps = sample_scheduler.timesteps
-            elif sample_solver == 'dpm++':
-                sample_scheduler = FlowDPMSolverMultistepScheduler(
-                    num_train_timesteps=self.num_train_timesteps,
-                    shift=1,
-                    use_dynamic_shifting=False)
-                sampling_sigmas = get_sampling_sigmas(sampling_steps, shift)
-                timesteps, _ = retrieve_timesteps(
-                    sample_scheduler,
-                    device=self.device,
-                    sigmas=sampling_sigmas)
-            else:
-                raise NotImplementedError("Unsupported solver.")
+        if sample_solver == 'unipc':
+            sample_scheduler = FlowUniPCMultistepScheduler(
+                num_train_timesteps=self.num_train_timesteps,
+                shift=1,
+                use_dynamic_shifting=False)
+            sample_scheduler.set_timesteps(
+                sampling_steps, device=self.device, shift=shift)
+            timesteps = sample_scheduler.timesteps
+        elif sample_solver == 'dpm++':
+            sample_scheduler = FlowDPMSolverMultistepScheduler(
+                num_train_timesteps=self.num_train_timesteps,
+                shift=1,
+                use_dynamic_shifting=False)
+            sampling_sigmas = get_sampling_sigmas(sampling_steps, shift)
+            timesteps, _ = retrieve_timesteps(
+                sample_scheduler,
+                device=self.device,
+                sigmas=sampling_sigmas)
+        else:
+            raise NotImplementedError("Unsupported solver.")
 
-            # sample videos
-            latent = noise
+        # sample videos
+        latent = noise
 
-            arg_c = {
-                'context': [context[0]],
-                'clip_fea': clip_context,
-                'seq_len': max_seq_len,
-                'y': [y],
-                'pipeline' : self
-            }
+        freqs = self.model.get_rope_freqs(nb_latent_frames = int((frame_num - 1)/4 + 1), RIFLEx_k = 4 if enable_RIFLEx else None )
 
-            arg_null = {
-                'context': context_null,
-                'clip_fea': clip_context,
-                'seq_len': max_seq_len,
-                'y': [y],
-                'pipeline' : self
-            }
+        arg_c = {
+            'context': [context[0]],
+            'clip_fea': clip_context,
+            'seq_len': max_seq_len,
+            'y': [y],
+            'freqs' : freqs,
+            'pipeline' : self
+        }
 
+        arg_null = {
+            'context': context_null,
+            'clip_fea': clip_context,
+            'seq_len': max_seq_len,
+            'y': [y],
+            'freqs' : freqs,
+            'pipeline' : self
+        }
+
+        if offload_model:
+            torch.cuda.empty_cache()
+
+        # self.model.to(self.device)
+        if callback != None:
+            callback(-1, None)
+
+        self._interrupt = False
+        for i, t in enumerate(tqdm(timesteps)):
+            latent_model_input = [latent.to(self.device)]
+            timestep = [t]
+
+            timestep = torch.stack(timestep).to(self.device)
+
+            noise_pred_cond = self.model(
+                latent_model_input, t=timestep, **arg_c)[0]
+            if self._interrupt:
+                return None                
             if offload_model:
                 torch.cuda.empty_cache()
-
-            # self.model.to(self.device)
-            if callback != None:
-                callback(-1, None)
-
-            self._interrupt = False
-            for i, t in enumerate(tqdm(timesteps)):
-                latent_model_input = [latent.to(self.device)]
-                timestep = [t]
-
-                timestep = torch.stack(timestep).to(self.device)
-
-                noise_pred_cond = self.model(
-                    latent_model_input, t=timestep, **arg_c)[0]
-                if self._interrupt:
-                    return None                
-                if offload_model:
-                    torch.cuda.empty_cache()
-                noise_pred_uncond = self.model(
-                    latent_model_input, t=timestep, **arg_null)[0]
-                if self._interrupt:
-                    return None                
-                del latent_model_input
-                if offload_model:
-                    torch.cuda.empty_cache()
-                noise_pred = noise_pred_uncond + guide_scale * (
-                    noise_pred_cond - noise_pred_uncond)
-                del noise_pred_uncond
-
-                latent = latent.to(
-                    torch.device('cpu') if offload_model else self.device)
-
-                temp_x0 = sample_scheduler.step(
-                    noise_pred.unsqueeze(0),
-                    t,
-                    latent.unsqueeze(0),
-                    return_dict=False,
-                    generator=seed_g)[0]
-                latent = temp_x0.squeeze(0)
-                del temp_x0
-                del timestep
-
-                if callback is not None:
-                    callback(i, latent)         
-
-
-            x0 = [latent.to(self.device)]
-
+            noise_pred_uncond = self.model(
+                latent_model_input, t=timestep, **arg_null)[0]
+            if self._interrupt:
+                return None                
+            del latent_model_input
             if offload_model:
-                self.model.cpu()
                 torch.cuda.empty_cache()
+            noise_pred = noise_pred_uncond + guide_scale * (
+                noise_pred_cond - noise_pred_uncond)
+            del noise_pred_uncond
 
-            if self.rank == 0:
-                videos = self.vae.decode(x0)
+            latent = latent.to(
+                torch.device('cpu') if offload_model else self.device)
+
+            temp_x0 = sample_scheduler.step(
+                noise_pred.unsqueeze(0),
+                t,
+                latent.unsqueeze(0),
+                return_dict=False,
+                generator=seed_g)[0]
+            latent = temp_x0.squeeze(0)
+            del temp_x0
+            del timestep
+
+            if callback is not None:
+                callback(i, latent)         
+
+
+        x0 = [latent.to(self.device)]
+
+        if offload_model:
+            self.model.cpu()
+            torch.cuda.empty_cache()
+
+        if self.rank == 0:
+            videos = self.vae.decode(x0)
 
         del noise, latent
         del sample_scheduler

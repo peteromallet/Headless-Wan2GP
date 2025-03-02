@@ -288,7 +288,7 @@ if __name__ == '__main__':
     # resolution = '720P'
     resolution = '480P'
 
-    load_model(resolution)
+    load_i2v_model(resolution)
 
     print("Step1: Init prompt_expander...", end='', flush=True)
     if args.prompt_extend_method == "dashscope":

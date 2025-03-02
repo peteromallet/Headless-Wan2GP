@@ -19,7 +19,8 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 
 ## 🔥 Latest News!!
 
-* Mar 03, 2025: 👋 Wan2.1GP DeepBeepMeep out of this World version ! Reduced memory consumption by 2, with possiblity to generate more than 10s of video at 720p
+* Mar 03, 2025: 👋 Wan2.1GP by DeepBeepMeep brings: Reduced memory consumption by 2, with possiblity to generate more than 10s of video at 720p with a RTX 4090 and 10s of video at 480p with less than 12GB of VRAM. Many thanks to REFLEx (https://github.com/thu-ml/RIFLEx) for their algorithm that allows generating nice looking video longer than 5s.
+
 * Feb 25, 2025: 👋 We've released the inference code and weights of Wan2.1.
 * Feb 27, 2025: 👋 Wan2.1 has been integrated into [ComfyUI](https://comfyanonymous.github.io/ComfyUI_examples/wan/). Enjoy!
 
@@ -35,7 +36,6 @@ This version has the following improvements over the original Alibaba model:
 - Improved gradio interface with progression bar and more options
 - Multiples prompts / multiple generations per prompt
 - Support multiple pretrained Loras with 32 GB of RAM or less
-- Switch easily between Hunyuan and Fast Hunyuan models and quantized / non quantized models
 - Much simpler installation
 
 
@@ -105,9 +105,27 @@ pip install https://github.com/deepbeepmeep/SageAttention/raw/refs/heads/main/re
 ## Run the application
 
 ### Run a Gradio Server on port 7860 (recommended)
+
+To run the text to video generator (in Low VRAM mode): 
 ```bash
 python gradio_server.py
+#or
+python gradio_server.py --t2v
+
 ```
+
+To run the image to video generator (in Low VRAM mode): 
+```bash
+python gradio_server.py --i2v
+```
+
+Within the application you can configure which video generator will be launched without specifying a command line switch.
+
+To run the application while loading entirely the diffusion model in VRAM (slightly faster but requires 24 GB of VRAM for a 8 bits quantized 14B model )
+```bash
+python gradio_server.py --profile 3
+```
+Please note that diffusion model of Wan2.1GP is extremely VRAM optimized and this will greatly benefit low VRAM systems since the diffusion / denoising step is the longest part of the generation process. However, the VAE encoder (at the beginning of a image 2 video process) and the VAE decoder (at the end of any video process) is only 20% lighter and it will require temporarly 22 GB of VRAM for a 720p generation and 12 GB of VRAM for a 480p generation. Therefore if you have less than these numbers, you may experience slow down at the begining and at the end of the generation process due to pytorch VRAM offloading.
 
 
 ### Loras support
@@ -131,7 +149,8 @@ You will find prebuilt Loras on https://civitai.com/ or you will be able to buil
 
 
 ### Command line parameters for Gradio Server
---profile no : default (4) : no of profile between 1 and 5\
+--i2v : launch the image to video generator\
+--t2v : launch the text to video generator\
 --quantize-transformer bool: (default True) : enable / disable on the fly transformer quantization\
 --lora-dir path : Path of directory that contains Loras in diffusers / safetensor format\
 --lora-preset preset : name of preset gile (without the extension) to preload
@@ -141,6 +160,7 @@ You will find prebuilt Loras on https://civitai.com/ or you will be able to buil
 --open-browser : open automatically Browser when launching Gradio Server\
 --compile : turn on pytorch compilation\
 --attention mode: force attention mode among, sdpa, flash, sage, sage2\
+--profile no : default (4) : no of profile between 1 and 5\
 
 ### Profiles (for power users only)
 You can choose between 5 profiles, these will try to leverage the most your hardware, but have little impact for HunyuanVideo GP:

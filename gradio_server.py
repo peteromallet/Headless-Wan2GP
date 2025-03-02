@@ -18,6 +18,8 @@ from wan.utils.utils import cache_video
 from wan.modules.attention import get_attention_modes
 import torch
 import gc
+import traceback
+
 
 def _parse_args():
     parser = argparse.ArgumentParser(
@@ -752,7 +754,7 @@ def generate_video(
     state["in_progress"] = True
     state["selected"] = 0
  
-    enable_riflex = RIFLEx_setting == 0 and video_length > (5* 24) or RIFLEx_setting == 1
+    enable_RIFLEx = RIFLEx_setting == 0 and video_length > (5* 16) or RIFLEx_setting == 1
     # VAE Tiling
     device_mem_capacity = torch.cuda.get_device_properties(0).total_memory / 1048576
 
@@ -810,7 +812,8 @@ def generate_video(
                         n_prompt=negative_prompt,
                         seed=seed,
                         offload_model=False,
-                        callback=callback
+                        callback=callback,
+                        enable_RIFLEx = enable_RIFLEx
                     )
 
                 else:
@@ -824,9 +827,10 @@ def generate_video(
                         n_prompt=negative_prompt,
                         seed=seed,
                         offload_model=False,
-                        callback=callback
+                        callback=callback,
+                        enable_RIFLEx = enable_RIFLEx
                     )
-            except:
+            except Exception as e:
                 gen_in_progress = False
                 if temp_filename!= None and  os.path.isfile(temp_filename):
                     os.remove(temp_filename)
@@ -838,7 +842,21 @@ def generate_video(
 
                 gc.collect()
                 torch.cuda.empty_cache()
-                raise gr.Error("The generation of the video has encountered an error: it is likely that you have unsufficient VRAM and you should therefore reduce the video resolution or its number of frames.")
+                s = str(e)
+                keyword_list = ["vram", "VRAM", "memory", "triton", "cuda", "allocat"]
+                VRAM_crash= False
+                if any( keyword in s for keyword in keyword_list):
+                    VRAM_crash = True
+                else:
+                    stack = traceback.extract_stack(f=None, limit=5)
+                    for frame in stack:
+                        if any( keyword in frame.name for keyword in keyword_list):
+                            VRAM_crash = True
+                            break
+                if VRAM_crash:
+                    raise gr.Error("The generation of the video has encountered an error: it is likely that you have unsufficient VRAM and you should therefore reduce the video resolution or its number of frames.")
+                else:
+                    raise gr.Error(f"The generation of the video has encountered an error, please check your terminal for more information. '{s}'")
 
 
             if samples != None:
@@ -949,7 +967,7 @@ def create_demo():
         else:
             gr.Markdown("<div align=center><H1>Wan 2.1<SUP>GP</SUP> v1 - AI Text To Video Generator (<A HREF='https://github.com/deepbeepmeep/Wan2GP'>Updates</A> / <A HREF='https://github.com/Wan-Video/Wan2.1'>Original by Alibaba</A>)</H1></div>")
 
-        gr.Markdown("<FONT SIZE=3>With this first release of Wan 2.1GP by <B>DeepBeepMeep</B> the VRAM requirements have been divided by more than 2 with no quality loss</FONT>")
+        gr.Markdown("<FONT SIZE=3>With this first release of Wan 2.1GP by <B>DeepBeepMeep</B>, the VRAM requirements have been divided by more than 2 with no quality loss</FONT>")
 
         if use_image2video  and False:
             pass
@@ -959,7 +977,7 @@ def create_demo():
             gr.Markdown("- 848 x 480 with the 1.3B model: 80 frames (5s) : 5 GB of VRAM")
             gr.Markdown("- 1280 x 720 with a 14B model: 192 frames (8s): 11 GB of VRAM")
             gr.Markdown("Note that the VAE stages (encoding / decoding at image2video ) or just the decoding at text2video will create a temporary VRAM peak (up to 12GB for 420P and 22 GB for 720P)")
-
+            gr.Markdown("It is not recommmended to generate a video longer than 8s even if there is still some VRAM left as some artifact may appear")
         gr.Markdown("Please note that if your turn on compilation, the first generation step of the first video generation will be slow due to the compilation. Therefore all your tests should be done with compilation turned off.")
 
 
@@ -1092,25 +1110,37 @@ def create_demo():
 
                     
                 with gr.Row():
-                    resolution = gr.Dropdown(
-                        choices=[
-                            # 720p
-                            ("1280x720 (16:9, 720p)", "1280x720"),
-                            ("720x1280 (9:16, 720p)", "720x1280"), 
-                            ("1024x1024 (4:3, 720p, T2V only)", "1024x024"),
-                            # ("832x1104 (3:4, 720p)", "832x1104"),
-                            # ("960x960 (1:1, 720p)", "960x960"),
-                            # 480p
-                            # ("960x544 (16:9, 480p)", "960x544"),
-                            ("832x480 (16:9, 480p)", "832x480"),
-                            ("480x832 (9:16, 480p)", "480x832"),
-                            # ("832x624 (4:3, 540p)", "832x624"), 
-                            # ("624x832 (3:4, 540p)", "624x832"),
-                            # ("720x720 (1:1, 540p)", "720x720"),
-                        ],
-                        value="832x480",
-                        label="Resolution"
-                    )
+                    if use_image2video:
+                        resolution = gr.Dropdown(
+                            choices=[
+                                # 720p
+                                ("720p", "1280x720"),
+                                ("480p", "832x480"),
+                            ],
+                            value="832x480",
+                            label="Resolution (video will have the same height / width ratio than the original image)"
+                        )
+
+                    else:
+                        resolution = gr.Dropdown(
+                            choices=[
+                                # 720p
+                                ("1280x720 (16:9, 720p)", "1280x720"),
+                                ("720x1280 (9:16, 720p)", "720x1280"), 
+                                ("1024x1024 (4:3, 720p)", "1024x024"),
+                                # ("832x1104 (3:4, 720p)", "832x1104"),
+                                # ("960x960 (1:1, 720p)", "960x960"),
+                                # 480p
+                                # ("960x544 (16:9, 480p)", "960x544"),
+                                ("832x480 (16:9, 480p)", "832x480"),
+                                ("480x832 (9:16, 480p)", "480x832"),
+                                # ("832x624 (4:3, 540p)", "832x624"), 
+                                # ("624x832 (3:4, 540p)", "624x832"),
+                                # ("720x720 (1:1, 540p)", "720x720"),
+                            ],
+                            value="832x480",
+                            label="Resolution"
+                        )
 
                 with gr.Row():
                     with gr.Column():
@@ -1125,7 +1155,7 @@ def create_demo():
                 with gr.Row(visible= len(loras)>0):
                     lset_choices = [ (preset, preset) for preset in loras_presets ] + [(new_preset_msg, "")]
                     with gr.Column(scale=5):
-                        lset_name = gr.Dropdown(show_label=False, allow_custom_value= True, scale=5, filterable=False, choices= lset_choices, value=default_lora_preset)
+                        lset_name = gr.Dropdown(show_label=False, allow_custom_value= True, scale=5, filterable=True, choices= lset_choices, value=default_lora_preset)
                     with gr.Column(scale=1):
                         # with gr.Column():
                         with gr.Row(height=17):
