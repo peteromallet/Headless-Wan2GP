@@ -35,6 +35,8 @@ class WanT2V:
         dit_fsdp=False,
         use_usp=False,
         t5_cpu=False,
+        model_filename = None,
+        text_encoder_filename = None
     ):
         r"""
         Initializes the Wan text-to-video generation model components.
@@ -70,18 +72,26 @@ class WanT2V:
             text_len=config.text_len,
             dtype=config.t5_dtype,
             device=torch.device('cpu'),
-            checkpoint_path=os.path.join(checkpoint_dir, config.t5_checkpoint),
+            checkpoint_path=text_encoder_filename,
             tokenizer_path=os.path.join(checkpoint_dir, config.t5_tokenizer),
             shard_fn=shard_fn if t5_fsdp else None)
 
         self.vae_stride = config.vae_stride
         self.patch_size = config.patch_size
+
+        
         self.vae = WanVAE(
             vae_pth=os.path.join(checkpoint_dir, config.vae_checkpoint),
             device=self.device)
 
-        logging.info(f"Creating WanModel from {checkpoint_dir}")
-        self.model = WanModel.from_pretrained(checkpoint_dir)
+        logging.info(f"Creating WanModel from {model_filename}")
+        from mmgp import offload
+
+
+        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel)
+
+
+
         self.model.eval().requires_grad_(False)
 
         if use_usp:
@@ -98,12 +108,12 @@ class WanT2V:
         else:
             self.sp_size = 1
 
-        if dist.is_initialized():
-            dist.barrier()
-        if dit_fsdp:
-            self.model = shard_fn(self.model)
-        else:
-            self.model.to(self.device)
+        # if dist.is_initialized():
+        #     dist.barrier()
+        # if dit_fsdp:
+        #     self.model = shard_fn(self.model)
+        # else:
+        #     self.model.to(self.device)
 
         self.sample_neg_prompt = config.sample_neg_prompt
 
@@ -117,7 +127,9 @@ class WanT2V:
                  guide_scale=5.0,
                  n_prompt="",
                  seed=-1,
-                 offload_model=True):
+                 offload_model=True,
+                 callback = None
+                 ):
         r"""
         Generates video frames from text prompt using diffusion process.
 
@@ -168,7 +180,7 @@ class WanT2V:
         seed_g.manual_seed(seed)
 
         if not self.t5_cpu:
-            self.text_encoder.model.to(self.device)
+            # self.text_encoder.model.to(self.device)
             context = self.text_encoder([input_prompt], self.device)
             context_null = self.text_encoder([n_prompt], self.device)
             if offload_model:
@@ -223,23 +235,32 @@ class WanT2V:
             # sample videos
             latents = noise
 
-            arg_c = {'context': context, 'seq_len': seq_len}
-            arg_null = {'context': context_null, 'seq_len': seq_len}
+            arg_c = {'context': context, 'seq_len': seq_len, 'pipeline': self}
+            arg_null = {'context': context_null, 'seq_len': seq_len, 'pipeline': self}
 
-            for _, t in enumerate(tqdm(timesteps)):
+            if callback != None:
+                callback(-1, None)
+            self._interrupt = False
+            for i, t in enumerate(tqdm(timesteps)):
                 latent_model_input = latents
                 timestep = [t]
 
                 timestep = torch.stack(timestep)
 
-                self.model.to(self.device)
+                # self.model.to(self.device)
                 noise_pred_cond = self.model(
                     latent_model_input, t=timestep, **arg_c)[0]
+                if self._interrupt:
+                    return None               
                 noise_pred_uncond = self.model(
                     latent_model_input, t=timestep, **arg_null)[0]
+                if self._interrupt:
+                    return None
 
+                del latent_model_input
                 noise_pred = noise_pred_uncond + guide_scale * (
                     noise_pred_cond - noise_pred_uncond)
+                del noise_pred_uncond
 
                 temp_x0 = sample_scheduler.step(
                     noise_pred.unsqueeze(0),
@@ -248,6 +269,10 @@ class WanT2V:
                     return_dict=False,
                     generator=seed_g)[0]
                 latents = [temp_x0.squeeze(0)]
+                del temp_x0
+
+                if callback is not None:
+                    callback(i, latents)         
 
             x0 = latents
             if offload_model:
@@ -255,6 +280,7 @@ class WanT2V:
                 torch.cuda.empty_cache()
             if self.rank == 0:
                 videos = self.vae.decode(x0)
+
 
         del noise, latents
         del sample_scheduler

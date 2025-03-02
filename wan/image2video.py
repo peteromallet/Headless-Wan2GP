@@ -39,6 +39,9 @@ class WanI2V:
         use_usp=False,
         t5_cpu=False,
         init_on_cpu=True,
+        i2v720p= True,
+        model_filename ="",
+        text_encoder_filename="",
     ):
         r"""
         Initializes the image-to-video generation model components.
@@ -77,7 +80,7 @@ class WanI2V:
             text_len=config.text_len,
             dtype=config.t5_dtype,
             device=torch.device('cpu'),
-            checkpoint_path=os.path.join(checkpoint_dir, config.t5_checkpoint),
+            checkpoint_path=text_encoder_filename,
             tokenizer_path=os.path.join(checkpoint_dir, config.t5_tokenizer),
             shard_fn=shard_fn if t5_fsdp else None,
         )
@@ -95,8 +98,10 @@ class WanI2V:
                                          config.clip_checkpoint),
             tokenizer_path=os.path.join(checkpoint_dir, config.clip_tokenizer))
 
-        logging.info(f"Creating WanModel from {checkpoint_dir}")
-        self.model = WanModel.from_pretrained(checkpoint_dir)
+        logging.info(f"Creating WanModel from {model_filename}")
+        from mmgp import offload
+
+        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel)
         self.model.eval().requires_grad_(False)
 
         if t5_fsdp or dit_fsdp or use_usp:
@@ -116,28 +121,30 @@ class WanI2V:
         else:
             self.sp_size = 1
 
-        if dist.is_initialized():
-            dist.barrier()
-        if dit_fsdp:
-            self.model = shard_fn(self.model)
-        else:
-            if not init_on_cpu:
-                self.model.to(self.device)
+        # if dist.is_initialized():
+        #     dist.barrier()
+        # if dit_fsdp:
+        #     self.model = shard_fn(self.model)
+        # else:
+        #     if not init_on_cpu:
+        #         self.model.to(self.device)
 
         self.sample_neg_prompt = config.sample_neg_prompt
 
     def generate(self,
-                 input_prompt,
-                 img,
-                 max_area=720 * 1280,
-                 frame_num=81,
-                 shift=5.0,
-                 sample_solver='unipc',
-                 sampling_steps=40,
-                 guide_scale=5.0,
-                 n_prompt="",
-                 seed=-1,
-                 offload_model=True):
+                input_prompt,
+                img,
+                max_area=720 * 1280,
+                frame_num=81,
+                shift=5.0,
+                sample_solver='unipc',
+                sampling_steps=40,
+                guide_scale=5.0,
+                n_prompt="",
+                seed=-1,
+                offload_model=True,
+                callback = None         
+                ):
         r"""
         Generates video frames from input image and text prompt using diffusion process.
 
@@ -197,14 +204,14 @@ class WanI2V:
         seed_g.manual_seed(seed)
         noise = torch.randn(
             16,
-            21,
+            int((frame_num - 1)/4 + 1), #21,
             lat_h,
             lat_w,
             dtype=torch.float32,
             generator=seed_g,
             device=self.device)
 
-        msk = torch.ones(1, 81, lat_h, lat_w, device=self.device)
+        msk = torch.ones(1, frame_num, lat_h, lat_w, device=self.device)
         msk[:, 1:] = 0
         msk = torch.concat([
             torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]
@@ -218,7 +225,7 @@ class WanI2V:
 
         # preprocess
         if not self.t5_cpu:
-            self.text_encoder.model.to(self.device)
+            # self.text_encoder.model.to(self.device)
             context = self.text_encoder([input_prompt], self.device)
             context_null = self.text_encoder([n_prompt], self.device)
             if offload_model:
@@ -229,20 +236,23 @@ class WanI2V:
             context = [t.to(self.device) for t in context]
             context_null = [t.to(self.device) for t in context_null]
 
-        self.clip.model.to(self.device)
+        # self.clip.model.to(self.device)
         clip_context = self.clip.visual([img[:, None, :, :]])
         if offload_model:
             self.clip.model.cpu()
 
-        y = self.vae.encode([
-            torch.concat([
-                torch.nn.functional.interpolate(
-                    img[None].cpu(), size=(h, w), mode='bicubic').transpose(
-                        0, 1),
-                torch.zeros(3, 80, h, w)
-            ],
-                         dim=1).to(self.device)
-        ])[0]
+        from mmgp import offload
+
+        offload.last_offload_obj.unload_all()
+        enc= torch.concat([
+            torch.nn.functional.interpolate(
+                img[None].cpu(), size=(h, w), mode='bicubic').transpose(
+                    0, 1).to(torch.bfloat16),
+            torch.zeros(3, frame_num-1, h, w, device="cpu", dtype= torch.bfloat16)
+        ], dim=1).to(self.device)
+        # enc = None
+
+        y = self.vae.encode([enc])[0]
         y = torch.concat([msk, y])
 
         @contextmanager
@@ -283,6 +293,7 @@ class WanI2V:
                 'clip_fea': clip_context,
                 'seq_len': max_seq_len,
                 'y': [y],
+                'pipeline' : self
             }
 
             arg_null = {
@@ -290,30 +301,39 @@ class WanI2V:
                 'clip_fea': clip_context,
                 'seq_len': max_seq_len,
                 'y': [y],
+                'pipeline' : self
             }
 
             if offload_model:
                 torch.cuda.empty_cache()
 
-            self.model.to(self.device)
-            for _, t in enumerate(tqdm(timesteps)):
+            # self.model.to(self.device)
+            if callback != None:
+                callback(-1, None)
+
+            self._interrupt = False
+            for i, t in enumerate(tqdm(timesteps)):
                 latent_model_input = [latent.to(self.device)]
                 timestep = [t]
 
                 timestep = torch.stack(timestep).to(self.device)
 
                 noise_pred_cond = self.model(
-                    latent_model_input, t=timestep, **arg_c)[0].to(
-                        torch.device('cpu') if offload_model else self.device)
+                    latent_model_input, t=timestep, **arg_c)[0]
+                if self._interrupt:
+                    return None                
                 if offload_model:
                     torch.cuda.empty_cache()
                 noise_pred_uncond = self.model(
-                    latent_model_input, t=timestep, **arg_null)[0].to(
-                        torch.device('cpu') if offload_model else self.device)
+                    latent_model_input, t=timestep, **arg_null)[0]
+                if self._interrupt:
+                    return None                
+                del latent_model_input
                 if offload_model:
                     torch.cuda.empty_cache()
                 noise_pred = noise_pred_uncond + guide_scale * (
                     noise_pred_cond - noise_pred_uncond)
+                del noise_pred_uncond
 
                 latent = latent.to(
                     torch.device('cpu') if offload_model else self.device)
@@ -325,9 +345,14 @@ class WanI2V:
                     return_dict=False,
                     generator=seed_g)[0]
                 latent = temp_x0.squeeze(0)
+                del temp_x0
+                del timestep
 
-                x0 = [latent.to(self.device)]
-                del latent_model_input, timestep
+                if callback is not None:
+                    callback(i, latent)         
+
+
+            x0 = [latent.to(self.device)]
 
             if offload_model:
                 self.model.cpu()

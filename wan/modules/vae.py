@@ -1,6 +1,6 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import logging
-
+from mmgp import offload
 import torch
 import torch.cuda.amp as amp
 import torch.nn as nn
@@ -31,9 +31,16 @@ class CausalConv3d(nn.Conv3d):
             cache_x = cache_x.to(x.device)
             x = torch.cat([cache_x, x], dim=2)
             padding[4] -= cache_x.shape[2]
+            cache_x = None
         x = F.pad(x, padding)
+        x = super().forward(x)
 
-        return super().forward(x)
+        mem_threshold = offload.shared_state.get("_vae_threshold",0)
+        vae_config = offload.shared_state.get("_vae",1)
+        
+        if vae_config == 0  and torch.cuda.memory_reserved()  > mem_threshold  or vae_config == 2:  
+            torch.cuda.empty_cache()
+        return x
 
 
 class RMS_norm(nn.Module):
@@ -49,10 +56,11 @@ class RMS_norm(nn.Module):
         self.bias = nn.Parameter(torch.zeros(shape)) if bias else 0.
 
     def forward(self, x):
-        return F.normalize(
+        x = F.normalize(
             x, dim=(1 if self.channel_first else
                     -1)) * self.scale * self.gamma + self.bias
-
+        x = x.to(torch.bfloat16)
+        return x 
 
 class Upsample(nn.Upsample):
 
@@ -107,11 +115,12 @@ class Resample(nn.Module):
                     feat_cache[idx] = 'Rep'
                     feat_idx[0] += 1
                 else:
-
-                    cache_x = x[:, :, -CACHE_T:, :, :].clone()
+                    clone = True
+                    cache_x = x[:, :, -CACHE_T:, :, :]#.clone()
                     if cache_x.shape[2] < 2 and feat_cache[
                             idx] is not None and feat_cache[idx] != 'Rep':
                         # cache last frame of last two chunk
+                        clone = False
                         cache_x = torch.cat([
                             feat_cache[idx][:, :, -1, :, :].unsqueeze(2).to(
                                 cache_x.device), cache_x
@@ -119,11 +128,14 @@ class Resample(nn.Module):
                                             dim=2)
                     if cache_x.shape[2] < 2 and feat_cache[
                             idx] is not None and feat_cache[idx] == 'Rep':
+                        clone = False
                         cache_x = torch.cat([
                             torch.zeros_like(cache_x).to(cache_x.device),
                             cache_x
                         ],
                                             dim=2)
+                    if clone:
+                        cache_x = cache_x.clone()
                     if feat_cache[idx] == 'Rep':
                         x = self.time_conv(x)
                     else:
@@ -144,7 +156,7 @@ class Resample(nn.Module):
             if feat_cache is not None:
                 idx = feat_idx[0]
                 if feat_cache[idx] is None:
-                    feat_cache[idx] = x.clone()
+                    feat_cache[idx] = x #.to("cpu") #x.clone() yyyy
                     feat_idx[0] += 1
                 else:
 
@@ -155,7 +167,7 @@ class Resample(nn.Module):
 
                     x = self.time_conv(
                         torch.cat([feat_cache[idx][:, :, -1:, :, :], x], 2))
-                    feat_cache[idx] = cache_x
+                    feat_cache[idx] = cache_x#.to("cpu") #yyyyy
                     feat_idx[0] += 1
         return x
 
@@ -212,11 +224,11 @@ class ResidualBlock(nn.Module):
                             cache_x.device), cache_x
                     ],
                                         dim=2)
-                x = layer(x, feat_cache[idx])
-                feat_cache[idx] = cache_x
+                x = layer(x, feat_cache[idx]).to(torch.bfloat16)
+                feat_cache[idx] = cache_x#.to("cpu")
                 feat_idx[0] += 1
             else:
-                x = layer(x)
+                x = layer(x).to(torch.bfloat16)
         return x + h
 
 
@@ -326,11 +338,15 @@ class Encoder3d(nn.Module):
                         cache_x.device), cache_x
                 ],
                                     dim=2)
-            x = self.conv1(x, feat_cache[idx])
+            x = self.conv1(x, feat_cache[idx]).to(torch.bfloat16)
             feat_cache[idx] = cache_x
+            del cache_x
             feat_idx[0] += 1
         else:
             x = self.conv1(x)
+
+
+        # torch.cuda.empty_cache()
 
         ## downsamples
         for layer in self.downsamples:
@@ -339,12 +355,16 @@ class Encoder3d(nn.Module):
             else:
                 x = layer(x)
 
+        # torch.cuda.empty_cache()
+
         ## middle
         for layer in self.middle:
             if isinstance(layer, ResidualBlock) and feat_cache is not None:
                 x = layer(x, feat_cache, feat_idx)
             else:
                 x = layer(x)
+
+        # torch.cuda.empty_cache()
 
         ## head
         for layer in self.head:
@@ -360,9 +380,13 @@ class Encoder3d(nn.Module):
                                         dim=2)
                 x = layer(x, feat_cache[idx])
                 feat_cache[idx] = cache_x
+                del cache_x
                 feat_idx[0] += 1
             else:
                 x = layer(x)
+
+        # torch.cuda.empty_cache()
+
         return x
 
 
@@ -433,10 +457,12 @@ class Decoder3d(nn.Module):
                 ],
                                     dim=2)
             x = self.conv1(x, feat_cache[idx])
-            feat_cache[idx] = cache_x
+            feat_cache[idx] = cache_x#.to("cpu")
+            del cache_x
             feat_idx[0] += 1
         else:
             x = self.conv1(x)
+        cache_x = None
 
         ## middle
         for layer in self.middle:
@@ -456,7 +482,7 @@ class Decoder3d(nn.Module):
         for layer in self.head:
             if isinstance(layer, CausalConv3d) and feat_cache is not None:
                 idx = feat_idx[0]
-                cache_x = x[:, :, -CACHE_T:, :, :].clone()
+                cache_x = x[:, :, -CACHE_T:, :, :] .clone()
                 if cache_x.shape[2] < 2 and feat_cache[idx] is not None:
                     # cache last frame of last two chunk
                     cache_x = torch.cat([
@@ -465,7 +491,8 @@ class Decoder3d(nn.Module):
                     ],
                                         dim=2)
                 x = layer(x, feat_cache[idx])
-                feat_cache[idx] = cache_x
+                feat_cache[idx] = cache_x#.to("cpu")
+                del cache_x
                 feat_idx[0] += 1
             else:
                 x = layer(x)
@@ -532,6 +559,8 @@ class WanVAE_(nn.Module):
                     feat_cache=self._enc_feat_map,
                     feat_idx=self._enc_conv_idx)
                 out = torch.cat([out, out_], 2)
+
+
         mu, log_var = self.conv1(out).chunk(2, dim=1)
         if isinstance(scale[0], torch.Tensor):
             mu = (mu - scale[0].view(1, self.z_dim, 1, 1, 1)) * scale[1].view(

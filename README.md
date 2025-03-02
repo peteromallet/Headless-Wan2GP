@@ -27,378 +27,159 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 
 ## 🔥 Latest News!!
 
+* Mar 03, 2025: Wan2.1GP DeepBeepMeep out of this World version ! Reduced memory consumption by 2, with possiblity to generate more than 10s of video at 720p
 * Feb 25, 2025: 👋 We've released the inference code and weights of Wan2.1.
 * Feb 27, 2025: 👋 Wan2.1 has been integrated into [ComfyUI](https://comfyanonymous.github.io/ComfyUI_examples/wan/). Enjoy!
 
 
-## 📑 Todo List
-- Wan2.1 Text-to-Video
-    - [x] Multi-GPU Inference code of the 14B and 1.3B models
-    - [x] Checkpoints of the 14B and 1.3B models
-    - [x] Gradio demo
-    - [x] ComfyUI integration
-    - [ ] Diffusers integration
-- Wan2.1 Image-to-Video
-    - [x] Multi-GPU Inference code of the 14B model
-    - [x] Checkpoints of the 14B model
-    - [x] Gradio demo
-    - [X] ComfyUI integration
-    - [ ] Diffusers integration
-    
+## Features
+*GPU Poor version by **DeepBeepMeep**. This great video generator can now run smoothly on any GPU.*
+
+This version has the following improvements over the original Hunyuan Video model:
+- Reduce greatly the RAM requirements and VRAM requirements
+- Much faster thanks to compilation and fast loading / unloading
+- 5 profiles in order to able to run the model at a decent speed on a low end consumer config (32 GB of RAM and 12 VRAM) and to run it at a very good speed on a high end consumer config (48 GB of RAM and 24 GB of VRAM)
+- Autodownloading of the needed model files
+- Improved gradio interface with progression bar and more options
+- Multiples prompts / multiple generations per prompt
+- Support multiple pretrained Loras with 32 GB of RAM or less
+- Switch easily between Hunyuan and Fast Hunyuan models and quantized / non quantized models
+- Much simpler installation
 
 
-## Quickstart
 
-#### Installation
-Clone the repo:
-```
-git clone https://github.com/Wan-Video/Wan2.1.git
-cd Wan2.1
-```
+This fork by DeepBeepMeep is an integration of the mmpg module on the gradio_server.py.
 
-Install dependencies:
-```
-# Ensure torch >= 2.4.0
-pip install -r requirements.txt
-```
+It is an illustration on how one can set up on an existing model some fast and properly working CPU offloading with changing only a few lines of code in the core model.
+
+For more information on how to use the mmpg module, please go to: https://github.com/deepbeepmeep/mmgp
+
+You will find the original Hunyuan Video repository here: https://github.com/deepbeepmeep/Wan2GP
+ 
 
 
-#### Model Download
+## Installation Guide for Linux and Windows
 
-| Models        |                       Download Link                                           |    Notes                      |
-| --------------|-------------------------------------------------------------------------------|-------------------------------|
-| T2V-14B       |      🤗 [Huggingface](https://huggingface.co/Wan-AI/Wan2.1-T2V-14B)      🤖 [ModelScope](https://www.modelscope.cn/models/Wan-AI/Wan2.1-T2V-14B)          | Supports both 480P and 720P
-| I2V-14B-720P  |      🤗 [Huggingface](https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-720P)    🤖 [ModelScope](https://www.modelscope.cn/models/Wan-AI/Wan2.1-I2V-14B-720P)     | Supports 720P
-| I2V-14B-480P  |      🤗 [Huggingface](https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P)    🤖 [ModelScope](https://www.modelscope.cn/models/Wan-AI/Wan2.1-I2V-14B-480P)      | Supports 480P
-| T2V-1.3B      |      🤗 [Huggingface](https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B)     🤖 [ModelScope](https://www.modelscope.cn/models/Wan-AI/Wan2.1-T2V-1.3B)         | Supports 480P
+We provide an `environment.yml` file for setting up a Conda environment.
+Conda's installation instructions are available [here](https://docs.anaconda.com/free/miniconda/index.html).
 
-> 💡Note: The 1.3B model is capable of generating videos at 720P resolution. However, due to limited training at this resolution, the results are generally less stable compared to 480P. For optimal performance, we recommend using 480P resolution.
+This app has been tested on Python 3.10 / 2.6.0  / Cuda 12.4.\
 
+```shell
+# 1 - conda. Prepare and activate a conda environment
+conda env create -f environment.yml
+conda activate Wan2
 
-Download models using huggingface-cli:
-```
-pip install "huggingface_hub[cli]"
-huggingface-cli download Wan-AI/Wan2.1-T2V-14B --local-dir ./Wan2.1-T2V-14B
-```
+# OR
 
-Download models using modelscope-cli:
-```
-pip install modelscope
-modelscope download Wan-AI/Wan2.1-T2V-14B --local_dir ./Wan2.1-T2V-14B
-```
-#### Run Text-to-Video Generation
-
-This repository supports two Text-to-Video models (1.3B and 14B) and two resolutions (480P and 720P). The parameters and configurations for these models are as follows:
-
-<table>
-    <thead>
-        <tr>
-            <th rowspan="2">Task</th>
-            <th colspan="2">Resolution</th>
-            <th rowspan="2">Model</th>
-        </tr>
-        <tr>
-            <th>480P</th>
-            <th>720P</th>
-        </tr>
-    </thead>
-    <tbody>
-        <tr>
-            <td>t2v-14B</td>
-            <td style="color: green;">✔️</td>
-            <td style="color: green;">✔️</td>
-            <td>Wan2.1-T2V-14B</td>
-        </tr>
-        <tr>
-            <td>t2v-1.3B</td>
-            <td style="color: green;">✔️</td>
-            <td style="color: red;">❌</td>
-            <td>Wan2.1-T2V-1.3B</td>
-        </tr>
-    </tbody>
-</table>
+# 1 - venv. Alternatively create a python 3.10 venv and then do the following
+pip install torch==2.6.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/test/cu124  
 
 
-##### (1) Without Prompt Extention
+# 2. Install pip dependencies
+python -m pip install -r requirements.txt
 
-To facilitate implementation, we will start with a basic version of the inference process that skips the [prompt extension](#2-using-prompt-extention) step.
+# 3.1 optional Sage attention support (30% faster, easy to install on Linux but much harder on Windows)
+python -m pip install sageattention==1.0.6 
 
-- Single-GPU inference
+# or for Sage Attention 2 (40% faster, sorry only manual compilation for the moment)
+git pull https://github.com/thu-ml/SageAttention
+cd sageattention 
+pip install -e .
+
+# 3.2 optional Flash attention support (easy to install on Linux but much harder on Windows)
+python -m pip install flash-attn==2.7.2.post1
+
+
+
 
 ```
-python generate.py  --task t2v-14B --size 1280*720 --ckpt_dir ./Wan2.1-T2V-14B --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
+
+Note that *Flash attention* and *Sage attention* are quite complex to install on Windows but offers a better memory management (and consequently longer videos) than the default *sdpa attention*.
+Likewise *Pytorch Compilation* will work on Windows only if you manage to install Triton. It is quite a complex process (see below for links).
+
+### Ready to use python wheels for Windows users
+I provide here links to simplify the installation for Windows users with Python 3.10 / Pytorch 2.51 / Cuda 12.4. As I am not hosting these files I won't be able to provide support neither guarantee they do what they should do.
+- Triton attention (needed for *pytorch compilation* and *Sage attention*)
+```
+pip install https://github.com/woct0rdho/triton-windows/releases/download/v3.2.0-windows.post9/triton-3.2.0-cp310-cp310-win_amd64.whl # triton for pytorch 2.6.0
 ```
 
-If you encounter OOM (Out-of-Memory) issues, you can use the `--offload_model True` and `--t5_cpu` options to reduce GPU memory usage. For example, on an RTX 4090 GPU:
-
+- Sage attention
 ```
-python generate.py  --task t2v-1.3B --size 832*480 --ckpt_dir ./Wan2.1-T2V-1.3B --offload_model True --t5_cpu --sample_shift 8 --sample_guide_scale 6 --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
+pip install https://github.com/deepbeepmeep/SageAttention/raw/refs/heads/main/releases/sageattention-2.1.0-cp310-cp310-win_amd64.whl # for pytorch 2.6.0 (experimental, if it works, otherwise you you will need to install and compile manually, see above) 
+ 
 ```
 
-> 💡Note: If you are using the `T2V-1.3B` model, we recommend setting the parameter `--sample_guide_scale 6`. The `--sample_shift parameter` can be adjusted within the range of 8 to 12 based on the performance.
+## Run the application
 
-
-- Multi-GPU inference using FSDP + xDiT USP
-
-```
-pip install "xfuser>=0.4.1"
-torchrun --nproc_per_node=8 generate.py --task t2v-14B --size 1280*720 --ckpt_dir ./Wan2.1-T2V-14B --dit_fsdp --t5_fsdp --ulysses_size 8 --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
+### Run a Gradio Server on port 7860 (recommended)
+```bash
+python gradio_server.py
 ```
 
 
-##### (2) Using Prompt Extention
+### Loras support
 
-Extending the prompts can effectively enrich the details in the generated videos, further enhancing the video quality. Therefore, we recommend enabling prompt extension. We provide the following two methods for prompt extension:
+-- Ready to be used but theorical as no lora for Wan have been released as today. 
 
-- Use the Dashscope API for extension.
-  - Apply for a `dashscope.api_key` in advance ([EN](https://www.alibabacloud.com/help/en/model-studio/getting-started/first-api-call-to-qwen) | [CN](https://help.aliyun.com/zh/model-studio/getting-started/first-api-call-to-qwen)).
-  - Configure the environment variable `DASH_API_KEY` to specify the Dashscope API key. For users of Alibaba Cloud's international site, you also need to set the environment variable `DASH_API_URL` to 'https://dashscope-intl.aliyuncs.com/api/v1'. For more detailed instructions, please refer to the [dashscope document](https://www.alibabacloud.com/help/en/model-studio/developer-reference/use-qwen-by-calling-api?spm=a2c63.p38356.0.i1).
-  - Use the `qwen-plus` model for text-to-video tasks and `qwen-vl-max` for image-to-video tasks.
-  - You can modify the model used for extension with the parameter `--prompt_extend_model`. For example:
-```
-DASH_API_KEY=your_key python generate.py  --task t2v-14B --size 1280*720 --ckpt_dir ./Wan2.1-T2V-14B --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage" --use_prompt_extend --prompt_extend_method 'dashscope' --prompt_extend_target_lang 'ch'
-```
+Every lora stored in the subfoler 'loras' will be automatically loaded. You will be then able to activate / desactive any of them when running the application.
 
-- Using a local model for extension.
+For each activated Lora, you may specify a *multiplier* that is one float number that corresponds to its weight (default is 1.0), alternatively you may specify a list of floats multipliers separated by a "," that gives the evolution of this Lora's multiplier over the steps. For instance let's assume there are 30 denoising steps and the multiplier is *0.9,0.8,0.7* then for the steps ranges 0-9, 10-19 and 20-29 the Lora multiplier will be respectively 0.9, 0.8 and 0.7.
 
-  - By default, the Qwen model on HuggingFace is used for this extension. Users can choose Qwen models or other models based on the available GPU memory size.
-  - For text-to-video tasks, you can use models like `Qwen/Qwen2.5-14B-Instruct`, `Qwen/Qwen2.5-7B-Instruct` and `Qwen/Qwen2.5-3B-Instruct`.
-  - For image-to-video tasks, you can use models like `Qwen/Qwen2.5-VL-7B-Instruct` and `Qwen/Qwen2.5-VL-3B-Instruct`.
-  - Larger models generally provide better extension results but require more GPU memory.
-  - You can modify the model used for extension with the parameter `--prompt_extend_model` , allowing you to specify either a local model path or a Hugging Face model. For example:
+You can edit, save or delete Loras presets (combinations of loras with their corresponding multipliers) directly from the gradio interface. Each preset, is a file with ".lset" extension stored in the loras directory and can be shared with other users
 
-```
-python generate.py  --task t2v-14B --size 1280*720 --ckpt_dir ./Wan2.1-T2V-14B --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage" --use_prompt_extend --prompt_extend_method 'local_qwen' --prompt_extend_target_lang 'ch'
+Then you can pre activate loras corresponding to a preset when launching the gradio server:
+```bash
+python gradio_server.py --lora-preset  mylorapreset.lset # where 'mylorapreset.lset' is a preset stored in the 'loras' folder
 ```
 
-##### (3) Runing local gradio
+Please note that command line parameters *--lora-weight* and *--lora-multiplier* have been deprecated since they are redundant with presets.
 
-```
-cd gradio
-# if one uses dashscope’s API for prompt extension
-DASH_API_KEY=your_key python t2v_14B_singleGPU.py --prompt_extend_method 'dashscope' --ckpt_dir ./Wan2.1-T2V-14B
+You will find prebuilt Loras on https://civitai.com/ or you will be able to build them with tools such as kohya or onetrainer.
 
-# if one uses a local model for prompt extension
-python t2v_14B_singleGPU.py --prompt_extend_method 'local_qwen' --ckpt_dir ./Wan2.1-T2V-14B
-```
 
+### Command line parameters for Gradio Server
+--profile no : default (4) : no of profile between 1 and 5\
+--quantize-transformer bool: (default True) : enable / disable on the fly transformer quantization\
+--lora-dir path : Path of directory that contains Loras in diffusers / safetensor format\
+--lora-preset preset : name of preset gile (without the extension) to preload
+--verbose level : default (1) : level of information between 0 and 2\
+--server-port portno : default (7860) : Gradio port no\
+--server-name name : default (0.0.0.0) : Gradio server name\
+--open-browser : open automatically Browser when launching Gradio Server\
+--compile : turn on pytorch compilation\
+--attention mode: force attention mode among, sdpa, flash, sage, sage2\
 
-#### Run Image-to-Video Generation
+### Profiles (for power users only)
+You can choose between 5 profiles, these will try to leverage the most your hardware, but have little impact for HunyuanVideo GP:
+- HighRAM_HighVRAM  (1):  the fastest well suited for a RTX 3090 / RTX 4090 but consumes much more VRAM, adapted for fast shorter video
+- HighRAM_LowVRAM  (2): a bit slower, better suited for RTX 3070/3080/4070/4080 or for RTX 3090 / RTX 4090 with large pictures batches or long videos
+- LowRAM_HighVRAM  (3): adapted for RTX 3090 / RTX 4090 with limited RAM  but at the cost of VRAM (shorter videos)
+- LowRAM_LowVRAM  (4): if you have little VRAM or want to generate longer videos 
+- VerylowRAM_LowVRAM  (5): at least 24 GB of RAM and 10 GB of VRAM : if you don't have much it won't be fast but maybe it will work
 
-Similar to Text-to-Video, Image-to-Video is also divided into processes with and without the prompt extension step. The specific parameters and their corresponding settings are as follows:
-<table>
-    <thead>
-        <tr>
-            <th rowspan="2">Task</th>
-            <th colspan="2">Resolution</th>
-            <th rowspan="2">Model</th>
-        </tr>
-        <tr>
-            <th>480P</th>
-            <th>720P</th>
-        </tr>
-    </thead>
-    <tbody>
-        <tr>
-            <td>i2v-14B</td>
-            <td style="color: green;">❌</td>
-            <td style="color: green;">✔️</td>
-            <td>Wan2.1-I2V-14B-720P</td>
-        </tr>
-        <tr>
-            <td>i2v-14B</td>
-            <td style="color: green;">✔️</td>
-            <td style="color: red;">❌</td>
-            <td>Wan2.1-T2V-14B-480P</td>
-        </tr>
-    </tbody>
-</table>
+Profile 2 (High RAM) and 4 (Low RAM)are the most recommended profiles since they are versatile (support for long videos for a slight performance cost).\
+However, a safe approach is to start from profile 5 (default profile) and then go down progressively to profile 4 and then to profile 2 as long as the app remains responsive or doesn't trigger any out of memory error.
 
+### Other Models for the GPU Poor
 
-##### (1) Without Prompt Extention
+- HuanyuanVideoGP: https://github.com/deepbeepmeep/HunyuanVideoGP :\
+One of the best open source Text to Video generator
 
-- Single-GPU inference
-```
-python generate.py --task i2v-14B --size 1280*720 --ckpt_dir ./Wan2.1-I2V-14B-720P --image examples/i2v_input.JPG --prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
-```
+- Hunyuan3D-2GP: https://github.com/deepbeepmeep/Hunyuan3D-2GP :\
+A great image to 3D and text to 3D tool by the Tencent team. Thanks to mmgp it can run with less than 6 GB of VRAM
 
-> 💡For the Image-to-Video task, the `size` parameter represents the area of the generated video, with the aspect ratio following that of the original input image.
+- FluxFillGP: https://github.com/deepbeepmeep/FluxFillGP :\
+One of the best inpainting / outpainting tools based on Flux that can run with less than 12 GB of VRAM.
 
+- Cosmos1GP: https://github.com/deepbeepmeep/Cosmos1GP :\
+This application include two models: a text to world generator and a image / video to world (probably the best open source image to video generator).
 
-- Multi-GPU inference using FSDP + xDiT USP
+- OminiControlGP: https://github.com/deepbeepmeep/OminiControlGP :\
+A Flux derived application very powerful that can be used to transfer an object of your choice in a prompted scene. With mmgp you can run it with only 6 GB of VRAM.
 
-```
-pip install "xfuser>=0.4.1"
-torchrun --nproc_per_node=8 generate.py --task i2v-14B --size 1280*720 --ckpt_dir ./Wan2.1-I2V-14B-720P --image examples/i2v_input.JPG --dit_fsdp --t5_fsdp --ulysses_size 8 --prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
-```
+- YuE GP: https://github.com/deepbeepmeep/YuEGP :\
+A great song generator (instruments + singer's voice) based on prompted Lyrics and a genre description. Thanks to mmgp you can run it with less than 10 GB of VRAM without waiting forever.
 
-##### (2) Using Prompt Extention
 
-
-The process of prompt extension can be referenced [here](#2-using-prompt-extention).
-
-Run with local prompt extention using `Qwen/Qwen2.5-VL-7B-Instruct`:
-```
-python generate.py --task i2v-14B --size 1280*720 --ckpt_dir ./Wan2.1-I2V-14B-720P --image examples/i2v_input.JPG --use_prompt_extend --prompt_extend_model Qwen/Qwen2.5-VL-7B-Instruct --prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
-```
-
-Run with remote prompt extention using `dashscope`:
-```
-DASH_API_KEY=your_key python generate.py --task i2v-14B --size 1280*720 --ckpt_dir ./Wan2.1-I2V-14B-720P --image examples/i2v_input.JPG --use_prompt_extend --prompt_extend_method 'dashscope' --prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
-```
-
-##### (3) Runing local gradio
-
-```
-cd gradio
-# if one only uses 480P model in gradio
-DASH_API_KEY=your_key python i2v_14B_singleGPU.py --prompt_extend_method 'dashscope' --ckpt_dir_480p ./Wan2.1-I2V-14B-480P
-
-# if one only uses 720P model in gradio
-DASH_API_KEY=your_key python i2v_14B_singleGPU.py --prompt_extend_method 'dashscope' --ckpt_dir_720p ./Wan2.1-I2V-14B-720P
-
-# if one uses both 480P and 720P models in gradio
-DASH_API_KEY=your_key python i2v_14B_singleGPU.py --prompt_extend_method 'dashscope' --ckpt_dir_480p ./Wan2.1-I2V-14B-480P --ckpt_dir_720p ./Wan2.1-I2V-14B-720P
-```
-
-
-#### Run Text-to-Image Generation
-
-Wan2.1 is a unified model for both image and video generation. Since it was trained on both types of data, it can also generate images. The command for generating images is similar to video generation, as follows:
-
-##### (1) Without Prompt Extention
-
-- Single-GPU inference
-```
-python generate.py --task t2i-14B --size 1024*1024 --ckpt_dir ./Wan2.1-T2V-14B  --prompt '一个朴素端庄的美人'
-```
-
-- Multi-GPU inference using FSDP + xDiT USP
-
-```
-torchrun --nproc_per_node=8 generate.py --dit_fsdp --t5_fsdp --ulysses_size 8 --base_seed 0 --frame_num 1 --task t2i-14B  --size 1024*1024 --prompt '一个朴素端庄的美人' --ckpt_dir ./Wan2.1-T2V-14B
-```
-
-##### (2) With Prompt Extention
-
-- Single-GPU inference
-```
-python generate.py --task t2i-14B --size 1024*1024 --ckpt_dir ./Wan2.1-T2V-14B  --prompt '一个朴素端庄的美人' --use_prompt_extend
-```
-
-- Multi-GPU inference using FSDP + xDiT USP
-```
-torchrun --nproc_per_node=8 generate.py --dit_fsdp --t5_fsdp --ulysses_size 8 --base_seed 0 --frame_num 1 --task t2i-14B  --size 1024*1024 --ckpt_dir ./Wan2.1-T2V-14B --prompt '一个朴素端庄的美人' --use_prompt_extend
-```
-
-
-## Manual Evaluation
-
-##### (1) Text-to-Video Evaluation
-
-Through manual evaluation, the results generated after prompt extension are superior to those from both closed-source and open-source models.
-
-<div align="center">
-    <img src="assets/t2v_res.jpg" alt="" style="width: 80%;" />
-</div>
-
-
-##### (2) Image-to-Video Evaluation
-
-We also conducted extensive manual evaluations to evaluate the performance of the Image-to-Video model, and the results are presented in the table below. The results clearly indicate that **Wan2.1** outperforms both closed-source and open-source models.
-
-<div align="center">
-    <img src="assets/i2v_res.png" alt="" style="width: 80%;" />
-</div>
-
-
-## Computational Efficiency on Different GPUs
-
-We test the computational efficiency of different **Wan2.1** models on different GPUs in the following table. The results are presented in the format: **Total time (s) / peak GPU memory (GB)**.
-
-
-<div align="center">
-    <img src="assets/comp_effic.png" alt="" style="width: 80%;" />
-</div>
-
-> The parameter settings for the tests presented in this table are as follows:
-> (1) For the 1.3B model on 8 GPUs, set `--ring_size 8` and `--ulysses_size 1`;
-> (2) For the 14B model on 1 GPU, use `--offload_model True`;
-> (3) For the 1.3B model on a single 4090 GPU, set `--offload_model True --t5_cpu`;
-> (4) For all testings, no prompt extension was applied, meaning `--use_prompt_extend` was not enabled.
-
-> 💡Note: T2V-14B is slower than I2V-14B because the former samples 50 steps while the latter uses 40 steps.
-
-
-## Community Contributions
-- [DiffSynth-Studio](https://github.com/modelscope/DiffSynth-Studio) provides more support for **Wan2.1**, including video-to-video, FP8 quantization, VRAM optimization, LoRA training, and more. Please refer to [their examples](https://github.com/modelscope/DiffSynth-Studio/tree/main/examples/wanvideo).
-
--------
-
-## Introduction of Wan2.1
-
-**Wan2.1**  is designed on the mainstream diffusion transformer paradigm, achieving significant advancements in generative capabilities through a series of innovations. These include our novel spatio-temporal variational autoencoder (VAE), scalable training strategies, large-scale data construction, and automated evaluation metrics. Collectively, these contributions enhance the model’s performance and versatility.
-
-
-##### (1) 3D Variational Autoencoders
-We propose a novel 3D causal VAE architecture, termed **Wan-VAE** specifically designed for video generation. By combining multiple strategies, we improve spatio-temporal compression, reduce memory usage, and ensure temporal causality. **Wan-VAE** demonstrates significant advantages in performance efficiency compared to other open-source VAEs. Furthermore, our **Wan-VAE** can encode and decode unlimited-length 1080P videos without losing historical temporal information, making it particularly well-suited for video generation tasks.
-
-
-<div align="center">
-    <img src="assets/video_vae_res.jpg" alt="" style="width: 80%;" />
-</div>
-
-
-##### (2) Video Diffusion DiT
-
-**Wan2.1** is designed using the Flow Matching framework within the paradigm of mainstream Diffusion Transformers. Our model's architecture uses the T5 Encoder to encode multilingual text input, with cross-attention in each transformer block embedding the text into the model structure. Additionally, we employ an MLP with a Linear layer and a SiLU layer to process the input time embeddings and predict six modulation parameters individually. This MLP is shared across all transformer blocks, with each block learning a distinct set of biases. Our experimental findings reveal a significant performance improvement with this approach at the same parameter scale.
-
-<div align="center">
-    <img src="assets/video_dit_arch.jpg" alt="" style="width: 80%;" />
-</div>
-
-
-| Model  | Dimension | Input Dimension | Output Dimension | Feedforward Dimension | Frequency Dimension | Number of Heads | Number of Layers |
-|--------|-----------|-----------------|------------------|-----------------------|---------------------|-----------------|------------------|
-| 1.3B   | 1536      | 16              | 16               | 8960                  | 256                 | 12              | 30               |
-| 14B   | 5120       | 16              | 16               | 13824                 | 256                 | 40              | 40               |
-
-
-
-##### Data
-
-We curated and deduplicated a candidate dataset comprising a vast amount of image and video data. During the data curation process, we designed a four-step data cleaning process, focusing on fundamental dimensions, visual quality and motion quality. Through the robust data processing pipeline, we can easily obtain high-quality, diverse, and large-scale training sets of images and videos.
-
-![figure1](assets/data_for_diff_stage.jpg "figure1")
-
-
-##### Comparisons to SOTA
-We compared **Wan2.1** with leading open-source and closed-source models to evaluate the performace. Using our carefully designed set of 1,035 internal prompts, we tested across 14 major dimensions and 26 sub-dimensions. We then compute the total score by performing a weighted calculation on the scores of each dimension, utilizing weights derived from human preferences in the matching process. The detailed results are shown in the table below. These results demonstrate our model's superior performance compared to both open-source and closed-source models.
-
-![figure1](assets/vben_vs_sota.png "figure1")
-
-
-## Citation
-If you find our work helpful, please cite us.
-
-```
-@article{wan2.1,
-    title   = {Wan: Open and Advanced Large-Scale Video Generative Models},
-    author  = {Wan Team},
-    journal = {},
-    year    = {2025}
-}
-```
-
-## License Agreement
-The models in this repository are licensed under the Apache 2.0 License. We claim no rights over the your generate contents, granting you the freedom to use them while ensuring that your usage complies with the provisions of this license. You are fully accountable for your use of the models, which must not involve sharing any content that violates applicable laws, causes harm to individuals or groups, disseminates personal information intended for harm, spreads misinformation, or targets vulnerable populations. For a complete list of restrictions and details regarding your rights, please refer to the full text of the [license](LICENSE.txt).
-
-
-## Acknowledgements
-
-We would like to thank the contributors to the [SD3](https://huggingface.co/stabilityai/stable-diffusion-3-medium), [Qwen](https://huggingface.co/Qwen), [umt5-xxl](https://huggingface.co/google/umt5-xxl), [diffusers](https://github.com/huggingface/diffusers) and [HuggingFace](https://huggingface.co) repositories, for their open research.
-
-
-
-## Contact Us
-If you would like to leave a message to our research or product teams, feel free to join our [Discord](https://discord.gg/p5XbdQV7) or [WeChat groups](https://gw.alicdn.com/imgextra/i2/O1CN01tqjWFi1ByuyehkTSB_!!6000000000015-0-tps-611-1279.jpg)!

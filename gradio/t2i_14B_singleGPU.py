@@ -190,6 +190,7 @@ if __name__ == '__main__':
 
     print("Step2: Init 14B t2i model...", end='', flush=True)
     cfg = WAN_CONFIGS['t2i-14B']
+    # cfg = WAN_CONFIGS['t2v-1.3B']    
     wan_t2i = wan.WanT2V(
         config=cfg,
         checkpoint_dir=args.ckpt_dir,

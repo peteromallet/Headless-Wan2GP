@@ -7,7 +7,7 @@ import torch.nn as nn
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 
-from .attention import flash_attention
+from .attention import pay_attention
 
 __all__ = ['WanModel']
 
@@ -16,7 +16,7 @@ def sinusoidal_embedding_1d(dim, position):
     # preprocess
     assert dim % 2 == 0
     half = dim // 2
-    position = position.type(torch.float64)
+    position = position.type(torch.float32)
 
     # calculation
     sinusoid = torch.outer(
@@ -25,18 +25,47 @@ def sinusoidal_embedding_1d(dim, position):
     return x
 
 
-@amp.autocast(enabled=False)
+# @amp.autocast(enabled=False)
 def rope_params(max_seq_len, dim, theta=10000):
     assert dim % 2 == 0
     freqs = torch.outer(
         torch.arange(max_seq_len),
         1.0 / torch.pow(theta,
-                        torch.arange(0, dim, 2).to(torch.float64).div(dim)))
+                        torch.arange(0, dim, 2).to(torch.float32).div(dim)))
     freqs = torch.polar(torch.ones_like(freqs), freqs)
     return freqs
 
 
-@amp.autocast(enabled=False)
+def rope_apply_(x, grid_sizes, freqs):
+    assert x.shape[0]==1
+
+    n, c = x.size(2), x.size(3) // 2
+
+    # split freqs
+    freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
+
+    f, h, w = grid_sizes[0]
+    seq_len = f * h * w
+    x_i = x[0, :seq_len, :, :]
+
+    x_i = x_i.to(torch.float32)
+    x_i = x_i.reshape(seq_len, n, -1, 2)        
+    x_i = torch.view_as_complex(x_i)
+    freqs_i = torch.cat([
+        freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
+        freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
+        freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)
+    ], dim=-1)
+    freqs_i= freqs_i.reshape(seq_len, 1, -1)
+
+    # apply rotary embedding
+    x_i *= freqs_i
+    x_i = torch.view_as_real(x_i).flatten(2)
+    x[0, :seq_len, :, :] = x_i.to(torch.bfloat16)
+    # x_i = torch.cat([x_i, x[0, seq_len:]])
+    return x
+
+# @amp.autocast(enabled=False)
 def rope_apply(x, grid_sizes, freqs):
     n, c = x.size(2), x.size(3) // 2
 
@@ -45,12 +74,17 @@ def rope_apply(x, grid_sizes, freqs):
 
     # loop over samples
     output = []
-    for i, (f, h, w) in enumerate(grid_sizes.tolist()):
+    for i, (f, h, w) in enumerate(grid_sizes):
         seq_len = f * h * w
 
         # precompute multipliers
-        x_i = torch.view_as_complex(x[i, :seq_len].to(torch.float64).reshape(
-            seq_len, n, -1, 2))
+        # x_i = x[i, :seq_len]
+        x_i = x[i]
+        x_i = x_i[:seq_len, :, :]
+
+        x_i = x_i.to(torch.float32)
+        x_i = x_i.reshape(seq_len, n, -1, 2)        
+        x_i = torch.view_as_complex(x_i)
         freqs_i = torch.cat([
             freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
             freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
@@ -59,12 +93,14 @@ def rope_apply(x, grid_sizes, freqs):
                             dim=-1).reshape(seq_len, 1, -1)
 
         # apply rotary embedding
-        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
+        x_i *= freqs_i
+        x_i = torch.view_as_real(x_i).flatten(2)
+        x_i = x_i.to(torch.bfloat16)
         x_i = torch.cat([x_i, x[i, seq_len:]])
 
         # append to collection
         output.append(x_i)
-    return torch.stack(output).float()
+    return torch.stack(output) #.float()
 
 
 class WanRMSNorm(nn.Module):
@@ -80,10 +116,30 @@ class WanRMSNorm(nn.Module):
         Args:
             x(Tensor): Shape [B, L, C]
         """
-        return self._norm(x.float()).type_as(x) * self.weight
+        y = x.float()
+        y.pow_(2)
+        y = y.mean(dim=-1, keepdim=True)
+        y += self.eps
+        y.rsqrt_()
+        x *=  y
+        x *= self.weight
+        return x
+        # return self._norm(x).type_as(x) * self.weight
 
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+
+def my_LayerNorm(norm, x):
+        y = x.float()
+        y_m = y.mean(dim=-1, keepdim=True)
+        y -= y_m 
+        del y_m
+        y.pow_(2)
+        y = y.mean(dim=-1, keepdim=True)
+        y += norm.eps
+        y.rsqrt_()
+        x = x *  y
+        return x
 
 
 class WanLayerNorm(nn.LayerNorm):
@@ -96,7 +152,13 @@ class WanLayerNorm(nn.LayerNorm):
         Args:
             x(Tensor): Shape [B, L, C]
         """
-        return super().forward(x.float()).type_as(x)
+        # return F.layer_norm(
+        #     input, self.normalized_shape, self.weight, self.bias, self.eps
+        # )
+        y = super().forward(x)
+        x = y.type_as(x)
+        return x
+        # return super().forward(x).type_as(x)
 
 
 class WanSelfAttention(nn.Module):
@@ -124,7 +186,7 @@ class WanSelfAttention(nn.Module):
         self.norm_q = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
 
-    def forward(self, x, seq_lens, grid_sizes, freqs):
+    def forward(self, xlist, seq_lens, grid_sizes, freqs):
         r"""
         Args:
             x(Tensor): Shape [B, L, num_heads, C / num_heads]
@@ -132,24 +194,31 @@ class WanSelfAttention(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
+        x = xlist[0]
+        xlist.clear()
+
         b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim
 
         # query, key, value function
-        def qkv_fn(x):
-            q = self.norm_q(self.q(x)).view(b, s, n, d)
-            k = self.norm_k(self.k(x)).view(b, s, n, d)
-            v = self.v(x).view(b, s, n, d)
-            return q, k, v
-
-        q, k, v = qkv_fn(x)
-
-        x = flash_attention(
-            q=rope_apply(q, grid_sizes, freqs),
-            k=rope_apply(k, grid_sizes, freqs),
-            v=v,
-            k_lens=seq_lens,
+        q = self.q(x)
+        self.norm_q(q)
+        q = q.view(b, s, n, d) # !!!
+        k = self.k(x)
+        self.norm_k(k)
+        k = k.view(b, s, n, d) 
+        v = self.v(x).view(b, s, n, d)
+        del x
+        rope_apply_(q, grid_sizes, freqs)
+        rope_apply_(k, grid_sizes, freqs)
+        qkv_list = [q,k,v]
+        del q,k,v
+        x = pay_attention(
+            qkv_list,
+            # q=q,
+            # k=k,
+            # v=v,
+            # k_lens=seq_lens,
             window_size=self.window_size)
-
         # output
         x = x.flatten(2)
         x = self.o(x)
@@ -158,22 +227,31 @@ class WanSelfAttention(nn.Module):
 
 class WanT2VCrossAttention(WanSelfAttention):
 
-    def forward(self, x, context, context_lens):
+    def forward(self, xlist, context, context_lens):
         r"""
         Args:
             x(Tensor): Shape [B, L1, C]
             context(Tensor): Shape [B, L2, C]
             context_lens(Tensor): Shape [B]
         """
+        x = xlist[0]
+        xlist.clear()
         b, n, d = x.size(0), self.num_heads, self.head_dim
 
         # compute query, key, value
-        q = self.norm_q(self.q(x)).view(b, -1, n, d)
-        k = self.norm_k(self.k(context)).view(b, -1, n, d)
+        q = self.q(x)
+        del x
+        self.norm_q(q)
+        q= q.view(b, -1, n, d)
+        k = self.k(context)
+        self.norm_k(k)
+        k = k.view(b, -1, n, d)
         v = self.v(context).view(b, -1, n, d)
 
         # compute attention
-        x = flash_attention(q, k, v, k_lens=context_lens)
+        qvl_list=[q, k, v]
+        del q, k, v
+        x = pay_attention(qvl_list, k_lens=context_lens)
 
         # output
         x = x.flatten(2)
@@ -196,31 +274,54 @@ class WanI2VCrossAttention(WanSelfAttention):
         # self.alpha = nn.Parameter(torch.zeros((1, )))
         self.norm_k_img = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
 
-    def forward(self, x, context, context_lens):
+    def forward(self, xlist, context, context_lens):
         r"""
         Args:
             x(Tensor): Shape [B, L1, C]
             context(Tensor): Shape [B, L2, C]
             context_lens(Tensor): Shape [B]
         """
+
+        ##### Enjoy this spagheti VRAM optimizations done by DeepBeepMeep !
+        # I am sure you are a nice person and as you copy this code, you will give me officially proper credits:
+        # Please link to https://github.com/deepbeepmeep/Wan2GP and @deepbeepmeep on twitter  
+
+        x = xlist[0]
+        xlist.clear()
+
         context_img = context[:, :257]
         context = context[:, 257:]
         b, n, d = x.size(0), self.num_heads, self.head_dim
 
         # compute query, key, value
-        q = self.norm_q(self.q(x)).view(b, -1, n, d)
-        k = self.norm_k(self.k(context)).view(b, -1, n, d)
+        q = self.q(x)
+        del x
+        self.norm_q(q)
+        q= q.view(b, -1, n, d)
+        k = self.k(context)
+        self.norm_k(k)
+        k = k.view(b, -1, n, d)
         v = self.v(context).view(b, -1, n, d)
-        k_img = self.norm_k_img(self.k_img(context_img)).view(b, -1, n, d)
+
+        qkv_list = [q, k, v]
+        del k,v
+        x = pay_attention(qkv_list, k_lens=context_lens)
+
+        k_img = self.k_img(context_img)
+        self.norm_k_img(k_img)
+        k_img = k_img.view(b, -1, n, d)
         v_img = self.v_img(context_img).view(b, -1, n, d)
-        img_x = flash_attention(q, k_img, v_img, k_lens=None)
+        qkv_list = [q, k_img, v_img]
+        del q, k_img, v_img
+        img_x = pay_attention(qkv_list, k_lens=None)
         # compute attention
-        x = flash_attention(q, k, v, k_lens=context_lens)
+
 
         # output
         x = x.flatten(2)
         img_x = img_x.flatten(2)
-        x = x + img_x
+        x += img_x
+        del img_x
         x = self.o(x)
         return x
 
@@ -289,27 +390,46 @@ class WanAttentionBlock(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
-        assert e.dtype == torch.float32
-        with amp.autocast(dtype=torch.float32):
-            e = (self.modulation + e).chunk(6, dim=1)
-        assert e[0].dtype == torch.float32
-
+        e = (self.modulation + e).chunk(6, dim=1)
+ 
         # self-attention
-        y = self.self_attn(
-            self.norm1(x).float() * (1 + e[1]) + e[0], seq_lens, grid_sizes,
-            freqs)
-        with amp.autocast(dtype=torch.float32):
-            x = x + y * e[2]
+        x_mod = self.norm1(x)
+        x_mod *= 1 + e[1]
+        x_mod += e[0]
+        xlist = [x_mod]
+        del x_mod
+        y = self.self_attn( xlist, seq_lens, grid_sizes,freqs)
+        x.addcmul_(y, e[2])
+        del y
+        y = self.norm3(x)
+        ylist= [y]
+        del y
+        x += self.cross_attn(ylist, context, context_lens)
+        y = self.norm2(x)
 
-        # cross-attention & ffn function
-        def cross_attn_ffn(x, context, context_lens, e):
-            x = x + self.cross_attn(self.norm3(x), context, context_lens)
-            y = self.ffn(self.norm2(x).float() * (1 + e[4]) + e[3])
-            with amp.autocast(dtype=torch.float32):
-                x = x + y * e[5]
-            return x
+        y *= 1 + e[4]
+        y += e[3]
 
-        x = cross_attn_ffn(x, context, context_lens, e)
+
+        ffn = self.ffn[0]
+        gelu = self.ffn[1]
+        ffn2= self.ffn[2]
+
+        y_shape = y.shape
+        y = y.view(-1, y_shape[-1])
+        chunk_size = int(y_shape[1]/2.7)
+        chunks =torch.split(y, chunk_size)
+        for y_chunk  in chunks:
+            mlp_chunk = ffn(y_chunk)
+            mlp_chunk = gelu(mlp_chunk)
+            y_chunk[...] = ffn2(mlp_chunk)
+            del mlp_chunk 
+        y = y.view(y_shape)
+
+        x.addcmul_(y, e[5])
+
+       
+
         return x
 
 
@@ -336,10 +456,13 @@ class Head(nn.Module):
             x(Tensor): Shape [B, L1, C]
             e(Tensor): Shape [B, C]
         """
-        assert e.dtype == torch.float32
-        with amp.autocast(dtype=torch.float32):
-            e = (self.modulation + e.unsqueeze(1)).chunk(2, dim=1)
-            x = (self.head(self.norm(x) * (1 + e[1]) + e[0]))
+        # assert e.dtype == torch.float32
+
+        e = (self.modulation + e.unsqueeze(1)).chunk(2, dim=1)
+        x = self.norm(x).to(torch.bfloat16)
+        x *= (1 + e[1])
+        x += e[0]
+        x = self.head(x)
         return x
 
 
@@ -384,7 +507,8 @@ class WanModel(ModelMixin, ConfigMixin):
                  window_size=(-1, -1),
                  qk_norm=True,
                  cross_attn_norm=True,
-                 eps=1e-6):
+                 eps=1e-6,
+                 ):
         r"""
         Initialize the diffusion model backbone.
 
@@ -466,7 +590,7 @@ class WanModel(ModelMixin, ConfigMixin):
         # buffers (don't use register_buffer otherwise dtype will be changed in to())
         assert (dim % num_heads) == 0 and (dim // num_heads) % 2 == 0
         d = dim // num_heads
-        self.freqs = torch.cat([
+        self.freqs = torch.cat([    
             rope_params(1024, d - 4 * (d // 6)),
             rope_params(1024, 2 * (d // 6)),
             rope_params(1024, 2 * (d // 6))
@@ -487,6 +611,7 @@ class WanModel(ModelMixin, ConfigMixin):
         seq_len,
         clip_fea=None,
         y=None,
+        pipeline = None,
     ):
         r"""
         Forward pass through the diffusion model
@@ -521,8 +646,11 @@ class WanModel(ModelMixin, ConfigMixin):
 
         # embeddings
         x = [self.patch_embedding(u.unsqueeze(0)) for u in x]
-        grid_sizes = torch.stack(
-            [torch.tensor(u.shape[2:], dtype=torch.long) for u in x])
+        # grid_sizes = torch.stack(
+        #     [torch.tensor(u.shape[2:], dtype=torch.long) for u in x])
+
+        grid_sizes = [ list(u.shape[2:]) for u in x]
+
         x = [u.flatten(2).transpose(1, 2) for u in x]
         seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.long)
         assert seq_lens.max() <= seq_len
@@ -532,11 +660,10 @@ class WanModel(ModelMixin, ConfigMixin):
         ])
 
         # time embeddings
-        with amp.autocast(dtype=torch.float32):
-            e = self.time_embedding(
-                sinusoidal_embedding_1d(self.freq_dim, t).float())
-            e0 = self.time_projection(e).unflatten(1, (6, self.dim))
-            assert e.dtype == torch.float32 and e0.dtype == torch.float32
+        e = self.time_embedding(
+            sinusoidal_embedding_1d(self.freq_dim, t))
+        e0 = self.time_projection(e).unflatten(1, (6, self.dim)).to(torch.bfloat16)
+            # assert e.dtype == torch.float32 and e0.dtype == torch.float32
 
         # context
         context_lens = None
@@ -561,6 +688,9 @@ class WanModel(ModelMixin, ConfigMixin):
             context_lens=context_lens)
 
         for block in self.blocks:
+            if pipeline._interrupt:
+                return [None]
+
             x = block(x, **kwargs)
 
         # head
@@ -588,7 +718,7 @@ class WanModel(ModelMixin, ConfigMixin):
 
         c = self.out_dim
         out = []
-        for u, v in zip(x, grid_sizes.tolist()):
+        for u, v in zip(x, grid_sizes):
             u = u[:math.prod(v)].view(*v, *self.patch_size, c)
             u = torch.einsum('fhwpqrc->cfphqwr', u)
             u = u.reshape(c, *[i * j for i, j in zip(v, self.patch_size)])

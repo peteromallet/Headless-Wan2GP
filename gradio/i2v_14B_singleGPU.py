@@ -24,8 +24,9 @@ wan_i2v_720P = None
 
 
 # Button Func
-def load_model(value):
+def load_i2v_model(value):
     global wan_i2v_480P, wan_i2v_720P
+    from mmgp import offload
 
     if value == '------':
         print("No model loaded")
@@ -52,8 +53,11 @@ def load_model(value):
                 t5_fsdp=False,
                 dit_fsdp=False,
                 use_usp=False,
-            )
+                i2v720p= True
+            )            
             print("done", flush=True)
+            pipe = {"transformer": wan_i2v_720P.model, "text_encoder" : wan_i2v_720P.text_encoder.model,  "text_encoder_2": wan_i2v_720P.clip.model, "vae": wan_i2v_720P.vae.model } #
+            offload.profile(pipe, profile_no=4, budgets = {"transformer":100, "*":3000}, verboseLevel=2,   compile="transformer", quantizeTransformer = False, pinnedMemory = False)
             return '720P'
 
     if value == '480P':
@@ -77,9 +81,14 @@ def load_model(value):
                 t5_fsdp=False,
                 dit_fsdp=False,
                 use_usp=False,
+                i2v720p= False
             )
             print("done", flush=True)
+            pipe = {"transformer": wan_i2v_480P.model, "text_encoder" : wan_i2v_480P.text_encoder.model,  "text_encoder_2": wan_i2v_480P.clip.model, "vae": wan_i2v_480P.vae.model } #
+            offload.profile(pipe, profile_no=4, budgets = {"model":100, "*":3000}, verboseLevel=2, compile="transformer" )
+
             return '480P'
+
 
 
 def prompt_enc(prompt, img, tar_lang):
@@ -96,10 +105,12 @@ def prompt_enc(prompt, img, tar_lang):
         return prompt_output.prompt
 
 
-def i2v_generation(img2vid_prompt, img2vid_image, resolution, sd_steps,
+def i2v_generation(img2vid_prompt, img2vid_image, res, sd_steps,
                    guide_scale, shift_scale, seed, n_prompt):
     # print(f"{img2vid_prompt},{resolution},{sd_steps},{guide_scale},{shift_scale},{seed},{n_prompt}")
-
+    global resolution
+    from PIL import Image
+    img2vid_image = Image.open("d:\mammoth2.jpg")
     if resolution == '------':
         print(
             'Please specify at least one resolution ckpt dir or specify the resolution'
@@ -118,19 +129,19 @@ def i2v_generation(img2vid_prompt, img2vid_image, resolution, sd_steps,
                 guide_scale=guide_scale,
                 n_prompt=n_prompt,
                 seed=seed,
-                offload_model=True)
+                offload_model=False)
         else:
             global wan_i2v_480P
             video = wan_i2v_480P.generate(
                 img2vid_prompt,
                 img2vid_image,
                 max_area=MAX_AREA_CONFIGS['480*832'],
-                shift=shift_scale,
+                shift=3.0, #shift_scale
                 sampling_steps=sd_steps,
                 guide_scale=guide_scale,
                 n_prompt=n_prompt,
                 seed=seed,
-                offload_model=True)
+                offload_model=False)
 
         cache_video(
             tensor=video[None],
@@ -169,6 +180,7 @@ def gradio_interface():
                 )
                 img2vid_prompt = gr.Textbox(
                     label="Prompt",
+                    value="Several giant wooly mammoths approach treading through a snowy meadow, their long wooly fur lightly blows in the wind as they walk, snow covered trees and dramatic snow capped mountains in the distance, mid afternoon light with wispy clouds and a sun high in the distance creates a warm glow, the low camera view is stunning capturing the large furry mammal with beautiful photography, depth of field.",
                     placeholder="Describe the video you want to generate",
                 )
                 tar_lang = gr.Radio(
@@ -262,6 +274,8 @@ def _parse_args():
         help="The prompt extend model to use.")
 
     args = parser.parse_args()
+    args.ckpt_dir_720p = "../ckpts" # os.path.join("ckpt")
+    args.ckpt_dir_480p = "../ckpts" # os.path.join("ckpt")
     assert args.ckpt_dir_720p is not None or args.ckpt_dir_480p is not None, "Please specify at least one checkpoint directory."
 
     return args
@@ -269,6 +283,12 @@ def _parse_args():
 
 if __name__ == '__main__':
     args = _parse_args()
+    global resolution
+    # load_model('720P')
+    # resolution = '720P'
+    resolution = '480P'
+
+    load_model(resolution)
 
     print("Step1: Init prompt_expander...", end='', flush=True)
     if args.prompt_extend_method == "dashscope":

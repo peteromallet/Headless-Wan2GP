@@ -442,7 +442,7 @@ def _t5(name,
         model = model_cls(**kwargs)
 
     # set device
-    model = model.to(dtype=dtype, device=device)
+    # model = model.to(dtype=dtype, device=device)
 
     # init tokenizer
     if return_tokenizer:
@@ -486,20 +486,25 @@ class T5EncoderModel:
         self.checkpoint_path = checkpoint_path
         self.tokenizer_path = tokenizer_path
 
+        from accelerate import init_empty_weights
         # init model
-        model = umt5_xxl(
-            encoder_only=True,
-            return_tokenizer=False,
-            dtype=dtype,
-            device=device).eval().requires_grad_(False)
+        with init_empty_weights():
+            model = umt5_xxl(
+                encoder_only=True,
+                return_tokenizer=False,
+                dtype=dtype,
+                device=device).eval().requires_grad_(False)
         logging.info(f'loading {checkpoint_path}')
-        model.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
+        from mmgp import offload
+        offload.load_model_data(model,checkpoint_path )
+
         self.model = model
         if shard_fn is not None:
             self.model = shard_fn(self.model, sync_module_states=False)
         else:
             self.model.to(self.device)
         # init tokenizer
+        tokenizer_path= "google/umt5-xxl"
         self.tokenizer = HuggingfaceTokenizer(
             name=tokenizer_path, seq_len=text_len, clean='whitespace')
 

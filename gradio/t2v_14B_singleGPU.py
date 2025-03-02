@@ -46,7 +46,7 @@ def t2v_generation(txt2vid_prompt, resolution, sd_steps, guide_scale,
         guide_scale=guide_scale,
         n_prompt=n_prompt,
         seed=seed,
-        offload_model=True)
+        offload_model=False)
 
     cache_video(
         tensor=video[None],
@@ -177,28 +177,39 @@ if __name__ == '__main__':
     args = _parse_args()
 
     print("Step1: Init prompt_expander...", end='', flush=True)
-    if args.prompt_extend_method == "dashscope":
-        prompt_expander = DashScopePromptExpander(
-            model_name=args.prompt_extend_model, is_vl=False)
-    elif args.prompt_extend_method == "local_qwen":
-        prompt_expander = QwenPromptExpander(
-            model_name=args.prompt_extend_model, is_vl=False, device=0)
-    else:
-        raise NotImplementedError(
-            f"Unsupport prompt_extend_method: {args.prompt_extend_method}")
-    print("done", flush=True)
+    prompt_expander = None
+    # if args.prompt_extend_method == "dashscope":
+    #     prompt_expander = DashScopePromptExpander(
+    #         model_name=args.prompt_extend_model, is_vl=False)
+    # elif args.prompt_extend_method == "local_qwen":
+    #     prompt_expander = QwenPromptExpander(
+    #         model_name=args.prompt_extend_model, is_vl=False, device=0)
+    # else:
+    #     raise NotImplementedError(
+    #         f"Unsupport prompt_extend_method: {args.prompt_extend_method}")
+    # print("done", flush=True)
+
+    from mmgp import offload
 
     print("Step2: Init 14B t2v model...", end='', flush=True)
     cfg = WAN_CONFIGS['t2v-14B']
+    # cfg = WAN_CONFIGS['t2v-1.3B']    
+
     wan_t2v = wan.WanT2V(
         config=cfg,
-        checkpoint_dir=args.ckpt_dir,
+        checkpoint_dir="../ckpts",
         device_id=0,
         rank=0,
         t5_fsdp=False,
         dit_fsdp=False,
         use_usp=False,
     )
+
+    pipe = {"transformer": wan_t2v.model, "text_encoder" : wan_t2v.text_encoder.model,  "vae": wan_t2v.vae.model } #
+    # offload.profile(pipe, profile_no=4, budgets = {"transformer":100, "*":3000}, verboseLevel=2, quantizeTransformer = False, compile = "transformer") #
+    offload.profile(pipe, profile_no=4, budgets = {"transformer":100, "*":3000}, verboseLevel=2, quantizeTransformer = False) #
+    # offload.profile(pipe, profile_no=4, budgets = {"transformer":3000, "*":3000}, verboseLevel=2, quantizeTransformer = False)
+
     print("done", flush=True)
 
     demo = gradio_interface()
