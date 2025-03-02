@@ -1,8 +1,5 @@
 # Wan2.1
 
-<p align="center">
-    <img src="assets/logo.png" width="400"/>
-<p>
 
 <p align="center">
     💜 <a href=""><b>Wan</b></a> &nbsp&nbsp ｜ &nbsp&nbsp 🖥️ <a href="https://github.com/Wan-Video/Wan2.1">GitHub</a> &nbsp&nbsp  | &nbsp&nbsp🤗 <a href="https://huggingface.co/Wan-AI/">Hugging Face</a>&nbsp&nbsp | &nbsp&nbsp🤖 <a href="https://modelscope.cn/organization/Wan-AI">ModelScope</a>&nbsp&nbsp | &nbsp&nbsp 📑 <a href="">Paper (Coming soon)</a> &nbsp&nbsp | &nbsp&nbsp 📑 <a href="https://wanxai.com">Blog</a> &nbsp&nbsp | &nbsp&nbsp💬 <a href="https://gw.alicdn.com/imgextra/i2/O1CN01tqjWFi1ByuyehkTSB_!!6000000000015-0-tps-611-1279.jpg">WeChat Group</a>&nbsp&nbsp | &nbsp&nbsp 📖 <a href="https://discord.gg/p5XbdQV7">Discord</a>&nbsp&nbsp
@@ -10,7 +7,7 @@
 
 -----
 
-[**Wan: Open and Advanced Large-Scale Video Generative Models**]("") <be>
+[**Wan2.1 GP by DeepBeepMeep based on Wan2.1's Alibaba: Open and Advanced Large-Scale Video Generative Models**]("") <be>
 
 In this repository, we present **Wan2.1**, a comprehensive and open suite of video foundation models that pushes the boundaries of video generation. **Wan2.1** offers these key features:
 - 👍 **SOTA Performance**: **Wan2.1** consistently outperforms existing open-source models and state-of-the-art commercial solutions across multiple benchmarks.
@@ -19,15 +16,10 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 - 👍 **Visual Text Generation**: **Wan2.1** is the first video model capable of generating both Chinese and English text, featuring robust text generation that enhances its practical applications.
 - 👍 **Powerful Video VAE**: **Wan-VAE** delivers exceptional efficiency and performance, encoding and decoding 1080P videos of any length while preserving temporal information, making it an ideal foundation for video and image generation.
 
-## Video Demos
-
-<div align="center">
-  <video src="https://github.com/user-attachments/assets/4aca6063-60bf-4953-bfb7-e265053f49ef" width="70%" poster=""> </video>
-</div>
 
 ## 🔥 Latest News!!
 
-* Mar 03, 2025: Wan2.1GP DeepBeepMeep out of this World version ! Reduced memory consumption by 2, with possiblity to generate more than 10s of video at 720p
+* Mar 03, 2025: 👋 Wan2.1GP DeepBeepMeep out of this World version ! Reduced memory consumption by 2, with possiblity to generate more than 10s of video at 720p
 * Feb 25, 2025: 👋 We've released the inference code and weights of Wan2.1.
 * Feb 27, 2025: 👋 Wan2.1 has been integrated into [ComfyUI](https://comfyanonymous.github.io/ComfyUI_examples/wan/). Enjoy!
 
@@ -35,8 +27,8 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 ## Features
 *GPU Poor version by **DeepBeepMeep**. This great video generator can now run smoothly on any GPU.*
 
-This version has the following improvements over the original Hunyuan Video model:
-- Reduce greatly the RAM requirements and VRAM requirements
+This version has the following improvements over the original Alibaba model:
+- Reduce greatly the RAM requirements and VRAM requirements 
 - Much faster thanks to compilation and fast loading / unloading
 - 5 profiles in order to able to run the model at a decent speed on a low end consumer config (32 GB of RAM and 12 VRAM) and to run it at a very good speed on a high end consumer config (48 GB of RAM and 24 GB of VRAM)
 - Autodownloading of the needed model files
@@ -47,8 +39,7 @@ This version has the following improvements over the original Hunyuan Video mode
 - Much simpler installation
 
 
-
-This fork by DeepBeepMeep is an integration of the mmpg module on the gradio_server.py.
+This fork by DeepBeepMeep is an integration of the mmpg module on the original model
 
 It is an illustration on how one can set up on an existing model some fast and properly working CPU offloading with changing only a few lines of code in the core model.
 
