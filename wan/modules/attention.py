@@ -119,6 +119,7 @@ def pay_attention(
     deterministic=False,
     dtype=torch.bfloat16,
     version=None,
+    force_attention= None
 ):
     """
     q:              [B, Lq, Nq, C1].
@@ -133,7 +134,8 @@ def pay_attention(
     deterministic:  bool. If True, slightly slower and uses more memory.
     dtype:          torch.dtype. Apply when dtype of q/k/v is not float16/bfloat16.
     """
-    attn = offload.shared_state["_attention"]
+
+    attn = offload.shared_state["_attention"] if force_attention== None else force_attention
     q,k,v = qkv_list
     qkv_list.clear()
 
