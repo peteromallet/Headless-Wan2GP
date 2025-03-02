@@ -754,7 +754,7 @@ def generate_video(
     state["in_progress"] = True
     state["selected"] = 0
  
-    enable_RIFLEx = RIFLEx_setting == 0 and video_length > (5* 16) or RIFLEx_setting == 1
+    enable_RIFLEx = RIFLEx_setting == 0 and video_length > (6* 16) or RIFLEx_setting == 1
     # VAE Tiling
     device_mem_capacity = torch.cuda.get_device_properties(0).total_memory / 1048576
 
