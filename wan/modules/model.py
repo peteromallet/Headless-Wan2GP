@@ -654,8 +654,8 @@ class WanModel(ModelMixin, ConfigMixin):
         assert (dim % num_heads) == 0 and (dim // num_heads) % 2 == 0
 
         
-        freqs = torch.cat([    
-            rope_params_riflex(1024, dim= d - 4 * (d // 6), L_test=nb_latent_frames, k = RIFLEx_k ), #44
+        freqs = torch.cat([
+            rope_params_riflex(1024, dim= d - 4 * (d // 6), L_test=nb_latent_frames, k = RIFLEx_k ) if RIFLEx_k != None else rope_params(1024, dim= d - 4 * (d // 6)), #44
             rope_params(1024, 2 * (d // 6)), #42
             rope_params(1024, 2 * (d // 6)) #42
         ],dim=1)

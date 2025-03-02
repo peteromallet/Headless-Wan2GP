@@ -45,25 +45,22 @@ It is an illustration on how one can set up on an existing model some fast and p
 
 For more information on how to use the mmpg module, please go to: https://github.com/deepbeepmeep/mmgp
 
-You will find the original Hunyuan Video repository here: https://github.com/deepbeepmeep/Wan2GP
+You will find the original Wan2.1 Video repository here: https://github.com/Wan-Video/Wan2.1
+
  
 
 
 ## Installation Guide for Linux and Windows
 
-We provide an `environment.yml` file for setting up a Conda environment.
-Conda's installation instructions are available [here](https://docs.anaconda.com/free/miniconda/index.html).
 
 This app has been tested on Python 3.10 / 2.6.0  / Cuda 12.4.\
 
+
 ```shell
-# 1 - conda. Prepare and activate a conda environment
-conda env create -f environment.yml
-conda activate Wan2
+# 0 Create a Python 3.10.9 environment or a venv using python
+conda create -name Wan2GP python==3.10.9  #if you have conda
 
-# OR
-
-# 1 - venv. Alternatively create a python 3.10 venv and then do the following
+# 1 Install pytorch 2.6.0
 pip install torch==2.6.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/test/cu124  
 
 
@@ -80,9 +77,6 @@ pip install -e .
 
 # 3.2 optional Flash attention support (easy to install on Linux but much harder on Windows)
 python -m pip install flash-attn==2.7.2.post1
-
-
-
 
 ```
 

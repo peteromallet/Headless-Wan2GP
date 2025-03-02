@@ -240,7 +240,7 @@ class WanT2V:
         #     k, N_k = identify_k(10000, 44, 26)
         #     print(f"value nb latent frames={nf}, k={k}, n_k={N_k}")
 
-        freqs = self.model.get_rope_freqs(nb_latent_frames = int((frame_num - 1)/4 + 1), RIFLEx_k = 4 if enable_RIFLEx else None )
+        freqs = self.model.get_rope_freqs(nb_latent_frames = int((frame_num - 1)/4 + 1), RIFLEx_k = 6 if enable_RIFLEx else None )
 
         arg_c = {'context': context, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self}
         arg_null = {'context': context_null, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self}

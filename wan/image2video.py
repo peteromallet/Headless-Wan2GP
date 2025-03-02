@@ -289,7 +289,7 @@ class WanI2V:
         # sample videos
         latent = noise
 
-        freqs = self.model.get_rope_freqs(nb_latent_frames = int((frame_num - 1)/4 + 1), RIFLEx_k = 4 if enable_RIFLEx else None )
+        freqs = self.model.get_rope_freqs(nb_latent_frames = int((frame_num - 1)/4 + 1), RIFLEx_k = 6 if enable_RIFLEx else None )
 
         arg_c = {
             'context': [context[0]],
