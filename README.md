@@ -83,7 +83,7 @@ python -m pip install flash-attn==2.7.2.post1
 
 ```
 
-Note pytorch *sdpa attention* is available by default. It is worth installing *Sage attention* (albout as simple as it sounds) because it offers a 30% speed boost over *sdpa attention* at a small quality cost.
+Note pytorch *sdpa attention* is available by default. It is worth installing *Sage attention* (albout not as simple as it sounds) because it offers a 30% speed boost over *sdpa attention* at a small quality cost.
 In order to install Sage, you will need to install also Triton. If Triton is installed you can turn on *Pytorch Compilation* which will give you an additional 20% speed boost and reduced VRAM consumption.
 
 ### Ready to use python wheels for Windows users
@@ -122,7 +122,7 @@ To run the application while loading entirely the diffusion model in VRAM (sligh
 ```bash
 python gradio_server.py --profile 3
 ```
-Please note that diffusion model of Wan2.1GP is extremely VRAM optimized and this will greatly benefit low VRAM systems since the diffusion / denoising step is the longest part of the generation process. However, the VAE encoder (at the beginning of a image 2 video process) and the VAE decoder (at the end of any video process) is only 20% lighter and it will require temporarly 22 GB of VRAM for a 720p generation and 12 GB of VRAM for a 480p generation. Therefore if you have less than these numbers, you may experience slow down at the beginning and at the end of the generation process due to pytorch VRAM offloading.
+Please note that diffusion model of Wan2.1GP is extremely VRAM optimized and this will greatly benefit low VRAM systems since the diffusion / denoising step is the longest part of the generation process. However, the VAE encoder (at the beginning of a image 2 video process) and the VAE decoder (at the end of any video process) is still VRAM hungry after optimization and it will require temporarly 22 GB of VRAM for a 720p generation and 12 GB of VRAM for a 480p generation. Therefore if you have less than these numbers, you may experience slow downs at the beginning and at the end of the generation process due to pytorch VRAM offloading.
 
 
 ### Loras support
@@ -139,8 +139,6 @@ Then you can pre activate loras corresponding to a preset when launching the gra
 ```bash
 python gradio_server.py --lora-preset  mylorapreset.lset # where 'mylorapreset.lset' is a preset stored in the 'loras' folder
 ```
-
-Please note that command line parameters *--lora-weight* and *--lora-multiplier* have been deprecated since they are redundant with presets.
 
 You will find prebuilt Loras on https://civitai.com/ or you will be able to build them with tools such as kohya or onetrainer.
 
