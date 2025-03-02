@@ -6,8 +6,9 @@
 <br>
 
 -----
-
-[**Wan2.1 GP by DeepBeepMeep based on Wan2.1's Alibaba: Open and Advanced Large-Scale Video Generative Models**]("") <be>
+<p align="center">
+<b>Wan2.1 GP by DeepBeepMeep based on Wan2.1's Alibaba: Open and Advanced Large-Scale Video Generative Models for the GPU Poor</b>
+</p>
 
 In this repository, we present **Wan2.1**, a comprehensive and open suite of video foundation models that pushes the boundaries of video generation. **Wan2.1** offers these key features:
 - 👍 **SOTA Performance**: **Wan2.1** consistently outperforms existing open-source models and state-of-the-art commercial solutions across multiple benchmarks.
@@ -19,7 +20,10 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 
 ## 🔥 Latest News!!
 
-* Mar 03, 2025: 👋 Wan2.1GP by DeepBeepMeep brings: Reduced memory consumption by 2, with possiblity to generate more than 10s of video at 720p with a RTX 4090 and 10s of video at 480p with less than 12GB of VRAM. Many thanks to REFLEx (https://github.com/thu-ml/RIFLEx) for their algorithm that allows generating nice looking video longer than 5s.
+* Mar 03, 2025: 👋 Wan2.1GP by DeepBeepMeep v1 brings: 
+    - Support for all Wan including the Image to Video model
+    - Reduced memory consumption by 2, with possiblity to generate more than 10s of video at 720p with a RTX 4090 and 10s of video at 480p with less than 12GB of VRAM. Many thanks to REFLEx (https://github.com/thu-ml/RIFLEx) for their algorithm that allows generating nice looking video longer than 5s.
+    - The usual perks: web interface, multiple generations, loras support, sage attebtion, auto download of models, ...
 
 * Feb 25, 2025: 👋 We've released the inference code and weights of Wan2.1.
 * Feb 27, 2025: 👋 Wan2.1 has been integrated into [ComfyUI](https://comfyanonymous.github.io/ComfyUI_examples/wan/). Enjoy!
@@ -31,7 +35,7 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 This version has the following improvements over the original Alibaba model:
 - Reduce greatly the RAM requirements and VRAM requirements 
 - Much faster thanks to compilation and fast loading / unloading
-- 5 profiles in order to able to run the model at a decent speed on a low end consumer config (32 GB of RAM and 12 VRAM) and to run it at a very good speed on a high end consumer config (48 GB of RAM and 24 GB of VRAM)
+- Multiple profiles in order to able to run the model at a decent speed on a low end consumer config (32 GB of RAM and 12 VRAM) and to run it at a very good speed on a high end consumer config (48 GB of RAM and 24 GB of VRAM)
 - Autodownloading of the needed model files
 - Improved gradio interface with progression bar and more options
 - Multiples prompts / multiple generations per prompt
@@ -63,7 +67,6 @@ conda create -name Wan2GP python==3.10.9  #if you have conda
 # 1 Install pytorch 2.6.0
 pip install torch==2.6.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/test/cu124  
 
-
 # 2. Install pip dependencies
 python -m pip install -r requirements.txt
 
@@ -80,11 +83,11 @@ python -m pip install flash-attn==2.7.2.post1
 
 ```
 
-Note that *Flash attention* and *Sage attention* are quite complex to install on Windows but offers a better memory management (and consequently longer videos) than the default *sdpa attention*.
-Likewise *Pytorch Compilation* will work on Windows only if you manage to install Triton. It is quite a complex process (see below for links).
+Note pytorch *sdpa attention* is available by default. It is worth installing *Sage attention* (albout as simple as it sounds) because it offers a 30% speed boost over *sdpa attention* at a small quality cost.
+In order to install Sage, you will need to install also Triton. If Triton is installed you can turn on *Pytorch Compilation* which will give you an additional 20% speed boost and reduced VRAM consumption.
 
 ### Ready to use python wheels for Windows users
-I provide here links to simplify the installation for Windows users with Python 3.10 / Pytorch 2.51 / Cuda 12.4. As I am not hosting these files I won't be able to provide support neither guarantee they do what they should do.
+I provide here links to simplify the installation for Windows users with Python 3.10 / Pytorch 2.51 / Cuda 12.4. I won't be able to provide support neither guarantee they do what they should do.
 - Triton attention (needed for *pytorch compilation* and *Sage attention*)
 ```
 pip install https://github.com/woct0rdho/triton-windows/releases/download/v3.2.0-windows.post9/triton-3.2.0-cp310-cp310-win_amd64.whl # triton for pytorch 2.6.0
@@ -124,7 +127,7 @@ Please note that diffusion model of Wan2.1GP is extremely VRAM optimized and thi
 
 ### Loras support
 
--- Ready to be used but theorical as no lora for Wan have been released as today. 
+-- Ready to be used but theoretical as no lora for Wan have been released as of today. ---
 
 Every lora stored in the subfoler 'loras' will be automatically loaded. You will be then able to activate / desactive any of them when running the application.
 
@@ -154,18 +157,13 @@ You will find prebuilt Loras on https://civitai.com/ or you will be able to buil
 --open-browser : open automatically Browser when launching Gradio Server\
 --compile : turn on pytorch compilation\
 --attention mode: force attention mode among, sdpa, flash, sage, sage2\
---profile no : default (4) : no of profile between 1 and 5\
+--profile no : default (4) : no of profile between 1 and 5
 
 ### Profiles (for power users only)
-You can choose between 5 profiles, these will try to leverage the most your hardware, but have little impact for HunyuanVideo GP:
-- HighRAM_HighVRAM  (1):  the fastest well suited for a RTX 3090 / RTX 4090 but consumes much more VRAM, adapted for fast shorter video
-- HighRAM_LowVRAM  (2): a bit slower, better suited for RTX 3070/3080/4070/4080 or for RTX 3090 / RTX 4090 with large pictures batches or long videos
-- LowRAM_HighVRAM  (3): adapted for RTX 3090 / RTX 4090 with limited RAM  but at the cost of VRAM (shorter videos)
-- LowRAM_LowVRAM  (4): if you have little VRAM or want to generate longer videos 
-- VerylowRAM_LowVRAM  (5): at least 24 GB of RAM and 10 GB of VRAM : if you don't have much it won't be fast but maybe it will work
+You can choose between 5 profiles, but two are really relevant here :
+- LowRAM_HighVRAM  (3): loads entirely the model in VRAM, slighty faster, but less VRAM
+- LowRAM_LowVRAM  (4): load only the part of the models that is needed, low VRAM and low RAM requirement but slightly slower
 
-Profile 2 (High RAM) and 4 (Low RAM)are the most recommended profiles since they are versatile (support for long videos for a slight performance cost).\
-However, a safe approach is to start from profile 5 (default profile) and then go down progressively to profile 4 and then to profile 2 as long as the app remains responsive or doesn't trigger any out of memory error.
 
 ### Other Models for the GPU Poor
 
