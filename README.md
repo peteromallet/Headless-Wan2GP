@@ -119,7 +119,7 @@ To run the application while loading entirely the diffusion model in VRAM (sligh
 ```bash
 python gradio_server.py --profile 3
 ```
-Please note that diffusion model of Wan2.1GP is extremely VRAM optimized and this will greatly benefit low VRAM systems since the diffusion / denoising step is the longest part of the generation process. However, the VAE encoder (at the beginning of a image 2 video process) and the VAE decoder (at the end of any video process) is only 20% lighter and it will require temporarly 22 GB of VRAM for a 720p generation and 12 GB of VRAM for a 480p generation. Therefore if you have less than these numbers, you may experience slow down at the begining and at the end of the generation process due to pytorch VRAM offloading.
+Please note that diffusion model of Wan2.1GP is extremely VRAM optimized and this will greatly benefit low VRAM systems since the diffusion / denoising step is the longest part of the generation process. However, the VAE encoder (at the beginning of a image 2 video process) and the VAE decoder (at the end of any video process) is only 20% lighter and it will require temporarly 22 GB of VRAM for a 720p generation and 12 GB of VRAM for a 480p generation. Therefore if you have less than these numbers, you may experience slow down at the beginning and at the end of the generation process due to pytorch VRAM offloading.
 
 
 ### Loras support

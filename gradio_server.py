@@ -458,7 +458,7 @@ def generate_header(model_filename, compile, attention_mode):
     
     if "image" in model_filename:
         model_name = "Wan2.1 image2video"
-        model_name += "720p" if "720p" in model_filename else "480"
+        model_name += "720p" if "720p" in model_filename else "480p"
     else:
         model_name = "Wan2.1 text2video"
         model_name += "14B" if "14B" in model_filename else "1.3B"
@@ -977,7 +977,7 @@ def create_demo():
             gr.Markdown("- 848 x 480 with the 1.3B model: 80 frames (5s) : 5 GB of VRAM")
             gr.Markdown("- 1280 x 720 with a 14B model: 80 frames (5s): 11 GB of VRAM")
             gr.Markdown("Note that the VAE stages (encoding / decoding at image2video ) or just the decoding at text2video will create a temporary VRAM peaks (up to 12GB for 420P and 22 GB for 720P)")
-            gr.Markdown("It is not recommmended to generate a video longer than 8s (128 frames) even if there is still some VRAM left as some artifact may appear")
+            gr.Markdown("It is not recommmended to generate a video longer than 8s (128 frames) even if there is still some VRAM left as some artifacts may appear")
         gr.Markdown("Please note that if your turn on compilation, the first generation step of the first video generation will be slow due to the compilation. Therefore all your tests should be done with compilation turned off.")
 
 
