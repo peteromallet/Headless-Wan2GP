@@ -1,4 +1,4 @@
-# Wan2.1
+# Wan2.1 GP
 
 
 <p align="center">
