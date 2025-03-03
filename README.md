@@ -78,7 +78,7 @@ python -m pip install -r requirements.txt
 python -m pip install sageattention==1.0.6 
 
 # or for Sage Attention 2 (40% faster, sorry only manual compilation for the moment)
-git pull https://github.com/thu-ml/SageAttention
+git clone https://github.com/thu-ml/SageAttention
 cd sageattention 
 pip install -e .
 
