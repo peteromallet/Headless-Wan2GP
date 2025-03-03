@@ -20,7 +20,8 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 
 ## 🔥 Latest News!!
 
-* Mar 03, 2025: 👋 Wan2.1GP by DeepBeepMeep v1 brings: 
+* Mar 03, 2025: 👋 Wan2.1GP v1.1: added Tea Cache support for faster generations:  optimization of kijai's implementation (https://github.com/kijai/ComfyUI-WanVideoWrapper/) of teacache (https://github.com/ali-vilab/TeaCache)  
+* Mar 02, 2025: 👋 Wan2.1GP by DeepBeepMeep v1 brings: 
     - Support for all Wan including the Image to Video model
     - Reduced memory consumption by 2, with possiblity to generate more than 10s of video at 720p with a RTX 4090 and 10s of video at 480p with less than 12GB of VRAM. Many thanks to REFLEx (https://github.com/thu-ml/RIFLEx) for their algorithm that allows generating nice looking video longer than 5s.
     - The usual perks: web interface, multiple generations, loras support, sage attebtion, auto download of models, ...
@@ -162,7 +163,7 @@ You will find prebuilt Loras on https://civitai.com/ or you will be able to buil
 
 ### Profiles (for power users only)
 You can choose between 5 profiles, but two are really relevant here :
-- LowRAM_HighVRAM  (3): loads entirely the model in VRAM, slighty faster, but less VRAM
+- LowRAM_HighVRAM  (3): loads entirely the model in VRAM, slightly faster, but less VRAM
 - LowRAM_LowVRAM  (4): load only the part of the models that is needed, low VRAM and low RAM requirement but slightly slower
 
 

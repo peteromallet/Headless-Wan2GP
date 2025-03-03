@@ -19,7 +19,7 @@ from wan.modules.attention import get_attention_modes
 import torch
 import gc
 import traceback
-
+import math
 
 def _parse_args():
     parser = argparse.ArgumentParser(
@@ -650,6 +650,7 @@ def generate_video(
     embedded_guidance_scale,
     repeat_generation,
     tea_cache,
+    tea_cache_start_step_perc,    
     loras_choices,
     loras_mult_choices,
     image_to_continue,
@@ -783,12 +784,15 @@ def generate_video(
                 break
 
             if trans.enable_teacache:
-                trans.num_steps = num_inference_steps
-                trans.cnt = 0
-                trans.rel_l1_thresh = tea_cache #0.15 # 0.1 for 1.6x speedup, 0.15 for 2.1x speedup
-                trans.accumulated_rel_l1_distance = 0
-                trans.previous_modulated_input = None
-                trans.previous_residual = None
+                trans.teacache_counter = 0
+                trans.rel_l1_thresh = tea_cache
+                trans.teacache_start_step =  max(math.ceil(tea_cache_start_step_perc*num_inference_steps/100),2)
+                trans.previous_residual_uncond = None
+                trans.previous_modulated_input_uncond = None                
+                trans.previous_residual_cond = None
+                trans.previous_modulated_input_cond= None                
+
+                trans.teacache_cache_device = "cuda" if profile==3 or profile==1 else "cpu"                                 
 
             video_no += 1
             status = f"Video {video_no}/{total_video}"
@@ -799,6 +803,7 @@ def generate_video(
 
             gc.collect()
             torch.cuda.empty_cache()
+            wan_model._interrupt = False
             try:
                 if use_image2video:
                     samples = wan_model.generate(
@@ -858,6 +863,9 @@ def generate_video(
                 else:
                     raise gr.Error(f"The generation of the video has encountered an error, please check your terminal for more information. '{s}'")
 
+            if trans.enable_teacache:
+                trans.previous_residual_uncond = None
+                trans.previous_residual_cond = None
 
             if samples != None:
                 samples = samples.to("cpu")
@@ -874,7 +882,10 @@ def generate_video(
                 # video = rearrange(sample.cpu().numpy(), "c t h w -> t h w c")
 
                 time_flag = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d-%Hh%Mm%Ss")
-                file_name = f"{time_flag}_seed{seed}_{prompt[:100].replace('/','').strip()}.mp4".replace(':',' ').replace('\\',' ')
+                if os.name == 'nt':
+                    file_name = f"{time_flag}_seed{seed}_{prompt[:50].replace('/','').strip()}.mp4".replace(':',' ').replace('\\',' ')
+                else:
+                    file_name = f"{time_flag}_seed{seed}_{prompt[:100].replace('/','').strip()}.mp4".replace(':',' ').replace('\\',' ')
                 video_path = os.path.join(os.getcwd(), "gradio_outputs", file_name)        
                 cache_video(
                     tensor=sample[None],
@@ -1189,14 +1200,16 @@ def create_demo():
                             flow_shift = gr.Slider(0.0, 25.0, value= default_flow_shift, step=0.1, label="Shift Scale") 
                         tea_cache_setting = gr.Dropdown(
                             choices=[
-                                ("Disabled", 0),
-                                ("Fast (x1.6 speed up)", 0.1), 
-                                ("Faster (x2.1 speed up)", 0.15), 
+                                ("Tea Cache Disabled", 0),
+                                ("0.03 (around x1.6 speed up)", 0.03), 
+                                ("0.05 (around x2 speed up)", 0.05), 
+                                ("0.10 (around x3 speed up)", 0.1), 
                             ],
                             value=default_tea_cache,
-                            visible=False,
-                            label="Tea Cache acceleration (the faster the acceleration the higher the degradation of the quality of the video. Consumes VRAM)"
+                            visible=True,
+                            label="Tea Cache Threshold to Skip Steps (the higher, the more steps are skipped but the lower the quality of the video (Tea Cache Consumes VRAM)"
                         )
+                        tea_cache_start_step_perc = gr.Slider(2, 100, value=20, step=1, label="Tea Cache starting moment in percentage of generation (the later, the higher the quality but also the lower the speed gain)") 
 
                         RIFLEx_setting = gr.Dropdown(
                             choices=[
@@ -1241,6 +1254,7 @@ def create_demo():
                 embedded_guidance_scale,
                 repeat_generation,
                 tea_cache_setting,
+                tea_cache_start_step_perc,
                 loras_choices,
                 loras_mult_choices,
                 image_to_continue,

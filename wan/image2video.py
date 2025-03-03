@@ -316,7 +316,6 @@ class WanI2V:
         if callback != None:
             callback(-1, None)
 
-        self._interrupt = False
         for i, t in enumerate(tqdm(timesteps)):
             latent_model_input = [latent.to(self.device)]
             timestep = [t]
@@ -324,13 +323,13 @@ class WanI2V:
             timestep = torch.stack(timestep).to(self.device)
 
             noise_pred_cond = self.model(
-                latent_model_input, t=timestep, **arg_c)[0]
+                latent_model_input, t=timestep, current_step=i, is_uncond = False, **arg_c)[0]
             if self._interrupt:
                 return None                
             if offload_model:
                 torch.cuda.empty_cache()
             noise_pred_uncond = self.model(
-                latent_model_input, t=timestep, **arg_null)[0]
+                latent_model_input, t=timestep, current_step=i, is_uncond = True, **arg_null)[0]
             if self._interrupt:
                 return None                
             del latent_model_input

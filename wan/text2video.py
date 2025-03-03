@@ -248,7 +248,6 @@ class WanT2V:
 
         if callback != None:
             callback(-1, None)
-        self._interrupt = False
         for i, t in enumerate(tqdm(timesteps)):
             latent_model_input = latents
             timestep = [t]
@@ -257,11 +256,11 @@ class WanT2V:
 
             # self.model.to(self.device)
             noise_pred_cond = self.model(
-                latent_model_input, t=timestep, **arg_c)[0]
+                latent_model_input, t=timestep,current_step=i, is_uncond = False, **arg_c)[0]
             if self._interrupt:
                 return None               
             noise_pred_uncond = self.model(
-                latent_model_input, t=timestep, **arg_null)[0]
+                latent_model_input, t=timestep,current_step=i, is_uncond = True, **arg_null)[0]
             if self._interrupt:
                 return None
 

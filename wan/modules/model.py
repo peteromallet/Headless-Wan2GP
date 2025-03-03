@@ -146,6 +146,11 @@ def rope_apply(x, grid_sizes, freqs):
         output.append(x_i)
     return torch.stack(output) #.float()
 
+def relative_l1_distance(last_tensor, current_tensor):
+    l1_distance = torch.abs(last_tensor - current_tensor).mean()
+    norm = torch.abs(last_tensor).mean()
+    relative_l1_distance = l1_distance / norm
+    return relative_l1_distance.to(torch.float32)
 
 class WanRMSNorm(nn.Module):
 
@@ -662,6 +667,7 @@ class WanModel(ModelMixin, ConfigMixin):
 
         return freqs
 
+
     def forward(
         self,
         x,
@@ -672,6 +678,8 @@ class WanModel(ModelMixin, ConfigMixin):
         y=None,
         freqs = None,
         pipeline = None,
+        current_step = 0,
+        is_uncond=False        
     ):
         r"""
         Forward pass through the diffusion model
@@ -723,7 +731,6 @@ class WanModel(ModelMixin, ConfigMixin):
         e = self.time_embedding(
             sinusoidal_embedding_1d(self.freq_dim, t))
         e0 = self.time_projection(e).unflatten(1, (6, self.dim)).to(torch.bfloat16)
-            # assert e.dtype == torch.float32 and e0.dtype == torch.float32
 
         # context
         context_lens = None
@@ -737,21 +744,71 @@ class WanModel(ModelMixin, ConfigMixin):
         if clip_fea is not None:
             context_clip = self.img_emb(clip_fea)  # bs x 257 x dim
             context = torch.concat([context_clip, context], dim=1)
+        # deepbeepmeep optimization of kijai's implementation (https://github.com/kijai/ComfyUI-WanVideoWrapper/) of teacache (https://github.com/ali-vilab/TeaCache)
+        should_calc = True
+        if self.enable_teacache and current_step >= self.teacache_start_step:
+            if current_step == self.teacache_start_step:
+                self.accumulated_rel_l1_distance_cond = 0
+                self.accumulated_rel_l1_distance_uncond = 0
+                self.teacache_skipped_cond_steps = 0
+                self.teacache_skipped_uncond_steps = 0
+            else:
+                prev_input = self.previous_modulated_input_uncond if is_uncond else self.previous_modulated_input_cond
+                acc_distance_attr = 'accumulated_rel_l1_distance_uncond' if is_uncond else 'accumulated_rel_l1_distance_cond'
 
-        # arguments
-        kwargs = dict(
-            e=e0,
-            seq_lens=seq_lens,
-            grid_sizes=grid_sizes,
-            freqs=freqs,
-            context=context,
-            context_lens=context_lens)
+                temb_relative_l1 = relative_l1_distance(prev_input, e0)
+                setattr(self, acc_distance_attr, getattr(self, acc_distance_attr) + temb_relative_l1)
 
-        for block in self.blocks:
-            if pipeline._interrupt:
-                return [None]
+                if getattr(self, acc_distance_attr) < self.rel_l1_thresh:
+                    should_calc = False
+                    self.teacache_counter += 1
+                else:
+                    should_calc = True
+                    setattr(self, acc_distance_attr, 0)
+            
+            if is_uncond:                
+                self.previous_modulated_input_uncond = e0.clone()
+                if should_calc:
+                    self.previous_residual_uncond = None
+                else:
+                    x += self.previous_residual_uncond
+                    self.teacache_skipped_cond_steps += 1
+                    # print(f"Skipped uncond:{self.teacache_skipped_cond_steps}/{current_step}" )
+            else:
+                self.previous_modulated_input_cond = e0.clone()
+                if should_calc:
+                    self.previous_residual_cond = None
+                else:
+                    x += self.previous_residual_cond
+                    self.teacache_skipped_uncond_steps += 1
+                    # print(f"Skipped uncond:{self.teacache_skipped_uncond_steps}/{current_step}" )
 
-            x = block(x, **kwargs)
+        if should_calc:
+            if self.enable_teacache:
+                ori_hidden_states = x.clone()
+            # arguments
+            kwargs = dict(
+                e=e0,
+                seq_lens=seq_lens,
+                grid_sizes=grid_sizes,
+                freqs=freqs,
+                context=context,
+                context_lens=context_lens)
+
+            for block in self.blocks:
+                if pipeline._interrupt:
+                    return [None]
+
+                x = block(x, **kwargs)
+
+            if self.enable_teacache:
+                residual = ori_hidden_states # just to have a readable code
+                torch.sub(x, ori_hidden_states, out=residual)
+                if is_uncond:
+                    self.previous_residual_uncond = residual
+                else:
+                    self.previous_residual_cond = residual
+                del residual, ori_hidden_states
 
         # head
         x = self.head(x, e)
