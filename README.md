@@ -61,8 +61,11 @@ This app has been tested on Python 3.10 / 2.6.0  / Cuda 12.4.\
 
 
 ```shell
-# 0 Create a Python 3.10.9 environment or a venv using python
-conda create -name Wan2GP python==3.10.9  #if you have conda
+# 0 Download the source and create a Python 3.10.9 environment using conda or create a venv using python
+git clone https://github.com/deepbeepmeep/Wan2GP.git
+cd Wan2GP
+conda create -n wan2gp python=3.10.9
+conda activate wan2gp
 
 # 1 Install pytorch 2.6.0
 pip install torch==2.6.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/test/cu124  
