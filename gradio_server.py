@@ -557,7 +557,7 @@ def update_defaults(state, num_inference_steps,flow_shift):
     server_config = state["config_new"] 
     old_server_config = state["config_old"] 
 
-    if use_image2video:
+    if not use_image2video:
         old_is_14B = "14B" in server_config["transformer_filename"]
         new_is_14B = "14B" in old_server_config["transformer_filename"]
 
@@ -1155,7 +1155,7 @@ def create_demo():
 
                 with gr.Row():
                     with gr.Column():
-                        video_length = gr.Slider(5, 169, value=81, step=4, label="Number of frames (16 = 1s)")
+                        video_length = gr.Slider(5, 193, value=81, step=4, label="Number of frames (16 = 1s)")
                     with gr.Column():
                         num_inference_steps = gr.Slider(1, 100, value=  default_inference_steps, step=1, label="Number of Inference Steps")
 
