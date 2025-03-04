@@ -136,6 +136,18 @@ To run the application while loading entirely the diffusion model in VRAM (sligh
 python gradio_server.py --profile 3
 ```
 
+**Trouble shooting**:\
+If you have installed Sage attention, it may seem that it works because *pip install sageattention* didn't produce and error or because sage is offered as on option but in fact it doesnt work :  in order to be fully operatioal Sage needs to compile its triton kernels the first time it is run (that is the first time you try to generate a video).
+
+Sometime fixing Sage compilation is easy (clear the triton cache, check triton is properly installed) sometime it is simply not possible because Sage is not supported on some older GPUs
+
+Therefore you may have no choice but to fallback to sdpa attention, to do so:
+- In the configuration menu inside the application, switch "Attention mode" to "sdpa"
+or
+- Launch the application this way:
+```bash
+python gradio_server.py --attention sdpa
+```
 
 ### Loras support
 
