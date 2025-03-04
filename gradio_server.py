@@ -350,7 +350,7 @@ def setup_loras(pipe,  lora_dir, lora_preselected_preset, split_linear_modules_m
 
     if len(loras) > 0:
         loras_names = [ Path(lora).stem for lora in loras  ]
-        offload.load_loras_into_model(pipe.transformer, loras,  activate_all_loras=False, split_linear_modules_map = split_linear_modules_map) #lora_multiplier,
+        offload.load_loras_into_model(pipe["transformer"], loras,  activate_all_loras=False, split_linear_modules_map = split_linear_modules_map) #lora_multiplier,
 
     if len(lora_preselected_preset) > 0:
         if not os.path.isfile(os.path.join(lora_dir, lora_preselected_preset + ".lset")):
