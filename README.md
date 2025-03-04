@@ -80,7 +80,7 @@ python -m pip install sageattention==1.0.6
 
 # or for Sage Attention 2 (40% faster, sorry only manual compilation for the moment)
 git clone https://github.com/thu-ml/SageAttention
-cd sageattention 
+cd SageAttention 
 pip install -e .
 
 # 3.2 optional Flash attention support (easy to install on Linux but much harder on Windows)
