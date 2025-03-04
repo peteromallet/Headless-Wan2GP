@@ -19,7 +19,8 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 
 
 ## 🔥 Latest News!!
-* Mar 03, 2025: 👋 Wan2.1GP v1.3: Support for Image to Video with multiples images for different images / prompts combinations (requires *--multiple-images* switch), and added command line *--preload x*  to preload in VRAM x MB of the main diffusion model if you find there is too much unused VRAM and you want to (slightly) accelerate the generation process
+* Mar 03, 2025: 👋 Wan2.1GP v1.3: Support for Image to Video with multiples images for different images / prompts combinations (requires *--multiple-images* switch), and added command line *--preload x*  to preload in VRAM x MB of the main diffusion model if you find there is too much unused VRAM and you want to (slightly) accelerate the generation process.
+If you upgrade you will need to do a 'pip install -r requirements.txt' again.
 * Mar 03, 2025: 👋 Wan2.1GP v1.2: Implemented tiling on VAE encoding and decoding. No more VRAM peaks at the beginning and at the end 
 * Mar 03, 2025: 👋 Wan2.1GP v1.1: added Tea Cache support for faster generations:  optimization of kijai's implementation (https://github.com/kijai/ComfyUI-WanVideoWrapper/) of teacache (https://github.com/ali-vilab/TeaCache)  
 * Mar 02, 2025: 👋 Wan2.1GP by DeepBeepMeep v1 brings: 
@@ -73,10 +74,10 @@ conda activate wan2gp
 pip install torch==2.6.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/test/cu124  
 
 # 2. Install pip dependencies
-python -m pip install -r requirements.txt
+pip install -r requirements.txt
 
 # 3.1 optional Sage attention support (30% faster, easy to install on Linux but much harder on Windows)
-python -m pip install sageattention==1.0.6 
+pip install sageattention==1.0.6 
 
 # or for Sage Attention 2 (40% faster, sorry only manual compilation for the moment)
 git clone https://github.com/thu-ml/SageAttention
@@ -84,7 +85,7 @@ cd SageAttention
 pip install -e .
 
 # 3.2 optional Flash attention support (easy to install on Linux but much harder on Windows)
-python -m pip install flash-attn==2.7.2.post1
+pip install flash-attn==2.7.2.post1
 
 ```
 
@@ -168,7 +169,7 @@ You will find prebuilt Loras on https://civitai.com/ or you will be able to buil
 --compile : turn on pytorch compilation\
 --attention mode: force attention mode among, sdpa, flash, sage, sage2\
 --profile no : default (4) : no of profile between 1 and 5\
---preload no : number in Megabytes to preload partially the diffusion model in VRAM , may offer speed gains especially on
+--preload no : number in Megabytes to preload partially the diffusion model in VRAM , may offer slight speed gains especially on older hardware
 
 ### Profiles (for power users only)
 You can choose between 5 profiles, but two are really relevant here :
