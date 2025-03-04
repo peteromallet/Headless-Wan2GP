@@ -59,9 +59,11 @@ You will find the original Wan2.1 Video repository here: https://github.com/Wan-
 
 ## Installation Guide for Linux and Windows
 
+**If you are looking for a one click installation, just go to the Pinokio App store : https://pinokio.computer/**
 
-This app has been tested on Python 3.10 / 2.6.0  / Cuda 12.4.\
+Otherwise you will find the instructions below:
 
+This app has been tested on Python 3.10 / 2.6.0  / Cuda 12.4.
 
 ```shell
 # 0 Download the source and create a Python 3.10.9 environment using conda or create a venv using python
