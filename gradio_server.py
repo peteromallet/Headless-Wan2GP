@@ -13,43 +13,47 @@ import random
 import json
 import wan
 from wan.configs import MAX_AREA_CONFIGS, WAN_CONFIGS, SUPPORTED_SIZES
-from wan.utils.prompt_extend import DashScopePromptExpander, QwenPromptExpander
 from wan.utils.utils import cache_video
 from wan.modules.attention import get_attention_modes
 import torch
 import gc
 import traceback
 import math
+import asyncio
 
 def _parse_args():
     parser = argparse.ArgumentParser(
         description="Generate a video from a text prompt or image using Gradio")
-    parser.add_argument(
-        "--ckpt_dir_720p",
-        type=str,
-        default=None,
-        help="The path to the checkpoint directory.")
-    parser.add_argument(
-        "--ckpt_dir_480p",
-        type=str,
-        default=None,
-        help="The path to the checkpoint directory.")
-    parser.add_argument(
-        "--prompt_extend_method",
-        type=str,
-        default="local_qwen",
-        choices=["dashscope", "local_qwen"],
-        help="The prompt extend method to use.")
-    parser.add_argument(
-        "--prompt_extend_model",
-        type=str,
-        default=None,
-        help="The prompt extend model to use.")
 
     parser.add_argument(
         "--quantize-transformer",
         action="store_true",
         help="On the fly 'transformer' quantization"
+    )
+
+    parser.add_argument(
+        "--share",
+        action="store_true",
+        help="Create a shared URL to access webserver remotely"
+    )
+
+    parser.add_argument(
+        "--lock-config",
+        action="store_true",
+        help="Prevent modifying the configuration from the web interface"
+    )
+
+    parser.add_argument(
+        "--preload",
+        type=str,
+        default="0",
+        help="Megabytes of the diffusion model to preload in VRAM"
+    )
+
+    parser.add_argument(
+        "--multiple-images",
+        action="store_true",
+        help="Allow inputting multiple images with image to video"
     )
 
 
@@ -163,9 +167,6 @@ def _parse_args():
 
 
     args = parser.parse_args()
-    args.ckpt_dir_720p = "../ckpts" # os.path.join("ckpt")
-    args.ckpt_dir_480p = "../ckpts" # os.path.join("ckpt")
-    assert args.ckpt_dir_720p is not None or args.ckpt_dir_480p is not None, "Please specify at least one checkpoint directory."
 
     return args
 
@@ -179,7 +180,7 @@ lock_ui_attention = False
 lock_ui_transformer = False
 lock_ui_compile = False
 
-
+preload =int(args.preload)
 force_profile_no = int(args.profile)
 verbose_level = int(args.verbose)
 quantizeTransformer = args.quantize_transformer
@@ -433,7 +434,10 @@ def load_models(i2v,  lora_dir,  lora_preselected_preset ):
 
     kwargs = { "extraModelsToQuantize": None}
     if profile == 2 or profile == 4:
-        kwargs["budgets"] = { "transformer" : 100, "text_encoder" : 100, "*" : 1000 }
+        kwargs["budgets"] = { "transformer" : 100 if preload  == 0 else preload, "text_encoder" : 100, "*" : 1000 }
+    elif profile == 3:
+        kwargs["budgets"] = { "*" : "70%" }
+
 
     loras, loras_names, default_loras_choices, default_loras_multis_str, default_lora_preset, loras_presets = setup_loras(pipe,  lora_dir, lora_preselected_preset, None)
     offloadobj = offload.profile(pipe, profile_no= profile, compile = compile, quantizeTransformer = quantizeTransformer, **kwargs)  
@@ -484,7 +488,8 @@ def apply_changes(  state,
                     vae_config_choice,
                     default_ui_choice ="t2v",
 ):
-
+    if args.lock_config:
+        return
     if gen_in_progress:
         yield "<DIV ALIGN=CENTER>Unable to change config when a generation is in progress</DIV>"
         return
@@ -719,9 +724,32 @@ def generate_video(
     global gen_in_progress
     gen_in_progress = True
     temp_filename = None
+    if len(prompt) ==0:
+        return
+    prompts = prompt.replace("\r", "").split("\n")
+
     if use_image2video:
         if image_to_continue is not None:
-            pass
+            if isinstance(image_to_continue, list):
+                image_to_continue = [ tup[0] for tup in image_to_continue ]
+            else:
+                image_to_continue = [image_to_continue]
+            if len(prompts) >= len(image_to_continue):
+                if len(prompts) % len(image_to_continue) !=0:
+                    raise gr.Error("If there are more text prompts than input images the number of text prompts should be dividable by the number of images")
+                rep = len(prompts) // len(image_to_continue)
+                new_image_to_continue = []
+                for i, _ in enumerate(prompts):
+                    new_image_to_continue.append(image_to_continue[i//rep] )
+                image_to_continue = new_image_to_continue 
+            else: 
+                if len(image_to_continue) % len(prompts)  !=0:
+                    raise gr.Error("If there are more input images than text prompts the number of images should be dividable by the number of text prompts")
+                rep = len(image_to_continue) // len(prompts)  
+                new_prompts = []
+                for i, _ in enumerate(image_to_continue):
+                    new_prompts.append(  prompts[ i//rep] )
+                prompts = new_prompts
 
         elif video_to_continue != None and len(video_to_continue) >0 :
             input_image_or_video_path = video_to_continue
@@ -791,7 +819,6 @@ def generate_video(
     from einops import rearrange
     save_path = os.path.join(os.getcwd(), "gradio_outputs")
     os.makedirs(save_path, exist_ok=True)
-    prompts = prompt.replace("\r", "").split("\n")
     video_no = 0
     total_video =  repeat_generation * len(prompts)
     abort = False
@@ -826,7 +853,7 @@ def generate_video(
                 if use_image2video:
                     samples = wan_model.generate(
                         prompt,
-                        image_to_continue,
+                        image_to_continue[video_no-1],
                         frame_num=(video_length // 4)* 4 + 1,
                         max_area=MAX_AREA_CONFIGS[resolution], 
                         shift=flow_shift,
@@ -1018,7 +1045,7 @@ def create_demo():
 
         header = gr.Markdown(generate_header(transformer_filename_i2v if use_image2video else transformer_filename_t2v, compile, attention_mode)  )            
 
-        with gr.Accordion("Video Engine Configuration - click here to change it", open = False):
+        with gr.Accordion("Video Engine Configuration - click here to change it", open = False, visible= not args.lock_config):
             gr.Markdown("For the changes to be effective you will need to restart the gradio_server. Some choices below may be locked if the app has been launched by specifying a config preset.")
 
             with gr.Column():
@@ -1100,7 +1127,7 @@ def create_demo():
                 ("128 x 128 : If at least 6 GB of VRAM", 3),
                     ],
                     value= vae_config,
-                    label="VAE optimisations - reduce the VRAM requirements for VAE decoding and VAE encoding"
+                    label="VAE Tiling - reduce the high VRAM requirements for VAE decoding and VAE encoding (if enabled it will be slower)"
                  )
 
                 profile_choice = gr.Dropdown(
@@ -1131,8 +1158,13 @@ def create_demo():
 
         with gr.Row():
             with gr.Column():
-                video_to_continue = gr.Video(label= "Video to continue", visible= use_image2video and False) #######  
-                image_to_continue = gr.Image(label= "Image as a starting point for a new video", visible=use_image2video)
+                video_to_continue = gr.Video(label= "Video to continue", visible= use_image2video and False) #######
+                if args.multiple_images:  
+                    image_to_continue = gr.Gallery(
+                            label="Images as a starting point for new videos", type ="pil", #file_types= "image", 
+                            columns=[3], rows=[1], object_fit="contain", height="auto", selected_index=0, interactive= True, visible=use_image2video)
+                else:
+                    image_to_continue = gr.Image(label= "Image as a starting point for a new video", visible=use_image2video)
 
                 if use_image2video:
                     prompt = gr.Textbox(label="Prompts (multiple prompts separated by carriage returns will generate multiple videos)", value="Several giant wooly mammoths approach treading through a snowy meadow, their long wooly fur lightly blows in the wind as they walk, snow covered trees and dramatic snow capped mountains in the distance, mid afternoon light with wispy clouds and a sun high in the distance creates a warm glow, the low camera view is stunning capturing the large furry mammal with beautiful photography, depth of field.", lines=3)
@@ -1317,6 +1349,8 @@ if __name__ == "__main__":
     os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
     server_port = int(args.server_port)
 
+    if os.name == "nt":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     if server_port == 0:
         server_port = int(os.getenv("SERVER_PORT", "7860"))
 
@@ -1334,6 +1368,6 @@ if __name__ == "__main__":
             url = "http://" + server_name 
         webbrowser.open(url + ":" + str(server_port), new = 0, autoraise = True)
 
-    demo.launch(server_name=server_name, server_port=server_port)
+    demo.launch(server_name=server_name, server_port=server_port, share=args.share)
 
  

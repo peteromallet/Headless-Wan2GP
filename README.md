@@ -19,8 +19,8 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 
 
 ## 🔥 Latest News!!
-
-* Mar 03, 2025: 👋 Wan2.1GP v1.2: Implementented tiling on VAE encoding and decoding. No more VRAM peaks at the beginning and at the end 
+* Mar 03, 2025: 👋 Wan2.1GP v1.3: Support for Image to Video with multiples images for different images / prompts combinations (requires *--multiple-images* switch), and added command line *--preload x*  to preload in VRAM x MB of the main diffusion model if you find there is too much unused VRAM and you want to (slightly) accelerate the generation process
+* Mar 03, 2025: 👋 Wan2.1GP v1.2: Implemented tiling on VAE encoding and decoding. No more VRAM peaks at the beginning and at the end 
 * Mar 03, 2025: 👋 Wan2.1GP v1.1: added Tea Cache support for faster generations:  optimization of kijai's implementation (https://github.com/kijai/ComfyUI-WanVideoWrapper/) of teacache (https://github.com/ali-vilab/TeaCache)  
 * Mar 02, 2025: 👋 Wan2.1GP by DeepBeepMeep v1 brings: 
     - Support for all Wan including the Image to Video model
@@ -121,6 +121,11 @@ To run the image to video generator (in Low VRAM mode):
 python gradio_server.py --i2v
 ```
 
+To be able to input multiple images with the image to video generator:
+```bash
+python gradio_server.py --i2v --multiple-images
+```
+
 Within the application you can configure which video generator will be launched without specifying a command line switch.
 
 To run the application while loading entirely the diffusion model in VRAM (slightly faster but requires 24 GB of VRAM for a 8 bits quantized 14B model )
@@ -155,18 +160,22 @@ You will find prebuilt Loras on https://civitai.com/ or you will be able to buil
 --lora-preset preset : name of preset gile (without the extension) to preload
 --verbose level : default (1) : level of information between 0 and 2\
 --server-port portno : default (7860) : Gradio port no\
---server-name name : default (0.0.0.0) : Gradio server name\
+--server-name name : default (localhost) : Gradio server name\
 --open-browser : open automatically Browser when launching Gradio Server\
+--lock-config : prevent modifying the video engine configuration from the interface\
+--share : create a shareable URL on huggingface so that your server can be accessed remotely\
+--multiple-images : Images as a starting point for new videos\ 
 --compile : turn on pytorch compilation\
 --attention mode: force attention mode among, sdpa, flash, sage, sage2\
---profile no : default (4) : no of profile between 1 and 5
+--profile no : default (4) : no of profile between 1 and 5\
+--preload no : number in Megabytes to preload partially the diffusion model in VRAM , may offer speed gains especially on
 
 ### Profiles (for power users only)
 You can choose between 5 profiles, but two are really relevant here :
-- LowRAM_HighVRAM  (3): loads entirely the model in VRAM, slightly faster, but less VRAM
-- LowRAM_LowVRAM  (4): load only the part of the models that is needed, low VRAM and low RAM requirement but slightly slower
+- LowRAM_HighVRAM  (3): loads entirely the model in VRAM if possible, slightly faster, but less VRAM available for the video data after that
+- LowRAM_LowVRAM  (4): loads only the part of the model that is needed, low VRAM and low RAM requirement but slightly slower
 
-
+You can adjust the number of megabytes to preload a model, with --preload nnn (nnn is the number of megabytes to preload)
 ### Other Models for the GPU Poor
 
 - HuanyuanVideoGP: https://github.com/deepbeepmeep/HunyuanVideoGP :\

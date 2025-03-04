@@ -541,6 +541,6 @@ class CLIPModel:
         videos = self.transforms.transforms[-1](videos.mul_(0.5).add_(0.5))
 
         # forward
-        with torch.cuda.amp.autocast(dtype=self.dtype):
-            out = self.model.visual(videos, use_31_block=True)
+        with torch.amp.autocast(dtype=self.dtype, device_type="cuda"):
+            out = self.model.visual(videos.to(torch.bfloat16), use_31_block=True)
             return out
