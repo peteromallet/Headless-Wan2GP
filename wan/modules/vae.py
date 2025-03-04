@@ -35,11 +35,6 @@ class CausalConv3d(nn.Conv3d):
         x = F.pad(x, padding)
         x = super().forward(x)
 
-        mem_threshold = offload.shared_state.get("_vae_threshold",0)
-        vae_config = offload.shared_state.get("_vae",1)
-        
-        if vae_config == 0  and torch.cuda.memory_reserved()  > mem_threshold  or vae_config == 2:  
-            torch.cuda.empty_cache()
         return x
 
 
@@ -346,8 +341,6 @@ class Encoder3d(nn.Module):
             x = self.conv1(x)
 
 
-        # torch.cuda.empty_cache()
-
         ## downsamples
         for layer in self.downsamples:
             if feat_cache is not None:
@@ -355,7 +348,6 @@ class Encoder3d(nn.Module):
             else:
                 x = layer(x)
 
-        # torch.cuda.empty_cache()
 
         ## middle
         for layer in self.middle:
@@ -364,7 +356,6 @@ class Encoder3d(nn.Module):
             else:
                 x = layer(x)
 
-        # torch.cuda.empty_cache()
 
         ## head
         for layer in self.head:
@@ -385,7 +376,6 @@ class Encoder3d(nn.Module):
             else:
                 x = layer(x)
 
-        # torch.cuda.empty_cache()
 
         return x
 
@@ -540,7 +530,7 @@ class WanVAE_(nn.Module):
         x_recon = self.decode(z)
         return x_recon, mu, log_var
 
-    def encode(self, x, scale):
+    def encode(self, x, scale = None):
         self.clear_cache()
         ## cache
         t = x.shape[2]
@@ -562,22 +552,25 @@ class WanVAE_(nn.Module):
 
 
         mu, log_var = self.conv1(out).chunk(2, dim=1)
-        if isinstance(scale[0], torch.Tensor):
-            mu = (mu - scale[0].view(1, self.z_dim, 1, 1, 1)) * scale[1].view(
-                1, self.z_dim, 1, 1, 1)
-        else:
-            mu = (mu - scale[0]) * scale[1]
+        if scale != None:
+            if isinstance(scale[0], torch.Tensor):
+                mu = (mu - scale[0].view(1, self.z_dim, 1, 1, 1)) * scale[1].view(
+                    1, self.z_dim, 1, 1, 1)
+            else:
+                mu = (mu - scale[0]) * scale[1]
         self.clear_cache()
         return mu
 
-    def decode(self, z, scale):
+
+    def decode(self, z, scale=None):
         self.clear_cache()
         # z: [b,c,t,h,w]
-        if isinstance(scale[0], torch.Tensor):
-            z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(
-                1, self.z_dim, 1, 1, 1)
-        else:
-            z = z / scale[1] + scale[0]
+        if scale != None:
+            if isinstance(scale[0], torch.Tensor):
+                z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(
+                    1, self.z_dim, 1, 1, 1)
+            else:
+                z = z / scale[1] + scale[0]
         iter_ = z.shape[2]
         x = self.conv2(z)
         for i in range(iter_):
@@ -595,6 +588,104 @@ class WanVAE_(nn.Module):
                 out = torch.cat([out, out_], 2)
         self.clear_cache()
         return out
+    
+    def blend_v(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
+        blend_extent = min(a.shape[-2], b.shape[-2], blend_extent)
+        for y in range(blend_extent):
+            b[:, :, :, y, :] = a[:, :, :, -blend_extent + y, :] * (1 - y / blend_extent) + b[:, :, :, y, :] * (y / blend_extent)
+        return b
+
+    def blend_h(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
+        blend_extent = min(a.shape[-1], b.shape[-1], blend_extent)
+        for x in range(blend_extent):
+            b[:, :, :, :, x] = a[:, :, :, :, -blend_extent + x] * (1 - x / blend_extent) + b[:, :, :, :, x] * (x / blend_extent)
+        return b
+    
+    def spatial_tiled_decode(self, z, scale, tile_size):
+        tile_sample_min_size = tile_size
+        tile_latent_min_size = int(tile_sample_min_size / 8)
+        tile_overlap_factor = 0.25
+
+        # z: [b,c,t,h,w]
+
+        if isinstance(scale[0], torch.Tensor):
+            z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(
+                1, self.z_dim, 1, 1, 1)
+        else:
+            z = z / scale[1] + scale[0]
+
+
+        overlap_size = int(tile_latent_min_size * (1 - tile_overlap_factor)) #8 0.75
+        blend_extent = int(tile_sample_min_size * tile_overlap_factor) #256 0.25
+        row_limit = tile_sample_min_size - blend_extent
+
+        # Split z into overlapping tiles and decode them separately.
+        # The tiles have an overlap to avoid seams between tiles.
+        rows = []
+        for i in range(0, z.shape[-2], overlap_size):
+            row = []
+            for j in range(0, z.shape[-1], overlap_size):
+                tile = z[:, :, :, i: i + tile_latent_min_size, j: j + tile_latent_min_size]
+                decoded = self.decode(tile)
+                row.append(decoded)
+            rows.append(row)
+        result_rows = []
+        for i, row in enumerate(rows):
+            result_row = []
+            for j, tile in enumerate(row):
+                # blend the above tile and the left tile
+                # to the current tile and add the current tile to the result row
+                if i > 0:
+                    tile = self.blend_v(rows[i - 1][j], tile, blend_extent)
+                if j > 0:
+                    tile = self.blend_h(row[j - 1], tile, blend_extent)
+                result_row.append(tile[:, :, :, :row_limit, :row_limit])
+            result_rows.append(torch.cat(result_row, dim=-1))
+
+        return torch.cat(result_rows, dim=-2)
+
+
+    def spatial_tiled_encode(self, x, scale, tile_size) :
+        tile_sample_min_size = tile_size
+        tile_latent_min_size = int(tile_sample_min_size / 8)
+        tile_overlap_factor = 0.25
+
+        overlap_size = int(tile_sample_min_size * (1 - tile_overlap_factor))
+        blend_extent = int(tile_latent_min_size * tile_overlap_factor)
+        row_limit = tile_latent_min_size - blend_extent
+
+        # Split video into tiles and encode them separately.
+        rows = []
+        for i in range(0, x.shape[-2], overlap_size):
+            row = []
+            for j in range(0, x.shape[-1], overlap_size):
+                tile = x[:, :, :, i: i + tile_sample_min_size, j: j + tile_sample_min_size]
+                tile = self.encode(tile)
+                row.append(tile)
+            rows.append(row)
+        result_rows = []
+        for i, row in enumerate(rows):
+            result_row = []
+            for j, tile in enumerate(row):
+                # blend the above tile and the left tile
+                # to the current tile and add the current tile to the result row
+                if i > 0:
+                    tile = self.blend_v(rows[i - 1][j], tile, blend_extent)
+                if j > 0:
+                    tile = self.blend_h(row[j - 1], tile, blend_extent)
+                result_row.append(tile[:, :, :, :row_limit, :row_limit])
+            result_rows.append(torch.cat(result_row, dim=-1))
+
+        mu = torch.cat(result_rows, dim=-2)
+
+        if isinstance(scale[0], torch.Tensor):
+            mu = (mu - scale[0].view(1, self.z_dim, 1, 1, 1)) * scale[1].view(
+                1, self.z_dim, 1, 1, 1)
+        else:
+            mu = (mu - scale[0]) * scale[1]
+
+        return mu
+
 
     def reparameterize(self, mu, log_var):
         std = torch.exp(0.5 * log_var)
@@ -673,18 +764,18 @@ class WanVAE:
             z_dim=z_dim,
         ).eval().requires_grad_(False).to(device)
 
-    def encode(self, videos):
+    def encode(self, videos, tile_size = 256):
         """
         videos: A list of videos each with shape [C, T, H, W].
         """
-        return [
-            self.model.encode(u.unsqueeze(0), self.scale).float().squeeze(0)
-            for u in videos
-        ]
+        if tile_size > 0:
+            return [ self.model.spatial_tiled_encode(u.unsqueeze(0), self.scale, tile_size).float().squeeze(0) for u in videos ]
+        else:
+            return [ self.model.encode(u.unsqueeze(0), self.scale).float().squeeze(0) for u in videos ]
 
-    def decode(self, zs):
-        return [
-            self.model.decode(u.unsqueeze(0),
-                                self.scale).float().clamp_(-1, 1).squeeze(0)
-            for u in zs
-        ]
+
+    def decode(self, zs, tile_size):
+        if tile_size > 0:
+            return [ self.model.spatial_tiled_decode(u.unsqueeze(0), self.scale, tile_size).float().clamp_(-1, 1).squeeze(0) for u in zs ]
+        else:
+            return [ self.model.decode(u.unsqueeze(0), self.scale).float().clamp_(-1, 1).squeeze(0) for u in zs ]

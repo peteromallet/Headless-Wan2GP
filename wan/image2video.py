@@ -144,7 +144,8 @@ class WanI2V:
                 seed=-1,
                 offload_model=True,
                 callback = None,
-                enable_RIFLEx = False
+                enable_RIFLEx = False,
+                VAE_tile_size= 0,
         
                 ):
         r"""
@@ -254,7 +255,7 @@ class WanI2V:
         ], dim=1).to(self.device)
         # enc = None
 
-        y = self.vae.encode([enc])[0]
+        y = self.vae.encode([enc], VAE_tile_size)[0]
         y = torch.concat([msk, y])
 
         @contextmanager
@@ -363,7 +364,7 @@ class WanI2V:
             torch.cuda.empty_cache()
 
         if self.rank == 0:
-            videos = self.vae.decode(x0)
+            videos = self.vae.decode(x0, VAE_tile_size)
 
         del noise, latent
         del sample_scheduler

@@ -433,7 +433,7 @@ def load_models(i2v,  lora_dir,  lora_preselected_preset ):
 
     kwargs = { "extraModelsToQuantize": None}
     if profile == 2 or profile == 4:
-        kwargs["budgets"] = { "transformer" : 100, "*" : 3000 }
+        kwargs["budgets"] = { "transformer" : 100, "text_encoder" : 100, "*" : 1000 }
 
     loras, loras_names, default_loras_choices, default_loras_multis_str, default_lora_preset, loras_presets = setup_loras(pipe,  lora_dir, lora_preselected_preset, None)
     offloadobj = offload.profile(pipe, profile_no= profile, compile = compile, quantizeTransformer = quantizeTransformer, **kwargs)  
@@ -693,11 +693,29 @@ def generate_video(
         if "1.3B" in  transformer_filename_t2v and width * height > 848*480:
             raise gr.Error("You must use the 14B text to video model to generate videos with a resolution equivalent to 720P")
 
-    offload.shared_state["_vae"] = vae_config
-    offload.shared_state["_vae_threshold"] = 0.9* torch.cuda.get_device_properties(0).total_memory 
     
     offload.shared_state["_attention"] =  attn
  
+     # VAE Tiling
+    device_mem_capacity = torch.cuda.get_device_properties(0).total_memory / 1048576
+    if vae_config == 0:
+        if device_mem_capacity >= 24000:
+            use_vae_config = 1            
+        elif device_mem_capacity >= 8000:
+            use_vae_config = 2
+        else:          
+            use_vae_config = 3
+    else:
+        use_vae_config = vae_config
+
+    if use_vae_config == 1:
+        VAE_tile_size = 0  
+    elif use_vae_config == 2:
+        VAE_tile_size = 256  
+    else: 
+        VAE_tile_size = 128  
+
+
     global gen_in_progress
     gen_in_progress = True
     temp_filename = None
@@ -818,7 +836,8 @@ def generate_video(
                         seed=seed,
                         offload_model=False,
                         callback=callback,
-                        enable_RIFLEx = enable_RIFLEx
+                        enable_RIFLEx = enable_RIFLEx,
+                        VAE_tile_size = VAE_tile_size
                     )
 
                 else:
@@ -833,7 +852,8 @@ def generate_video(
                         seed=seed,
                         offload_model=False,
                         callback=callback,
-                        enable_RIFLEx = enable_RIFLEx
+                        enable_RIFLEx = enable_RIFLEx,
+                        VAE_tile_size = VAE_tile_size
                     )
             except Exception as e:
                 gen_in_progress = False
@@ -987,7 +1007,6 @@ def create_demo():
             gr.Markdown("- 848 x 480 with a 14B model: 80 frames (5s) : 8 GB of VRAM")
             gr.Markdown("- 848 x 480 with the 1.3B model: 80 frames (5s) : 5 GB of VRAM")
             gr.Markdown("- 1280 x 720 with a 14B model: 80 frames (5s): 11 GB of VRAM")
-            gr.Markdown("Note that the VAE stages (encoding / decoding at image2video ) or just the decoding at text2video will create a temporary VRAM peaks (up to 12GB for 420P and 22 GB for 720P)")
             gr.Markdown("It is not recommmended to generate a video longer than 8s (128 frames) even if there is still some VRAM left as some artifacts may appear")
         gr.Markdown("Please note that if your turn on compilation, the first generation step of the first video generation will be slow due to the compilation. Therefore all your tests should be done with compilation turned off.")
 
@@ -1076,8 +1095,9 @@ def create_demo():
                 vae_config_choice = gr.Dropdown(
                     choices=[
                 ("Auto", 0),
-                ("Disabled (faster but may require up to 24 GB of VRAM)", 1),
-                ("Enabled (2x slower and up to 50% VRAM reduction)", 2),
+                ("Disabled (faster but may require up to 22 GB of VRAM)", 1),
+                ("256 x 256 : If at least 8 GB of VRAM", 2),
+                ("128 x 128 : If at least 6 GB of VRAM", 3),
                     ],
                     value= vae_config,
                     label="VAE optimisations - reduce the VRAM requirements for VAE decoding and VAE encoding"

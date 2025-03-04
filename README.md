@@ -20,6 +20,7 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 
 ## 🔥 Latest News!!
 
+* Mar 03, 2025: 👋 Wan2.1GP v1.2: Implementented tiling on VAE encoding and decoding. No more VRAM peaks at the beginning and at the end 
 * Mar 03, 2025: 👋 Wan2.1GP v1.1: added Tea Cache support for faster generations:  optimization of kijai's implementation (https://github.com/kijai/ComfyUI-WanVideoWrapper/) of teacache (https://github.com/ali-vilab/TeaCache)  
 * Mar 02, 2025: 👋 Wan2.1GP by DeepBeepMeep v1 brings: 
     - Support for all Wan including the Image to Video model
@@ -126,7 +127,6 @@ To run the application while loading entirely the diffusion model in VRAM (sligh
 ```bash
 python gradio_server.py --profile 3
 ```
-Please note that diffusion model of Wan2.1GP is extremely VRAM optimized and this will greatly benefit low VRAM systems since the diffusion / denoising step is the longest part of the generation process. However, the VAE encoder (at the beginning of a image 2 video process) and the VAE decoder (at the end of any video process) is still VRAM hungry after optimization and it will require temporarly 22 GB of VRAM for a 720p generation and 12 GB of VRAM for a 480p generation. Therefore if you have less than these numbers, you may experience slow downs at the beginning and at the end of the generation process due to pytorch VRAM offloading.
 
 
 ### Loras support

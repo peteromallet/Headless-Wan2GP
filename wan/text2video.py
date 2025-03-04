@@ -129,7 +129,8 @@ class WanT2V:
                  seed=-1,
                  offload_model=True,
                  callback = None,
-                 enable_RIFLEx = None
+                 enable_RIFLEx = None,
+                 VAE_tile_size = 0
                  ):
         r"""
         Generates video frames from text prompt using diffusion process.
@@ -286,7 +287,7 @@ class WanT2V:
             self.model.cpu()
             torch.cuda.empty_cache()
         if self.rank == 0:
-            videos = self.vae.decode(x0)
+            videos = self.vae.decode(x0, VAE_tile_size)
 
 
         del noise, latents
