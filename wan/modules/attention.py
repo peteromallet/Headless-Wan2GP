@@ -201,7 +201,7 @@ def pay_attention(
         qkv_list = [q, k, v]
         del q, k , v
         x = sdpa_wrapper( qkv_list, lq).unsqueeze(0)
-    elif attn=="flash" and (version is None or version == 3):
+    elif attn=="flash" and version == 3:
         # Note: dropout_p, window_size are not supported in FA3 now.
         x = flash_attn_interface.flash_attn_varlen_func(
             q=q,

@@ -1161,7 +1161,7 @@ def create_demo():
                 video_to_continue = gr.Video(label= "Video to continue", visible= use_image2video and False) #######
                 if args.multiple_images:  
                     image_to_continue = gr.Gallery(
-                            label="Images as a starting point for new videos", type ="pil", #file_types= "image", 
+                            label="Images as a starting point for new videos", type ="numpy", #file_types= "image", 
                             columns=[3], rows=[1], object_fit="contain", height="auto", selected_index=0, interactive= True, visible=use_image2video)
                 else:
                     image_to_continue = gr.Image(label= "Image as a starting point for a new video", visible=use_image2video)
