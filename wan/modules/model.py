@@ -67,17 +67,15 @@ def rope_params_riflex(max_seq_len, dim, theta=10000, L_test=30, k=6):
     inv_theta_pow[k-1] = 0.9 * 2 * torch.pi / L_test
         
     freqs = torch.outer(torch.arange(max_seq_len), inv_theta_pow)
-    freqs = torch.polar(torch.ones_like(freqs), freqs)
+    if True:
+        freqs_cos = freqs.cos().repeat_interleave(2, dim=1).float()  # [S, D]
+        freqs_sin = freqs.sin().repeat_interleave(2, dim=1).float()  # [S, D]
+        return (freqs_cos, freqs_sin)
+    else:
+        freqs = torch.polar(torch.ones_like(freqs), freqs)  # complex64     # [S, D/2]
     return freqs
 
-def rope_params(max_seq_len, dim, theta=10000):
-    assert dim % 2 == 0
-    freqs = torch.outer(
-        torch.arange(max_seq_len),
-        1.0 / torch.pow(theta,
-                        torch.arange(0, dim, 2).to(torch.float32).div(dim)))
-    freqs = torch.polar(torch.ones_like(freqs), freqs)
-    return freqs
+
 
 
 def rope_apply_(x, grid_sizes, freqs):
@@ -209,6 +207,7 @@ class WanLayerNorm(nn.LayerNorm):
         return x
         # return super().forward(x).type_as(x)
 
+from wan.modules.posemb_layers import apply_rotary_emb
 
 class WanSelfAttention(nn.Module):
 
@@ -257,8 +256,11 @@ class WanSelfAttention(nn.Module):
         k = k.view(b, s, n, d) 
         v = self.v(x).view(b, s, n, d)
         del x
-        rope_apply_(q, grid_sizes, freqs)
-        rope_apply_(k, grid_sizes, freqs)
+        # rope_apply_(q, grid_sizes, freqs)
+        # rope_apply_(k, grid_sizes, freqs)
+        qklist = [q,k]
+        del q,k
+        q,k = apply_rotary_emb(qklist, freqs, head_first=False)
         qkv_list = [q,k,v]
         del q,k,v
         x = pay_attention(
@@ -652,20 +654,18 @@ class WanModel(ModelMixin, ConfigMixin):
         # ],dim=1)
 
 
-    def get_rope_freqs(self, nb_latent_frames, RIFLEx_k = None):
+    def get_rope_freqs(self, nb_latent_frames, RIFLEx_k = None, device = "cuda"):
         dim = self.dim
         num_heads = self.num_heads 
         d = dim // num_heads
         assert (dim % num_heads) == 0 and (dim // num_heads) % 2 == 0
 
         
-        freqs = torch.cat([
-            rope_params_riflex(1024, dim= d - 4 * (d // 6), L_test=nb_latent_frames, k = RIFLEx_k ) if RIFLEx_k != None else rope_params(1024, dim= d - 4 * (d // 6)), #44
-            rope_params(1024, 2 * (d // 6)), #42
-            rope_params(1024, 2 * (d // 6)) #42
-        ],dim=1)
+        c1, s1 = rope_params_riflex(1024, dim= d - 4 * (d // 6), L_test=nb_latent_frames, k = RIFLEx_k ) if RIFLEx_k != None else rope_params(1024, dim= d - 4 * (d // 6)) #44
+        c2, s2 = rope_params(1024, 2 * (d // 6)) #42
+        c3, s3 = rope_params(1024, 2 * (d // 6)) #42
 
-        return freqs
+        return (torch.cat([c1,c2,c3],dim=1).to(device) , torch.cat([s1,s2,s3],dim=1).to(device))
 
 
     def forward(
@@ -706,7 +706,7 @@ class WanModel(ModelMixin, ConfigMixin):
             assert clip_fea is not None and y is not None
         # params
         device = self.patch_embedding.weight.device
-        if freqs.device != device:
+        if torch.is_tensor(freqs) and freqs.device != device:
             freqs = freqs.to(device)
 
         if y is not None:

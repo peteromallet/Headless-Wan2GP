@@ -24,7 +24,7 @@ from .modules.vae import WanVAE
 from .utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
                                get_sampling_sigmas, retrieve_timesteps)
 from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
-
+from wan.modules.posemb_layers import get_rotary_pos_embed
 
 class WanI2V:
 
@@ -290,7 +290,7 @@ class WanI2V:
         # sample videos
         latent = noise
 
-        freqs = self.model.get_rope_freqs(nb_latent_frames = int((frame_num - 1)/4 + 1), RIFLEx_k = 6 if enable_RIFLEx else None )
+        freqs = get_rotary_pos_embed(frame_num, h, w, enable_RIFLEx= enable_RIFLEx  ) 
 
         arg_c = {
             'context': [context[0]],
@@ -318,6 +318,7 @@ class WanI2V:
             callback(-1, None)
 
         for i, t in enumerate(tqdm(timesteps)):
+            offload.set_step_no_for_lora(i)
             latent_model_input = [latent.to(self.device)]
             timestep = [t]
 

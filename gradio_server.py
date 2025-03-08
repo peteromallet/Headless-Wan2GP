@@ -853,7 +853,7 @@ def generate_video(
                 if use_image2video:
                     samples = wan_model.generate(
                         prompt,
-                        image_to_continue[video_no-1],
+                        image_to_continue[ (video_no-1) % len(image_to_continue)],  
                         frame_num=(video_length // 4)* 4 + 1,
                         max_area=MAX_AREA_CONFIGS[resolution], 
                         shift=flow_shift,

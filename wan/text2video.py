@@ -8,7 +8,7 @@ import sys
 import types
 from contextlib import contextmanager
 from functools import partial
-
+from mmgp import offload
 import torch
 import torch.cuda.amp as amp
 import torch.distributed as dist
@@ -21,6 +21,7 @@ from .modules.vae import WanVAE
 from .utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
                                get_sampling_sigmas, retrieve_timesteps)
 from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
+from wan.modules.posemb_layers import get_rotary_pos_embed
 
 
 class WanT2V:
@@ -236,13 +237,7 @@ class WanT2V:
         # sample videos
         latents = noise
 
-        # from .modules.model import identify_k
-        # for nf in range(20, 50):
-        #     k, N_k = identify_k(10000, 44, 26)
-        #     print(f"value nb latent frames={nf}, k={k}, n_k={N_k}")
-
-        freqs = self.model.get_rope_freqs(nb_latent_frames = int((frame_num - 1)/4 + 1), RIFLEx_k = 6 if enable_RIFLEx else None )
-
+        freqs = get_rotary_pos_embed(frame_num, size[1], size[0], enable_RIFLEx= enable_RIFLEx) 
         arg_c = {'context': context, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self}
         arg_null = {'context': context_null, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self}
 
@@ -252,7 +247,7 @@ class WanT2V:
         for i, t in enumerate(tqdm(timesteps)):
             latent_model_input = latents
             timestep = [t]
-
+            offload.set_step_no_for_lora(i)
             timestep = torch.stack(timestep)
 
             # self.model.to(self.device)
