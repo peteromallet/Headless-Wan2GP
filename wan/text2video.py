@@ -131,7 +131,8 @@ class WanT2V:
                  offload_model=True,
                  callback = None,
                  enable_RIFLEx = None,
-                 VAE_tile_size = 0
+                 VAE_tile_size = 0,
+                 joint_pass = False,
                  ):
         r"""
         Generates video frames from text prompt using diffusion process.
@@ -240,8 +241,10 @@ class WanT2V:
         freqs = get_rotary_pos_embed(frame_num, size[1], size[0], enable_RIFLEx= enable_RIFLEx) 
         arg_c = {'context': context, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self}
         arg_null = {'context': context_null, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self}
+        arg_both = {'context': context, 'context2': context_null, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self}
 
-
+        if self.model.enable_teacache:
+            self.model.compute_teacache_threshold(self.model.teacache_start_step, timesteps, self.model.teacache_multiplier)
         if callback != None:
             callback(-1, None)
         for i, t in enumerate(tqdm(timesteps)):
@@ -251,14 +254,20 @@ class WanT2V:
             timestep = torch.stack(timestep)
 
             # self.model.to(self.device)
-            noise_pred_cond = self.model(
-                latent_model_input, t=timestep,current_step=i, is_uncond = False, **arg_c)[0]
-            if self._interrupt:
-                return None               
-            noise_pred_uncond = self.model(
-                latent_model_input, t=timestep,current_step=i, is_uncond = True, **arg_null)[0]
-            if self._interrupt:
-                return None
+            if joint_pass:
+                noise_pred_cond, noise_pred_uncond = self.model(
+                    latent_model_input, t=timestep,current_step=i, **arg_both)
+                if self._interrupt:
+                    return None
+            else:
+                noise_pred_cond = self.model(
+                    latent_model_input, t=timestep,current_step=i, is_uncond = False, **arg_c)[0]
+                if self._interrupt:
+                    return None               
+                noise_pred_uncond = self.model(
+                    latent_model_input, t=timestep,current_step=i, is_uncond = True, **arg_null)[0]
+                if self._interrupt:
+                    return None
 
             del latent_model_input
             noise_pred = noise_pred_uncond + guide_scale * (

@@ -667,7 +667,43 @@ class WanModel(ModelMixin, ConfigMixin):
 
         return (torch.cat([c1,c2,c3],dim=1).to(device) , torch.cat([s1,s2,s3],dim=1).to(device))
 
-
+    def compute_teacache_threshold(self, start_step, timesteps = None, speed_factor =0):
+        rescale_func = np.poly1d(self.coefficients)         
+        e_list = []
+        for t in timesteps:
+            t = torch.stack([t])
+            e_list.append(self.time_embedding( sinusoidal_embedding_1d(self.freq_dim, t)))
+	
+        best_threshold = 0.01
+        best_diff = 1000
+        target_nb_steps= int(len(timesteps) / speed_factor)
+        threshold = 0.01
+        while threshold <= 0.6:
+            accumulated_rel_l1_distance =0
+            nb_steps = 0
+            diff = 1000
+            for i, t in enumerate(timesteps):
+                skip = False
+                if not (i<=start_step or i== len(timesteps)):
+                    accumulated_rel_l1_distance += rescale_func(((e_list[i]-previous_modulated_input).abs().mean() / previous_modulated_input.abs().mean()).cpu().item())
+                    if accumulated_rel_l1_distance < threshold:
+                        skip = True
+                    else:
+                        accumulated_rel_l1_distance = 0
+                previous_modulated_input = e_list[i]
+                if not skip:
+                    nb_steps += 1
+                    diff = abs(target_nb_steps - nb_steps)                
+            if diff < best_diff:
+                best_threshold = threshold
+                best_diff = diff
+            elif diff > best_diff:
+                break
+            threshold += 0.01
+        self.rel_l1_thresh = best_threshold
+        print(f"Tea Cache, best threshold found:{best_threshold} with gain x{len(timesteps)/(len(timesteps) - best_diff):0.1f} for a target of x{speed_factor}")
+        return best_threshold
+    
     def forward(
         self,
         x,
@@ -679,6 +715,7 @@ class WanModel(ModelMixin, ConfigMixin):
         freqs = None,
         pipeline = None,
         current_step = 0,
+        context2 = None,
         is_uncond=False        
     ):
         r"""
@@ -722,10 +759,13 @@ class WanModel(ModelMixin, ConfigMixin):
         x = [u.flatten(2).transpose(1, 2) for u in x]
         seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.long)
         assert seq_lens.max() <= seq_len
-        x = torch.cat([
-            torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))],
-                      dim=1) for u in x
-        ])
+        if len(x)==1 and seq_len == x[0].size(1):
+            x = x[0]
+        else:
+            x = torch.cat([
+                torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))],
+                        dim=1) for u in x
+            ])
 
         # time embeddings
         e = self.time_embedding(
@@ -740,82 +780,105 @@ class WanModel(ModelMixin, ConfigMixin):
                     [u, u.new_zeros(self.text_len - u.size(0), u.size(1))])
                 for u in context
             ]))
+        if context2!=None:
+            context2 = self.text_embedding(
+                torch.stack([
+                    torch.cat(
+                        [u, u.new_zeros(self.text_len - u.size(0), u.size(1))])
+                    for u in context2
+                ]))
 
         if clip_fea is not None:
             context_clip = self.img_emb(clip_fea)  # bs x 257 x dim
             context = torch.concat([context_clip, context], dim=1)
-        # deepbeepmeep optimization of kijai's implementation (https://github.com/kijai/ComfyUI-WanVideoWrapper/) of teacache (https://github.com/ali-vilab/TeaCache)
+            if context2 != None:
+                context2 = torch.concat([context_clip, context2], dim=1)
+        
+        joint_pass = context2 != None
+        if joint_pass:
+            x_list = [x, x.clone()]
+            context_list = [context, context2]
+            is_uncond = False
+        else:
+            x_list = [x]
+            context_list = [context]
+        del x
         should_calc = True
-        if self.enable_teacache and current_step >= self.teacache_start_step:
-            if current_step == self.teacache_start_step:
-                self.accumulated_rel_l1_distance_cond = 0
-                self.accumulated_rel_l1_distance_uncond = 0
-                self.teacache_skipped_cond_steps = 0
-                self.teacache_skipped_uncond_steps = 0
+        if self.enable_teacache: 
+            if is_uncond:
+                should_calc = self.should_calc
             else:
-                prev_input = self.previous_modulated_input_uncond if is_uncond else self.previous_modulated_input_cond
-                acc_distance_attr = 'accumulated_rel_l1_distance_uncond' if is_uncond else 'accumulated_rel_l1_distance_cond'
-
-                temb_relative_l1 = relative_l1_distance(prev_input, e0)
-                setattr(self, acc_distance_attr, getattr(self, acc_distance_attr) + temb_relative_l1)
-
-                if getattr(self, acc_distance_attr) < self.rel_l1_thresh:
-                    should_calc = False
-                    self.teacache_counter += 1
-                else:
+                if current_step <= self.teacache_start_step or current_step == self.num_steps-1:
                     should_calc = True
-                    setattr(self, acc_distance_attr, 0)
-            
-            if is_uncond:                
-                self.previous_modulated_input_uncond = e0.clone()
-                if should_calc:
-                    self.previous_residual_uncond = None
+                    self.accumulated_rel_l1_distance = 0
                 else:
-                    x += self.previous_residual_uncond
-                    self.teacache_skipped_cond_steps += 1
-                    # print(f"Skipped uncond:{self.teacache_skipped_cond_steps}/{current_step}" )
-            else:
-                self.previous_modulated_input_cond = e0.clone()
-                if should_calc:
-                    self.previous_residual_cond = None
-                else:
-                    x += self.previous_residual_cond
-                    self.teacache_skipped_uncond_steps += 1
-                    # print(f"Skipped uncond:{self.teacache_skipped_uncond_steps}/{current_step}" )
+                    rescale_func = np.poly1d(self.coefficients)
+                    self.accumulated_rel_l1_distance += rescale_func(((e-self.previous_modulated_input).abs().mean() / self.previous_modulated_input.abs().mean()).cpu().item())
+                    if self.accumulated_rel_l1_distance < self.rel_l1_thresh:
+                        should_calc = False
+                        self.teacache_skipped_steps += 1
+                        # print(f"Teacache Skipped Step:{self.teacache_skipped_steps}/{current_step}" )
+                    else:
+                        should_calc = True
+                        self.accumulated_rel_l1_distance = 0
+                self.previous_modulated_input = e 
+                self.should_calc = should_calc                        
 
-        if should_calc:
+        if not should_calc:
+            for i, x in enumerate(x_list):
+                x += self.previous_residual_uncond if i==1 or is_uncond else self.previous_residual_cond                              
+        else:
             if self.enable_teacache:
-                ori_hidden_states = x.clone()
+                if joint_pass or is_uncond:
+                    self.previous_residual_uncond = None
+                if joint_pass or not is_uncond:
+                    self.previous_residual_cond = None
+                ori_hidden_states = x_list[0].clone()
             # arguments
             kwargs = dict(
-                e=e0,
+                # e=e0,
                 seq_lens=seq_lens,
                 grid_sizes=grid_sizes,
                 freqs=freqs,
-                context=context,
+                # context=context,
                 context_lens=context_lens)
 
             for block in self.blocks:
                 if pipeline._interrupt:
-                    return [None]
-
-                x = block(x, **kwargs)
+                    if joint_pass:
+                        return None, None
+                    else:
+                        return [None]
+                for i, (x, context) in enumerate(zip(x_list, context_list)):
+                    x_list[i] = block(x, context = context, e= e0, **kwargs)
+                    del x
 
             if self.enable_teacache:
-                residual = ori_hidden_states # just to have a readable code
-                torch.sub(x, ori_hidden_states, out=residual)
-                if is_uncond:
-                    self.previous_residual_uncond = residual
+                if joint_pass:
+                    self.previous_residual_cond = torch.sub(x_list[0], ori_hidden_states)
+                    self.previous_residual_uncond = ori_hidden_states
+                    torch.sub(x_list[1], ori_hidden_states, out=self.previous_residual_uncond)
                 else:
-                    self.previous_residual_cond = residual
-                del residual, ori_hidden_states
+                    residual = ori_hidden_states # just to have a readable code
+                    torch.sub(x_list[0], ori_hidden_states, out=residual)
+                    if i==1 or is_uncond:
+                        self.previous_residual_uncond = residual
+                    else:
+                        self.previous_residual_cond = residual
+                residual, ori_hidden_states = None, None
 
-        # head
-        x = self.head(x, e)
+        for i, x in enumerate(x_list):
+            # head
+            x = self.head(x, e)
 
-        # unpatchify
-        x = self.unpatchify(x, grid_sizes)
-        return [u.float() for u in x]
+            # unpatchify
+            x_list[i] = self.unpatchify(x, grid_sizes)
+            del x
+
+        if joint_pass:
+            return x_list[0][0], x_list[1][0]
+        else:
+            return [u.float() for u in x_list[0]]
 
     def unpatchify(self, x, grid_sizes):
         r"""
