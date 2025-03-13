@@ -16,5 +16,5 @@ gradio>=5.0.0
 numpy>=1.23.5,<2
 einops
 moviepy==1.0.3
-mmgp==3.2.3
+mmgp==3.2.5
 peft==0.14.0

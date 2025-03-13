@@ -291,8 +291,8 @@ offload.default_verboseLevel = verbose_level
 
 download_models(transformer_filename_i2v if use_image2video else transformer_filename_t2v, text_encoder_filename) 
 
-def sanitize_file_name(file_name):
-    return file_name.replace("/","").replace("\\","").replace(":","").replace("|","").replace("?","").replace("<","").replace(">","").replace("\"","") 
+def sanitize_file_name(file_name, rep =""):
+    return file_name.replace("/",rep).replace("\\",rep).replace(":",rep).replace("|",rep).replace("?",rep).replace("<",rep).replace(">",rep).replace("\"",rep) 
 
 def extract_preset(lset_name, loras):
     lset_name = sanitize_file_name(lset_name)
@@ -338,34 +338,35 @@ def setup_loras(pipe,  lora_dir, lora_preselected_preset, split_linear_modules_m
     default_loras_choices = []
     default_loras_multis_str = ""
     loras_presets = []
-
-    from pathlib import Path
-
-    if lora_dir != None :
-        if not os.path.isdir(lora_dir):
-            raise Exception("--lora-dir should be a path to a directory that contains Loras")
-
     default_lora_preset = ""
     default_prompt = ""
-    if lora_dir != None:
-        import glob
-        dir_loras =  glob.glob( os.path.join(lora_dir , "*.sft") ) + glob.glob( os.path.join(lora_dir , "*.safetensors") ) 
-        dir_loras.sort()
-        loras += [element for element in dir_loras if element not in loras ]
 
-        dir_presets =  glob.glob( os.path.join(lora_dir , "*.lset") ) 
-        dir_presets.sort()
-        loras_presets = [ Path(Path(file_path).parts[-1]).stem for file_path in dir_presets]
+    if use_image2video or not "1.3B" in transformer_filename_t2v:
+        from pathlib import Path
 
-    if len(loras) > 0:
-        loras_names = [ Path(lora).stem for lora in loras  ]
-    offload.load_loras_into_model(pipe["transformer"], loras,  activate_all_loras=False, split_linear_modules_map = split_linear_modules_map) #lora_multiplier,
+        if lora_dir != None :
+            if not os.path.isdir(lora_dir):
+                raise Exception("--lora-dir should be a path to a directory that contains Loras")
 
-    if len(lora_preselected_preset) > 0:
-        if not os.path.isfile(os.path.join(lora_dir, lora_preselected_preset + ".lset")):
-            raise Exception(f"Unknown preset '{lora_preselected_preset}'")
-        default_lora_preset = lora_preselected_preset
-        default_loras_choices, default_loras_multis_str, default_prompt, _ = extract_preset(default_lora_preset, loras)
+        if lora_dir != None:
+            import glob
+            dir_loras =  glob.glob( os.path.join(lora_dir , "*.sft") ) + glob.glob( os.path.join(lora_dir , "*.safetensors") ) 
+            dir_loras.sort()
+            loras += [element for element in dir_loras if element not in loras ]
+
+            dir_presets =  glob.glob( os.path.join(lora_dir , "*.lset") ) 
+            dir_presets.sort()
+            loras_presets = [ Path(Path(file_path).parts[-1]).stem for file_path in dir_presets]
+
+        if len(loras) > 0:
+            loras_names = [ Path(lora).stem for lora in loras  ]
+        offload.load_loras_into_model(pipe["transformer"], loras,  activate_all_loras=False, split_linear_modules_map = split_linear_modules_map) #lora_multiplier,
+
+        if len(lora_preselected_preset) > 0:
+            if not os.path.isfile(os.path.join(lora_dir, lora_preselected_preset + ".lset")):
+                raise Exception(f"Unknown preset '{lora_preselected_preset}'")
+            default_lora_preset = lora_preselected_preset
+            default_loras_choices, default_loras_multis_str, default_prompt, _ = extract_preset(default_lora_preset, loras)
     if len(default_prompt) == 0:
         default_prompt = get_default_prompt(use_image2video)
     return loras, loras_names, default_loras_choices, default_loras_multis_str, default_prompt, default_lora_preset, loras_presets
@@ -966,9 +967,9 @@ def generate_video(
 
                 time_flag = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d-%Hh%Mm%Ss")
                 if os.name == 'nt':
-                    file_name = f"{time_flag}_seed{seed}_{prompt[:50].replace('/','').strip()}.mp4".replace(':',' ').replace('\\',' ')
+                    file_name = f"{time_flag}_seed{seed}_{sanitize_file_name(prompt[:50])}.mp4"
                 else:
-                    file_name = f"{time_flag}_seed{seed}_{prompt[:100].replace('/','').strip()}.mp4".replace(':',' ').replace('\\',' ')
+                    file_name = f"{time_flag}_seed{seed}_{sanitize_file_name(prompt[:100])}.mp4"
                 video_path = os.path.join(os.getcwd(), "gradio_outputs", file_name)        
                 cache_video(
                     tensor=sample[None],
