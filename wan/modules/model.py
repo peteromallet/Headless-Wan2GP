@@ -716,7 +716,8 @@ class WanModel(ModelMixin, ConfigMixin):
         pipeline = None,
         current_step = 0,
         context2 = None,
-        is_uncond=False        
+        is_uncond=False,
+        slg_layers=None,
     ):
         r"""
         Forward pass through the diffusion model
@@ -843,7 +844,9 @@ class WanModel(ModelMixin, ConfigMixin):
                 # context=context,
                 context_lens=context_lens)
 
-            for block in self.blocks:
+            for block_idx, block in enumerate(self.blocks):
+                if slg_layers is not None and block_idx in slg_layers and is_uncond:
+                    continue
                 if pipeline._interrupt:
                     if joint_pass:
                         return None, None
