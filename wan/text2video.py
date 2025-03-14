@@ -243,6 +243,10 @@ class WanT2V:
         arg_null = {'context': context_null, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self}
         arg_both = {'context': context, 'context2': context_null, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self}
 
+        # arg_c = {'context': context, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self, "max_steps": sampling_steps}
+        # arg_null = {'context': context_null, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self, "max_steps": sampling_steps}
+        # arg_both = {'context': context, 'context2': context_null, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self, "max_steps": sampling_steps}
+
         if self.model.enable_teacache:
             self.model.compute_teacache_threshold(self.model.teacache_start_step, timesteps, self.model.teacache_multiplier)
         if callback != None:
@@ -250,7 +254,7 @@ class WanT2V:
         for i, t in enumerate(tqdm(timesteps)):
             latent_model_input = latents
             timestep = [t]
-            offload.set_step_no_for_lora(i)
+            offload.set_step_no_for_lora(self.model, i)
             timestep = torch.stack(timestep)
 
             # self.model.to(self.device)

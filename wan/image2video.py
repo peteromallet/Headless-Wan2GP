@@ -331,7 +331,7 @@ class WanI2V:
             callback(-1, None)
 
         for i, t in enumerate(tqdm(timesteps)):
-            offload.set_step_no_for_lora(i)
+            offload.set_step_no_for_lora(self.model, i)
             latent_model_input = [latent.to(self.device)]
             timestep = [t]
 

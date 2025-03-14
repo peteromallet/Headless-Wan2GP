@@ -60,6 +60,30 @@ try:
 except ImportError:
     sageattn = None
 
+# # try:
+# if True:
+#     from sageattention import sageattn_qk_int8_pv_fp8_window_cuda
+#     @torch.compiler.disable()
+#     def sageattn_window_wrapper(
+#             qkv_list,
+#             attention_length,
+#             window
+#         ):
+#         q,k, v = qkv_list
+#         padding_length = q.shape[0] -attention_length
+#         q = q[:attention_length, :, : ].unsqueeze(0)
+#         k = k[:attention_length, :, : ].unsqueeze(0)
+#         v = v[:attention_length, :, : ].unsqueeze(0)
+#         o = sageattn_qk_int8_pv_fp8_window_cuda(q, k, v, tensor_layout="NHD", window = window).squeeze(0)
+#         del q, k ,v
+#         qkv_list.clear()
+
+#         if padding_length > 0:
+#             o = torch.cat([o, torch.empty( (padding_length, *o.shape[-2:]), dtype= o.dtype, device=o.device  ) ], 0)
+
+#         return o
+# # except ImportError:
+# #     sageattn = sageattn_qk_int8_pv_fp8_window_cuda
 
 @torch.compiler.disable()
 def sdpa_wrapper(
@@ -119,7 +143,8 @@ def pay_attention(
     deterministic=False,
     dtype=torch.bfloat16,
     version=None,
-    force_attention= None
+    force_attention= None,
+    cross_attn= False
 ):
     """
     q:              [B, Lq, Nq, C1].
@@ -194,9 +219,67 @@ def pay_attention(
             max_seqlen_kv=lk,
         ).unflatten(0, (b, lq))
     elif attn=="sage2":
-        qkv_list = [q,k,v]
-        del q,k,v
-        x = sageattn_wrapper(qkv_list, lq).unsqueeze(0)
+        import math
+        if cross_attn or True:
+            qkv_list = [q,k,v]
+            del q,k,v
+
+            x = sageattn_wrapper(qkv_list, lq).unsqueeze(0)
+        # else:
+        #     layer =  offload.shared_state["layer"]
+        #     embed_sizes = offload.shared_state["embed_sizes"] 
+        #     current_step = offload.shared_state["step_no"] 
+        #     max_steps = offload.shared_state["max_steps"]  
+
+
+        #     nb_latents =  embed_sizes[0] * embed_sizes[1]* embed_sizes[2]
+
+        #     window = 0
+        #     start_window_step = int(max_steps * 0.4)
+        #     start_layer = 10
+        #     if (layer < start_layer )  or current_step <start_window_step: 
+        #         window = 0
+        #     else:
+        #         coef =  min((max_steps - current_step)/(max_steps-start_window_step),1)*max(min((25 - layer)/(25-start_layer),1),0) * 0.7 + 0.3
+        #         print(f"step: {current_step}, layer: {layer}, coef:{coef:0.1f}]")
+        #         window =  math.ceil(coef* nb_latents)
+
+        #     invert_spaces = (layer + current_step) % 2 == 0 and window > 0
+
+        #     def flip(q):
+        #         q = q.reshape(*embed_sizes, *q.shape[-2:])
+        #         q = q.transpose(0,2)
+        #         q = q.contiguous()
+        #         q = q.transpose(0,2)
+        #         q = q.reshape( -1, *q.shape[-2:])
+        #         return q
+
+        #     def flop(q):
+        #         q = q.reshape(embed_sizes[2], embed_sizes[1], embed_sizes[0] , *q.shape[-2:])
+        #         q = q.transpose(0,2)
+        #         q = q.contiguous()
+        #         q = q.transpose(0,2)
+        #         q = q.reshape( -1, *q.shape[-2:])
+        #         return q
+
+
+        #     if invert_spaces:
+
+        #         q = flip(q)
+        #         k = flip(k)
+        #         v = flip(v)            
+        #     qkv_list = [q,k,v]
+        #     del q,k,v
+
+
+
+        #     x = sageattn_window_wrapper(qkv_list, lq, window= window) #.unsqueeze(0)
+
+        #     if invert_spaces:
+        #         x = flop(x)
+        #     x = x.unsqueeze(0)
+
+        
     elif attn=="sdpa":
         qkv_list = [q, k, v]
         del q, k , v

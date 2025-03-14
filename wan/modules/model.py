@@ -8,7 +8,7 @@ from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 import numpy as np
 from typing import Union,Optional
-
+from mmgp import offload
 from .attention import pay_attention
 
 __all__ = ['WanModel']
@@ -302,7 +302,7 @@ class WanT2VCrossAttention(WanSelfAttention):
         # compute attention
         qvl_list=[q, k, v]
         del q, k, v
-        x = pay_attention(qvl_list, k_lens=context_lens)
+        x = pay_attention(qvl_list, k_lens=context_lens, cross_attn= True)
 
         # output
         x = x.flatten(2)
@@ -716,7 +716,9 @@ class WanModel(ModelMixin, ConfigMixin):
         pipeline = None,
         current_step = 0,
         context2 = None,
-        is_uncond=False        
+        is_uncond=False,
+        max_steps = 0
+ 
     ):
         r"""
         Forward pass through the diffusion model
@@ -755,6 +757,12 @@ class WanModel(ModelMixin, ConfigMixin):
         #     [torch.tensor(u.shape[2:], dtype=torch.long) for u in x])
 
         grid_sizes = [ list(u.shape[2:]) for u in x]
+        embed_sizes = grid_sizes[0]
+
+        offload.shared_state["embed_sizes"] = embed_sizes 
+        offload.shared_state["step_no"] = current_step 
+        offload.shared_state["max_steps"] = max_steps
+
 
         x = [u.flatten(2).transpose(1, 2) for u in x]
         seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.long)
@@ -843,7 +851,11 @@ class WanModel(ModelMixin, ConfigMixin):
                 # context=context,
                 context_lens=context_lens)
 
-            for block in self.blocks:
+            for l, block in  enumerate(self.blocks):
+                offload.shared_state["layer"] = l
+                if "refresh" in offload.shared_state:
+                    del offload.shared_state["refresh"]
+                    offload.shared_state["callback"](-1, -1, True)
                 if pipeline._interrupt:
                     if joint_pass:
                         return None, None
