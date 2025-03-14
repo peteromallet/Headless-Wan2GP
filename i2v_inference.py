@@ -413,6 +413,9 @@ def parse_args():
     parser.add_argument("--teacache", type=float, default=0.25, help="TeaCache multiplier, e.g. 0.5, 2.0, etc.")
     parser.add_argument("--teacache-start", type=float, default=0.1, help="Teacache start step percentage [0..100]")
     parser.add_argument("--seed", type=int, default=-1, help="Random seed. -1 means random each time.")
+    parser.add_argument("--slg-layers", type=str, default=None, help="Which layers to use for skip layer guidance")
+    parser.add_argument("--slg-start", type=float, default=0.0, help="Percentage in to start SLG")
+    parser.add_argument("--slg-end", type=float, default=1.0, help="Percentage in to end SLG")
 
     # LoRA usage
     parser.add_argument("--loras-choices", type=str, default="", help="Comma-separated list of chosen LoRA indices or preset names to load. Usually you only use the preset.")
@@ -540,6 +543,12 @@ def main():
     except:
         raise ValueError(f"Invalid resolution: '{resolution_str}'")
 
+    # Parse slg_layers from comma-separated string to a Python list of ints (or None if not provided)
+    if args.slg_layers:
+        slg_list = [int(x) for x in args.slg_layers.split(",")]
+    else:
+        slg_list = None
+
     # Additional checks (from your original code).
     if "480p" in args.transformer_file:
         # Then we cannot exceed certain area for 480p model
@@ -628,6 +637,10 @@ def main():
             callback=None,  # or define your own callback if you want
             enable_RIFLEx=enable_riflex,
             VAE_tile_size=VAE_tile_size,
+            joint_pass=slg_list is None,  # set if you want a small speed improvement without SLG
+            slg_layers=slg_list,
+            slg_start=args.slg_start,
+            slg_end=args.slg_end,
         )
     except Exception as e:
         offloadobj.unload_all()
