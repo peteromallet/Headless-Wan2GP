@@ -717,8 +717,8 @@ class WanModel(ModelMixin, ConfigMixin):
         current_step = 0,
         context2 = None,
         is_uncond=False,
-        max_steps = 0
- 
+        max_steps = 0, 
+        slg_layers=None,
     ):
         r"""
         Forward pass through the diffusion model
@@ -851,8 +851,8 @@ class WanModel(ModelMixin, ConfigMixin):
                 # context=context,
                 context_lens=context_lens)
 
-            for l, block in  enumerate(self.blocks):
-                offload.shared_state["layer"] = l
+            for block_idx, block in enumerate(self.blocks):
+                offload.shared_state["layer"] = block_idx
                 if "refresh" in offload.shared_state:
                     del offload.shared_state["refresh"]
                     offload.shared_state["callback"](-1, -1, True)
@@ -861,9 +861,16 @@ class WanModel(ModelMixin, ConfigMixin):
                         return None, None
                     else:
                         return [None]
-                for i, (x, context) in enumerate(zip(x_list, context_list)):
-                    x_list[i] = block(x, context = context, e= e0, **kwargs)
-                    del x
+
+                if slg_layers is not None and block_idx in slg_layers:
+                    if is_uncond and not joint_pass:
+                        continue
+                    x_list[0] = block(x_list[0], context = context_list[0], e= e0, **kwargs)
+
+                else:
+                    for i, (x, context) in enumerate(zip(x_list, context_list)):
+                        x_list[i] = block(x, context = context, e= e0, **kwargs)
+                        del x
 
             if self.enable_teacache:
                 if joint_pass:

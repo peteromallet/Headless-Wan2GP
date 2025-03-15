@@ -738,6 +738,10 @@ def generate_video(
     video_to_continue,
     max_frames,
     RIFLEx_setting,
+    slg_switch,
+    slg_layers,    
+    slg_start,
+    slg_end, 
     state,
     progress=gr.Progress() #track_tqdm= True
 
@@ -760,7 +764,8 @@ def generate_video(
     width, height = resolution.split("x")
     width, height = int(width), int(height)
 
-
+    if slg_switch == 0:
+        slg_layers = None
     if use_image2video:
         if "480p" in  transformer_filename_i2v and width * height > 848*480:
             raise gr.Error("You must use the 720P image to video model to generate videos with a resolution equivalent to 720P")
@@ -982,6 +987,9 @@ def generate_video(
                         enable_RIFLEx = enable_RIFLEx,
                         VAE_tile_size = VAE_tile_size,
                         joint_pass = joint_pass,
+                        slg_layers = slg_layers,
+                        slg_start = slg_start/100,
+                        slg_end = slg_end/100,
                     )
 
                 else:
@@ -999,6 +1007,9 @@ def generate_video(
                         enable_RIFLEx = enable_RIFLEx,
                         VAE_tile_size = VAE_tile_size,
                         joint_pass = joint_pass,
+                        slg_layers = slg_layers,
+                        slg_start = slg_start/100,
+                        slg_end = slg_end/100,
                     )
             except Exception as e:
                 gen_in_progress = False
@@ -1490,6 +1501,34 @@ def create_demo():
                             label="RIFLEx positional embedding to generate long video"
                         )
 
+
+                        with gr.Row():
+                            gr.Markdown("Experimental: Skip Layer guidance,should improve video quality")
+                        with gr.Row():
+                            slg_switch = gr.Dropdown(
+                                choices=[
+                                    ("OFF", 0),
+                                    ("ON", 1), 
+                                ],
+                                value= 0,
+                                visible=True,
+                                scale = 1,
+                                label="Skip Layer guidance"
+                            )
+                            slg_layers = gr.Dropdown(
+                                choices=[
+                                    (str(i), i ) for i in range(40)
+                                ],
+                                value= [9],
+                                multiselect= True,
+                                label="Skip Layers",
+                                scale= 3
+                            )
+                        with gr.Row():
+                            slg_start_perc = gr.Slider(0, 100, value=10, step=1, label="Denoising Steps % start") 
+                            slg_end_perc = gr.Slider(0, 100, value=90, step=1, label="Denoising Steps % end") 
+
+
                 show_advanced.change(fn=lambda x: gr.Row(visible=x), inputs=[show_advanced], outputs=[advanced_row])
             
             with gr.Column():
@@ -1537,7 +1576,11 @@ def create_demo():
                 video_to_continue,
                 max_frames,
                 RIFLEx_setting,
-                state
+                slg_switch, 
+                slg_layers,
+                slg_start_perc,
+                slg_end_perc,
+                state,
             ],
             outputs= [gen_status] #,state 
 

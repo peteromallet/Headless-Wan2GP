@@ -119,20 +119,23 @@ class WanT2V:
         self.sample_neg_prompt = config.sample_neg_prompt
 
     def generate(self,
-                 input_prompt,
-                 size=(1280, 720),
-                 frame_num=81,
-                 shift=5.0,
-                 sample_solver='unipc',
-                 sampling_steps=50,
-                 guide_scale=5.0,
-                 n_prompt="",
-                 seed=-1,
-                 offload_model=True,
-                 callback = None,
-                 enable_RIFLEx = None,
-                 VAE_tile_size = 0,
-                 joint_pass = False,
+                input_prompt,
+                size=(1280, 720),
+                frame_num=81,
+                shift=5.0,
+                sample_solver='unipc',
+                sampling_steps=50,
+                guide_scale=5.0,
+                n_prompt="",
+                seed=-1,
+                offload_model=True,
+                callback = None,
+                enable_RIFLEx = None,
+                VAE_tile_size = 0,
+                joint_pass = False,
+                slg_layers = None,
+                slg_start = 0.0,
+                slg_end = 1.0,
                  ):
         r"""
         Generates video frames from text prompt using diffusion process.
@@ -253,6 +256,9 @@ class WanT2V:
             callback(-1, None)
         for i, t in enumerate(tqdm(timesteps)):
             latent_model_input = latents
+            slg_layers_local = None
+            if int(slg_start * sampling_steps) <= i < int(slg_end * sampling_steps):
+                slg_layers_local = slg_layers
             timestep = [t]
             offload.set_step_no_for_lora(self.model, i)
             timestep = torch.stack(timestep)
@@ -260,7 +266,7 @@ class WanT2V:
             # self.model.to(self.device)
             if joint_pass:
                 noise_pred_cond, noise_pred_uncond = self.model(
-                    latent_model_input, t=timestep,current_step=i, **arg_both)
+                    latent_model_input, t=timestep,current_step=i, slg_layers=slg_layers_local, **arg_both)
                 if self._interrupt:
                     return None
             else:
@@ -269,7 +275,7 @@ class WanT2V:
                 if self._interrupt:
                     return None               
                 noise_pred_uncond = self.model(
-                    latent_model_input, t=timestep,current_step=i, is_uncond = True, **arg_null)[0]
+                    latent_model_input, t=timestep,current_step=i, is_uncond = True, slg_layers=slg_layers_local, **arg_null)[0]
                 if self._interrupt:
                     return None
 

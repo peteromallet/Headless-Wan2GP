@@ -132,22 +132,25 @@ class WanI2V:
         self.sample_neg_prompt = config.sample_neg_prompt
 
     def generate(self,
-                input_prompt,
-                img,
-                max_area=720 * 1280,
-                frame_num=81,
-                shift=5.0,
-                sample_solver='unipc',
-                sampling_steps=40,
-                guide_scale=5.0,
-                n_prompt="",
-                seed=-1,
-                offload_model=True,
-                callback = None,
-                enable_RIFLEx = False,
-                VAE_tile_size= 0,
-                joint_pass = False,
-                ):
+        input_prompt,
+        img,
+        max_area=720 * 1280,
+        frame_num=81,
+        shift=5.0,
+        sample_solver='unipc',
+        sampling_steps=40,
+        guide_scale=5.0,
+        n_prompt="",
+        seed=-1,
+        offload_model=True,
+        callback = None,
+        enable_RIFLEx = False,
+        VAE_tile_size= 0,
+        joint_pass = False,
+        slg_layers = None,
+        slg_start = 0.0,
+        slg_end = 1.0,
+    ):
         r"""
         Generates video frames from input image and text prompt using diffusion process.
 
@@ -332,24 +335,41 @@ class WanI2V:
 
         for i, t in enumerate(tqdm(timesteps)):
             offload.set_step_no_for_lora(self.model, i)
+            slg_layers_local = None
+            if int(slg_start * sampling_steps) <= i < int(slg_end * sampling_steps):
+                slg_layers_local = slg_layers
+
             latent_model_input = [latent.to(self.device)]
             timestep = [t]
 
             timestep = torch.stack(timestep).to(self.device)
             if joint_pass:
+                # if slg_layers is not None:
+                #     raise ValueError('Can not use SLG and joint-pass')
                 noise_pred_cond, noise_pred_uncond = self.model(
-                    latent_model_input, t=timestep, current_step=i, **arg_both)
+                    latent_model_input, t=timestep, current_step=i, slg_layers=slg_layers_local, **arg_both)
                 if self._interrupt:
                     return None                
             else:
                 noise_pred_cond = self.model(
-                    latent_model_input, t=timestep, current_step=i, is_uncond = False, **arg_c)[0]
+                    latent_model_input,
+                    t=timestep,
+                    current_step=i,
+                    is_uncond=False,
+                    **arg_c,
+                )[0]
                 if self._interrupt:
                     return None                
                 if offload_model:
                     torch.cuda.empty_cache()
                 noise_pred_uncond = self.model(
-                    latent_model_input, t=timestep, current_step=i, is_uncond = True, **arg_null)[0]
+                    latent_model_input,
+                    t=timestep,
+                    current_step=i,
+                    is_uncond=True,
+                    slg_layers=slg_layers_local,
+                    **arg_null,
+                )[0]
                 if self._interrupt:
                     return None                
             del latent_model_input
