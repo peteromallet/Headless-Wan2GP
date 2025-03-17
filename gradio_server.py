@@ -1486,15 +1486,24 @@ def download_loras():
 
     yield "<B><FONT SIZE=3>Please wait while the Loras are being downloaded</B></FONT>", *[gr.Column(visible=False)] * 2
     log_path = os.path.join(lora_dir, "log.txt")
-    if not os.path.isfile(log_path):
+    if not os.path.isfile(log_path) or True:
         import shutil 
         tmp_path = os.path.join(lora_dir, "tmp_lora_dowload")
 
         import  shutil, glob
         snapshot_download(repo_id="DeepBeepMeep/Wan2.1",  allow_patterns="loras_i2v/*", local_dir= tmp_path)
-        [shutil.move(f, lora_dir) for f in glob.glob(os.path.join(tmp_path, "loras_i2v", "*.*")) if not "README.txt" in f ]
+        for f in glob.glob(os.path.join(tmp_path, "loras_i2v", "*.*")):
+            target_file = os.path.join(lora_dir,  Path(f).parts[-1] )
+            if os.path.isfile(target_file):
+                os.remove(f)
+            else:
+                shutil.move(f, lora_dir) 
 
-
+    try:
+        os.remove(tmp_path)
+    except:
+        pass
+    
     yield "<B><FONT SIZE=3>Loras have been completely downloaded</B></FONT>", *[gr.Column(visible=True)] * 2
 
     from datetime import datetime
