@@ -19,6 +19,13 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 
 
 ## 🔥 Latest News!!
+* Marc 17 2022: 👋 Wan2.1GP v2.0: The Lora festival continues:
+    - Clearer user interface
+    - Download 30 Loras in one click to try them all (expand the info section)
+    - Very to use Loras as now Lora presets can input the subject (or other need terms) of the Lora so that you dont have to modify manually a prompt 
+    - Added basic macro prompt language to prefill prompts with differnent values. With one prompt template, you can generate multiple prompts.
+    - New Multiple images prompts: you can now combine any number of images with any number of text promtps (need to launch the app with --multiple-images)
+    - New command lines options to launch directly the 1.3B t2v model or the 14B t2v model
 * Mar 14, 2025: 👋 Wan2.1GP v1.7: 
     - Lora Fest special edition: very fast loading / unload of loras for those Loras collectors around. You can also now add / remove loras in the Lora folder without restarting the app. You will need to refresh the requirements *pip install -r requirements.txt*
     - Added experimental Skip Layer Guidance (advanced settings), that should improve the image quality at no extra cost. Many thanks to the *AmericanPresidentJimmyCarter* for the original implementation
@@ -121,7 +128,11 @@ To run the text to video generator (in Low VRAM mode):
 ```bash
 python gradio_server.py
 #or
-python gradio_server.py --t2v
+python gradio_server.py --t2v #launch the default text 2 video model
+#or
+python gradio_server.py --t2v-14B #for the 14B model 
+#or
+python gradio_server.py --t2v-1-3B #for the 1.3B model
 
 ```
 
@@ -191,10 +202,27 @@ python gradio_server.py --lora-preset  mylorapreset.lset # where 'mylorapreset.l
 
 You will find prebuilt Loras on https://civitai.com/ or you will be able to build them with tools such as kohya or onetrainer.
 
+### Macros (basic)
+In *Advanced Mode*, you can starts prompt lines with a "!" , for instance:\ 
+```
+! {Subject}="cat","woman","man", {Location}="forest","lake","city", {Possessive}="its", "her", "his"
+In the video, a {Subject} is presented. The {Subject} is in a {Location} and looks at {Possessive} watch.
+```
+
+This will create automatically 3 prompts that will cause the generation of 3 videos:
+```
+In the video, a cat is presented. The cat is in a forest and looks at its watch.
+In the video, a man is presented. The man is in a lake  and looks at his watch.
+In the video, a woman is presented. The woman is in a city and looks at her watch.
+```
+
+You can define multiple lines of macros. If there is only one macro line, the app will generate a simple user interface to enter the macro variables when getting back to *Normal Mode* (advanced mode turned off)
 
 ### Command line parameters for Gradio Server
 --i2v : launch the image to video generator\
---t2v : launch the text to video generator\
+--t2v : launch the text to video generator (default defined in the configuration)\
+--t2v-14B : launch the 14B model text to video generator\
+--t2v-1-3B : launch the 1.3B model text to video generator\
 --quantize-transformer bool: (default True) : enable / disable on the fly transformer quantization\
 --lora-dir path : Path of directory that contains Loras in diffusers / safetensor format\
 --lora-preset preset : name of preset gile (without the extension) to preload
@@ -208,7 +236,12 @@ You will find prebuilt Loras on https://civitai.com/ or you will be able to buil
 --compile : turn on pytorch compilation\
 --attention mode: force attention mode among, sdpa, flash, sage, sage2\
 --profile no : default (4) : no of profile between 1 and 5\
---preload no : number in Megabytes to preload partially the diffusion model in VRAM , may offer slight speed gains especially on older hardware. Works only with profile 2 and 4.
+--preload no : number in Megabytes to preload partially the diffusion model in VRAM , may offer slight speed gains especially on older hardware. Works only with profile 2 and 4.\
+--seed no : set default seed value\
+--frames no : set the default number of frames to generate\
+--steps no : set the default number of denoising steps\
+--check-loras : filter loras that are incompatible (will take a few seconds while refreshing the lora list or while starting the app)\
+--advanced : turn on the advanced mode while launching the app
 
 ### Profiles (for power users only)
 You can choose between 5 profiles, but two are really relevant here :

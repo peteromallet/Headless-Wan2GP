@@ -676,6 +676,7 @@ class WanModel(ModelMixin, ConfigMixin):
 	
         best_threshold = 0.01
         best_diff = 1000
+        best_signed_diff = 1000
         target_nb_steps= int(len(timesteps) / speed_factor)
         threshold = 0.01
         while threshold <= 0.6:
@@ -686,6 +687,8 @@ class WanModel(ModelMixin, ConfigMixin):
                 skip = False
                 if not (i<=start_step or i== len(timesteps)):
                     accumulated_rel_l1_distance += rescale_func(((e_list[i]-previous_modulated_input).abs().mean() / previous_modulated_input.abs().mean()).cpu().item())
+        #   self.accumulated_rel_l1_distance_even += rescale_func(((e_list[i]-self.previous_e0_even).abs().mean() / self.previous_e0_even.abs().mean()).cpu().item())
+
                     if accumulated_rel_l1_distance < threshold:
                         skip = True
                     else:
@@ -693,15 +696,17 @@ class WanModel(ModelMixin, ConfigMixin):
                 previous_modulated_input = e_list[i]
                 if not skip:
                     nb_steps += 1
-                    diff = abs(target_nb_steps - nb_steps)                
+                    signed_diff = target_nb_steps - nb_steps               
+                    diff = abs(signed_diff)  
             if diff < best_diff:
                 best_threshold = threshold
                 best_diff = diff
+                best_signed_diff = signed_diff
             elif diff > best_diff:
                 break
             threshold += 0.01
         self.rel_l1_thresh = best_threshold
-        print(f"Tea Cache, best threshold found:{best_threshold} with gain x{len(timesteps)/(len(timesteps) - best_diff):0.1f} for a target of x{speed_factor}")
+        print(f"Tea Cache, best threshold found:{best_threshold:0.2f} with gain x{len(timesteps)/(target_nb_steps - best_signed_diff):0.2f} for a target of x{speed_factor}")
         return best_threshold
     
     def forward(
