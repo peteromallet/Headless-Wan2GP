@@ -1551,14 +1551,13 @@ def create_demo():
                 gr.Markdown("It is not recommmended to generate a video longer than 8s (128 frames) even if there is still some VRAM left as some artifacts may appear")
             gr.Markdown("Please note that if your turn on compilation, the first denoising step of the first video generation will be slow due to the compilation. Therefore all your tests should be done with compilation turned off.")
 
-        if use_image2video:
-            with gr.Row():
-                with gr.Row(scale =3):
-                    gr.Markdown("<I>Wan2GP's Lora Festival ! Press the following button to download i2v <B>Remade</B> Loras collection (and bonuses Loras). Dont't forget first to make a backup of your Loras just in case.")
-                with gr.Row(scale =1):
-                    download_loras_btn = gr.Button("---> Let the Lora's Festival Start !", scale =1)
-            with gr.Row():
-                download_status = gr.Markdown()
+        with gr.Row(visible= use_image2video):
+            with gr.Row(scale =3):
+                gr.Markdown("<I>Wan2GP's Lora Festival ! Press the following button to download i2v <B>Remade</B> Loras collection (and bonuses Loras). Dont't forget first to make a backup of your Loras just in case.")
+            with gr.Row(scale =1):
+                download_loras_btn = gr.Button("---> Let the Lora's Festival Start !", scale =1)
+        with gr.Row(visible= use_image2video):
+            download_status = gr.Markdown()
 
         # css = """<STYLE>
         #         h2 { width: 100%;  text-align: center; border-bottom: 1px solid #000; line-height: 0.1em; margin: 10px 0 20px;  } 
