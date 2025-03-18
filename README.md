@@ -19,7 +19,9 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 
 
 ## 🔥 Latest News!!
-* Marc 17 2022: 👋 Wan2.1GP v2.0: The Lora festival continues:
+* Mar 18 2022: 👋 Wan2.1GP v2.1: More Loras !: added support for 'Safetensors' and 'Replicate' Lora formats.\
+You will need to refresh the requirements with a *pip install -r requirements.txt*
+* Mar 17 2022: 👋 Wan2.1GP v2.0: The Lora festival continues:
     - Clearer user interface
     - Download 30 Loras in one click to try them all (expand the info section)
     - Very to use Loras as now Lora presets can input the subject (or other need terms) of the Lora so that you dont have to modify manually a prompt 
