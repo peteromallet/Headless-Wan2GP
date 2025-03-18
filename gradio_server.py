@@ -1237,6 +1237,19 @@ def generate_video(
                     nrow=1,
                     normalize=True,
                     value_range=(-1, 1))
+                
+                configs = {
+                    'prompt': prompt,
+                    'negative_prompt': negative_prompt,
+                    'resolution': resolution,
+                    'video_length': video_length,
+                    'seed': seed,
+                    'num_inference_steps': num_inference_steps,
+                }
+
+                # Save the configs as json format
+                with open(video_path.replace('.mp4', '.json'), 'w') as f:
+                    json.dump(configs, f, indent=4)
 
                 print(f"New video saved to Path: "+video_path)
                 file_list.append(video_path)
@@ -1306,7 +1319,7 @@ def save_lset(state, lset_name, loras_choices, loras_mult_choices, prompt, save_
         full_lset_name_filename = os.path.join(lora_dir, lset_name_filename) 
 
         with open(full_lset_name_filename, "w", encoding="utf-8") as writer:
-            writer.write(json.dumps(lset))
+            writer.write(json.dumps(lset, indent=4))
 
         if lset_name in loras_presets:
             gr.Info(f"Lora Preset '{lset_name}' has been updated")
@@ -1582,7 +1595,7 @@ def create_demo():
         }
 """
     default_flow_shift = get_default_flow(transformer_filename_i2v if use_image2video else transformer_filename_t2v)
-    with gr.Blocks(css=css, theme=gr.themes.Soft(primary_hue="emerald", neutral_hue="slate", text_size= "md")) as demo:
+    with gr.Blocks(css=css, theme=gr.themes.Soft(primary_hue="sky", neutral_hue="slate", text_size= "md")) as demo:
         state_dict = {}
        
         if use_image2video:
