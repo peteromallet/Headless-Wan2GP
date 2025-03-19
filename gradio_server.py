@@ -292,6 +292,7 @@ if not Path(server_config_filename).is_file():
                      "text_encoder_filename" : text_encoder_choices[1],
                      "save_path": os.path.join(os.getcwd(), "gradio_outputs"),
                      "compile" : "",
+                     "metadata_type": "metadata",
                      "default_ui": "t2v",
                      "boost" : 1,
                      "vae_config": 0,
@@ -325,6 +326,8 @@ if len(args.vae_config) > 0:
     vae_config = int(args.vae_config)
 
 default_ui = server_config.get("default_ui", "t2v") 
+metadata = server_config.get("metadata_type", "metadata")
+save_path = server_config.get("save_path", os.path.join(os.getcwd(), "gradio_outputs"))
 use_image2video = default_ui != "t2v"
 if args.t2v:
     use_image2video = False
@@ -670,6 +673,7 @@ def apply_changes(  state,
                     compile_choice,
                     profile_choice,
                     vae_config_choice,
+                    metadata_choice,
                     default_ui_choice ="t2v",
                     boost_choice = 1
 ):
@@ -687,6 +691,7 @@ def apply_changes(  state,
                      "compile" : compile_choice,
                      "profile" : profile_choice,
                      "vae_config" : vae_config_choice,
+                     "metadata_choice": metadata_choice,
                      "default_ui" : default_ui_choice,
                      "boost" : boost_choice,
                        }
@@ -910,6 +915,7 @@ def generate_video(
     slg_start,
     slg_end, 
     state,
+    metadata_choice,
     progress=gr.Progress() #track_tqdm= True
 
 ):
@@ -1113,7 +1119,6 @@ def generate_video(
     file_list = []
     state["file_list"] = file_list    
     global save_path
-    save_path = server_config.get("save_path", os.path.join(os.getcwd(), "gradio_outputs"))
     os.makedirs(save_path, exist_ok=True)
     video_no = 0
     total_video =  repeat_generation * len(prompts)
@@ -1272,9 +1277,14 @@ def generate_video(
                     'num_inference_steps': num_inference_steps,
                 }
 
-                # Save the configs as json format
-                with open(video_path.replace('.mp4', '.json'), 'w') as f:
-                    json.dump(configs, f, indent=4)
+                if metadata_choice == "json":
+                    with open(video_path.replace('.mp4', '.json'), 'w') as f:
+                        json.dump(configs, f, indent=4)
+                elif metadata_choice == "metadata":
+                    from mutagen.mp4 import MP4
+                    file = MP4(video_path)
+                    file.tags['©cmt'] = [json.dumps(configs)]
+                    file.save()
 
                 print(f"New video saved to Path: "+video_path)
                 file_list.append(video_path)
@@ -1702,7 +1712,7 @@ def create_demo():
                  )
                 save_path_choice = gr.Textbox(
                     label="Output Folder for Generated Videos",
-                    value=server_config.get("save_path", os.path.join(os.getcwd(), "gradio_outputs"))
+                    value=server_config.get("save_path", save_path)
                 )
                 def check(mode): 
                     if not mode in attention_modes_supported:
@@ -1776,6 +1786,16 @@ def create_demo():
                     label="Default mode when launching the App if not '--t2v' ot '--i2v' switch is specified when launching the server ",
                     # visible= True ############
                  )                
+
+                metadata_choice = gr.Dropdown(
+                    choices=[
+                        ("Export JSON files", "json"),
+                        ("Add metadata to video", "metadata"),
+                        ("Neither", "none")
+                    ],
+                    value=metadata,
+                    label="Metadata Handling"
+                )
 
                 msg = gr.Markdown()            
                 apply_btn  = gr.Button("Apply Changes")
@@ -2044,6 +2064,7 @@ def create_demo():
                 slg_start_perc,
                 slg_end_perc,
                 state,
+                metadata_choice,
             ],
             outputs= [gen_status] #,state 
 
@@ -2065,6 +2086,7 @@ def create_demo():
                     compile_choice,                            
                     profile_choice,
                     vae_config_choice,
+                    metadata_choice,
                     default_ui_choice,
                     boost_choice,
                 ],
