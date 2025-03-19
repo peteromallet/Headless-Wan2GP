@@ -234,7 +234,7 @@ You can define multiple lines of macros. If there is only one macro line, the ap
 --open-browser : open automatically Browser when launching Gradio Server\
 --lock-config : prevent modifying the video engine configuration from the interface\
 --share : create a shareable URL on huggingface so that your server can be accessed remotely\
---multiple-images : allow the users to choose multiple images as different starting points for new videos\ 
+--multiple-images : allow the users to choose multiple images as different starting points for new videos\
 --compile : turn on pytorch compilation\
 --attention mode: force attention mode among, sdpa, flash, sage, sage2\
 --profile no : default (4) : no of profile between 1 and 5\
