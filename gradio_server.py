@@ -236,7 +236,7 @@ def _parse_args():
     )
 
     parser.add_argument(
-        "--skip-guidance",
+        "--slg",
         action="store_true",
         help="Enable skip guidance"
     )
@@ -1982,7 +1982,7 @@ def create_demo():
                                     ("OFF", 0),
                                     ("ON", 1), 
                                 ],
-                                value= 1 if args.skip_guidance else 0,
+                                value= 1 if args.slg else 0,
                                 visible=True,
                                 scale = 1,
                                 label="Skip Layer guidance"
