@@ -38,27 +38,35 @@ import warnings
 
 try:
     from sageattention import sageattn
-    @torch.compiler.disable()
-    def sageattn_wrapper(
-            qkv_list,
-            attention_length
-        ):
-        q,k, v = qkv_list
-        padding_length = q.shape[0] -attention_length
-        q = q[:attention_length, :, : ].unsqueeze(0)
-        k = k[:attention_length, :, : ].unsqueeze(0)
-        v = v[:attention_length, :, : ].unsqueeze(0)
-
-        o = sageattn(q, k, v, tensor_layout="NHD").squeeze(0)
-        del q, k ,v
-        qkv_list.clear()
-
-        if padding_length > 0:
-            o = torch.cat([o, torch.empty( (padding_length, *o.shape[-2:]), dtype= o.dtype, device=o.device  ) ], 0)
-
-        return o
+    from .sage2_core import sageattn as alt_sageattn
 except ImportError:
     sageattn = None
+    alt_sageattn = None
+
+# @torch.compiler.disable()
+def sageattn_wrapper(
+        qkv_list,
+        attention_length
+    ):
+    q,k, v = qkv_list
+    padding_length = q.shape[0] -attention_length
+    q = q[:attention_length, :, : ].unsqueeze(0)
+    k = k[:attention_length, :, : ].unsqueeze(0)
+    v = v[:attention_length, :, : ].unsqueeze(0)
+    if True:
+        qkv_list = [q,k,v]
+        del q, k ,v
+        o = alt_sageattn(qkv_list, tensor_layout="NHD").squeeze(0)
+    else:
+        o = sageattn(q, k, v, tensor_layout="NHD").squeeze(0)
+        del q, k ,v
+
+    qkv_list.clear()
+
+    if padding_length > 0:
+        o = torch.cat([o, torch.empty( (padding_length, *o.shape[-2:]), dtype= o.dtype, device=o.device  ) ], 0)
+
+    return o
 
 # # try:
 # if True:
