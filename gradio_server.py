@@ -219,6 +219,27 @@ def _parse_args():
     help="vae config mode"
     )    
 
+    parser.add_argument(
+        "--res",
+        type=str,
+        default="480p",
+        choices=["480p", "720p", "823p", "1024p", "1280p"],
+        help="Default resolution for the video (480p, 720p, 823p, 1024p or 1280p)"
+    )
+
+    parser.add_argument(
+        "--teacache",
+        type=str,
+        default="0",
+        choices=["0", "1.5", "1.75", "2.0", "2.25", "2.5"],
+        help="Default teacache setting"
+    )
+
+    parser.add_argument(
+        "--skip-guidance",
+        action="store_true",
+        help="Enable skip guidance"
+    )
 
     args = parser.parse_args()
 
@@ -269,7 +290,9 @@ if not Path(server_config_filename).is_file():
                      "transformer_filename": transformer_choices_t2v[0], 
                      "transformer_filename_i2v": transformer_choices_i2v[1],  ########
                      "text_encoder_filename" : text_encoder_choices[1],
+                     "save_path": os.path.join(os.getcwd(), "gradio_outputs"),
                      "compile" : "",
+                     "metadata_type": "metadata",
                      "default_ui": "t2v",
                      "boost" : 1,
                      "vae_config": 0,
@@ -303,6 +326,8 @@ if len(args.vae_config) > 0:
     vae_config = int(args.vae_config)
 
 default_ui = server_config.get("default_ui", "t2v") 
+metadata = server_config.get("metadata_type", "metadata")
+save_path = server_config.get("save_path", os.path.join(os.getcwd(), "gradio_outputs"))
 use_image2video = default_ui != "t2v"
 if args.t2v:
     use_image2video = False
@@ -330,7 +355,7 @@ else:
     root_lora_dir = lora_dir
 lora_dir = get_lora_dir(root_lora_dir)
 lora_preselected_preset = args.lora_preset
-default_tea_cache = 0
+default_tea_cache = float(args.teacache)
 # if args.fast : #or args.fastest
 #     transformer_filename_t2v = transformer_choices_t2v[2]
 #     attention_mode="sage2" if "sage2" in attention_modes_supported else "sage"
@@ -643,10 +668,12 @@ def apply_changes(  state,
                     transformer_t2v_choice,
                     transformer_i2v_choice,
                     text_encoder_choice,
+                    save_path_choice,
                     attention_choice,
                     compile_choice,
                     profile_choice,
                     vae_config_choice,
+                    metadata_choice,
                     default_ui_choice ="t2v",
                     boost_choice = 1
 ):
@@ -660,9 +687,11 @@ def apply_changes(  state,
                      "transformer_filename": transformer_choices_t2v[transformer_t2v_choice], 
                      "transformer_filename_i2v": transformer_choices_i2v[transformer_i2v_choice],  ##########
                      "text_encoder_filename" : text_encoder_choices[text_encoder_choice],
+                     "save_path" : save_path_choice,
                      "compile" : compile_choice,
                      "profile" : profile_choice,
                      "vae_config" : vae_config_choice,
+                     "metadata_choice": metadata_choice,
                      "default_ui" : default_ui_choice,
                      "boost" : boost_choice,
                        }
@@ -886,6 +915,7 @@ def generate_video(
     slg_start,
     slg_end, 
     state,
+    metadata_choice,
     progress=gr.Progress() #track_tqdm= True
 
 ):
@@ -1088,7 +1118,7 @@ def generate_video(
 
     file_list = []
     state["file_list"] = file_list    
-    save_path = os.path.join(os.getcwd(), "gradio_outputs")
+    global save_path
     os.makedirs(save_path, exist_ok=True)
     video_no = 0
     total_video =  repeat_generation * len(prompts)
@@ -1229,7 +1259,7 @@ def generate_video(
                     file_name = f"{time_flag}_seed{seed}_{sanitize_file_name(prompt[:50]).strip()}.mp4"
                 else:
                     file_name = f"{time_flag}_seed{seed}_{sanitize_file_name(prompt[:100]).strip()}.mp4"
-                video_path = os.path.join(os.getcwd(), "gradio_outputs", file_name)        
+                video_path = os.path.join(save_path, file_name)        
                 cache_video(
                     tensor=sample[None],
                     save_file=video_path,
@@ -1247,9 +1277,14 @@ def generate_video(
                     'num_inference_steps': num_inference_steps,
                 }
 
-                # Save the configs as json format
-                with open(video_path.replace('.mp4', '.json'), 'w') as f:
-                    json.dump(configs, f, indent=4)
+                if metadata_choice == "json":
+                    with open(video_path.replace('.mp4', '.json'), 'w') as f:
+                        json.dump(configs, f, indent=4)
+                elif metadata_choice == "metadata":
+                    from mutagen.mp4 import MP4
+                    file = MP4(video_path)
+                    file.tags['©cmt'] = [json.dumps(configs)]
+                    file.save()
 
                 print(f"New video saved to Path: "+video_path)
                 file_list.append(video_path)
@@ -1675,6 +1710,10 @@ def create_demo():
                     value= index,
                     label="Text Encoder model"
                  )
+                save_path_choice = gr.Textbox(
+                    label="Output Folder for Generated Videos",
+                    value=server_config.get("save_path", save_path)
+                )
                 def check(mode): 
                     if not mode in attention_modes_supported:
                         return " (NOT INSTALLED)"
@@ -1748,6 +1787,16 @@ def create_demo():
                     # visible= True ############
                  )                
 
+                metadata_choice = gr.Dropdown(
+                    choices=[
+                        ("Export JSON files", "json"),
+                        ("Add metadata to video", "metadata"),
+                        ("Neither", "none")
+                    ],
+                    value=metadata,
+                    label="Metadata Handling"
+                )
+
                 msg = gr.Markdown()            
                 apply_btn  = gr.Button("Apply Changes")
 
@@ -1817,6 +1866,7 @@ def create_demo():
                 state = gr.State(state_dict)
              
                 with gr.Row():
+                    res = args.res
                     if use_image2video:
                         resolution = gr.Dropdown(
                             choices=[
@@ -1824,7 +1874,7 @@ def create_demo():
                                 ("720p", "1280x720"),
                                 ("480p", "832x480"),
                             ],
-                            value="832x480",
+                            value="1280x720" if res == "720p" else "832x480",
                             label="Resolution (video will have the same height / width ratio than the original image)"
                         )
 
@@ -1845,7 +1895,7 @@ def create_demo():
                                 # ("624x832 (3:4, 540p)", "624x832"),
                                 # ("720x720 (1:1, 540p)", "720x720"),
                             ],
-                            value="832x480",
+                            value={"480p": "832x480","720p": "1280x720","823p": "480x832","1024p": "1024x1024","1280p": "720x1280",}.get(res, "832x480"),
                             label="Resolution"
                         )
 
@@ -1932,7 +1982,7 @@ def create_demo():
                                     ("OFF", 0),
                                     ("ON", 1), 
                                 ],
-                                value= 0,
+                                value= 1 if args.skip_guidance else 0,
                                 visible=True,
                                 scale = 1,
                                 label="Skip Layer guidance"
@@ -2014,6 +2064,7 @@ def create_demo():
                 slg_start_perc,
                 slg_end_perc,
                 state,
+                metadata_choice,
             ],
             outputs= [gen_status] #,state 
 
@@ -2030,10 +2081,12 @@ def create_demo():
                     transformer_t2v_choice,
                     transformer_i2v_choice,
                     text_encoder_choice,
+                    save_path_choice,
                     attention_choice,
                     compile_choice,                            
                     profile_choice,
                     vae_config_choice,
+                    metadata_choice,
                     default_ui_choice,
                     boost_choice,
                 ],
@@ -2069,6 +2122,6 @@ if __name__ == "__main__":
             url = "http://" + server_name 
         webbrowser.open(url + ":" + str(server_port), new = 0, autoraise = True)
 
-    demo.launch(server_name=server_name, server_port=server_port, share=args.share)
+    demo.launch(server_name=server_name, server_port=server_port, share=args.share, allowed_paths=[save_path])
 
  
