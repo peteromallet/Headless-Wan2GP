@@ -1929,9 +1929,8 @@ def create_demo():
                             flow_shift = gr.Slider(0.0, 25.0, value= default_flow_shift, step=0.1, label="Shift Scale") 
                         with gr.Row():
                             negative_prompt = gr.Textbox(label="Negative Prompt", value="")
-                        with gr.Row():
-                            gr.Markdown("<B>Loras can be used to create special effects on the video by mentioned a trigger word in the Prompt. You can save Loras combinations in presets.</B>")
                         with gr.Column() as loras_column:
+                            gr.Markdown("<B>Loras can be used to create special effects on the video by mentioned a trigger word in the Prompt. You can save Loras combinations in presets.</B>")
                             loras_choices = gr.Dropdown(
                                 choices=[
                                     (lora_name, str(i) ) for i, lora_name in enumerate(loras_names)
