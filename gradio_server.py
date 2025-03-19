@@ -219,6 +219,27 @@ def _parse_args():
     help="vae config mode"
     )    
 
+    parser.add_argument(
+        "--res",
+        type=str,
+        default="480p",
+        choices=["480p", "720p", "823p", "1024p", "1280p"],
+        help="Default resolution for the video (480p, 720p, 823p, 1024p or 1280p)"
+    )
+
+    parser.add_argument(
+        "--teacache",
+        type=str,
+        default="0",
+        choices=["0", "1.5", "1.75", "2.0", "2.25", "2.5"],
+        help="Default teacache setting"
+    )
+
+    parser.add_argument(
+        "--skip-guidance",
+        action="store_true",
+        help="Enable skip guidance"
+    )
 
     args = parser.parse_args()
 
@@ -331,7 +352,7 @@ else:
     root_lora_dir = lora_dir
 lora_dir = get_lora_dir(root_lora_dir)
 lora_preselected_preset = args.lora_preset
-default_tea_cache = 0
+default_tea_cache = float(args.teacache)
 # if args.fast : #or args.fastest
 #     transformer_filename_t2v = transformer_choices_t2v[2]
 #     attention_mode="sage2" if "sage2" in attention_modes_supported else "sage"
@@ -1825,6 +1846,7 @@ def create_demo():
                 state = gr.State(state_dict)
              
                 with gr.Row():
+                    res = args.res
                     if use_image2video:
                         resolution = gr.Dropdown(
                             choices=[
@@ -1832,7 +1854,7 @@ def create_demo():
                                 ("720p", "1280x720"),
                                 ("480p", "832x480"),
                             ],
-                            value="832x480",
+                            value="1280x720" if res == "720p" else "832x480",
                             label="Resolution (video will have the same height / width ratio than the original image)"
                         )
 
@@ -1853,7 +1875,7 @@ def create_demo():
                                 # ("624x832 (3:4, 540p)", "624x832"),
                                 # ("720x720 (1:1, 540p)", "720x720"),
                             ],
-                            value="832x480",
+                            value={"480p": "832x480","720p": "1280x720","823p": "480x832","1024p": "1024x1024","1280p": "720x1280",}.get(res, "832x480"),
                             label="Resolution"
                         )
 
@@ -1940,7 +1962,7 @@ def create_demo():
                                     ("OFF", 0),
                                     ("ON", 1), 
                                 ],
-                                value= 0,
+                                value= 1 if args.skip_guidance else 0,
                                 visible=True,
                                 scale = 1,
                                 label="Skip Layer guidance"
