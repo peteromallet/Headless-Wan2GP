@@ -137,9 +137,10 @@ def sageattn(
 
 @torch.compiler.disable
 def sageattn_qk_int8_pv_fp16_triton(
-    q: torch.Tensor, 
-    k: torch.Tensor, 
-    v: torch.Tensor, 
+    qkv_list,
+    # q: torch.Tensor, 
+    # k: torch.Tensor, 
+    # v: torch.Tensor, 
     tensor_layout: str = "HND",
     quantization_backend: str = "triton",
     is_causal: bool =False, 
@@ -211,7 +212,8 @@ def sageattn_qk_int8_pv_fp16_triton(
     - All tensors must be on the same cuda device.
     - `smooth_k` will introduce slight overhead but will improve the accuracy under most circumstances.
     """
-
+    q, k, v = qkv_list
+    qkv_list.clear()
     dtype = q.dtype
     assert q.is_cuda, "Input tensors must be on cuda."
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
@@ -266,6 +268,8 @@ def sageattn_qk_int8_pv_fp16_triton(
         q_int8, q_scale, k_int8, k_scale = per_block_int8_cuda(q, k, km=km, sm_scale=sm_scale, tensor_layout=tensor_layout)
     else:
         raise ValueError(f"Unsupported quantization backend: {quantization_backend}")
+    del q,k, km
+
     if is_causal:
         o, lse = attn_true(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, return_lse=return_lse)
     else:
