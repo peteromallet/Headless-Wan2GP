@@ -116,32 +116,10 @@ def _parse_args():
     )
 
     parser.add_argument(
-        "--steps",
-        type=int,
-        default=0,
-        help="default denoising steps"
-    )
-
-    parser.add_argument(
-        "--frames",
-        type=int,
-        default=0,
-        help="default number of frames"
-    )
-
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=-1,
-        help="default generation seed"
-    )
-
-    parser.add_argument(
         "--advanced",
         action="store_true",
         help="Access advanced options by default"
     )
-
 
     parser.add_argument(
         "--server-port",
@@ -219,28 +197,6 @@ def _parse_args():
     help="vae config mode"
     )    
 
-    parser.add_argument(
-        "--res",
-        type=str,
-        default="480p",
-        choices=["480p", "720p", "832p", "1024p", "1280p"],
-        help="Default resolution for the video (480p, 720p, 823p, 1024p or 1280p)"
-    )
-
-    parser.add_argument(
-        "--teacache",
-        type=str,
-        default="0",
-        choices=["0", "1.5", "1.75", "2.0", "2.25", "2.5"],
-        help="Default teacache setting"
-    )
-
-    parser.add_argument(
-        "--slg",
-        action="store_true",
-        help="Enable skip guidance"
-    )
-
     args = parser.parse_args()
 
     return args
@@ -271,11 +227,6 @@ preload =int(args.preload)
 force_profile_no = int(args.profile)
 verbose_level = int(args.verbose)
 quantizeTransformer = args.quantize_transformer
-default_seed = args.seed
-default_number_frames = int(args.frames)
-if default_number_frames > 0:
-    default_number_frames = ((default_number_frames - 1) // 4) * 4 + 1 
-default_inference_steps = args.steps
 check_loras = args.check_loras ==1
 advanced = args.advanced
 
@@ -305,6 +256,35 @@ else:
         text = reader.read()
     server_config = json.loads(text)
 
+ui_defaults_filename = "ui_defaults.json"
+
+if not Path(ui_defaults_filename).is_file():
+    default_ui_defaults = {
+        "prompts": get_default_prompt(use_image2video),
+        "resolution": "832x480",
+        "video_length": 81,
+        "num_inference_steps": 30,
+        "seed": -1,
+        "repeat_generation": 1,
+        "guidance_scale": 5.0,
+        "flow_shift": get_default_flow(transformer_filename_i2v if use_image2video else transformer_filename_t2v),
+        "negative_prompt": "",
+        "activated_loras": [],
+        "loras_multipliers": "",
+        "tea_cache": 0.0,
+        "tea_cache_start_step_perc": 0,
+        "RIFLEx_setting": 0,
+        "slg_switch": 0,
+        "slg_layers": [9],
+        "slg_start_perc": 10,
+        "slg_end_perc": 90
+    }
+    with open(ui_defaults_filename, "w", encoding="utf-8") as f:
+        json.dump(default_ui_defaults, f, indent=4)
+    ui_defaults = default_ui_defaults
+else:
+    with open(ui_defaults_filename, "r", encoding="utf-8") as f:
+        ui_defaults = json.load(f)
 
 transformer_filename_t2v = server_config["transformer_filename"]
 transformer_filename_i2v = server_config.get("transformer_filename_i2v", transformer_choices_i2v[1]) ########
@@ -355,7 +335,6 @@ else:
     root_lora_dir = lora_dir
 lora_dir = get_lora_dir(root_lora_dir)
 lora_preselected_preset = args.lora_preset
-default_tea_cache = float(args.teacache)
 # if args.fast : #or args.fastest
 #     transformer_filename_t2v = transformer_choices_t2v[2]
 #     attention_mode="sage2" if "sage2" in attention_modes_supported else "sage"
@@ -1629,7 +1608,6 @@ def create_demo():
             white-space: nowrap;
         }
 """
-    default_flow_shift = get_default_flow(transformer_filename_i2v if use_image2video else transformer_filename_t2v)
     with gr.Blocks(css=css, theme=gr.themes.Soft(primary_hue="sky", neutral_hue="slate", text_size= "md")) as demo:
         state_dict = {}
        
@@ -1848,7 +1826,7 @@ def create_demo():
                     advanced_prompt  = len(errors) > 0
 
                 with gr.Column(visible= advanced_prompt) as prompt_column_advanced: #visible= False
-                    prompt = gr.Textbox( visible= advanced_prompt, label="Prompts (each new line of prompt will generate a new video, # lines = comments, ! lines = macros)", value=default_prompt, lines=3)
+                    prompt = gr.Textbox( visible= advanced_prompt, label="Prompts (each new line of prompt will generate a new video, # lines = comments, ! lines = macros)", value=ui_defaults["prompts"], lines=3)
 
                 with gr.Column(visible=not advanced_prompt and len(variables) > 0) as prompt_column_wizard_vars: #visible= False
                     gr.Markdown("<B>Please fill the following input fields to adapt automatically the Prompt:</B>")
@@ -1866,7 +1844,6 @@ def create_demo():
                 state = gr.State(state_dict)
              
                 with gr.Row():
-                    res = args.res
                     if use_image2video:
                         resolution = gr.Dropdown(
                             choices=[
@@ -1874,7 +1851,7 @@ def create_demo():
                                 ("720p", "1280x720"),
                                 ("480p", "832x480"),
                             ],
-                            value="1280x720" if res == "720p" else "832x480",
+                            value=ui_defaults["resolution"],
                             label="Resolution (video will have the same height / width ratio than the original image)"
                         )
 
@@ -1895,15 +1872,15 @@ def create_demo():
                                 # ("624x832 (3:4, 540p)", "624x832"),
                                 # ("720x720 (1:1, 540p)", "720x720"),
                             ],
-                            value={"480p": "832x480","720p": "1280x720","832p": "480x832","1024p": "1024x1024","1280p": "720x1280",}.get(res, "832x480"),
+                            value=ui_defaults["resolution"],
                             label="Resolution"
                         )
 
                 with gr.Row():
                     with gr.Column():
-                        video_length = gr.Slider(5, 193, value=default_number_frames if default_number_frames > 0 else 81, step=4, label="Number of frames (16 = 1s)")
+                        video_length = gr.Slider(5, 193, value=ui_defaults["video_length"], step=4, label="Number of frames (16 = 1s)")
                     with gr.Column():
-                        num_inference_steps = gr.Slider(1, 100, value=  default_inference_steps if default_inference_steps > 0 else 30, step=1, label="Number of Inference Steps")
+                        num_inference_steps = gr.Slider(1, 100, value=ui_defaults["num_inference_steps"], step=1, label="Number of Inference Steps")
 
                 with gr.Row():
                     max_frames = gr.Slider(1, 100, value=9, step=1, label="Number of input frames to use for Video2World prediction", visible=use_image2video and False) #########
@@ -1913,9 +1890,9 @@ def create_demo():
                 show_advanced = gr.Checkbox(label="Advanced Mode", value=advanced)
                 with gr.Row(visible=advanced) as advanced_row:
                     with gr.Column():
-                        seed = gr.Slider(-1, 999999999, value=default_seed, step=1, label="Seed (-1 for random)") 
+                        seed = gr.Slider(-1, 999999999, value=ui_defaults["seed"], step=1, label="Seed (-1 for random)") 
                         with gr.Row():
-                            repeat_generation = gr.Slider(1, 25.0, value=1.0, step=1, label="Default Number of Generated Videos per Prompt") 
+                            repeat_generation = gr.Slider(1, 25.0, value=ui_defaults["repeat_generation"], step=1, label="Default Number of Generated Videos per Prompt") 
                             multi_images_gen_type = gr.Dropdown(
                                 choices=[
                                     ("Generate every combination of images and texts prompts", 0),
@@ -1924,22 +1901,22 @@ def create_demo():
                             )
 
                         with gr.Row():
-                            guidance_scale = gr.Slider(1.0, 20.0, value=5.0, step=0.5, label="Guidance Scale", visible=True)
+                            guidance_scale = gr.Slider(1.0, 20.0, value=ui_defaults["guidance_scale"], step=0.5, label="Guidance Scale", visible=True)
                             embedded_guidance_scale = gr.Slider(1.0, 20.0, value=6.0, step=0.5, label="Embedded Guidance Scale", visible=False)
-                            flow_shift = gr.Slider(0.0, 25.0, value= default_flow_shift, step=0.1, label="Shift Scale") 
+                            flow_shift = gr.Slider(0.0, 25.0, value=ui_defaults["flow_shift"], step=0.1, label="Shift Scale") 
                         with gr.Row():
-                            negative_prompt = gr.Textbox(label="Negative Prompt", value="")
+                            negative_prompt = gr.Textbox(label="Negative Prompt", value=ui_defaults["negative_prompt"])
                         with gr.Column(visible = len(loras)>0) as loras_column:
                             gr.Markdown("<B>Loras can be used to create special effects on the video by mentioning a trigger word in the Prompt. You can save Loras combinations in presets.</B>")
                             loras_choices = gr.Dropdown(
                                 choices=[
                                     (lora_name, str(i) ) for i, lora_name in enumerate(loras_names)
                                 ],
-                                value= default_loras_choices,
+                                value= ui_defaults["activated_loras"],
                                 multiselect= True,
                                 label="Activated Loras"
                             )
-                            loras_mult_choices = gr.Textbox(label="Loras Multipliers (1.0 by default) separated by space characters or carriage returns, line that starts with # are ignored", value=default_loras_multis_str)
+                            loras_mult_choices = gr.Textbox(label="Loras Multipliers (1.0 by default) separated by space characters or carriage returns, line that starts with # are ignored", value=ui_defaults["loras_multipliers"])
 
 
                         with gr.Row():
@@ -1954,11 +1931,11 @@ def create_demo():
                                     ("around x2.25 speed up", 2.25), 
                                     ("around x2.5 speed up", 2.5), 
                                 ],
-                                value=default_tea_cache,
+                                value=float(ui_defaults["tea_cache"]),
                                 visible=True,
                                 label="Tea Cache Global Acceleration"
                             )
-                            tea_cache_start_step_perc = gr.Slider(0, 100, value=0, step=1, label="Tea Cache starting moment in % of generation") 
+                            tea_cache_start_step_perc = gr.Slider(0, 100, value=ui_defaults["tea_cache_start_step_perc"], step=1, label="Tea Cache starting moment in % of generation") 
 
                         gr.Markdown("<B>With Riflex you can generate videos longer than 5s which is the default duration of videos used to train the model</B>")
                         RIFLEx_setting = gr.Dropdown(
@@ -1967,7 +1944,7 @@ def create_demo():
                                 ("Always ON", 1), 
                                 ("Always OFF", 2), 
                             ],
-                            value=0,
+                            value=ui_defaults["RIFLEx_setting"],
                             label="RIFLEx positional embedding to generate long video"
                         )
 
@@ -1980,7 +1957,7 @@ def create_demo():
                                     ("OFF", 0),
                                     ("ON", 1), 
                                 ],
-                                value= 1 if args.slg else 0,
+                                value=ui_defaults["slg_switch"],
                                 visible=True,
                                 scale = 1,
                                 label="Skip Layer guidance"
@@ -1989,14 +1966,14 @@ def create_demo():
                                 choices=[
                                     (str(i), i ) for i in range(40)
                                 ],
-                                value= [9],
+                                value=ui_defaults["slg_layers"],
                                 multiselect= True,
                                 label="Skip Layers",
                                 scale= 3
                             )
                         with gr.Row():
-                            slg_start_perc = gr.Slider(0, 100, value=10, step=1, label="Denoising Steps % start") 
-                            slg_end_perc = gr.Slider(0, 100, value=90, step=1, label="Denoising Steps % end") 
+                            slg_start_perc = gr.Slider(0, 100, value=ui_defaults["slg_start_perc"], step=1, label="Denoising Steps % start") 
+                            slg_end_perc = gr.Slider(0, 100, value=ui_defaults["slg_end_perc"], step=1, label="Denoising Steps % end") 
 
 
                 show_advanced.change(fn=switch_advanced, inputs=[show_advanced, lset_name], outputs=[advanced_row, preset_buttons_rows, refresh_lora_btn, refresh2_row ,lset_name ]).then(
