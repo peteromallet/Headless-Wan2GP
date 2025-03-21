@@ -603,7 +603,16 @@ def load_models(i2v,  lora_dir,  lora_preselected_preset ):
 
     offloadobj = offload.profile(pipe, profile_no= profile, compile = compile, quantizeTransformer = quantizeTransformer, loras = "transformer", **kwargs)  
     loras, loras_names, default_loras_choices, default_loras_multis_str, default_prompt, default_lora_preset, loras_presets = setup_loras(pipe["transformer"],  lora_dir, lora_preselected_preset, None)
-
+    if "activated_loras" in ui_defaults:
+        lora_filenames = [os.path.basename(lora_path) for lora_path in loras]
+        activated_indices = []
+        for lora_file in ui_defaults["activated_loras"]:
+            try:
+                idx = lora_filenames.index(lora_file)
+                activated_indices.append(str(idx))
+            except ValueError:
+                print(f"Warning: Lora file {lora_file} from config not found in loras directory")
+        ui_defaults["activated_loras"] = activated_indices
 
     return wan_model, offloadobj, loras, loras_names, default_loras_choices, default_loras_multis_str, default_prompt, default_lora_preset, loras_presets
 
