@@ -2042,12 +2042,12 @@ def on_tab_select(evt: gr.SelectData):
         return [
             gr.Dropdown(visible=False),
             gr.Dropdown(visible=False),
-            gr.Dropdown(choices=new_loras_choices, visible=True),
+            gr.Dropdown(choices=new_loras_choices, value=ui_defaults['activated_loras'], visible=True),
             gr.Dropdown(choices=lset_choices, value=default_lora_preset, visible=True)
         ]
     else:
         return [
-            gr.Dropdown(choices=new_loras_choices, visible=True),
+            gr.Dropdown(choices=new_loras_choices, value=ui_defaults['activated_loras'], visible=True),
             gr.Dropdown(choices=lset_choices, value=default_lora_preset, visible=True),
             gr.Dropdown(visible=False),
             gr.Dropdown(visible=False)
