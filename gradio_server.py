@@ -899,7 +899,6 @@ def generate_video(
     slg_start,
     slg_end, 
     state,
-    metadata_choice,
     image2video,
     progress=gr.Progress() #track_tqdm= True
 
@@ -1271,6 +1270,7 @@ def generate_video(
                     'num_inference_steps': num_inference_steps,
                 }
 
+                metadata_choice = server_config["metadata_choice"]
                 if metadata_choice == "json":
                     with open(video_path.replace('.mp4', '.json'), 'w') as f:
                         json.dump(configs, f, indent=4)
@@ -1797,15 +1797,6 @@ def generate_video_tab(image2video=False):
                     with gr.Row():
                         slg_start_perc = gr.Slider(0, 100, value=ui_defaults["slg_start_perc"], step=1, label="Denoising Steps % start") 
                         slg_end_perc = gr.Slider(0, 100, value=ui_defaults["slg_end_perc"], step=1, label="Denoising Steps % end") 
-                        metadata_choice = gr.Dropdown(
-                            choices=[
-                                ("Export JSON files", "json"),
-                                ("Add metadata to video", "metadata"),
-                                ("Neither", "none")
-                            ],
-                            value=metadata,
-                            label="Metadata Handling"
-                        )
             show_advanced.change(fn=switch_advanced, inputs=[show_advanced, lset_name], outputs=[advanced_row, preset_buttons_rows, refresh_lora_btn, refresh2_row ,lset_name ]).then(
                 fn=switch_prompt_type, inputs = [state, prompt, wizard_prompt, *prompt_vars], outputs = [prompt, wizard_prompt, prompt_column_advanced, prompt_column_wizard, prompt_column_wizard_vars, *prompt_vars])
         with gr.Column():
@@ -1863,7 +1854,6 @@ def generate_video_tab(image2video=False):
                 slg_start_perc,
                 slg_end_perc,
                 state,
-                metadata_choice,
                 gr.State(image2video)
             ],
             outputs= [gen_status]
