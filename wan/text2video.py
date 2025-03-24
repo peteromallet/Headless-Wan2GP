@@ -241,7 +241,7 @@ class WanT2V:
         # sample videos
         latents = noise
 
-        freqs = get_rotary_pos_embed(frame_num, size[1], size[0], enable_RIFLEx= enable_RIFLEx) 
+        freqs = get_rotary_pos_embed(latents[0].shape[1:], enable_RIFLEx= enable_RIFLEx) 
         arg_c = {'context': context, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self}
         arg_null = {'context': context_null, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self}
         arg_both = {'context': context, 'context2': context_null, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self}

@@ -19,7 +19,14 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 
 
 ## 🔥 Latest News!!
-* Mar 18 2022: 👋 Wan2.1GP v2.11: Added more command line parameters to prefill the generation settings + customizable output directory and choice of type of metadata for generated videos. Many thanks to Tophness for his contributionsgit. You will need one more *pip install -r requirements.txt* to reflect new dependencies\
+* Mar 18 2022: 👋 Wan2.1GP v3.0: 
+    - New Tab based interface, yon can switch from i2v to t2v conversely without restarting the app
+    - Experimental Dual Frames mode for i2v, you can also specify an End frame. It doesn't always work, so you will need a few attempts.
+    - You can save default settings in the files *i2v_settings.json* and *t2v_settings.json* that will be used when launching the app (you can also specify the path to different settings files)
+    - Slight acceleration with loras
+    You will need one more *pip install -r requirements.txt*
+    Many thanks to *Tophness* who created the framework (and did a big part of the work) of the multitabs and saved settings features 
+* Mar 18 2022: 👋 Wan2.1GP v2.11: Added more command line parameters to prefill the generation settings + customizable output directory and choice of type of metadata for generated videos. Many thanks to *Tophness* for his contributions. You will need one more *pip install -r requirements.txt* to reflect new dependencies\
 * Mar 18 2022: 👋 Wan2.1GP v2.1: More Loras !: added support for 'Safetensors' and 'Replicate' Lora formats.\
 You will need to refresh the requirements with a *pip install -r requirements.txt*
 * Mar 17 2022: 👋 Wan2.1GP v2.0: The Lora festival continues:
@@ -243,11 +250,12 @@ You can define multiple lines of macros. If there is only one macro line, the ap
 --seed no : set default seed value\
 --frames no : set the default number of frames to generate\
 --steps no : set the default number of denoising steps\
---res resolution : default resolution, choices=["480p", "720p", "823p", "1024p", "1280p"]\
 --teacache speed multiplier: Tea cache speed multiplier,  choices=["0", "1.5", "1.75", "2.0", "2.25", "2.5"]\
 --slg : turn on skip layer guidance for improved quality\
 --check-loras : filter loras that are incompatible (will take a few seconds while refreshing the lora list or while starting the app)\
---advanced : turn on the advanced mode while launching the app
+--advanced : turn on the advanced mode while launching the app\
+--i2v-settings : path to launch settings for i2v\
+--t2v-settings : path to launch settings for t2v
 
 ### Profiles (for power users only)
 You can choose between 5 profiles, but two are really relevant here :

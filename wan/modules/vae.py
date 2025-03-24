@@ -530,26 +530,37 @@ class WanVAE_(nn.Module):
         x_recon = self.decode(z)
         return x_recon, mu, log_var
 
-    def encode(self, x, scale = None):
+    def encode(self, x, scale = None, any_end_frame = False):
         self.clear_cache()
         ## cache
         t = x.shape[2]
-        iter_ = 1 + (t - 1) // 4
+        if any_end_frame:
+            iter_ = 2 + (t - 2) // 4
+        else:
+            iter_ = 1 + (t - 1) // 4
         ## 对encode输入的x，按时间拆分为1、4、4、4....
+        out_list = []
         for i in range(iter_):
             self._enc_conv_idx = [0]
             if i == 0:
-                out = self.encoder(
+                out_list.append(self.encoder(
                     x[:, :, :1, :, :],
                     feat_cache=self._enc_feat_map,
-                    feat_idx=self._enc_conv_idx)
+                    feat_idx=self._enc_conv_idx))
+            elif any_end_frame and i== iter_ -1:
+                out_list.append(self.encoder(
+                    x[:, :, -1:, :, :],
+                    feat_cache= None,
+                    feat_idx=self._enc_conv_idx))
             else:
-                out_ = self.encoder(
+                out_list.append(self.encoder(
                     x[:, :, 1 + 4 * (i - 1):1 + 4 * i, :, :],
                     feat_cache=self._enc_feat_map,
-                    feat_idx=self._enc_conv_idx)
-                out = torch.cat([out, out_], 2)
+                    feat_idx=self._enc_conv_idx))
 
+        self.clear_cache()
+        out = torch.cat(out_list, 2)
+        out_list = None
 
         mu, log_var = self.conv1(out).chunk(2, dim=1)
         if scale != None:
@@ -558,11 +569,10 @@ class WanVAE_(nn.Module):
                     1, self.z_dim, 1, 1, 1)
             else:
                 mu = (mu - scale[0]) * scale[1]
-        self.clear_cache()
         return mu
 
 
-    def decode(self, z, scale=None):
+    def decode(self, z, scale=None, any_end_frame = False):
         self.clear_cache()
         # z: [b,c,t,h,w]
         if scale != None:
@@ -573,20 +583,26 @@ class WanVAE_(nn.Module):
                 z = z / scale[1] + scale[0]
         iter_ = z.shape[2]
         x = self.conv2(z)
+        out_list = []
         for i in range(iter_):
             self._conv_idx = [0]
             if i == 0:
-                out = self.decoder(
+                out_list.append(self.decoder(
                     x[:, :, i:i + 1, :, :],
                     feat_cache=self._feat_map,
-                    feat_idx=self._conv_idx)
+                    feat_idx=self._conv_idx))
+            elif any_end_frame and i==iter_-1:
+                out_list.append(self.decoder(
+                    x[:, :, -1:, :, :],
+                    feat_cache=None ,
+                    feat_idx=self._conv_idx))
             else:
-                out_ = self.decoder(
+                out_list.append(self.decoder(
                     x[:, :, i:i + 1, :, :],
                     feat_cache=self._feat_map,
-                    feat_idx=self._conv_idx)
-                out = torch.cat([out, out_], 2)
+                    feat_idx=self._conv_idx))
         self.clear_cache()
+        out = torch.cat(out_list, 2)
         return out
     
     def blend_v(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
@@ -601,7 +617,7 @@ class WanVAE_(nn.Module):
             b[:, :, :, :, x] = a[:, :, :, :, -blend_extent + x] * (1 - x / blend_extent) + b[:, :, :, :, x] * (x / blend_extent)
         return b
     
-    def spatial_tiled_decode(self, z, scale, tile_size):
+    def spatial_tiled_decode(self, z, scale, tile_size, any_end_frame= False):
         tile_sample_min_size = tile_size
         tile_latent_min_size = int(tile_sample_min_size / 8)
         tile_overlap_factor = 0.25
@@ -626,7 +642,7 @@ class WanVAE_(nn.Module):
             row = []
             for j in range(0, z.shape[-1], overlap_size):
                 tile = z[:, :, :, i: i + tile_latent_min_size, j: j + tile_latent_min_size]
-                decoded = self.decode(tile)
+                decoded = self.decode(tile, any_end_frame= any_end_frame)
                 row.append(decoded)
             rows.append(row)
         result_rows = []
@@ -645,7 +661,7 @@ class WanVAE_(nn.Module):
         return torch.cat(result_rows, dim=-2)
 
 
-    def spatial_tiled_encode(self, x, scale, tile_size) :
+    def spatial_tiled_encode(self, x, scale, tile_size, any_end_frame = False) :
         tile_sample_min_size = tile_size
         tile_latent_min_size = int(tile_sample_min_size / 8)
         tile_overlap_factor = 0.25
@@ -660,7 +676,7 @@ class WanVAE_(nn.Module):
             row = []
             for j in range(0, x.shape[-1], overlap_size):
                 tile = x[:, :, :, i: i + tile_sample_min_size, j: j + tile_sample_min_size]
-                tile = self.encode(tile)
+                tile = self.encode(tile, any_end_frame= any_end_frame)
                 row.append(tile)
             rows.append(row)
         result_rows = []
@@ -764,18 +780,18 @@ class WanVAE:
             z_dim=z_dim,
         ).eval().requires_grad_(False).to(device)
 
-    def encode(self, videos, tile_size = 256):
+    def encode(self, videos, tile_size = 256, any_end_frame = False):
         """
         videos: A list of videos each with shape [C, T, H, W].
         """
         if tile_size > 0:
-            return [ self.model.spatial_tiled_encode(u.unsqueeze(0), self.scale, tile_size).float().squeeze(0) for u in videos ]
+            return [ self.model.spatial_tiled_encode(u.unsqueeze(0), self.scale, tile_size, any_end_frame=any_end_frame).float().squeeze(0) for u in videos ]
         else:
-            return [ self.model.encode(u.unsqueeze(0), self.scale).float().squeeze(0) for u in videos ]
+            return [ self.model.encode(u.unsqueeze(0), self.scale, any_end_frame=any_end_frame).float().squeeze(0) for u in videos ]
 
 
-    def decode(self, zs, tile_size):
+    def decode(self, zs, tile_size, any_end_frame = False):
         if tile_size > 0:
-            return [ self.model.spatial_tiled_decode(u.unsqueeze(0), self.scale, tile_size).float().clamp_(-1, 1).squeeze(0) for u in zs ]
+            return [ self.model.spatial_tiled_decode(u.unsqueeze(0), self.scale, tile_size, any_end_frame=any_end_frame).clamp_(-1, 1).float().squeeze(0) for u in zs ]
         else:
-            return [ self.model.decode(u.unsqueeze(0), self.scale).float().clamp_(-1, 1).squeeze(0) for u in zs ]
+            return [ self.model.decode(u.unsqueeze(0), self.scale, any_end_frame=any_end_frame).clamp_(-1, 1).float().squeeze(0) for u in zs ]

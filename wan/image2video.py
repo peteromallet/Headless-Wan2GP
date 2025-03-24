@@ -26,6 +26,82 @@ from .utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
 from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
 from wan.modules.posemb_layers import get_rotary_pos_embed
 
+from PIL import Image
+
+def lanczos(samples, width, height):
+    images = [Image.fromarray(np.clip(255. * image.movedim(0, -1).cpu().numpy(), 0, 255).astype(np.uint8)) for image in samples]
+    images = [image.resize((width, height), resample=Image.Resampling.LANCZOS) for image in images]
+    images = [torch.from_numpy(np.array(image).astype(np.float32) / 255.0).movedim(-1, 0) for image in images]
+    result = torch.stack(images)
+    return result.to(samples.device, samples.dtype)
+
+def bislerp(samples, width, height):
+    def slerp(b1, b2, r):
+        '''slerps batches b1, b2 according to ratio r, batches should be flat e.g. NxC'''
+
+        c = b1.shape[-1]
+
+        #norms
+        b1_norms = torch.norm(b1, dim=-1, keepdim=True)
+        b2_norms = torch.norm(b2, dim=-1, keepdim=True)
+
+        #normalize
+        b1_normalized = b1 / b1_norms
+        b2_normalized = b2 / b2_norms
+
+        #zero when norms are zero
+        b1_normalized[b1_norms.expand(-1,c) == 0.0] = 0.0
+        b2_normalized[b2_norms.expand(-1,c) == 0.0] = 0.0
+
+        #slerp
+        dot = (b1_normalized*b2_normalized).sum(1)
+        omega = torch.acos(dot)
+        so = torch.sin(omega)
+
+        #technically not mathematically correct, but more pleasing?
+        res = (torch.sin((1.0-r.squeeze(1))*omega)/so).unsqueeze(1)*b1_normalized + (torch.sin(r.squeeze(1)*omega)/so).unsqueeze(1) * b2_normalized
+        res *= (b1_norms * (1.0-r) + b2_norms * r).expand(-1,c)
+
+        #edge cases for same or polar opposites
+        res[dot > 1 - 1e-5] = b1[dot > 1 - 1e-5]
+        res[dot < 1e-5 - 1] = (b1 * (1.0-r) + b2 * r)[dot < 1e-5 - 1]
+        return res
+
+
+def common_upscale(samples, width, height, upscale_method, crop):
+        orig_shape = tuple(samples.shape)
+        if len(orig_shape) > 4:
+            samples = samples.reshape(samples.shape[0], samples.shape[1], -1, samples.shape[-2], samples.shape[-1])
+            samples = samples.movedim(2, 1)
+            samples = samples.reshape(-1, orig_shape[1], orig_shape[-2], orig_shape[-1])
+        if crop == "center":
+            old_width = samples.shape[-1]
+            old_height = samples.shape[-2]
+            old_aspect = old_width / old_height
+            new_aspect = width / height
+            x = 0
+            y = 0
+            if old_aspect > new_aspect:
+                x = round((old_width - old_width * (new_aspect / old_aspect)) / 2)
+            elif old_aspect < new_aspect:
+                y = round((old_height - old_height * (old_aspect / new_aspect)) / 2)
+            s = samples.narrow(-2, y, old_height - y * 2).narrow(-1, x, old_width - x * 2)
+        else:
+            s = samples
+
+        if upscale_method == "bislerp":
+            out = bislerp(s, width, height)
+        elif upscale_method == "lanczos":
+            out = lanczos(s, width, height)
+        else:
+            out = torch.nn.functional.interpolate(s, size=(height, width), mode=upscale_method)
+
+        if len(orig_shape) == 4:
+            return out
+
+        out = out.reshape((orig_shape[0], -1, orig_shape[1]) + (height, width))
+        return out.movedim(2, 1).reshape(orig_shape[:-2] + (height, width))
+
 class WanI2V:
 
     def __init__(
@@ -63,8 +139,8 @@ class WanI2V:
                 Enable distribution strategy of USP.
             t5_cpu (`bool`, *optional*, defaults to False):
                 Whether to place T5 model on CPU. Only works without t5_fsdp.
-            init_on_cpu (`bool`, *optional*, defaults to True):
                 Enable initializing Transformer Model on CPU. Only works without FSDP or USP.
+            init_on_cpu (`bool`, *optional*, defaults to True):
         """
         self.device = torch.device(f"cuda:{device_id}")
         self.config = config
@@ -134,6 +210,7 @@ class WanI2V:
     def generate(self,
         input_prompt,
         img,
+        img2 = None,
         max_area=720 * 1280,
         frame_num=81,
         shift=5.0,
@@ -188,8 +265,14 @@ class WanI2V:
                 - W: Frame width from max_area)
         """
         img = TF.to_tensor(img).sub_(0.5).div_(0.5).to(self.device)
+        lat_frames = int((frame_num - 1) // self.vae_stride[0] + 1)
+        any_end_frame = img2 !=None 
+        if any_end_frame:
+            any_end_frame = True
+            img2 = TF.to_tensor(img2).sub_(0.5).div_(0.5).to(self.device)
+            frame_num +=1
+            lat_frames = int((frame_num - 2) // self.vae_stride[0] + 2)
 
-        F = frame_num
         h, w = img.shape[1:]
         aspect_ratio = h / w
         lat_h = round(
@@ -201,28 +284,21 @@ class WanI2V:
         h = lat_h * self.vae_stride[1]
         w = lat_w * self.vae_stride[2]
 
-        max_seq_len = ((F - 1) // self.vae_stride[0] + 1) * lat_h * lat_w // (
-            self.patch_size[1] * self.patch_size[2])
+        max_seq_len = lat_frames * lat_h * lat_w // ( self.patch_size[1] * self.patch_size[2])
         max_seq_len = int(math.ceil(max_seq_len / self.sp_size)) * self.sp_size
 
         seed = seed if seed >= 0 else random.randint(0, sys.maxsize)
         seed_g = torch.Generator(device=self.device)
         seed_g.manual_seed(seed)
-        noise = torch.randn(
-            16,
-            int((frame_num - 1)/4 + 1), #21,
-            lat_h,
-            lat_w,
-            dtype=torch.float32,
-            generator=seed_g,
-            device=self.device)
+        noise = torch.randn(16, lat_frames, lat_h, lat_w, dtype=torch.float32, generator=seed_g, device=self.device)        
 
         msk = torch.ones(1, frame_num, lat_h, lat_w, device=self.device)
-        msk[:, 1:] = 0
-        msk = torch.concat([
-            torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]
-        ],
-                           dim=1)
+        if any_end_frame:
+            msk[:, 1: -1] = 0
+            msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:-1], torch.repeat_interleave(msk[:, -1:], repeats=4, dim=1) ], dim=1)
+        else:
+            msk[:, 1:] = 0
+            msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:] ], dim=1)
         msk = msk.view(1, msk.shape[1] // 4, 4, lat_h, lat_w)
         msk = msk.transpose(1, 2)[0]
 
@@ -242,7 +318,6 @@ class WanI2V:
             context = [t.to(self.device) for t in context]
             context_null = [t.to(self.device) for t in context_null]
 
-        # self.clip.model.to(self.device)
         clip_context = self.clip.visual([img[:, None, :, :]])
         if offload_model:
             self.clip.model.cpu()
@@ -250,16 +325,24 @@ class WanI2V:
         from mmgp import offload
 
         offload.last_offload_obj.unload_all()
-        enc= torch.concat([
-            torch.nn.functional.interpolate(
-                img[None].cpu(), size=(h, w), mode='bicubic').transpose(
-                    0, 1).to(torch.bfloat16),
-            torch.zeros(3, frame_num-1, h, w, device="cpu", dtype= torch.bfloat16)
-        ], dim=1).to(self.device)
-        # enc = None
+        if any_end_frame:
+            img_interpolated = torch.nn.functional.interpolate(img[None].cpu(), size=(h, w), mode='bicubic').transpose(0, 1).to(torch.bfloat16)
+            img2_interpolated = torch.nn.functional.interpolate(img2[None].cpu(), size=(h, w), mode='bicubic').transpose(0, 1).to(torch.bfloat16) 
+            mean2 = 0
+            enc= torch.concat([
+                    img_interpolated,
+                    torch.full( (3, frame_num-2,  h, w), mean2, device="cpu", dtype= torch.bfloat16),
+                    img2_interpolated,
+            ], dim=1).to(self.device)
+        else:
+            enc= torch.concat([
+                torch.nn.functional.interpolate(
+                    img[None].cpu(),   size=(h, w), mode='bicubic').transpose(0, 1).to(torch.bfloat16),
+                    torch.zeros(3, frame_num-1, h, w, device="cpu", dtype= torch.bfloat16)
+            ], dim=1).to(self.device)
 
-        y = self.vae.encode([enc], VAE_tile_size)[0]
-        y = torch.concat([msk, y])
+        lat_y = self.vae.encode([enc], VAE_tile_size, any_end_frame= any_end_frame)[0]
+        y = torch.concat([msk, lat_y])
 
         @contextmanager
         def noop_no_sync():
@@ -293,7 +376,7 @@ class WanI2V:
         # sample videos
         latent = noise
 
-        freqs = get_rotary_pos_embed(frame_num, h, w, enable_RIFLEx= enable_RIFLEx  ) 
+        freqs = get_rotary_pos_embed(latent.shape[1:],  enable_RIFLEx= enable_RIFLEx) 
 
         arg_c = {
             'context': [context[0]],
@@ -344,8 +427,6 @@ class WanI2V:
 
             timestep = torch.stack(timestep).to(self.device)
             if joint_pass:
-                # if slg_layers is not None:
-                #     raise ValueError('Can not use SLG and joint-pass')
                 noise_pred_cond, noise_pred_uncond = self.model(
                     latent_model_input, t=timestep, current_step=i, slg_layers=slg_layers_local, **arg_both)
                 if self._interrupt:
@@ -393,17 +474,25 @@ class WanI2V:
             del timestep
 
             if callback is not None:
-                callback(i, latent)         
+                callback(i, latent) 
 
 
-        x0 = [latent.to(self.device)]
+        x0 = [latent.to(self.device, dtype=torch.bfloat16)]
 
         if offload_model:
             self.model.cpu()
             torch.cuda.empty_cache()
 
         if self.rank == 0:
-            videos = self.vae.decode(x0, VAE_tile_size)
+            # x0 = [lat_y]
+            video = self.vae.decode(x0, VAE_tile_size, any_end_frame= any_end_frame)[0]
+
+            if any_end_frame:
+                # video[:,  -1:] = img2_interpolated
+                video = video[:,  :-1]  
+
+        else:
+            video = None
 
         del noise, latent
         del sample_scheduler
@@ -413,4 +502,4 @@ class WanI2V:
         if dist.is_initialized():
             dist.barrier()
 
-        return videos[0] if self.rank == 0 else None
+        return video

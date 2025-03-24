@@ -429,11 +429,10 @@ def get_1d_rotary_pos_embed(
         )  # complex64     # [S, D/2]
         return freqs_cis
 
-def get_rotary_pos_embed(video_length, height, width, enable_RIFLEx = False):
+def get_rotary_pos_embed(latents_size, enable_RIFLEx = False):
     target_ndim = 3
     ndim = 5 - 2
 
-    latents_size = [(video_length - 1) // 4 + 1, height // 8, width // 8]
     patch_size = [1, 2, 2]
     if isinstance(patch_size, int):
         assert all(s % patch_size == 0 for s in latents_size), (
@@ -468,7 +467,7 @@ def get_rotary_pos_embed(video_length, height, width, enable_RIFLEx = False):
         theta=10000,
         use_real=True,
         theta_rescale_factor=1,
-        L_test = (video_length - 1) // 4 + 1,
+        L_test = latents_size[0],
         enable_riflex = enable_RIFLEx
     )
     return (freqs_cos, freqs_sin)
