@@ -658,6 +658,8 @@ def load_models(i2v):
     kwargs = { "extraModelsToQuantize": None}
     if profile == 2 or profile == 4:
         kwargs["budgets"] = { "transformer" : 100 if preload  == 0 else preload, "text_encoder" : 100, "*" : 1000 }
+        if profile == 4:
+            kwargs["partialPinning"] = True
     elif profile == 3:
         kwargs["budgets"] = { "*" : "70%" }
     offloadobj = offload.profile(pipe, profile_no= profile, compile = compile, quantizeTransformer = quantizeTransformer, loras = "transformer", **kwargs)  
@@ -668,6 +670,7 @@ wan_model, offloadobj, transformer = load_models(use_image2video)
 if check_loras:
     setup_loras(use_image2video, transformer,  get_lora_dir(use_image2video), "", None)
     exit()
+del transformer
 
 gen_in_progress = False
 
@@ -932,10 +935,10 @@ def generate_video(
     reload_needed = state.get("_reload_needed", False)
     file_model_needed = model_needed(image2video)
     if file_model_needed !=  model_filename or reload_needed:
+        del wan_model
         if offloadobj is not None:
             offloadobj.release()
-            offloadobj = None
-        wan_model = None
+            del offloadobj
         gc.collect()
         yield f"Loading model {get_model_name(file_model_needed)}..."
         wan_model, offloadobj, trans = load_models(image2video)
