@@ -177,7 +177,7 @@ class WanI2V:
         logging.info(f"Creating WanModel from {model_filename}")
         from mmgp import offload
 
-        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel)
+        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel, writable_tensors= False)
         self.model.eval().requires_grad_(False)
 
         if t5_fsdp or dit_fsdp or use_usp:

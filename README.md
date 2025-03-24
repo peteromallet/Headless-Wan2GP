@@ -255,8 +255,9 @@ You can define multiple lines of macros. If there is only one macro line, the ap
 --check-loras : filter loras that are incompatible (will take a few seconds while refreshing the lora list or while starting the app)\
 --advanced : turn on the advanced mode while launching the app\
 --i2v-settings : path to launch settings for i2v\
---t2v-settings : path to launch settings for t2v
---listen : make server accessible on network
+--t2v-settings : path to launch settings for t2v\
+--listen : make server accessible on network\
+--gpu device : run Wan on device for instance "cuda:1"
 
 ### Profiles (for power users only)
 You can choose between 5 profiles, but two are really relevant here :

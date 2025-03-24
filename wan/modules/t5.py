@@ -496,7 +496,7 @@ class T5EncoderModel:
                 device=device).eval().requires_grad_(False)
         logging.info(f'loading {checkpoint_path}')
         from mmgp import offload
-        offload.load_model_data(model,checkpoint_path )
+        offload.load_model_data(model,checkpoint_path, writable_tensors= False )
 
         self.model = model
         if shard_fn is not None:

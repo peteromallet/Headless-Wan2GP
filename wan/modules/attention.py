@@ -30,6 +30,7 @@ try:
             max_seqlen_kv,
         ):
         return sageattn_varlen(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv)
+    
 except ImportError:
     sageattn_varlen_wrapper = None
 
@@ -38,11 +39,12 @@ import warnings
 
 try:
     from sageattention import sageattn
-    from .sage2_core import sageattn as alt_sageattn
+    from .sage2_core import sageattn as alt_sageattn, is_sage_supported
+    sage_supported =  is_sage_supported()
 except ImportError:
     sageattn = None
     alt_sageattn = None
-
+    sage_supported = False
 # @torch.compiler.disable()
 def sageattn_wrapper(
         qkv_list,
@@ -129,6 +131,14 @@ def get_attention_modes():
 
     return ret
 
+def get_supported_attention_modes():
+    ret = get_attention_modes()
+    if not sage_supported:
+        if "sage" in ret:
+            del ret["sage"]
+        if "sage2" in ret:
+            del ret["sage2"]
+    return ret
 
 __all__ = [
     'pay_attention',
