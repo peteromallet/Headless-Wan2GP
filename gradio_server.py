@@ -936,6 +936,7 @@ def generate_video(
             offloadobj.release()
             offloadobj = None
         wan_model = None
+        gc.collect()
         yield f"Loading model {get_model_name(file_model_needed)}..."
         wan_model, offloadobj, trans = load_models(image2video)
         yield f"Model loaded"
