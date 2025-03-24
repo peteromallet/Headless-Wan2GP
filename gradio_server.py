@@ -492,7 +492,7 @@ if not Path(server_config_filename).is_file():
                      "boost" : 1,
                      "vae_config": 0,
                      "profile" : profile_type.LowRAM_LowVRAM,
-                     "reload_model": 1 }
+                     "reload_model": 2 }
 
     with open(server_config_filename, "w", encoding="utf-8") as writer:
         writer.write(json.dumps(server_config))
@@ -854,8 +854,8 @@ def load_models(i2v):
     kwargs = { "extraModelsToQuantize": None}
     if profile == 2 or profile == 4:
         kwargs["budgets"] = { "transformer" : 100 if preload  == 0 else preload, "text_encoder" : 100, "*" : 1000 }
-        if profile == 4:
-            kwargs["partialPinning"] = True
+        # if profile == 4:
+        #     kwargs["partialPinning"] = True
     elif profile == 3:
         kwargs["budgets"] = { "*" : "70%" }
     offloadobj = offload.profile(pipe, profile_no= profile, compile = compile, quantizeTransformer = quantizeTransformer, loras = "transformer", **kwargs)  
@@ -867,6 +867,7 @@ if check_loras:
     setup_loras(use_image2video, transformer,  get_lora_dir(use_image2video), "", None)
     exit()
 del transformer
+
 gen_in_progress = False
 
 def get_auto_attention():
@@ -2247,7 +2248,7 @@ def generate_configuration_tab():
                 ("When changing tabs", 1), 
                 ("When pressing generate", 2), 
             ],
-            value=server_config.get("reload_model",1),
+            value=server_config.get("reload_model",2),
             label="Reload model"
         )
         msg = gr.Markdown()            
@@ -2289,7 +2290,7 @@ def on_tab_select(t2v_state, i2v_state, evt: gr.SelectData):
     new_i2v = evt.index == 1
     use_image2video = new_i2v
 
-    if(server_config.get("reload_model",1) == 1):
+    if(server_config.get("reload_model",2) == 1):
         global wan_model, offloadobj
         if wan_model is not None:
             if offloadobj is not None:
