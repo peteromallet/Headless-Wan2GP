@@ -256,6 +256,7 @@ You can define multiple lines of macros. If there is only one macro line, the ap
 --advanced : turn on the advanced mode while launching the app\
 --i2v-settings : path to launch settings for i2v\
 --t2v-settings : path to launch settings for t2v
+--listen : make server accessible on network
 
 ### Profiles (for power users only)
 You can choose between 5 profiles, but two are really relevant here :
