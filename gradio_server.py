@@ -658,8 +658,8 @@ def load_models(i2v):
     kwargs = { "extraModelsToQuantize": None}
     if profile == 2 or profile == 4:
         kwargs["budgets"] = { "transformer" : 100 if preload  == 0 else preload, "text_encoder" : 100, "*" : 1000 }
-        if profile == 4:
-            kwargs["partialPinning"] = True
+        # if profile == 4:
+        #     kwargs["partialPinning"] = True
     elif profile == 3:
         kwargs["budgets"] = { "*" : "70%" }
     offloadobj = offload.profile(pipe, profile_no= profile, compile = compile, quantizeTransformer = quantizeTransformer, loras = "transformer", **kwargs)  
