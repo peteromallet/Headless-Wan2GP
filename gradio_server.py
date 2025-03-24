@@ -397,6 +397,12 @@ def _parse_args():
         help="Enable pytorch compilation"
     )
 
+    parser.add_argument(
+        "--listen",
+        action="store_true",
+        help="Server accessible on local network"
+    )
+
     # parser.add_argument(
     #     "--fast",
     #     action="store_true",
@@ -1361,7 +1367,7 @@ def generate_video(
             'num_inference_steps': num_inference_steps,
         }
 
-        metadata_choice = server_config["metadata_choice"]
+        metadata_choice = server_config.get("metadata_choice","metadata")
         if metadata_choice == "json":
             with open(video_path.replace('.mp4', '.json'), 'w') as f:
                 json.dump(configs, f, indent=4)
@@ -2360,8 +2366,9 @@ def create_demo():
                 t2v_loras_choices, t2v_lset_name, t2v_header, t2v_state  = generate_video_tab()
             with gr.Tab("Image To Video", id="i2v") as i2v_tab:
                 i2v_loras_choices, i2v_lset_name, i2v_header, i2v_state = generate_video_tab(True)
-            with gr.Tab("Configuration"):
-                generate_configuration_tab()
+            if not args.lock_config:
+                with gr.Tab("Configuration"):
+                    generate_configuration_tab()
             with gr.Tab("About"):
                 generate_about_tab()
         main_tabs.select(
@@ -2383,6 +2390,8 @@ if __name__ == "__main__":
     if server_port == 0:
         server_port = int(os.getenv("SERVER_PORT", "7860"))
     server_name = args.server_name
+    if args.listen:
+        server_name = "0.0.0.0"
     if len(server_name) == 0:
         server_name = os.getenv("SERVER_NAME", "localhost")      
     demo = create_demo()
