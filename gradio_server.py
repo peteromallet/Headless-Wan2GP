@@ -1086,7 +1086,7 @@ def generate_video(
             del wan_model
             if offloadobj is not None:
                 offloadobj.release()
-            del offloadobj
+                del offloadobj
             gc.collect()
             print(f"Loading model {get_model_name(file_model_needed)}...")
             wan_model, offloadobj, trans = load_models(image2video)
@@ -1197,8 +1197,8 @@ def generate_video(
         if len(list_mult_choices_nums ) < len(loras_choices):
             list_mult_choices_nums  += [1.0] * ( len(loras_choices) - len(list_mult_choices_nums ) )
         loras_selected = [ lora for i, lora in enumerate(loras) if str(i) in loras_choices]
-        pinnedLora = False #profile !=5 #False # # #
-        offload.load_loras_into_model(trans, loras_selected, list_mult_choices_nums, activate_all_loras=True, preprocess_sd=preprocess_loras, pinnedLora=pinnedLora, split_linear_modules_map = None) 
+        pinnedLora = False #profile !=5 #False # # # 
+        offload.load_loras_into_model(trans, loras_selected, list_mult_choices_nums, activate_all_loras=True, preprocess_sd=preprocess_loras, pinnedLora=pinnedLora, split_linear_modules_map = None)
         errors = trans._loras_errors
         if len(errors) > 0:
             error_files = [msg for _ ,  msg  in errors]
