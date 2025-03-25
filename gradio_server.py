@@ -2403,6 +2403,18 @@ def create_demo():
             overflow: hidden;
             text-overflow: ellipsis;
         }
+        #queue_df table {
+            overflow: hidden !important;
+        }
+
+        #queue_df::-webkit-scrollbar {
+            display: none !important;
+        }
+
+        #queue_df {
+            scrollbar-width: none !important;
+            -ms-overflow-style: none !important;
+        }
         #queue_df td:nth-child(1) {
             width: 100px;
         }
