@@ -70,30 +70,31 @@ def sageattn_wrapper(
 
     return o
 
-# # try:
+# try:
 # if True:
-#     from sageattention import sageattn_qk_int8_pv_fp8_window_cuda
-#     @torch.compiler.disable()
-#     def sageattn_window_wrapper(
-#             qkv_list,
-#             attention_length,
-#             window
-#         ):
-#         q,k, v = qkv_list
-#         padding_length = q.shape[0] -attention_length
-#         q = q[:attention_length, :, : ].unsqueeze(0)
-#         k = k[:attention_length, :, : ].unsqueeze(0)
-#         v = v[:attention_length, :, : ].unsqueeze(0)
-#         o = sageattn_qk_int8_pv_fp8_window_cuda(q, k, v, tensor_layout="NHD", window = window).squeeze(0)
-#         del q, k ,v
-#         qkv_list.clear()
+    # from .sage2_core import sageattn_qk_int8_pv_fp8_window_cuda
+    # @torch.compiler.disable()
+    # def sageattn_window_wrapper(
+    #         qkv_list,
+    #         attention_length,
+    #         window
+    #     ):
+    #     q,k, v = qkv_list
+    #     padding_length = q.shape[0] -attention_length
+    #     q = q[:attention_length, :, : ].unsqueeze(0)
+    #     k = k[:attention_length, :, : ].unsqueeze(0)
+    #     v = v[:attention_length, :, : ].unsqueeze(0)
+    #     qkvl_list = [q, k , v]
+    #     del q, k ,v
+    #     o = sageattn_qk_int8_pv_fp8_window_cuda(qkvl_list, tensor_layout="NHD", window = window).squeeze(0)
+    #     qkv_list.clear()
 
-#         if padding_length > 0:
-#             o = torch.cat([o, torch.empty( (padding_length, *o.shape[-2:]), dtype= o.dtype, device=o.device  ) ], 0)
+    #     if padding_length > 0:
+    #         o = torch.cat([o, torch.empty( (padding_length, *o.shape[-2:]), dtype= o.dtype, device=o.device  ) ], 0)
 
-#         return o
-# # except ImportError:
-# #     sageattn = sageattn_qk_int8_pv_fp8_window_cuda
+    #     return o
+# except ImportError:
+#     sageattn = sageattn_qk_int8_pv_fp8_window_cuda
 
 @torch.compiler.disable()
 def sdpa_wrapper(
@@ -253,17 +254,19 @@ def pay_attention(
         #     nb_latents =  embed_sizes[0] * embed_sizes[1]* embed_sizes[2]
 
         #     window = 0
-        #     start_window_step = int(max_steps * 0.4)
+        #     start_window_step = int(max_steps * 0.3)
         #     start_layer = 10
-        #     if (layer < start_layer )  or current_step <start_window_step: 
+        #     end_layer = 30
+        #     if (layer < start_layer or layer > end_layer )  or current_step <start_window_step: 
         #         window = 0
         #     else:
-        #         coef =  min((max_steps - current_step)/(max_steps-start_window_step),1)*max(min((25 - layer)/(25-start_layer),1),0) * 0.7 + 0.3
+        #         # coef =  min((max_steps - current_step)/(max_steps-start_window_step),1)*max(min((25 - layer)/(25-start_layer),1),0) * 0.7 + 0.3
+        #         coef = 0.3
         #         print(f"step: {current_step}, layer: {layer}, coef:{coef:0.1f}]")
         #         window =  math.ceil(coef* nb_latents)
 
         #     invert_spaces = (layer + current_step) % 2 == 0 and window > 0
-
+        #     invert_spaces = False
         #     def flip(q):
         #         q = q.reshape(*embed_sizes, *q.shape[-2:])
         #         q = q.transpose(0,2)

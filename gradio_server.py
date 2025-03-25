@@ -23,7 +23,7 @@ import asyncio
 from wan.utils import prompt_parser
 PROMPT_VARS_MAX = 10
 
-target_mmgp_version = "3.3.3"
+target_mmgp_version = "3.3.4"
 from importlib.metadata import version
 mmgp_version = version("mmgp")
 if mmgp_version != target_mmgp_version:
@@ -300,6 +300,7 @@ if not Path(server_config_filename).is_file():
                      "metadata_type": "metadata",
                      "default_ui": "t2v",
                      "boost" : 1,
+                     "clear_file_list" : 0,
                      "vae_config": 0,
                      "profile" : profile_type.LowRAM_LowVRAM }
 
@@ -382,7 +383,6 @@ if len(args.vae_config) > 0:
 
 reload_needed = False
 default_ui = server_config.get("default_ui", "t2v") 
-metadata = server_config.get("metadata_type", "metadata")
 save_path = server_config.get("save_path", os.path.join(os.getcwd(), "gradio_outputs"))
 use_image2video = default_ui != "t2v"
 if args.t2v:
@@ -741,7 +741,8 @@ def apply_changes(  state,
                     vae_config_choice,
                     metadata_choice,
                     default_ui_choice ="t2v",
-                    boost_choice = 1
+                    boost_choice = 1,
+                    clear_file_list = 0,
 ):
     if args.lock_config:
         return
@@ -760,6 +761,7 @@ def apply_changes(  state,
                      "metadata_choice": metadata_choice,
                      "default_ui" : default_ui_choice,
                      "boost" : boost_choice,
+                     "clear_file_list" : clear_file_list
                        }
 
     if Path(server_config_filename).is_file():
@@ -792,7 +794,7 @@ def apply_changes(  state,
     text_encoder_filename = server_config["text_encoder_filename"]
     vae_config = server_config["vae_config"]
     boost = server_config["boost"]
-    if  all(change in ["attention_mode", "vae_config", "default_ui", "boost", "save_path", "metadata_choice"] for change in changes ):
+    if  all(change in ["attention_mode", "vae_config", "default_ui", "boost", "save_path", "metadata_choice", "clear_file_list"] for change in changes ):
         pass
     else:
         reload_needed = True
@@ -849,13 +851,17 @@ def refresh_gallery(state, txt):
     if len(prompt) == 0:
         return file_list, gr.Text(visible= False, value="")
     else:
+        choice = 0
+        if "in_progress" in state:
+            choice = state.get("selected",0)
+
         prompts_max = state.get("prompts_max",0) 
         prompt_no = state.get("prompt_no",0)
         if prompts_max >1 : 
             label = f"Current Prompt ({prompt_no+1}/{prompts_max})"
         else:
             label = f"Current Prompt"            
-        return file_list, gr.Text(visible= True, value=prompt, label=label)
+        return gr.Gallery(selected_index=choice, value = file_list), gr.Text(visible= True, value=prompt, label=label)
 
         
 def finalize_gallery(state):
@@ -863,6 +869,8 @@ def finalize_gallery(state):
     if "in_progress" in state:
         del state["in_progress"]
         choice = state.get("selected",0)
+        # file_list = state.get("file_list", [])      
+            
 
     state["extra_orders"] = 0
     time.sleep(0.2)
@@ -930,6 +938,7 @@ def generate_video(
     tea_cache_start_step_perc,    
     loras_choices,
     loras_mult_choices,
+    image_prompt_type,
     image_to_continue,
     image_to_end,
     video_to_continue,
@@ -938,7 +947,9 @@ def generate_video(
     slg_switch,
     slg_layers,    
     slg_start,
-    slg_end, 
+    slg_end,
+    cfg_star_switch,
+    cfg_zero_step,
     state,
     image2video,
     progress=gr.Progress() #track_tqdm= True
@@ -1031,6 +1042,8 @@ def generate_video(
     if len(prompts) ==0:
         return
     if image2video:
+        if image_prompt_type == 0:
+            image_to_end = None
         if image_to_continue is not None:
             if isinstance(image_to_continue, list):
                 image_to_continue = [ tup[0] for tup in image_to_continue ]
@@ -1135,7 +1148,6 @@ def generate_video(
     if "abort" in state:
         del state["abort"]
     state["in_progress"] = True
-    state["selected"] = 0
  
     enable_RIFLEx = RIFLEx_setting == 0 and video_length > (6* 16) or RIFLEx_setting == 1
     # VAE Tiling
@@ -1172,8 +1184,21 @@ def generate_video(
     if seed == None or seed <0:
         seed = random.randint(0, 999999999)
 
-    file_list = []
+    clear_file_list = server_config.get("clear_file_list", 0)    
+    file_list = state.get("file_list", [])
+    if clear_file_list > 0:
+        file_list_current_size = len(file_list)
+        keep_file_from = max(file_list_current_size - clear_file_list, 0)
+        files_removed = keep_file_from
+        choice = state.get("selected",0)
+        choice = max(choice- files_removed, 0)
+        file_list = file_list[ keep_file_from: ]
+    else:
+        file_list = []
+        choice = 0
+    state["selected"] = choice         
     state["file_list"] = file_list    
+
     global save_path
     os.makedirs(save_path, exist_ok=True)
     video_no = 0
@@ -1240,6 +1265,8 @@ def generate_video(
                         slg_layers = slg_layers,
                         slg_start = slg_start/100,
                         slg_end = slg_end/100,
+                        cfg_star_switch = cfg_star_switch,
+                        cfg_zero_step = cfg_zero_step,                       
                     )
 
                 else:
@@ -1260,6 +1287,8 @@ def generate_video(
                         slg_layers = slg_layers,
                         slg_start = slg_start/100,
                         slg_end = slg_end/100,
+                        cfg_star_switch = cfg_star_switch,
+                        cfg_zero_step = cfg_zero_step,                       
                     )
             except Exception as e:
                 gen_in_progress = False
@@ -1326,7 +1355,7 @@ def generate_video(
                     value_range=(-1, 1))
 
                 configs = get_settings_dict(state, use_image2video, prompt, 0 if image_to_end == None else 1 , video_length, raw_resolution, num_inference_steps, seed, repeat_generation, multi_images_gen_type, guidance_scale, flow_shift, negative_prompt, loras_choices, 
-                      loras_mult_choices, tea_cache , tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers, slg_start, slg_end)
+                      loras_mult_choices, tea_cache , tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers, slg_start, slg_end, cfg_star_switch, cfg_zero_step)
 
                 metadata_choice = server_config.get("metadata_choice","metadata")
                 if metadata_choice == "json":
@@ -1642,7 +1671,7 @@ def switch_advanced(state, new_advanced, lset_name):
 
 
 def get_settings_dict(state, i2v, prompt, image_prompt_type, video_length, resolution, num_inference_steps, seed, repeat_generation, multi_images_gen_type, guidance_scale, flow_shift, negative_prompt, loras_choices, 
-                      loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers, slg_start_perc, slg_end_perc):
+                      loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers, slg_start_perc, slg_end_perc, cfg_star_switch, cfg_zero_step):
 
     loras = state["loras"]
     activated_loras = [Path( loras[int(no)]).parts[-1]  for no in loras_choices ]
@@ -1666,7 +1695,9 @@ def get_settings_dict(state, i2v, prompt, image_prompt_type, video_length, resol
         "slg_switch": slg_switch,
         "slg_layers": slg_layers,
         "slg_start_perc": slg_start_perc,
-        "slg_end_perc": slg_end_perc
+        "slg_end_perc": slg_end_perc,
+        "cfg_star_switch": cfg_star_switch, 
+        "cfg_zero_step": cfg_zero_step
     }
 
     if i2v:
@@ -1678,13 +1709,13 @@ def get_settings_dict(state, i2v, prompt, image_prompt_type, video_length, resol
     return ui_settings
 
 def save_settings(state, prompt, image_prompt_type, video_length, resolution, num_inference_steps, seed, repeat_generation, multi_images_gen_type, guidance_scale, flow_shift, negative_prompt, loras_choices, 
-                      loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers, slg_start_perc, slg_end_perc):
+                      loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers, slg_start_perc, slg_end_perc, cfg_star_switch, cfg_zero_step):
 
     if state.get("validate_success",0) != 1:
         return
 
     ui_defaults = get_settings_dict(state, use_image2video, prompt, image_prompt_type, video_length, resolution, num_inference_steps, seed, repeat_generation, multi_images_gen_type, guidance_scale, flow_shift, negative_prompt, loras_choices, 
-                      loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers, slg_start_perc, slg_end_perc)
+                      loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers, slg_start_perc, slg_end_perc, cfg_star_switch, cfg_zero_step)
 
     defaults_filename = get_settings_file_name(use_image2video)
 
@@ -1955,7 +1986,7 @@ def generate_video_tab(image2video=False):
                         label="RIFLEx positional embedding to generate long video"
                     )
                     with gr.Row():
-                        gr.Markdown("<B>Experimental: Skip Layer guidance,should improve video quality</B>")
+                        gr.Markdown("<B>Experimental: Skip Layer Guidance, should improve video quality</B>")
                     with gr.Row():
                         slg_switch = gr.Dropdown(
                             choices=[
@@ -1979,6 +2010,23 @@ def generate_video_tab(image2video=False):
                     with gr.Row():
                         slg_start_perc = gr.Slider(0, 100, value=ui_defaults["slg_start_perc"], step=1, label="Denoising Steps % start") 
                         slg_end_perc = gr.Slider(0, 100, value=ui_defaults["slg_end_perc"], step=1, label="Denoising Steps % end") 
+
+                    with gr.Row():
+                        gr.Markdown("<B>Experimental: Classifier-Free Guidance Zero Star, better adherence to Text Prompt")
+                    with gr.Row():
+                        cfg_star_switch = gr.Dropdown(
+                            choices=[
+                                ("OFF", 0),
+                                ("ON", 1), 
+                            ],
+                            value=ui_defaults.get("cfg_star_switch",0),
+                            visible=True,
+                            scale = 1,
+                            label="CFG Star"
+                        )
+                        with gr.Row():
+                            cfg_zero_step = gr.Slider(-1, 39, value=ui_defaults.get("cfg_zero_step",-1), step=1, label="CFG Zero below this Layer (Extra Process)") 
+
                     with gr.Row():
                         save_settings_btn = gr.Button("Set Settings as Default")
             show_advanced.change(fn=switch_advanced, inputs=[state, show_advanced, lset_name], outputs=[advanced_row, preset_buttons_rows, refresh_lora_btn, refresh2_row ,lset_name ]).then(
@@ -1997,7 +2045,7 @@ def generate_video_tab(image2video=False):
         save_settings_btn.click( fn=validate_wizard_prompt, inputs =[state, wizard_prompt_activated_var, wizard_variables_var,  prompt, wizard_prompt, *prompt_vars] , outputs= [prompt]).then(
             save_settings, inputs = [state, prompt, image_prompt_type_radio, video_length, resolution, num_inference_steps, seed, repeat_generation, multi_images_gen_type, guidance_scale, flow_shift, negative_prompt, 
                                                          loras_choices, loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers,
-                                                         slg_start_perc, slg_end_perc  ], outputs = [])
+                                                         slg_start_perc, slg_end_perc, cfg_star_switch, cfg_zero_step  ], outputs = [])
         save_lset_btn.click(validate_save_lset, inputs=[lset_name], outputs=[apply_lset_btn, refresh_lora_btn, delete_lset_btn, save_lset_btn,confirm_save_lset_btn, cancel_lset_btn, save_lset_prompt_drop])
         confirm_save_lset_btn.click(fn=validate_wizard_prompt, inputs =[state, wizard_prompt_activated_var, wizard_variables_var, prompt, wizard_prompt, *prompt_vars] , outputs= [prompt]).then(
         save_lset, inputs=[state, lset_name, loras_choices, loras_mult_choices, prompt, save_lset_prompt_drop], outputs=[lset_name, apply_lset_btn,refresh_lora_btn, delete_lset_btn, save_lset_btn, confirm_save_lset_btn, cancel_lset_btn, save_lset_prompt_drop])
@@ -2035,6 +2083,7 @@ def generate_video_tab(image2video=False):
                 tea_cache_start_step_perc,
                 loras_choices,
                 loras_mult_choices,
+                image_prompt_type_radio,
                 image_to_continue,
                 image_to_end,
                 video_to_continue,
@@ -2044,6 +2093,8 @@ def generate_video_tab(image2video=False):
                 slg_layers,
                 slg_start_perc,
                 slg_end_perc,
+                cfg_star_switch,
+                cfg_zero_step,
                 state,
                 gr.State(image2video)
             ],
@@ -2175,9 +2226,24 @@ def generate_configuration_tab():
                 ("Add metadata to video", "metadata"),
                 ("Neither", "none")
             ],
-            value=metadata,
+            value=server_config.get("metadata_type", "metadata"),
             label="Metadata Handling"
         )
+
+        clear_file_list_choice = gr.Dropdown(
+            choices=[
+                ("None", 0),
+                ("Keep the last video", 1),
+                ("Keep the last 5 videos", 5),
+                ("Keep the last 10 videos", 10),
+                ("Keep the last 20 videos", 20),
+                ("Keep the last 30 videos", 30),
+            ],
+            value=server_config.get("clear_file_list", 0),
+            label="Keep Previously Generated Videos when starting a Generation Batch"
+        )
+
+        
         msg = gr.Markdown()            
         apply_btn  = gr.Button("Apply Changes")
         apply_btn.click(
@@ -2195,6 +2261,7 @@ def generate_configuration_tab():
                     metadata_choice,
                     default_ui_choice,
                     boost_choice,
+                    clear_file_list_choice,
                 ],
                 outputs= msg
         )
@@ -2262,7 +2329,7 @@ def create_demo():
         }
     """
     with gr.Blocks(css=css, theme=gr.themes.Soft(primary_hue="sky", neutral_hue="slate", text_size="md")) as demo:
-        gr.Markdown("<div align=center><H1>Wan 2.1<SUP>GP</SUP> v3.1 <FONT SIZE=4>by <I>DeepBeepMeep</I></FONT> <FONT SIZE=3> (<A HREF='https://github.com/deepbeepmeep/Wan2GP'>Updates</A>)</FONT SIZE=3></H1></div>")
+        gr.Markdown("<div align=center><H1>Wan 2.1<SUP>GP</SUP> v3.2 <FONT SIZE=4>by <I>DeepBeepMeep</I></FONT> <FONT SIZE=3> (<A HREF='https://github.com/deepbeepmeep/Wan2GP'>Updates</A>)</FONT SIZE=3></H1></div>")
         gr.Markdown("<FONT SIZE=3>Welcome to Wan 2.1GP a super fast and low VRAM AI Video Generator !</FONT>")
         
         with gr.Accordion("Click here for some Info on how to use Wan2GP", open = False):

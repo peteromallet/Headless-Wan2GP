@@ -28,79 +28,19 @@ from wan.modules.posemb_layers import get_rotary_pos_embed
 
 from PIL import Image
 
-def lanczos(samples, width, height):
-    images = [Image.fromarray(np.clip(255. * image.movedim(0, -1).cpu().numpy(), 0, 255).astype(np.uint8)) for image in samples]
-    images = [image.resize((width, height), resample=Image.Resampling.LANCZOS) for image in images]
-    images = [torch.from_numpy(np.array(image).astype(np.float32) / 255.0).movedim(-1, 0) for image in images]
-    result = torch.stack(images)
-    return result.to(samples.device, samples.dtype)
+def optimized_scale(positive_flat, negative_flat):
 
-def bislerp(samples, width, height):
-    def slerp(b1, b2, r):
-        '''slerps batches b1, b2 according to ratio r, batches should be flat e.g. NxC'''
+    # Calculate dot production
+    dot_product = torch.sum(positive_flat * negative_flat, dim=1, keepdim=True)
 
-        c = b1.shape[-1]
+    # Squared norm of uncondition
+    squared_norm = torch.sum(negative_flat ** 2, dim=1, keepdim=True) + 1e-8
 
-        #norms
-        b1_norms = torch.norm(b1, dim=-1, keepdim=True)
-        b2_norms = torch.norm(b2, dim=-1, keepdim=True)
-
-        #normalize
-        b1_normalized = b1 / b1_norms
-        b2_normalized = b2 / b2_norms
-
-        #zero when norms are zero
-        b1_normalized[b1_norms.expand(-1,c) == 0.0] = 0.0
-        b2_normalized[b2_norms.expand(-1,c) == 0.0] = 0.0
-
-        #slerp
-        dot = (b1_normalized*b2_normalized).sum(1)
-        omega = torch.acos(dot)
-        so = torch.sin(omega)
-
-        #technically not mathematically correct, but more pleasing?
-        res = (torch.sin((1.0-r.squeeze(1))*omega)/so).unsqueeze(1)*b1_normalized + (torch.sin(r.squeeze(1)*omega)/so).unsqueeze(1) * b2_normalized
-        res *= (b1_norms * (1.0-r) + b2_norms * r).expand(-1,c)
-
-        #edge cases for same or polar opposites
-        res[dot > 1 - 1e-5] = b1[dot > 1 - 1e-5]
-        res[dot < 1e-5 - 1] = (b1 * (1.0-r) + b2 * r)[dot < 1e-5 - 1]
-        return res
-
-
-def common_upscale(samples, width, height, upscale_method, crop):
-        orig_shape = tuple(samples.shape)
-        if len(orig_shape) > 4:
-            samples = samples.reshape(samples.shape[0], samples.shape[1], -1, samples.shape[-2], samples.shape[-1])
-            samples = samples.movedim(2, 1)
-            samples = samples.reshape(-1, orig_shape[1], orig_shape[-2], orig_shape[-1])
-        if crop == "center":
-            old_width = samples.shape[-1]
-            old_height = samples.shape[-2]
-            old_aspect = old_width / old_height
-            new_aspect = width / height
-            x = 0
-            y = 0
-            if old_aspect > new_aspect:
-                x = round((old_width - old_width * (new_aspect / old_aspect)) / 2)
-            elif old_aspect < new_aspect:
-                y = round((old_height - old_height * (old_aspect / new_aspect)) / 2)
-            s = samples.narrow(-2, y, old_height - y * 2).narrow(-1, x, old_width - x * 2)
-        else:
-            s = samples
-
-        if upscale_method == "bislerp":
-            out = bislerp(s, width, height)
-        elif upscale_method == "lanczos":
-            out = lanczos(s, width, height)
-        else:
-            out = torch.nn.functional.interpolate(s, size=(height, width), mode=upscale_method)
-
-        if len(orig_shape) == 4:
-            return out
-
-        out = out.reshape((orig_shape[0], -1, orig_shape[1]) + (height, width))
-        return out.movedim(2, 1).reshape(orig_shape[:-2] + (height, width))
+    # st_star = v_cond^T * v_uncond / ||v_uncond||^2
+    st_star = dot_product / squared_norm
+    
+    return st_star
+    
 
 class WanI2V:
 
@@ -227,6 +167,8 @@ class WanI2V:
         slg_layers = None,
         slg_start = 0.0,
         slg_end = 1.0,
+        cfg_star_switch = True,
+        cfg_zero_step = 5,
     ):
         r"""
         Generates video frames from input image and text prompt using diffusion process.
@@ -375,7 +317,7 @@ class WanI2V:
 
         # sample videos
         latent = noise
-
+        batch_size  = latent.shape[0]
         freqs = get_rotary_pos_embed(latent.shape[1:],  enable_RIFLEx= enable_RIFLEx) 
 
         arg_c = {
@@ -456,8 +398,23 @@ class WanI2V:
             del latent_model_input
             if offload_model:
                 torch.cuda.empty_cache()
-            noise_pred = noise_pred_uncond + guide_scale * (
-                noise_pred_cond - noise_pred_uncond)
+            # CFG Zero *. Thanks to https://github.com/WeichenFan/CFG-Zero-star/
+            noise_pred_text = noise_pred_cond
+            if cfg_star_switch:
+                positive_flat = noise_pred_text.view(batch_size, -1)  
+                negative_flat = noise_pred_uncond.view(batch_size, -1)  
+
+                alpha = optimized_scale(positive_flat,negative_flat)
+                alpha = alpha.view(batch_size, 1, 1, 1)
+
+
+                if (i <= cfg_zero_step):
+                    noise_pred = noise_pred_text*0.
+                else:
+                    noise_pred = noise_pred_uncond * alpha + guide_scale * (noise_pred_text - noise_pred_uncond * alpha)
+            else:
+                noise_pred = noise_pred_uncond + guide_scale * (noise_pred_text - noise_pred_uncond)        
+
             del noise_pred_uncond
 
             latent = latent.to(
