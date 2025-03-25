@@ -1772,7 +1772,7 @@ def save_settings(state, prompt, image_prompt_type, video_length, resolution, nu
     defaults_filename = get_settings_file_name(use_image2video)
 
     with open(defaults_filename, "w", encoding="utf-8") as f:
-        json.dump(ui_settings , f, indent=4)
+        json.dump(ui_defaults , f, indent=4)
 
     gr.Info("New Default Settings saved")
 
