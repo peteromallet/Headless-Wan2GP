@@ -215,8 +215,8 @@ def update_queue_data():
         for item in queue:
             data.append([
                 str(item['id']),
-                item['status'],
-                item['repeats'],
+                item.get('status', "Starting"),
+                item.get('repeats', "0/0"),
                 item.get('progress', "0.0%"),
                 item.get('steps', ''),
                 item.get('time', '--'),
@@ -998,7 +998,7 @@ def save_video(final_frames, output_path, fps=24):
         final_frames = (final_frames * 255).astype(np.uint8)
     ImageSequenceClip(list(final_frames), fps=fps).write_videofile(output_path, verbose= False, logger = None)
 
-def build_callback(state, pipe, num_inference_steps, status):
+def build_callback(taskid, state, pipe, num_inference_steps, repeats):
     start_time = time.time()
     def update_progress(step_idx, latents, read_state = False):
         with tracker_lock:
@@ -1011,12 +1011,12 @@ def build_callback(state, pipe, num_inference_steps, status):
             else:
                 phase = "Denoising"
             elapsed = time.time() - start_time
-            progress_tracker[task_id] = {
+            progress_tracker[taskid] = {
                 'current_step': step_idx,
                 'total_steps': num_inference_steps,
                 'start_time': start_time,
                 'last_update': time.time(),
-                'repeats': status,
+                'repeats': repeats,
                 'status': phase
             }
     return update_progress
@@ -1262,16 +1262,8 @@ def generate_video(
         trans.previous_residual_uncond = None
         trans.previous_residual_cond = None
     video_no = 0
-    status = f"{video_no}/{repeat_generation}"
-    with tracker_lock:
-        if task_id in progress_tracker:
-            progress_tracker[task_id]['status'] = "Encoding Prompt"
-            progress_tracker[task_id]['repeats'] = status
-            progress_tracker[task_id]['current_step'] = 0
-            progress_tracker[task_id]['total_steps'] = num_inference_steps
-            progress_tracker[task_id]['start_time'] = time.time()
-            progress_tracker[task_id]['last_update'] = time.time()
-    callback = build_callback(state, trans, num_inference_steps, status)
+    repeats = f"{video_no}/{repeat_generation}"
+    callback = build_callback(task_id, state, trans, num_inference_steps, repeats)
     offload.shared_state["callback"] = callback
     gc.collect()
     torch.cuda.empty_cache()
@@ -1279,8 +1271,14 @@ def generate_video(
     for i in range(repeat_generation):
         try:
             with tracker_lock:
-                if task_id in progress_tracker:
-                    progress_tracker[task_id]['repeats'] = video_no
+                progress_tracker[task_id] = {
+                    'current_step': 0,
+                    'total_steps': num_inference_steps,
+                    'start_time': time.time(),
+                    'last_update': time.time(),
+                    'repeats': f"0/{repeat_generation}",
+                    'status': "Encoding Prompt"
+                }
             video_no += 1
             if image2video:
                 samples = wan_model.generate(
