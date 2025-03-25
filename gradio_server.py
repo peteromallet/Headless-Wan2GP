@@ -380,12 +380,6 @@ def _parse_args():
         default="",
         help="Server name"
     )
-    parser.add_argument(
-        "--gpu",
-        type=str,
-        default="",
-        help="Default GPU Device"
-    )
 
     parser.add_argument(
         "--gpu",
