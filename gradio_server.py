@@ -23,7 +23,7 @@ import asyncio
 from wan.utils import prompt_parser
 PROMPT_VARS_MAX = 10
 
-target_mmgp_version = "3.3.2"
+target_mmgp_version = "3.3.3"
 from importlib.metadata import version
 mmgp_version = version("mmgp")
 if mmgp_version != target_mmgp_version:
@@ -1671,7 +1671,7 @@ def get_settings_dict(state, i2v, prompt, image_prompt_type, video_length, resol
 
     if i2v:
         ui_settings["type"] = "Wan2.1GP by DeepBeepMeep - image2video"
-        ui_settings["image_prompt_type"] = image_prompt_type,
+        ui_settings["image_prompt_type"] = image_prompt_type
     else: 
         ui_settings["type"] = "Wan2.1GP by DeepBeepMeep - text2video"
 
