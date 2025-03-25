@@ -2426,6 +2426,19 @@ def create_demo():
             overflow: hidden;
             text-overflow: ellipsis;
         }
+        #queue_df td:nth-child(-n+6) {
+            cursor: default !important;
+            pointer-events: none;
+        }
+        #queue_df th {
+            pointer-events: none;
+        }
+        #queue_df .tabulator-col {
+          pointer-events: none;
+        }
+        #queue_df .tabulator-col .tabulator-arrow {
+          display: none;
+        }
         #queue_df table {
             overflow: hidden !important;
         }
@@ -2433,7 +2446,6 @@ def create_demo():
         #queue_df::-webkit-scrollbar {
             display: none !important;
         }
-
         #queue_df {
             scrollbar-width: none !important;
             -ms-overflow-style: none !important;
