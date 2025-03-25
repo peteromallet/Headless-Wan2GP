@@ -135,9 +135,9 @@ def get_supported_attention_modes():
     ret = get_attention_modes()
     if not sage_supported:
         if "sage" in ret:
-            del ret["sage"]
+            ret.remove("sage")
         if "sage2" in ret:
-            del ret["sage2"]
+            ret.remove("sage2")
     return ret
 
 __all__ = [

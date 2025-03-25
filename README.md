@@ -19,11 +19,13 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 
 
 ## 🔥 Latest News!!
+* Mar 19 2022: 👋 Wan2.1GP v3.1: Faster launch and RAM optimizations (should require less RAM to run)\ 
+    You will need one more *pip install -r requirements.txt*
 * Mar 18 2022: 👋 Wan2.1GP v3.0: 
     - New Tab based interface, yon can switch from i2v to t2v conversely without restarting the app
     - Experimental Dual Frames mode for i2v, you can also specify an End frame. It doesn't always work, so you will need a few attempts.
     - You can save default settings in the files *i2v_settings.json* and *t2v_settings.json* that will be used when launching the app (you can also specify the path to different settings files)
-    - Slight acceleration with loras
+    - Slight acceleration with loras\
     You will need one more *pip install -r requirements.txt*
     Many thanks to *Tophness* who created the framework (and did a big part of the work) of the multitabs and saved settings features 
 * Mar 18 2022: 👋 Wan2.1GP v2.11: Added more command line parameters to prefill the generation settings + customizable output directory and choice of type of metadata for generated videos. Many thanks to *Tophness* for his contributions. You will need one more *pip install -r requirements.txt* to reflect new dependencies\
