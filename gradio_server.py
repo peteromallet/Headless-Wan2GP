@@ -24,7 +24,7 @@ import asyncio
 from wan.utils import prompt_parser
 PROMPT_VARS_MAX = 10
 
-target_mmgp_version = "3.3.0"
+target_mmgp_version = "3.3.1"
 from importlib.metadata import version
 mmgp_version = version("mmgp")
 if mmgp_version != target_mmgp_version:
@@ -38,6 +38,17 @@ progress_tracker = {}
 tracker_lock = threading.Lock()
 file_list = []
 last_model_type = None
+
+def format_time(seconds):
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    elif seconds < 3600:
+        minutes = seconds / 60
+        return f"{minutes:.1f}m"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        return f"{hours}h {minutes}m"
 
 def runner():
     global current_task_id
@@ -57,7 +68,7 @@ def runner():
                     item.update({
                         'progress': f"{((current_step/total_steps)*100 if total_steps > 0 else 0):.1f}%",
                         'steps': f"{current_step}/{total_steps}",
-                        'time': f"{elapsed:.1f}s",
+                        'time': format_time(elapsed),
                         'repeats': f"{repeats}",
                         'status': f"{status}"
                     })
@@ -213,14 +224,16 @@ def update_queue_data():
     with lock:
         data = []
         for item in queue:
+            truncated_prompt = (item['prompt'][:97] + '...') if len(item['prompt']) > 100 else item['prompt']
+            full_prompt = item['prompt'].replace('"', '&quot;')
+            prompt_cell = f'<span title="{full_prompt}">{truncated_prompt}</span>'
             data.append([
-                str(item['id']),
                 item.get('status', "Starting"),
                 item.get('repeats', "0/0"),
                 item.get('progress', "0.0%"),
                 item.get('steps', ''),
                 item.get('time', '--'),
-                (item['prompt'][:47] + '...') if len(item['prompt']) > 50 else item['prompt'],
+                prompt_cell,
                 "↑",
                 "↓",
                 "✖"
@@ -2037,10 +2050,10 @@ def generate_video_tab(image2video=False):
                 , columns=[3], rows=[1], object_fit="contain", height=450, selected_index=0, interactive= False)
             generate_btn = gr.Button("Generate")
             queue_df = gr.DataFrame(
-                headers=["ID", "Status", "Repeats", "Progress", "Steps", "Time", "Prompt", "", "", ""],
-                datatype=["str", "str", "str", "str", "str", "str", "str", "str", "str", "str"],
+                headers=["Status", "Completed", "Progress", "Steps", "Time", "Prompt", "", "", ""],
+                datatype=["str", "str", "str", "str", "str", "markdown", "str", "str", "str"],
                 interactive=False,
-                col_count=(10, "fixed"),
+                col_count=(9, "fixed"),
                 wrap=True,
                 value=update_queue_data,
                 every=1,
@@ -2389,6 +2402,12 @@ def create_demo():
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+        }
+        #queue_df td:nth-child(1) {
+            width: 100px;
+        }
+        #queue_df td:nth-child(6) {
+            width: 300px;
         }
         #queue_df td:nth-child(7),
         #queue_df td:nth-child(8),
