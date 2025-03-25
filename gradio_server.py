@@ -380,6 +380,12 @@ def _parse_args():
         default="",
         help="Server name"
     )
+    parser.add_argument(
+        "--gpu",
+        type=str,
+        default="",
+        help="Default GPU Device"
+    )
 
     parser.add_argument(
         "--gpu",
@@ -485,7 +491,6 @@ attention_modes_supported = get_supported_attention_modes()
 
 args = _parse_args()
 args.flow_reverse = True
-
 
 lock_ui_attention = False
 lock_ui_transformer = False
@@ -1111,6 +1116,7 @@ def generate_video(
     progress=gr.Progress() #track_tqdm= True
 
 ):
+
     global wan_model, offloadobj, reload_needed, last_model_type
     file_model_needed = model_needed(image2video)
     with lock:
@@ -1232,7 +1238,7 @@ def generate_video(
             list_mult_choices_nums  += [1.0] * ( len(loras_choices) - len(list_mult_choices_nums ) )
         loras_selected = [ lora for i, lora in enumerate(loras) if str(i) in loras_choices]
         pinnedLora = False #profile !=5 #False # # # 
-        offload.load_loras_into_model(trans, loras_selected, list_mult_choices_nums, activate_all_loras=True, preprocess_sd=preprocess_loras, pinnedLora=pinnedLora, split_linear_modules_map = None)
+        offload.load_loras_into_model(trans, loras_selected, list_mult_choices_nums, activate_all_loras=True, preprocess_sd=preprocess_loras, pinnedLora=pinnedLora, split_linear_modules_map = None) 
         errors = trans._loras_errors
         if len(errors) > 0:
             error_files = [msg for _ ,  msg  in errors]
@@ -1331,7 +1337,6 @@ def generate_video(
                     slg_start = slg_start/100,
                     slg_end = slg_end/100,
                 )
-
             else:
                 samples = wan_model.generate(
                     prompt,
@@ -1732,7 +1737,7 @@ def get_settings_dict(state, i2v, prompt, image_prompt_type, video_length, resol
     loras = state["loras"]
     activated_loras = [Path( loras[int(no)]).parts[-1]  for no in loras_choices ]
 
-    ui_settings  = {
+    ui_settings = {
         "prompts": prompt,
         "resolution": resolution,
         "video_length": video_length,
@@ -1763,8 +1768,10 @@ def get_settings_dict(state, i2v, prompt, image_prompt_type, video_length, resol
 
 def save_settings(state, prompt, image_prompt_type, video_length, resolution, num_inference_steps, seed, repeat_generation, multi_images_gen_type, guidance_scale, flow_shift, negative_prompt, loras_choices, 
                       loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers, slg_start_perc, slg_end_perc):
+
     if state.get("validate_success",0) != 1:
         return
+
     ui_defaults = get_settings_dict(state, use_image2video, prompt, image_prompt_type, video_length, resolution, num_inference_steps, seed, repeat_generation, multi_images_gen_type, guidance_scale, flow_shift, negative_prompt, loras_choices, 
                       loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers, slg_start_perc, slg_end_perc)
 
@@ -1884,7 +1891,6 @@ def generate_video_tab(image2video=False):
                         delete_lset_btn = gr.Button("Delete", size="sm", min_width= 1)
                         cancel_lset_btn = gr.Button("Don't do it !", size="sm", min_width= 1 , visible=False)  
             video_to_continue = gr.Video(label= "Video to continue", visible= image2video and False) #######
-
             image_prompt_type= ui_defaults.get("image_prompt_type",0)
             image_prompt_type_radio = gr.Radio( [("Use only a Start Image", 0),("Use both a Start and an End Image", 1)], value =image_prompt_type, label="Location", show_label= False, scale= 3, visible=image2video)
 
@@ -1907,8 +1913,7 @@ def generate_video_tab(image2video=False):
                     return gr.Gallery(visible = (image_prompt_type_radio == 1)  )
                 else:
                     return gr.Image(visible = (image_prompt_type_radio == 1)  )
-
-            image_prompt_type_radio.change(fn=switch_image_prompt_type_radio, inputs=[image_prompt_type_radio], outputs=[image_to_end])
+            image_prompt_type_radio.change(fn=switch_image_prompt_type_radio, inputs=[image_prompt_type_radio], outputs=[image_to_end]) 
 
 
             advanced_prompt = advanced
