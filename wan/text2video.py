@@ -89,7 +89,7 @@ class WanT2V:
         from mmgp import offload
 
 
-        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel)
+        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel, writable_tensors= False)
 
 
 

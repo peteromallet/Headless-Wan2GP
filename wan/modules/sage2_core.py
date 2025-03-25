@@ -51,6 +51,15 @@ from sageattention.quant import per_channel_fp8
 
 from typing import Any, List, Literal, Optional, Tuple, Union
 import warnings
+import os
+
+def is_sage_supported():
+    device_count = torch.cuda.device_count()
+    for i in range(device_count):
+        major, minor = torch.cuda.get_device_capability(i)
+        if major < 8:
+            return False
+    return True
 
 def get_cuda_arch_versions():
     cuda_archs = []

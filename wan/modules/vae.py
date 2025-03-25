@@ -744,11 +744,12 @@ def _video_vae(pretrained_path=None, z_dim=None, device='cpu', **kwargs):
     with torch.device('meta'):
         model = WanVAE_(**cfg)
 
+    from mmgp import offload
     # load checkpoint
     logging.info(f'loading {pretrained_path}')
-    model.load_state_dict(
-        torch.load(pretrained_path, map_location=device), assign=True)
-
+    # model.load_state_dict(
+    #     torch.load(pretrained_path, map_location=device), assign=True)
+    offload.load_model_data(model, pretrained_path.replace(".pth", "_bf16.safetensors"), writable_tensors= False)    
     return model
 
 
@@ -778,7 +779,7 @@ class WanVAE:
         self.model = _video_vae(
             pretrained_path=vae_pth,
             z_dim=z_dim,
-        ).eval().requires_grad_(False).to(device)
+        ).eval() #.requires_grad_(False).to(device)
 
     def encode(self, videos, tile_size = 256, any_end_frame = False):
         """
