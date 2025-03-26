@@ -39,12 +39,12 @@ import warnings
 
 try:
     from sageattention import sageattn
-    from .sage2_core import sageattn as alt_sageattn, is_sage_supported
-    sage_supported =  is_sage_supported()
+    from .sage2_core import sageattn as alt_sageattn, is_sage2_supported
+    sage2_supported =  is_sage2_supported()
 except ImportError:
     sageattn = None
     alt_sageattn = None
-    sage_supported = False
+    sage2_supported = False
 # @torch.compiler.disable()
 def sageattn_wrapper(
         qkv_list,
@@ -134,9 +134,7 @@ def get_attention_modes():
 
 def get_supported_attention_modes():
     ret = get_attention_modes()
-    if not sage_supported:
-        if "sage" in ret:
-            ret.remove("sage")
+    if not sage2_supported:
         if "sage2" in ret:
             ret.remove("sage2")
     return ret

@@ -409,11 +409,10 @@ class WanI2V:
 
 
                 if (i <= cfg_zero_step):
-                    noise_pred = noise_pred_text*0.
+                    noise_pred *= 0. # it would be faster not to compute noise_pred...
                 else:
-                    noise_pred = noise_pred_uncond * alpha + guide_scale * (noise_pred_text - noise_pred_uncond * alpha)
-            else:
-                noise_pred = noise_pred_uncond + guide_scale * (noise_pred_text - noise_pred_uncond)        
+                    noise_pred_uncond *= alpha
+            noise_pred = noise_pred_uncond + guide_scale * (noise_pred_text - noise_pred_uncond)            
 
             del noise_pred_uncond
 

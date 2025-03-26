@@ -1064,7 +1064,9 @@ def finalize_gallery(state):
     if "in_progress" in state:
         del state["in_progress"]
         choice = state.get("selected",0)
-        # file_list = state.get("file_list", [])      
+        if state.get("last_selected", True):
+            file_list = state.get("file_list", [])
+            choice = len(file_list) - 1
             
 
     state["extra_orders"] = 0
@@ -1076,7 +1078,10 @@ def finalize_gallery(state):
 def select_video(state , event_data: gr.EventData):
     data=  event_data._data
     if data!=None:
-        state["selected"] = data.get("index",0)
+        choice = data.get("index",0)
+        file_list = state.get("file_list", [])
+        state["last_selected"] = (choice + 1) >= len(file_list)
+        state["selected"] = choice
     return 
 
 def expand_slist(slist, num_inference_steps ):
@@ -1306,6 +1311,7 @@ def generate_video(
         choice = 0
     state["selected"] = choice         
     state["file_list"] = file_list    
+
 
     global save_path
     os.makedirs(save_path, exist_ok=True)
