@@ -1057,8 +1057,7 @@ def build_callback(taskid, state, pipe, num_inference_steps, repeats):
     return update_progress
 
 def refresh_gallery(state):
-    file_list = state.get("file_list", None)
-    return file_list
+    return state
 
 def finalize_gallery(state):
     choice = 0
@@ -1465,6 +1464,7 @@ def generate_video(
 
             print(f"New video saved to Path: "+video_path)
             file_list.append(video_path)
+            state['update_gallery'] = True
         seed += 1
 
         last_model_type = image2video
@@ -1899,6 +1899,7 @@ def generate_video_tab(image2video=False):
         download_status = gr.Markdown()
     with gr.Row():
         with gr.Column():
+            gallery_update_trigger = gr.Textbox(value="0", visible=False, label="_gallery_trigger")
             with gr.Row(visible= len(loras)>0) as presets_column:
                 lset_choices = [ (preset, preset) for preset in loras_presets ] + [(get_new_preset_msg(advanced), "")]
                 with gr.Column(scale=6):
@@ -2146,15 +2147,24 @@ def generate_video_tab(image2video=False):
                 elif cell_value == "✖":
                     return remove_task([selected_index])
                 return queue_df
+            def refresh_gallery_on_trigger(state):
+                if(state.get("update_gallery", False)):
+                    state['update_gallery'] = False
+                    return gr.update(value=state.get("file_list", []))
             selected_indices = gr.State([])
             queue_df.select(
                 fn=handle_selection,
                 outputs=selected_indices
             )
+            gallery_update_trigger.change(
+                fn=refresh_gallery_on_trigger,
+                inputs=[state],
+                outputs=[output]
+            )
             queue_df.change(
                 fn=refresh_gallery,
                 inputs=[state],
-                outputs=[output]
+                outputs=[gallery_update_trigger]
             )
         save_settings_btn.click( fn=validate_wizard_prompt, inputs =[state, wizard_prompt_activated_var, wizard_variables_var,  prompt, wizard_prompt, *prompt_vars] , outputs= [prompt]).then(
             save_settings, inputs = [state, prompt, image_prompt_type_radio, video_length, resolution, num_inference_steps, seed, repeat_generation, multi_images_gen_type, guidance_scale, flow_shift, negative_prompt, 
