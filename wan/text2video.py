@@ -306,7 +306,7 @@ class WanT2V:
                 alpha = alpha.view(batch_size, 1, 1, 1)
 
                 if (i <= cfg_zero_step):
-                    noise_pred *= 0. # it would be faster not to compute noise_pred...
+                    noise_pred = noise_pred_text*0. # it would be faster not to compute noise_pred...
                 else:
                     noise_pred_uncond *= alpha
             noise_pred = noise_pred_uncond + guide_scale * (noise_pred_text - noise_pred_uncond)            
