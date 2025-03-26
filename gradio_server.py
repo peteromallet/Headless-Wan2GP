@@ -1466,7 +1466,6 @@ def generate_video(
             print(f"New video saved to Path: "+video_path)
             file_list.append(video_path)
         seed += 1
-        repeat_no += 1
 
         last_model_type = image2video
   
