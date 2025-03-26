@@ -980,7 +980,7 @@ def apply_changes(  state,
                      "metadata_choice": metadata_choice,
                      "default_ui" : default_ui_choice,
                      "boost" : boost_choice,
-                     "clear_file_list" : clear_file_list
+                     "clear_file_list" : clear_file_list,
                      "reload_model" : reload_choice,
                        }
 
