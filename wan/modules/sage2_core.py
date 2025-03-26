@@ -53,7 +53,7 @@ from typing import Any, List, Literal, Optional, Tuple, Union
 import warnings
 import os
 
-def is_sage_supported():
+def is_sage2_supported():
     device_count = torch.cuda.device_count()
     for i in range(device_count):
         major, minor = torch.cuda.get_device_capability(i)

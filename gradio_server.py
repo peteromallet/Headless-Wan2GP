@@ -847,14 +847,15 @@ def abort_generation(state):
 
 def refresh_gallery(state, txt):
     file_list = state.get("file_list", None)      
+    choice = state.get("selected",0)
+    if "in_progress" in state:
+        if state.get("last_selected", True):
+            choice = max(len(file_list) - 1,0)  
+
     prompt = state.get("prompt", "")
     if len(prompt) == 0:
         return file_list, gr.Text(visible= False, value="")
     else:
-        choice = 0
-        if "in_progress" in state:
-            choice = state.get("selected",0)
-
         prompts_max = state.get("prompts_max",0) 
         prompt_no = state.get("prompt_no",0)
         if prompts_max >1 : 
@@ -869,7 +870,9 @@ def finalize_gallery(state):
     if "in_progress" in state:
         del state["in_progress"]
         choice = state.get("selected",0)
-        # file_list = state.get("file_list", [])      
+        if state.get("last_selected", True):
+            file_list = state.get("file_list", [])
+            choice = len(file_list) - 1
             
 
     state["extra_orders"] = 0
@@ -881,7 +884,10 @@ def finalize_gallery(state):
 def select_video(state , event_data: gr.EventData):
     data=  event_data._data
     if data!=None:
-        state["selected"] = data.get("index",0)
+        choice = data.get("index",0)
+        file_list = state.get("file_list", [])
+        state["last_selected"] = (choice + 1) >= len(file_list)
+        state["selected"] = choice
     return 
 
 def expand_slist(slist, num_inference_steps ):
@@ -1198,6 +1204,7 @@ def generate_video(
         choice = 0
     state["selected"] = choice         
     state["file_list"] = file_list    
+
 
     global save_path
     os.makedirs(save_path, exist_ok=True)

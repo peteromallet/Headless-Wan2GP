@@ -19,25 +19,25 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 
 
 ## 🔥 Latest News!!
-* Mar 19 2022: 👋 Wan2.1GP v3.2: 
+* Mar 19 2025: 👋 Wan2.1GP v3.2: 
     - Added Classifier-Free Guidance Zero Star. The video should match better the text prompt (especially with text2video) at no performance cost: many thanks to the **CFG Zero * Team:**\
     Dont hesitate to give them a star if you appreciate the results:  https://github.com/WeichenFan/CFG-Zero-star 
     - Added back support for Pytorch compilation with Loras. It seems it had been broken for some time
     - Added possibility to keep a number of pregenerated videos in the Video Gallery (useful to compare outputs of different settings)
     You will need one more *pip install -r requirements.txt*
-* Mar 19 2022: 👋 Wan2.1GP v3.1: Faster launch and RAM optimizations (should require less RAM to run)\ 
+* Mar 19 2025: 👋 Wan2.1GP v3.1: Faster launch and RAM optimizations (should require less RAM to run)\ 
     You will need one more *pip install -r requirements.txt*
-* Mar 18 2022: 👋 Wan2.1GP v3.0: 
+* Mar 18 2025: 👋 Wan2.1GP v3.0: 
     - New Tab based interface, yon can switch from i2v to t2v conversely without restarting the app
     - Experimental Dual Frames mode for i2v, you can also specify an End frame. It doesn't always work, so you will need a few attempts.
     - You can save default settings in the files *i2v_settings.json* and *t2v_settings.json* that will be used when launching the app (you can also specify the path to different settings files)
     - Slight acceleration with loras\
     You will need one more *pip install -r requirements.txt*
     Many thanks to *Tophness* who created the framework (and did a big part of the work) of the multitabs and saved settings features 
-* Mar 18 2022: 👋 Wan2.1GP v2.11: Added more command line parameters to prefill the generation settings + customizable output directory and choice of type of metadata for generated videos. Many thanks to *Tophness* for his contributions. You will need one more *pip install -r requirements.txt* to reflect new dependencies\
-* Mar 18 2022: 👋 Wan2.1GP v2.1: More Loras !: added support for 'Safetensors' and 'Replicate' Lora formats.\
+* Mar 18 2025: 👋 Wan2.1GP v2.11: Added more command line parameters to prefill the generation settings + customizable output directory and choice of type of metadata for generated videos. Many thanks to *Tophness* for his contributions. You will need one more *pip install -r requirements.txt* to reflect new dependencies\
+* Mar 18 2025: 👋 Wan2.1GP v2.1: More Loras !: added support for 'Safetensors' and 'Replicate' Lora formats.\
 You will need to refresh the requirements with a *pip install -r requirements.txt*
-* Mar 17 2022: 👋 Wan2.1GP v2.0: The Lora festival continues:
+* Mar 17 2025: 👋 Wan2.1GP v2.0: The Lora festival continues:
     - Clearer user interface
     - Download 30 Loras in one click to try them all (expand the info section)
     - Very to use Loras as now Lora presets can input the subject (or other need terms) of the Lora so that you dont have to modify manually a prompt 
