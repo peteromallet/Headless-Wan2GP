@@ -1431,7 +1431,7 @@ def generate_video(
             end_time = time.time()
             abort = True
             state["prompt"] = ""
-            yield f"Video generation was aborted. Total Generation Time: {end_time-start_time:.1f}s"
+            print(f"Video generation was aborted. Total Generation Time: {end_time-start_time:.1f}s")
         else:
             sample = samples.cpu()
             # video = rearrange(sample.cpu().numpy(), "c t h w -> t h w c")
@@ -1465,12 +1465,6 @@ def generate_video(
 
             print(f"New video saved to Path: "+video_path)
             file_list.append(video_path)
-            if video_no < total_video:
-                yield  status 
-            else:
-                end_time = time.time()
-                state["prompt"] = ""
-                yield f"Total Generation Time: {end_time-start_time:.1f}s"
         seed += 1
         repeat_no += 1
 
