@@ -647,26 +647,6 @@ class WanModel(ModelMixin, ConfigMixin):
         self.init_weights()
 
 
-        # self.freqs = torch.cat([    
-        #     rope_params(1024, d - 4 * (d // 6)), #44
-        #     rope_params(1024, 2 * (d // 6)), #42
-        #     rope_params(1024, 2 * (d // 6)) #42
-        # ],dim=1)
-
-
-    def get_rope_freqs(self, nb_latent_frames, RIFLEx_k = None, device = "cuda"):
-        dim = self.dim
-        num_heads = self.num_heads 
-        d = dim // num_heads
-        assert (dim % num_heads) == 0 and (dim // num_heads) % 2 == 0
-
-        
-        c1, s1 = rope_params_riflex(1024, dim= d - 4 * (d // 6), L_test=nb_latent_frames, k = RIFLEx_k ) if RIFLEx_k != None else rope_params(1024, dim= d - 4 * (d // 6)) #44
-        c2, s2 = rope_params(1024, 2 * (d // 6)) #42
-        c3, s3 = rope_params(1024, 2 * (d // 6)) #42
-
-        return (torch.cat([c1,c2,c3],dim=1).to(device) , torch.cat([s1,s2,s3],dim=1).to(device))
-
     def compute_teacache_threshold(self, start_step, timesteps = None, speed_factor =0):
         rescale_func = np.poly1d(self.coefficients)         
         e_list = []

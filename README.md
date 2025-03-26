@@ -19,6 +19,12 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 
 
 ## 🔥 Latest News!!
+* Mar 19 2022: 👋 Wan2.1GP v3.2: 
+    - Added Classifier-Free Guidance Zero Star. The video should match better the text prompt (especially with text2video) at no performance cost: many thanks to the **CFG Zero * Team:**\
+    Dont hesitate to give them a star if you appreciate the results:  https://github.com/WeichenFan/CFG-Zero-star 
+    - Added back support for Pytorch compilation with Loras. It seems it had been broken for some time
+    - Added possibility to keep a number of pregenerated videos in the Video Gallery (useful to compare outputs of different settings)
+    You will need one more *pip install -r requirements.txt*
 * Mar 19 2022: 👋 Wan2.1GP v3.1: Faster launch and RAM optimizations (should require less RAM to run)\ 
     You will need one more *pip install -r requirements.txt*
 * Mar 18 2022: 👋 Wan2.1GP v3.0: 

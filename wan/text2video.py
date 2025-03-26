@@ -24,6 +24,20 @@ from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
 from wan.modules.posemb_layers import get_rotary_pos_embed
 
 
+def optimized_scale(positive_flat, negative_flat):
+
+    # Calculate dot production
+    dot_product = torch.sum(positive_flat * negative_flat, dim=1, keepdim=True)
+
+    # Squared norm of uncondition
+    squared_norm = torch.sum(negative_flat ** 2, dim=1, keepdim=True) + 1e-8
+
+    # st_star = v_cond^T * v_uncond / ||v_uncond||^2
+    st_star = dot_product / squared_norm
+    
+    return st_star
+    
+
 class WanT2V:
 
     def __init__(
@@ -136,6 +150,8 @@ class WanT2V:
                 slg_layers = None,
                 slg_start = 0.0,
                 slg_end = 1.0,
+                cfg_star_switch = True,
+                cfg_zero_step = 5,
                  ):
         r"""
         Generates video frames from text prompt using diffusion process.
@@ -240,7 +256,7 @@ class WanT2V:
 
         # sample videos
         latents = noise
-
+        batch_size =len(latents)
         freqs = get_rotary_pos_embed(latents[0].shape[1:], enable_RIFLEx= enable_RIFLEx) 
         arg_c = {'context': context, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self}
         arg_null = {'context': context_null, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self}
@@ -249,7 +265,6 @@ class WanT2V:
         # arg_c = {'context': context, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self, "max_steps": sampling_steps}
         # arg_null = {'context': context_null, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self, "max_steps": sampling_steps}
         # arg_both = {'context': context, 'context2': context_null, 'seq_len': seq_len, 'freqs': freqs, 'pipeline': self, "max_steps": sampling_steps}
-
         if self.model.enable_teacache:
             self.model.compute_teacache_threshold(self.model.teacache_start_step, timesteps, self.model.teacache_multiplier)
         if callback != None:
@@ -280,8 +295,23 @@ class WanT2V:
                     return None
 
             del latent_model_input
-            noise_pred = noise_pred_uncond + guide_scale * (
-                noise_pred_cond - noise_pred_uncond)
+
+            # CFG Zero *. Thanks to https://github.com/WeichenFan/CFG-Zero-star/
+            noise_pred_text = noise_pred_cond
+            if cfg_star_switch:
+                positive_flat = noise_pred_text.view(batch_size, -1)  
+                negative_flat = noise_pred_uncond.view(batch_size, -1)  
+
+                alpha = optimized_scale(positive_flat,negative_flat)
+                alpha = alpha.view(batch_size, 1, 1, 1)
+
+
+                if (i <= cfg_zero_step):
+                    noise_pred = noise_pred_text*0.
+                else:
+                    noise_pred = noise_pred_uncond * alpha + guide_scale * (noise_pred_text - noise_pred_uncond * alpha)
+            else:
+                noise_pred = noise_pred_uncond + guide_scale * (noise_pred_text - noise_pred_uncond)            
             del noise_pred_uncond
 
             temp_x0 = sample_scheduler.step(
