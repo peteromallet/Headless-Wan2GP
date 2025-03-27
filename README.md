@@ -19,8 +19,9 @@ In this repository, we present **Wan2.1**, a comprehensive and open suite of vid
 
 
 ## 🔥 Latest News!!
-* Mar 20 2025: 👋 Good news ! Official support for RTX 50xx please check the installation instructions below. 
-* Mar 19 2025: 👋 Wan2.1GP v3.2: 
+* Mar 27 2025: 👋 Added support for the new Wan Fun InP models (image2video). The 14B Fun InP has probably better end image support but unfortunately existing loras do not work so well with it. The great novelty is the Fun InP image2 1.3B model : Image 2 Video is now accessible to even lower hardware configuration. It is not as good as the 14B models but very impressive for its size. You can choose any of those models in the Configuration tab. Many thanks to the VideoX-Fun team  (https://github.com/aigc-apps/VideoX-Fun)
+* Mar 26 2025: 👋 Good news ! Official support for RTX 50xx please check the installation instructions below. 
+* Mar 24 2025: 👋 Wan2.1GP v3.2: 
     - Added Classifier-Free Guidance Zero Star. The video should match better the text prompt (especially with text2video) at no performance cost: many thanks to the **CFG Zero * Team:**\
     Dont hesitate to give them a star if you appreciate the results:  https://github.com/WeichenFan/CFG-Zero-star 
     - Added back support for Pytorch compilation with Loras. It seems it had been broken for some time
@@ -188,6 +189,10 @@ To run the image to video generator (in Low VRAM mode):
 ```bash
 python gradio_server.py --i2v
 ```
+To run the 1.3B Fun InP image to video generator (in Low VRAM mode): 
+```bash
+python gradio_server.py --i2v-1-3B
+```
 
 To be able to input multiple images with the image to video generator:
 ```bash
@@ -271,6 +276,8 @@ You can define multiple lines of macros. If there is only one macro line, the ap
 --t2v : launch the text to video generator (default defined in the configuration)\
 --t2v-14B : launch the 14B model text to video generator\
 --t2v-1-3B : launch the 1.3B model text to video generator\
+--i2v-14B : launch the 14B model image to video generator\
+--i2v-1-3B : launch the Fun InP 1.3B model image to video generator\
 --quantize-transformer bool: (default True) : enable / disable on the fly transformer quantization\
 --lora-dir path : Path of directory that contains Loras in diffusers / safetensor format\
 --lora-preset preset : name of preset gile (without the extension) to preload
