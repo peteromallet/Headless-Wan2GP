@@ -949,6 +949,25 @@ def one_more_video(state):
 
     return state 
 
+def convert_image(image):
+    from PIL import ExifTags
+
+    image = image.convert('RGB')
+    for orientation in ExifTags.TAGS.keys():
+        if ExifTags.TAGS[orientation]=='Orientation':
+            break            
+    exif = image.getexif()
+    if not orientation in exif:
+        return image
+    if exif[orientation] == 3:
+        image=image.rotate(180, expand=True)
+    elif exif[orientation] == 6:
+        image=image.rotate(270, expand=True)
+    elif exif[orientation] == 8:
+        image=image.rotate(90, expand=True)
+    return image
+
+
 def prepare_generate_video():
     
     return gr.Button(visible= False), gr.Checkbox(visible= True)
@@ -999,10 +1018,6 @@ def generate_video(
         wan_model, offloadobj, trans = load_models(image2video)
         yield f"Model loaded"
         reload_needed=  False
-
-    from PIL import Image
-    import numpy as np
-    import tempfile
 
     if wan_model == None:
         raise gr.Error("Unable to generate a Video while a new configuration is being applied.")
@@ -1076,17 +1091,18 @@ def generate_video(
             image_to_end = None
         if image_to_continue is not None:
             if isinstance(image_to_continue, list):
-                image_to_continue = [ tup[0] for tup in image_to_continue ]
+                image_to_continue = [ convert_image(tup[0]) for tup in image_to_continue ]
             else:
-                image_to_continue = [image_to_continue]
+                image_to_continue = [convert_image(image_to_continue)]
             if image_to_end != None:
                 if isinstance(image_to_end , list):
-                    image_to_end  = [ tup[0] for tup in image_to_end  ]
+                    image_to_end  = [ convert_image(tup[0]) for tup in image_to_end  ]
                 else:
-                    image_to_end  = [image_to_end ]
+                    image_to_end  = [convert_image(image_to_end) ]
                 if len(image_to_continue) != len(image_to_end):
                     gr.Info("The number of start and end images should be the same ")
                     return 
+                               
             if multi_images_gen_type == 0:
                 new_prompts = []
                 new_image_to_continue = []
@@ -1279,8 +1295,8 @@ def generate_video(
                 if image2video:
                     samples = wan_model.generate(
                         prompt,
-                        image_to_continue[no].convert('RGB'),  
-                        image_to_end[no].convert('RGB') if image_to_end != None else None,  
+                        image_to_continue[no],  
+                        image_to_end[no] if image_to_end != None else None,  
                         frame_num=(video_length // 4)* 4 + 1,
                         max_area=MAX_AREA_CONFIGS[resolution], 
                         shift=flow_shift,
