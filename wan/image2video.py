@@ -117,7 +117,8 @@ class WanI2V:
         logging.info(f"Creating WanModel from {model_filename}")
         from mmgp import offload
 
-        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel, writable_tensors= False)
+        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,  writable_tensors= False) #forcedConfigPath= "ckpts/config2.json", 
+        # offload.save_model(self.model, "wan2.1_Fun_InP_1.3B_bf16_bis.safetensors")
         self.model.eval().requires_grad_(False)
 
         if t5_fsdp or dit_fsdp or use_usp:
@@ -169,6 +170,7 @@ class WanI2V:
         slg_end = 1.0,
         cfg_star_switch = True,
         cfg_zero_step = 5,
+        add_frames_for_end_image = True
     ):
         r"""
         Generates video frames from input image and text prompt using diffusion process.
@@ -212,8 +214,9 @@ class WanI2V:
         if any_end_frame:
             any_end_frame = True
             img2 = TF.to_tensor(img2).sub_(0.5).div_(0.5).to(self.device)
-            frame_num +=1
-            lat_frames = int((frame_num - 2) // self.vae_stride[0] + 2)
+            if add_frames_for_end_image:
+                frame_num +=1
+                lat_frames = int((frame_num - 2) // self.vae_stride[0] + 2)
 
         h, w = img.shape[1:]
         aspect_ratio = h / w
@@ -237,7 +240,11 @@ class WanI2V:
         msk = torch.ones(1, frame_num, lat_h, lat_w, device=self.device)
         if any_end_frame:
             msk[:, 1: -1] = 0
-            msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:-1], torch.repeat_interleave(msk[:, -1:], repeats=4, dim=1) ], dim=1)
+            if add_frames_for_end_image:
+                msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:-1], torch.repeat_interleave(msk[:, -1:], repeats=4, dim=1) ], dim=1)
+            else:
+                msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:] ], dim=1)
+
         else:
             msk[:, 1:] = 0
             msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:] ], dim=1)
@@ -283,7 +290,7 @@ class WanI2V:
                     torch.zeros(3, frame_num-1, h, w, device="cpu", dtype= torch.bfloat16)
             ], dim=1).to(self.device)
 
-        lat_y = self.vae.encode([enc], VAE_tile_size, any_end_frame= any_end_frame)[0]
+        lat_y = self.vae.encode([enc], VAE_tile_size, any_end_frame= any_end_frame and add_frames_for_end_image)[0]
         y = torch.concat([msk, lat_y])
 
         @contextmanager
@@ -441,9 +448,9 @@ class WanI2V:
 
         if self.rank == 0:
             # x0 = [lat_y]
-            video = self.vae.decode(x0, VAE_tile_size, any_end_frame= any_end_frame)[0]
+            video = self.vae.decode(x0, VAE_tile_size, any_end_frame= any_end_frame and add_frames_for_end_image)[0]
 
-            if any_end_frame:
+            if any_end_frame and add_frames_for_end_image:
                 # video[:,  -1:] = img2_interpolated
                 video = video[:,  :-1]  
 
