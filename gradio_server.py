@@ -139,11 +139,15 @@ def process_prompt_and_add_tasks(
     state_arg,
     image2video
 ):
+
+    if state_arg.get("validate_success",0) != 1:
+        print("Validation failed, not adding tasks.")
+        return
     if len(prompt) ==0:
         return
     prompt, errors = prompt_parser.process_template(prompt)
     if len(errors) > 0:
-        gr.Info("Error processing prompt template: " + errors)
+        print("Error processing prompt template: " + errors)
         return
     prompts = prompt.replace("\r", "").split("\n")
     prompts = [prompt.strip() for prompt in prompts if len(prompt.strip())>0 and not prompt.startswith("#")]
@@ -1223,8 +1227,6 @@ def generate_video(
         gr.Info(f"You have selected attention mode '{attention_mode}'. However it is not installed or supported on your system. You should either install it or switch to the default 'sdpa' attention.")
         return
 
-    #if state.get("validate_success",0) != 1:
-    #    return
     raw_resolution = resolution
     width, height = resolution.split("x")
     width, height = int(width), int(height)
@@ -1545,6 +1547,7 @@ def generate_video(
         os.remove(temp_filename)
     gen_in_progress = False
     offload.unload_loras_from_model(trans)
+
 
 def get_new_preset_msg(advanced = True):
     if advanced:
@@ -2285,10 +2288,9 @@ def generate_video_tab(image2video=False):
         download_loras_btn.click(fn=download_loras, inputs=[], outputs=[download_status_row, download_status, presets_column, loras_column]).then(fn=refresh_lora_list, inputs=[state, lset_name,loras_choices], outputs=[lset_name, loras_choices])
         output.select(select_video, state, None )
 
-        #generate_btn.click(
-        #    fn=validate_wizard_prompt, inputs =[state, wizard_prompt_activated_var, wizard_variables_var,  prompt, wizard_prompt, *prompt_vars] , outputs= [prompt]
-        #).then(
         generate_btn.click(
+            fn=validate_wizard_prompt, inputs =[state, wizard_prompt_activated_var, wizard_variables_var,  prompt, wizard_prompt, *prompt_vars] , outputs= [prompt]
+        ).then(
             fn=process_prompt_and_add_tasks,
             inputs=[
                 prompt,
