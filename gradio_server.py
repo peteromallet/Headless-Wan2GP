@@ -1164,6 +1164,24 @@ def expand_slist(slist, num_inference_steps ):
         pos += inc
     return new_slist
 
+def convert_image(image):
+    from PIL import ExifTags
+
+    image = image.convert('RGB')
+    for orientation in ExifTags.TAGS.keys():
+        if ExifTags.TAGS[orientation]=='Orientation':
+            break            
+    exif = image.getexif()
+    if not orientation in exif:
+        return image
+    if exif[orientation] == 3:
+        image=image.rotate(180, expand=True)
+    elif exif[orientation] == 6:
+        image=image.rotate(270, expand=True)
+    elif exif[orientation] == 8:
+        image=image.rotate(90, expand=True)
+    return image
+
 def generate_video(
     task_id,
     prompt,
@@ -1213,9 +1231,6 @@ def generate_video(
         wan_model, offloadobj, trans = load_models(image2video)
         print(f"Model loaded")
         reload_needed=  False
-
-    import numpy as np
-    import tempfile
 
     if wan_model == None:
         raise gr.Error("Unable to generate a Video while a new configuration is being applied.")
@@ -1413,8 +1428,8 @@ def generate_video(
             if image2video:
                 samples = wan_model.generate(
                     prompt,
-                    image_to_continue.convert('RGB'),  
-                    image_to_end.convert('RGB') if image_to_end != None else None,  
+                    convert_image(image_to_continue),  
+                    convert_image(image_to_end) if image_to_end != None else None,  
                     frame_num=(video_length // 4)* 4 + 1,
                     max_area=MAX_AREA_CONFIGS[resolution], 
                     shift=flow_shift,
