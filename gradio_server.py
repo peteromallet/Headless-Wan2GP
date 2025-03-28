@@ -2662,28 +2662,31 @@ def create_demo():
         #queue_df td:nth-child(1) {
             width: 100px;
         }
-        #queue_df td:nth-child(6) {
-            width: auto;
-            min-width: 200px;
-        }
-        #queue_df td:nth-child(7),
-        #queue_df td:nth-child(8),
-        #queue_df td:nth-child(9) {
-            cursor: pointer;
-            text-align: center;
-            font-weight: bold;
-            width: 60px;
-            text-align: center;
-            padding: 2px !important;
-            cursor: pointer;
-        }
-        #queue_df td:nth-child(10) img,
-        #queue_df td:nth-child(11) img {
+        #queue_df td:nth-child(7) img,
+        #queue_df td:nth-child(8) img,
             max-width: 50px;
             max-height: 50px;
             object-fit: contain;
             display: block;
-            margin: auto;
+            margin: auto;            
+            cursor: pointer;
+            text-align: center;
+        }
+        #queue_df td:nth-child(9),
+        #queue_df td:nth-child(10),
+        #queue_df td:nth-child(11) {            
+            width: 60px;
+            padding: 2px !important;
+            cursor: pointer;
+            text-align: center;
+            font-weight: bold;
+        }
+        #queue_df td:nth-child(7):hover,
+        #queue_df td:nth-child(8):hover,
+        #queue_df td:nth-child(9):hover,
+        #queue_df td:nth-child(10):hover,
+        #queue_df td:nth-child(11):hover {
+            background-color: #e0e0e0;
         }
         #image-modal-container {
             position: fixed;
