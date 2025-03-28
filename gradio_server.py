@@ -2284,44 +2284,43 @@ def generate_video_tab(image2video=False):
         refresh_lora_btn2.click(refresh_lora_list, inputs=[state, lset_name,loras_choices], outputs=[lset_name, loras_choices])
         download_loras_btn.click(fn=download_loras, inputs=[], outputs=[download_status_row, download_status, presets_column, loras_column]).then(fn=refresh_lora_list, inputs=[state, lset_name,loras_choices], outputs=[lset_name, loras_choices])
         output.select(select_video, state, None )
-        original_inputs = [
-            prompt,
-            negative_prompt,
-            resolution,
-            video_length,
-            seed,
-            num_inference_steps,
-            guidance_scale,
-            flow_shift,
-            embedded_guidance_scale,
-            repeat_generation,
-            multi_images_gen_type,
-            tea_cache_setting,
-            tea_cache_start_step_perc,
-            loras_choices,
-            loras_mult_choices,
-            image_prompt_type_radio,
-            image_to_continue,
-            image_to_end,
-            video_to_continue,
-            max_frames,
-            RIFLEx_setting,
-            slg_switch, 
-            slg_layers,
-            slg_start_perc,
-            slg_end_perc,
-            cfg_star_switch,
-            cfg_zero_step,
-            state,
-            gr.State(image2video)
-        ]
 
         #generate_btn.click(
         #    fn=validate_wizard_prompt, inputs =[state, wizard_prompt_activated_var, wizard_variables_var,  prompt, wizard_prompt, *prompt_vars] , outputs= [prompt]
         #).then(
         generate_btn.click(
             fn=process_prompt_and_add_tasks,
-            inputs=original_inputs,
+            inputs=[
+                prompt,
+                negative_prompt,
+                resolution,
+                video_length,
+                seed,
+                num_inference_steps,
+                guidance_scale,
+                flow_shift,
+                embedded_guidance_scale,
+                repeat_generation,
+                multi_images_gen_type,
+                tea_cache_setting,
+                tea_cache_start_step_perc,
+                loras_choices,
+                loras_mult_choices,
+                image_prompt_type_radio,
+                image_to_continue,
+                image_to_end,
+                video_to_continue,
+                max_frames,
+                RIFLEx_setting,
+                slg_switch, 
+                slg_layers,
+                slg_start_perc,
+                slg_end_perc,
+                cfg_star_switch,
+                cfg_zero_step,
+                state,
+                gr.State(image2video)
+            ],
             outputs=queue_df
         )
         close_modal_button.click(
