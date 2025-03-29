@@ -41,6 +41,7 @@ progress_tracker = {}
 tracker_lock = threading.Lock()
 file_list = []
 last_model_type = None
+last_status_string = ""
 
 def format_time(seconds):
     if seconds < 60:
@@ -291,6 +292,53 @@ def update_queue_data():
                 "✖"
             ])
         return data
+
+def create_html_progress_bar(percentage=0.0, text="Idle", is_idle=True):
+    bar_class = "progress-bar-custom idle" if is_idle else "progress-bar-custom"
+    bar_text_html = f'<div class="progress-bar-text">{text}</div>'
+
+    html = f"""
+    <div class="progress-container-custom">
+        <div class="{bar_class}" style="width: {percentage:.1f}%;" role="progressbar" aria-valuenow="{percentage:.1f}" aria-valuemin="0" aria-valuemax="100">
+           {bar_text_html}
+        </div>
+    </div>
+    """
+    return html
+
+def refresh_progress():
+    global current_task_id, progress_tracker, last_status_string
+    task_id_to_check = current_task_id
+    is_idle = True
+    status_string = "Starting..."
+    progress_percent = 0.0
+    html_content = ""
+
+    with tracker_lock:
+        with lock:
+            processing_or_queued = any(item['state'] in ["Processing", "Queued"] for item in queue)
+        if task_id_to_check is not None:
+            progress_data = progress_tracker.get(task_id_to_check)
+            if progress_data:
+                is_idle = False
+                current_step = progress_data.get('current_step', 0)
+                total_steps = progress_data.get('total_steps', 0)
+                status = progress_data.get('status', "Starting...")
+                repeats = progress_data.get("repeats", "0/0")
+
+                if total_steps > 0:
+                    progress_float = min(1.0, max(0.0, float(current_step) / float(total_steps)))
+                    progress_percent = progress_float * 100
+                    status_string = f"{status} [{repeats}] - {progress_percent:.1f}% complete ({current_step}/{total_steps} steps)"
+                else:
+                    progress_percent = 0.0
+                    status_string = f"{status} [{repeats}] - Initializing..."
+    html_content = create_html_progress_bar(progress_percent, status_string, is_idle)
+    return gr.update(value=html_content)
+
+def update_generation_status(html_content):
+    if(html_content):
+        return gr.update(value=html_content)
 
 def _parse_args():
     parser = argparse.ArgumentParser(
@@ -1212,8 +1260,7 @@ def generate_video(
     cfg_star_switch,
     cfg_zero_step,
     state,
-    image2video,
-    progress=gr.Progress() #track_tqdm= True
+    image2video
 
 ):
 
@@ -1993,6 +2040,7 @@ def generate_video_tab(image2video=False):
                 with gr.Row(elem_id="image-modal-close-button-row"):
                      close_modal_button = gr.Button("❌", size="sm")
                 modal_image_display = gr.Image(label="Full Resolution Image", interactive=False, show_label=False)
+            progress_update_trigger = gr.Textbox(value="0", visible=False, label="_progress_trigger")
             gallery_update_trigger = gr.Textbox(value="0", visible=False, label="_gallery_trigger")
             with gr.Row(visible= len(loras)>0) as presets_column:
                 lset_choices = [ (preset, preset) for preset in loras_presets ] + [(get_new_preset_msg(advanced), "")]
@@ -2217,6 +2265,11 @@ def generate_video_tab(image2video=False):
             show_advanced.change(fn=switch_advanced, inputs=[state, show_advanced, lset_name], outputs=[advanced_row, preset_buttons_rows, refresh_lora_btn, refresh2_row ,lset_name ]).then(
                 fn=switch_prompt_type, inputs = [state, wizard_prompt_activated_var, wizard_variables_var, prompt, wizard_prompt, *prompt_vars], outputs = [wizard_prompt_activated_var, wizard_variables_var, prompt, wizard_prompt, prompt_column_advanced, prompt_column_wizard, prompt_column_wizard_vars, *prompt_vars])
         with gr.Column():
+            gen_progress_html = gr.HTML(
+                label="Status",
+                value="Idle",
+                elem_id="generation_progress_bar_container"
+            )
             output = gr.Gallery(
                     label="Generated videos", show_label=False, elem_id="gallery"
                 , columns=[3], rows=[1], object_fit="contain", height=450, selected_index=0, interactive= False)
@@ -2284,6 +2337,16 @@ def generate_video_tab(image2video=False):
                 fn=refresh_gallery,
                 inputs=[state],
                 outputs=[gallery_update_trigger]
+            ).then(
+                fn=refresh_progress,
+                inputs=None,
+                outputs=[progress_update_trigger]
+            )
+            progress_update_trigger.change(
+                fn=update_generation_status,
+                inputs=[progress_update_trigger],
+                outputs=[gen_progress_html],
+                show_progress="hidden"
             )
         save_settings_btn.click( fn=validate_wizard_prompt, inputs =[state, wizard_prompt_activated_var, wizard_variables_var,  prompt, wizard_prompt, *prompt_vars] , outputs= [prompt]).then(
             save_settings, inputs = [state, prompt, image_prompt_type_radio, video_length, resolution, num_inference_steps, seed, repeat_generation, multi_images_gen_type, guidance_scale, flow_shift, negative_prompt, 
@@ -2741,6 +2804,49 @@ def create_demo():
          #image-modal-close-button-row button {
             cursor: pointer;
          }
+        .progress-container-custom {
+            width: 100%;
+            background-color: #e9ecef;
+            border-radius: 0.375rem;
+            overflow: hidden;
+            height: 25px;
+            position: relative;
+            margin-top: 5px;
+            margin-bottom: 5px;
+        }
+        .progress-bar-custom {
+            height: 100%;
+            background-color: #0d6efd;
+            transition: width 0.3s ease-in-out;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 0.9em;
+            font-weight: bold;
+            white-space: nowrap;
+            overflow: hidden;
+        }
+        .progress-bar-custom.idle {
+            background-color: #6c757d;
+        }
+        .progress-bar-text {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            mix-blend-mode: difference;
+            font-size: 0.9em;
+            font-weight: bold;
+            white-space: nowrap;
+            z-index: 2;
+            pointer-events: none;
+        }
     """
     with gr.Blocks(css=css, theme=gr.themes.Soft(primary_hue="sky", neutral_hue="slate", text_size="md")) as demo:
         gr.Markdown("<div align=center><H1>Wan 2.1<SUP>GP</SUP> v3.3 <FONT SIZE=4>by <I>DeepBeepMeep</I></FONT> <FONT SIZE=3> (<A HREF='https://github.com/deepbeepmeep/Wan2GP'>Updates</A>)</FONT SIZE=3></H1></div>")
