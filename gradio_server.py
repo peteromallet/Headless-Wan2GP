@@ -1176,7 +1176,12 @@ def build_callback(taskid, state, pipe, num_inference_steps, repeats):
     return update_progress
 
 def refresh_gallery(state):
-    return state
+    return gr.update(value=state.get("file_list", []))
+
+def refresh_gallery_on_trigger(state):
+    if(state.get("update_gallery", False)):
+        state['update_gallery'] = False
+        return gr.update(value=state.get("file_list", []))
 
 def finalize_gallery(state):
     choice = 0
@@ -2318,10 +2323,6 @@ def generate_video_tab(image2video=False):
                     return gr.update(), gr.update(value=image_data_to_show), gr.update(visible=True)
                 else:
                     return gr.update(), gr.update(), gr.update(visible=False)
-            def refresh_gallery_on_trigger(state):
-                if(state.get("update_gallery", False)):
-                    state['update_gallery'] = False
-                    return gr.update(value=state.get("file_list", []))
             selected_indices = gr.State([])
             queue_df.select(
                 fn=handle_selection,
