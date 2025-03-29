@@ -19,3 +19,4 @@ moviepy==1.0.3
 mmgp==3.3.4
 peft==0.14.0
 mutagen
+pydantic==2.10.6
