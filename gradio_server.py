@@ -2706,9 +2706,12 @@ def create_demo():
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        #queue_df td:nth-child(-n+6) {
+        #queue_df td:nth-child(-n+5) {
             cursor: default !important;
             pointer-events: none;
+        }
+        #queue_df td:nth-child(6) {
+            cursor: default !important;
         }
         #queue_df th {
             pointer-events: none;
