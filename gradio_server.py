@@ -1183,22 +1183,6 @@ def refresh_gallery_on_trigger(state):
         state['update_gallery'] = False
         return gr.update(value=state.get("file_list", []))
 
-def finalize_gallery(state):
-    choice = 0
-    if "in_progress" in state:
-        del state["in_progress"]
-        choice = state.get("selected",0)
-        if state.get("last_selected", True):
-            file_list = state.get("file_list", [])
-            choice = len(file_list) - 1
-            
-
-    state["extra_orders"] = 0
-    time.sleep(0.2)
-    global gen_in_progress
-    gen_in_progress = False
-    return gr.Gallery(selected_index=choice), gr.Button(interactive=True), gr.Button(visible=False), gr.Checkbox(visible=False), gr.Text(visible=False, value="")
-
 def select_video(state , event_data: gr.EventData):
     data=  event_data._data
     if data!=None:
