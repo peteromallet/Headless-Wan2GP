@@ -1870,9 +1870,9 @@ def process_tasks(state, progress=gr.Progress()):
             try:
                 ok = False
                 status = next(iterator, "#")
+                ok = True
                 if status == "#":
                     break
-                ok = True
             except Exception as e:
                 _ , exc_value, exc_traceback = sys.exc_info()
                 raise exc_value.with_traceback(exc_traceback)
