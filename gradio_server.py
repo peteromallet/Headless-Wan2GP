@@ -3167,112 +3167,94 @@ def create_demo():
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        # #queue_df td:nth-child(-n+5) {
-        #     cursor: default !important;
-        #     pointer-events: none;
-        # }
-        # #queue_df td:nth-child(6) {
-        #     cursor: default !important;
-        # }
-        # #queue_df th {
-        #     pointer-events: none;
-        #     text-align: center;
-        #     vertical-align: middle;
-        # }
-        # #queue_df table {
-        #     width: 100%;
-        #     overflow: hidden !important;
-        # }
-        # #queue_df::-webkit-scrollbar {
-        #     display: none !important;
-        # }
-        # #queue_df {
-        #     scrollbar-width: none !important;
-        #     -ms-overflow-style: none !important;
-        # }
-        # #queue_df th:nth-child(1),
-        # #queue_df td:nth-child(1) {
-        #     width: 90px;
-        #     text-align: center;
-        #     vertical-align: middle;
-        # }
-        # #queue_df th:nth-child(1) {
-        #      font-size: 0.8em;
-        # }
-        # #queue_df th:nth-child(2),
-        # #queue_df td:nth-child(2) {
-        #     width: 85px;
-        #     text-align: center;
-        #     vertical-align: middle;
-        # }
-        # #queue_df th:nth-child(2) {
-        #      font-size: 0.5em;
-        # }
-        # #queue_df th:nth-child(3),
-        # #queue_df td:nth-child(3) {
-        #     width: 75px;
-        #     text-align: center;
-        #     vertical-align: middle;
-        # }
-        #  #queue_df th:nth-child(3) {
-        #      font-size: 0.6em;
-        # }
-        # #queue_df th:nth-child(4),
-        # #queue_df td:nth-child(4) {
-        #     width: 65px;
-        #     text-align: center;
-        #     white-space: nowrap;
-        # }
-        #  #queue_df th:nth-child(4) {
-        #      font-size: 0.9em;
-        # }
-        # #queue_df th:nth-child(5),
-        # #queue_df td:nth-child(5) {
-        #     width: 60px;
-        #     text-align: center;
-        #     white-space: nowrap;
-        # }
-        # #queue_df th:nth-child(6),
-        # #queue_df td:nth-child(6) {
-        #      width: auto;
-        #      text-align: center;
-        #      white-space: normal;
-        # }
-        #  #queue_df th:nth-child(6) {
-        #      font-size: 0.8em;
-        # }
-        # #queue_df th:nth-child(7), #queue_df td:nth-child(7),
-        # #queue_df th:nth-child(8), #queue_df td:nth-child(8) {
-        #     width: 60px;
-        #     text-align: center;
-        #     vertical-align: middle;
-        # }
-        # #queue_df td:nth-child(7) img,
-        # #queue_df td:nth-child(8) img {
-        #     max-width: 50px;
-        #     max-height: 50px;
-        #     object-fit: contain;
-        #     display: block;
-        #     margin: auto;
-        #     cursor: pointer;
-        # }
-        # #queue_df th:nth-child(9), #queue_df td:nth-child(9),
-        # #queue_df th:nth-child(10), #queue_df td:nth-child(10),
-        # #queue_df th:nth-child(11), #queue_df td:nth-child(11) {
-        #     width: 20px;
-        #     padding: 2px !important;
-        #     cursor: pointer;
-        #     text-align: center;
-        #     font-weight: bold;
-        #     vertical-align: middle;
-        # }
-        # #queue_df td:nth-child(7):hover,
-        # #queue_df td:nth-child(8):hover,
-        # #queue_df td:nth-child(9):hover,
-        # #queue_df td:nth-child(10):hover,
-        # #queue_df td:nth-child(11):hover {
-        #     background-color: #e0e0e0;
-        # }
+        #queue_df th {
+            pointer-events: none;
+            text-align: center;
+            vertical-align: middle;
+        }
+        #queue_df table {
+            width: 100%;
+            overflow: hidden !important;
+        }
+        #queue_df::-webkit-scrollbar {
+            display: none !important;
+        }
+        #queue_df {
+            scrollbar-width: none !important;
+            -ms-overflow-style: none !important;
+        }
+        .selection-button {
+            display: none;
+        }
+        .cell-selected {
+            --ring-color: none;
+        }
+        #queue_df th:nth-child(1),
+        #queue_df td:nth-child(1) {
+            width: 60px;
+            text-align: center;
+            vertical-align: middle;
+            cursor: default !important;
+            pointer-events: none;
+        }
+        #queue_df th:nth-child(2),
+        #queue_df td:nth-child(2) {
+            width: auto;
+            text-align: center;
+            vertical-align: middle;
+            white-space: normal;
+        }
+        #queue_df td:nth-child(2) {
+            cursor: default !important;
+        }
+        #queue_df th:nth-child(3),
+        #queue_df td:nth-child(3) {
+            width: 60px;
+            text-align: center;
+            vertical-align: middle;
+            cursor: default !important;
+            pointer-events: none;
+        }
+        #queue_df th:nth-child(4),
+        #queue_df td:nth-child(4) {
+            width: 60px;
+            text-align: center;
+            white-space: nowrap;
+            cursor: default !important;
+            pointer-events: none;
+        }
+        #queue_df th:nth-child(5), #queue_df td:nth-child(7),
+        #queue_df th:nth-child(6), #queue_df td:nth-child(8) {
+            width: 60px;
+            text-align: center;
+            vertical-align: middle;
+        }
+        #queue_df td:nth-child(5) img,
+        #queue_df td:nth-child(6) img {
+            max-width: 50px;
+            max-height: 50px;
+            object-fit: contain;
+            display: block;
+            margin: auto;
+            cursor: pointer;
+        }
+        #queue_df th:nth-child(7), #queue_df td:nth-child(9),
+        #queue_df th:nth-child(8), #queue_df td:nth-child(10),
+        #queue_df th:nth-child(9), #queue_df td:nth-child(11) {
+            width: 20px;
+            padding: 2px !important;
+            cursor: pointer;
+            text-align: center;
+            font-weight: bold;
+            vertical-align: middle;
+        }
+        #queue_df td:nth-child(5):hover,
+        #queue_df td:nth-child(6):hover,
+        #queue_df td:nth-child(7):hover,
+        #queue_df td:nth-child(8):hover,
+        #queue_df td:nth-child(9):hover {
+            background-color: #e0e0e0;
+        }
         #image-modal-container {
             position: fixed;
             top: 0;
