@@ -268,7 +268,7 @@ class WanT2V:
         if self.model.enable_teacache:
             self.model.compute_teacache_threshold(self.model.teacache_start_step, timesteps, self.model.teacache_multiplier)
         if callback != None:
-            callback(-1, None)
+            callback(-1, True)
         for i, t in enumerate(tqdm(timesteps)):
             latent_model_input = latents
             slg_layers_local = None
@@ -322,7 +322,7 @@ class WanT2V:
             del temp_x0
 
             if callback is not None:
-                callback(i, latents)         
+                callback(i, False)         
 
         x0 = latents
         if offload_model:

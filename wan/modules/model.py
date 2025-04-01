@@ -704,6 +704,7 @@ class WanModel(ModelMixin, ConfigMixin):
         is_uncond=False,
         max_steps = 0, 
         slg_layers=None,
+        callback = None,
     ):
         r"""
         Forward pass through the diffusion model
@@ -835,12 +836,10 @@ class WanModel(ModelMixin, ConfigMixin):
                 freqs=freqs,
                 # context=context,
                 context_lens=context_lens)
-
             for block_idx, block in enumerate(self.blocks):
                 offload.shared_state["layer"] = block_idx
-                if "refresh" in offload.shared_state:
-                    del offload.shared_state["refresh"]
-                    offload.shared_state["callback"](-1, -1, True)
+                if callback != None:
+                    callback(-1, False, True)
                 if pipeline._interrupt:
                     if joint_pass:
                         return None, None
