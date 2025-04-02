@@ -73,7 +73,7 @@ def process_frames(model, device, frames, exp):
         ssim = ssim_matlab(I0_small[:, :3], I1_small[:, :3])
 
         break_flag = False
-        if ssim > 0.996:        
+        if ssim > 0.996 or pos > 100:        
             pos += 1
             frame = get_frame(frames, pos)
             if frame is None:
@@ -86,7 +86,7 @@ def process_frames(model, device, frames, exp):
             I1 = model.inference(I0, I1, scale)
             I1_small = F.interpolate(I1, (32, 32), mode='bilinear', align_corners=False)
             ssim = ssim_matlab(I0_small[:, :3], I1_small[:, :3])
-            frame = I1[0]
+            frame = I1[0][:, :h, :w]
         
         if ssim < 0.2:
             output = []
