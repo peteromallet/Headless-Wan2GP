@@ -25,8 +25,7 @@ from .utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
                                get_sampling_sigmas, retrieve_timesteps)
 from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
 from wan.modules.posemb_layers import get_rotary_pos_embed
-
-from PIL import Image
+from wan.utils.utils import resize_lanczos
 
 def optimized_scale(positive_flat, negative_flat):
 
@@ -41,10 +40,6 @@ def optimized_scale(positive_flat, negative_flat):
     
     return st_star
 
-def resize_lanczos(img, h, w):
-    img = Image.fromarray(np.clip(255. * img.movedim(0, -1).cpu().numpy(), 0, 255).astype(np.uint8))
-    img = img.resize((w,h), resample=Image.Resampling.LANCZOS) 
-    return torch.from_numpy(np.array(img).astype(np.float32) / 255.0).movedim(-1, 0)
 
 
 class WanI2V:
@@ -285,21 +280,6 @@ class WanI2V:
             self.clip.model.cpu()
 
         from mmgp import offload
-
-
-        # img_interpolated.save('aaa.png')        
-
-        # img_interpolated = torch.from_numpy(np.array(img_interpolated).astype(np.float32) / 255.0).movedim(-1, 0)
-
-        # img_interpolated = torch.nn.functional.interpolate(img[None].cpu(), size=(h, w), mode='lanczos')
-        # img_interpolated = img_interpolated.squeeze(0).transpose(0,2).transpose(1,0)
-        # img_interpolated = img_interpolated.clamp(-1, 1) 
-        # img_interpolated = (img_interpolated + 1)/2
-        # img_interpolated = (img_interpolated*255).type(torch.uint8) 
-        # img_interpolated = img_interpolated.cpu().numpy()
-        # xxx = Image.fromarray(img_interpolated, 'RGB')
-        # xxx.save('my.png')        
-
         offload.last_offload_obj.unload_all()
         if any_end_frame:
             mean2 = 0

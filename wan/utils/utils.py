@@ -7,8 +7,15 @@ import os.path as osp
 import imageio
 import torch
 import torchvision
+from PIL import Image
+import numpy as np
 
 __all__ = ['cache_video', 'cache_image', 'str2bool']
+
+def resize_lanczos(img, h, w):
+    img = Image.fromarray(np.clip(255. * img.movedim(0, -1).cpu().numpy(), 0, 255).astype(np.uint8))
+    img = img.resize((w,h), resample=Image.Resampling.LANCZOS) 
+    return torch.from_numpy(np.array(img).astype(np.float32) / 255.0).movedim(-1, 0)
 
 
 def rand_name(length=8, suffix=''):

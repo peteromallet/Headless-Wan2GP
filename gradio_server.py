@@ -97,6 +97,8 @@ def process_prompt_and_add_tasks(
     image_to_end,
     video_to_continue,
     max_frames,
+    temporal_upsampling,
+    spatial_upsampling,    
     RIFLEx_setting,
     slg_switch,
     slg_layers,
@@ -230,6 +232,8 @@ def process_prompt_and_add_tasks(
             "image_to_end" : image_end,
             "video_to_continue" : video_to_continue ,
             "max_frames" : max_frames,
+            "temporal_upsampling" : temporal_upsampling,
+            "spatial_upsampling" : spatial_upsampling,
             "RIFLEx_setting" : RIFLEx_setting,
             "slg_switch" : slg_switch,
             "slg_layers" : slg_layers,
@@ -852,48 +856,63 @@ model_filename = ""
 # compile = "transformer"
 
 def preprocess_loras(sd):
+    if wan_model == None:
+        return sd
+    model_filename = wan_model._model_file_name
+
     first = next(iter(sd), None)
     if first == None:
         return sd
-    if not first.startswith("lora_unet_"):
-        return sd
-    new_sd = {}
-    print("Converting Lora Safetensors format to Lora Diffusers format")
-    alphas = {}
-    repl_list = ["cross_attn", "self_attn", "ffn"]
-    src_list = ["_" + k + "_" for k in repl_list]
-    tgt_list = ["." + k + "." for k in repl_list]
+    
+    if first.startswith("lora_unet_"):
+        new_sd = {}
+        print("Converting Lora Safetensors format to Lora Diffusers format")
+        alphas = {}
+        repl_list = ["cross_attn", "self_attn", "ffn"]
+        src_list = ["_" + k + "_" for k in repl_list]
+        tgt_list = ["." + k + "." for k in repl_list]
 
-    for k,v in sd.items():
-        k = k.replace("lora_unet_blocks_","diffusion_model.blocks.")
+        for k,v in sd.items():
+            k = k.replace("lora_unet_blocks_","diffusion_model.blocks.")
 
-        for s,t in zip(src_list, tgt_list):
-            k = k.replace(s,t)
+            for s,t in zip(src_list, tgt_list):
+                k = k.replace(s,t)
 
-        k = k.replace("lora_up","lora_B")
-        k = k.replace("lora_down","lora_A")
+            k = k.replace("lora_up","lora_B")
+            k = k.replace("lora_down","lora_A")
 
-        if "alpha" in k:
-            alphas[k] = v
-        else:
+            if "alpha" in k:
+                alphas[k] = v
+            else:
+                new_sd[k] = v
+
+        new_alphas = {}
+        for k,v in new_sd.items():
+            if "lora_B" in k:
+                dim = v.shape[1]
+            elif "lora_A" in k:
+                dim = v.shape[0]
+            else:
+                continue
+            alpha_key = k[:-len("lora_X.weight")] +"alpha"
+            if alpha_key in alphas:
+                scale = alphas[alpha_key] / dim
+                new_alphas[alpha_key] = scale
+            else:
+                print(f"Lora alpha'{alpha_key}' is missing")
+        new_sd.update(new_alphas)
+        sd = new_sd
+
+    if "text2video" in model_filename:
+        new_sd = {}
+        # convert loras for i2v to t2v
+        for k,v in sd.items():
+            if  any(layer in k for layer in ["cross_attn.k_img", "cross_attn.v_img"]):
+                continue
             new_sd[k] = v
+        sd = new_sd
 
-    new_alphas = {}
-    for k,v in new_sd.items():
-        if "lora_B" in k:
-            dim = v.shape[1]
-        elif "lora_A" in k:
-            dim = v.shape[0]
-        else:
-            continue
-        alpha_key = k[:-len("lora_X.weight")] +"alpha"
-        if alpha_key in alphas:
-            scale = alphas[alpha_key] / dim
-            new_alphas[alpha_key] = scale
-        else:
-            print(f"Lora alpha'{alpha_key}' is missing")
-    new_sd.update(new_alphas)
-    return new_sd
+    return sd
 
 
 def download_models(transformer_filename, text_encoder_filename):
@@ -905,7 +924,7 @@ def download_models(transformer_filename, text_encoder_filename):
     from huggingface_hub import hf_hub_download, snapshot_download    
     repoId = "DeepBeepMeep/Wan2.1" 
     sourceFolderList = ["xlm-roberta-large", "",  ]
-    fileList = [ [], ["Wan2.1_VAE_bf16.safetensors", "models_clip_open-clip-xlm-roberta-large-vit-huge-14-bf16.safetensors" ] + computeList(text_encoder_filename) + computeList(transformer_filename) ]   
+    fileList = [ [], ["Wan2.1_VAE_bf16.safetensors", "models_clip_open-clip-xlm-roberta-large-vit-huge-14-bf16.safetensors", "flownet.pkl" ] + computeList(text_encoder_filename) + computeList(transformer_filename) ]   
     targetRoot = "ckpts/" 
     for sourceFolder, files in zip(sourceFolderList,fileList ):
         if len(files)==0:
@@ -1094,6 +1113,7 @@ def load_models(i2v):
         wan_model, pipe = load_i2v_model(model_filename, "720P" if res720P else "480P")
     else:
         wan_model, pipe = load_t2v_model(model_filename, "")
+    wan_model._model_file_name = model_filename
     kwargs = { "extraModelsToQuantize": None}
     if profile == 2 or profile == 4:
         kwargs["budgets"] = { "transformer" : 100 if preload  == 0 else preload, "text_encoder" : 100, "*" : 1000 }
@@ -1441,6 +1461,8 @@ def generate_video(
     image_to_end,
     video_to_continue,
     max_frames,
+    temporal_upsampling,
+    spatial_upsampling,
     RIFLEx_setting,
     slg_switch,
     slg_layers,    
@@ -1693,6 +1715,7 @@ def generate_video(
                     cfg_star_switch = cfg_star_switch,
                     cfg_zero_step = cfg_zero_step,
                 )
+            # samples = torch.empty( (1,2)) #for testing
         except Exception as e:
             if temp_filename!= None and  os.path.isfile(temp_filename):
                 os.remove(temp_filename)
@@ -1716,8 +1739,6 @@ def generate_video(
                     if any( keyword in frame.name for keyword in keyword_list):
                         VRAM_crash = True
                         break
-
-            _ , exc_value, exc_traceback = sys.exc_info()
 
             state["prompt"] = ""
             if VRAM_crash:
@@ -1759,17 +1780,61 @@ def generate_video(
                 file_name = f"{time_flag}_seed{seed}_{sanitize_file_name(prompt[:50]).strip()}.mp4"
             else:
                 file_name = f"{time_flag}_seed{seed}_{sanitize_file_name(prompt[:100]).strip()}.mp4"
-            video_path = os.path.join(save_path, file_name)        
+            video_path = os.path.join(save_path, file_name)
+            # if False: # for testing
+            #     torch.save(sample, "ouput.pt")
+            # else:
+            #     sample =torch.load("ouput.pt")
+            exp = 0
+            fps = 16
+
+            if len(temporal_upsampling) > 0 or len(spatial_upsampling) > 0:                
+                progress_args = [0, status + " - Upsampling"]
+                progress(*progress_args )   
+                gen["progress_args"] = progress_args
+
+            if temporal_upsampling == "rife2":
+                exp = 1
+            elif temporal_upsampling == "rife4":
+                exp = 2
+            
+            if exp > 0: 
+                from rife.inference import temporal_interpolation
+                sample = temporal_interpolation( os.path.join("ckpts", "flownet.pkl"), sample, exp, device="cuda")
+                fps = fps * 2**exp
+
+            if len(spatial_upsampling) > 0:
+                from wan.utils.utils import resize_lanczos
+                if spatial_upsampling == "lanczos1.5":
+                    scale = 1.5
+                else:
+                    scale = 2
+                sample = (sample + 1) / 2
+                h, w = sample.shape[-2:]
+                h *= scale
+                w *= scale
+                new_frames =[]
+                for i in range( sample.shape[1] ):
+                    frame = sample[:, i]
+                    frame = resize_lanczos(frame, h, w)
+                    frame = frame.unsqueeze(1)
+                    new_frames.append(frame)
+                sample = torch.cat(new_frames, dim=1)
+                new_frames = None
+                sample = sample * 2 - 1
+
+
             cache_video(
                 tensor=sample[None],
                 save_file=video_path,
-                fps=16,
+                fps=fps,
                 nrow=1,
                 normalize=True,
                 value_range=(-1, 1))
+    
 
             configs = get_settings_dict(state, image2video, prompt, 0 if image_to_end == None else 1 , video_length, resolution, num_inference_steps, seed, repeat_generation, multi_images_gen_type, guidance_scale, flow_shift, negative_prompt, loras_choices, 
-                  loras_mult_choices, tea_cache , tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers, slg_start, slg_end, cfg_star_switch, cfg_zero_step)
+                  loras_mult_choices, tea_cache , tea_cache_start_step_perc, temporal_upsampling, spatial_upsampling, RIFLEx_setting, slg_switch, slg_layers, slg_start, slg_end, cfg_star_switch, cfg_zero_step)
 
             metadata_choice = server_config.get("metadata_choice","metadata")
             if metadata_choice == "json":
@@ -2231,7 +2296,7 @@ def switch_advanced(state, new_advanced, lset_name):
 
 
 def get_settings_dict(state, i2v, prompt, image_prompt_type, video_length, resolution, num_inference_steps, seed, repeat_generation, multi_images_gen_type, guidance_scale, flow_shift, negative_prompt, loras_choices, 
-                      loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers, slg_start_perc, slg_end_perc, cfg_star_switch, cfg_zero_step):
+                      loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, temporal_upsampling, spatial_upsampling, RIFLEx_setting, slg_switch, slg_layers, slg_start_perc, slg_end_perc, cfg_star_switch, cfg_zero_step):
 
     loras = state["loras"]
     activated_loras = [Path( loras[int(no)]).parts[-1]  for no in loras_choices ]
@@ -2251,6 +2316,8 @@ def get_settings_dict(state, i2v, prompt, image_prompt_type, video_length, resol
         "loras_multipliers": loras_mult_choices,
         "tea_cache": tea_cache_setting,
         "tea_cache_start_step_perc": tea_cache_start_step_perc,
+        "temporal_upsampling" : temporal_upsampling, 
+        "spatial_upsampling" : spatial_upsampling,
         "RIFLEx_setting": RIFLEx_setting,
         "slg_switch": slg_switch,
         "slg_layers": slg_layers,
@@ -2269,14 +2336,14 @@ def get_settings_dict(state, i2v, prompt, image_prompt_type, video_length, resol
     return ui_settings
 
 def save_settings(state, prompt, image_prompt_type, video_length, resolution, num_inference_steps, seed, repeat_generation, multi_images_gen_type, guidance_scale, flow_shift, negative_prompt, loras_choices, 
-                      loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers, slg_start_perc, slg_end_perc, cfg_star_switch, cfg_zero_step):
+                      loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, temporal_upsampling, spatial_upsampling, RIFLEx_setting, slg_switch, slg_layers, slg_start_perc, slg_end_perc, cfg_star_switch, cfg_zero_step):
 
     if state.get("validate_success",0) != 1:
         return
 
     image2video = state["image2video"]
     ui_defaults = get_settings_dict(state, image2video, prompt, image_prompt_type, video_length, resolution, num_inference_steps, seed, repeat_generation, multi_images_gen_type, guidance_scale, flow_shift, negative_prompt, loras_choices, 
-                      loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers, slg_start_perc, slg_end_perc, cfg_star_switch, cfg_zero_step)
+                      loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, temporal_upsampling, spatial_upsampling, RIFLEx_setting, slg_switch, slg_layers, slg_start_perc, slg_end_perc, cfg_star_switch, cfg_zero_step)
 
     defaults_filename = get_settings_file_name(image2video)
 
@@ -2538,6 +2605,32 @@ def generate_video_tab(image2video=False):
                         )
                         tea_cache_start_step_perc = gr.Slider(0, 100, value=ui_defaults["tea_cache_start_step_perc"], step=1, label="Tea Cache starting moment in % of generation") 
 
+                    with gr.Row():
+                        gr.Markdown("<B>Upsampling</B>")
+                    with gr.Row():
+                        temporal_upsampling_choice = gr.Dropdown(
+                            choices=[
+                                ("Disabled", ""),
+                                ("Rife x2 (32 frames/s)", "rife2"), 
+                                ("Rife x4 (64 frames/s)", "rife4"), 
+                            ],
+                            value=ui_defaults.get("temporal_upsampling", ""),
+                            visible=True,
+                            scale = 1,
+                            label="Temporal Upsampling"
+                        )
+                        spatial_upsampling_choice = gr.Dropdown(
+                            choices=[
+                                ("Disabled", ""),
+                                ("Lanczos x1.5", "lanczos1.5"), 
+                                ("Lanczos x2.0", "lanczos2"), 
+                            ],
+                            value=ui_defaults.get("spatial_upsampling", ""),
+                            visible=True,
+                            scale = 1,
+                            label="Spatial Upsampling"
+                        )
+
                     gr.Markdown("<B>With Riflex you can generate videos longer than 5s which is the default duration of videos used to train the model</B>")
                     RIFLEx_setting = gr.Dropdown(
                         choices=[
@@ -2699,7 +2792,7 @@ def generate_video_tab(image2video=False):
                 )
         save_settings_btn.click( fn=validate_wizard_prompt, inputs =[state, wizard_prompt_activated_var, wizard_variables_var,  prompt, wizard_prompt, *prompt_vars] , outputs= [prompt]).then(
             save_settings, inputs = [state, prompt, image_prompt_type_radio, video_length, resolution, num_inference_steps, seed, repeat_generation, multi_images_gen_type, guidance_scale, flow_shift, negative_prompt, 
-                                                         loras_choices, loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, RIFLEx_setting, slg_switch, slg_layers,
+                                                         loras_choices, loras_mult_choices, tea_cache_setting, tea_cache_start_step_perc, temporal_upsampling_choice, spatial_upsampling_choice, RIFLEx_setting, slg_switch, slg_layers,
                                                          slg_start_perc, slg_end_perc, cfg_star_switch, cfg_zero_step  ], outputs = [])
         save_lset_btn.click(validate_save_lset, inputs=[lset_name], outputs=[apply_lset_btn, refresh_lora_btn, delete_lset_btn, save_lset_btn,confirm_save_lset_btn, cancel_lset_btn, save_lset_prompt_drop])
         confirm_save_lset_btn.click(fn=validate_wizard_prompt, inputs =[state, wizard_prompt_activated_var, wizard_variables_var, prompt, wizard_prompt, *prompt_vars] , outputs= [prompt]).then(
@@ -2758,6 +2851,8 @@ def generate_video_tab(image2video=False):
             image_to_end,
             video_to_continue,
             max_frames,
+            temporal_upsampling_choice,
+            spatial_upsampling_choice,
             RIFLEx_setting,
             slg_switch, 
             slg_layers,
