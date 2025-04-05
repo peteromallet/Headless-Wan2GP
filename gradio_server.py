@@ -2566,6 +2566,8 @@ def generate_video_tab(image2video=False):
                     remove_background_image_ref = gr.Text(visible = False)
                 else:
                     image_prompt_type= ui_defaults.get("image_prompt_type","I")
+                    if not isinstance(image_prompt_type, str):
+                        image_prompt_type ="I"
                     image_prompt_type_radio = gr.Radio( [("Use Images Ref", "I"),("a Video", "V"), ("Images + a Video", "IV"), ("Video + Video Mask", "VM"), ("Images + Video + Mask", "IVM")], value =image_prompt_type, label="Location", show_label= False, scale= 3, visible = vace_model)
                     image_source1 = gr.Gallery(
                             label="Reference Images of Faces and / or Object to be found in the Video", type ="pil",  
@@ -3195,9 +3197,10 @@ def generate_about_tab():
     gr.Markdown("<H2>Wan2.1GP - Wan 2.1 model for the GPU Poor by <B>DeepBeepMeep</B> (<A HREF='https://github.com/deepbeepmeep/Wan2GP'>GitHub</A>)</H2>")
     gr.Markdown("Original Wan 2.1 Model by <B>Alibaba</B> (<A HREF='https://github.com/Wan-Video/Wan2.1'>GitHub</A>)")
     gr.Markdown("Many thanks to:")
+    gr.Markdown("- <B>Alibaba Wan team for the best open source video generator")
     gr.Markdown("- <B>Cocktail Peanuts</B> : QA and simple installation via Pinokio.computer")
+    gr.Markdown("- <B>Tophness</B> : created multi tabs and queuing frameworks")
     gr.Markdown("- <B>AmericanPresidentJimmyCarter</B> : added original support for Skip Layer Guidance")
-    gr.Markdown("- <B>Tophness</B> : created multi tabs framework")
     gr.Markdown("- <B>Remade_AI</B> : for creating their awesome Loras collection")
     
 
