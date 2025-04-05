@@ -3,19 +3,68 @@ import argparse
 import binascii
 import os
 import os.path as osp
+import torchvision.transforms.functional as TF
+import torch.nn.functional as F
 
 import imageio
 import torch
+import decord
 import torchvision
 from PIL import Image
 import numpy as np
+from rembg import remove, new_session
+
 
 __all__ = ['cache_video', 'cache_image', 'str2bool']
+
+
+
+from PIL import Image
+
+def get_video_frame(file_name, frame_no):
+    decord.bridge.set_bridge('torch')
+    reader = decord.VideoReader(file_name)
+
+    frame = reader.get_batch([frame_no]).squeeze(0)
+    img = Image.fromarray(frame.numpy().astype(np.uint8))
+    return img
 
 def resize_lanczos(img, h, w):
     img = Image.fromarray(np.clip(255. * img.movedim(0, -1).cpu().numpy(), 0, 255).astype(np.uint8))
     img = img.resize((w,h), resample=Image.Resampling.LANCZOS) 
     return torch.from_numpy(np.array(img).astype(np.float32) / 255.0).movedim(-1, 0)
+
+
+def remove_background(img, session=None):
+    if session ==None:
+        session = new_session() 
+    img = Image.fromarray(np.clip(255. * img.movedim(0, -1).cpu().numpy(), 0, 255).astype(np.uint8))
+    img = remove(img, session=session, alpha_matting = True, bgcolor=[255, 255, 255, 0]).convert('RGB')
+    return torch.from_numpy(np.array(img).astype(np.float32) / 255.0).movedim(-1, 0)
+
+
+
+
+def resize_and_remove_background(img_list, canvas_width, canvas_height, rm_background ):
+    if rm_background:
+        session = new_session() 
+
+    output_list =[]
+    for img in img_list:
+        width, height =  img.size 
+        white_canvas = np.full( (canvas_height, canvas_width, 3), 255, dtype= np.uint8 ) 
+        scale = min(canvas_height / height, canvas_width / width)
+        new_height = int(height * scale)
+        new_width = int(width * scale)
+        resized_image= img.resize((new_width,new_height), resample=Image.Resampling.LANCZOS) 
+        if rm_background:
+            resized_image = remove(resized_image, session=session, alpha_matting = True, bgcolor=[255, 255, 255, 0]).convert('RGB')
+        top = (canvas_height - new_height) // 2
+        left = (canvas_width - new_width) // 2
+        white_canvas[top:top + new_height, left:left + new_width, :] =  np.array(resized_image)
+        img = Image.fromarray(white_canvas)
+        output_list.append(img)
+    return output_list
 
 
 def rand_name(length=8, suffix=''):

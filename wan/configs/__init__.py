@@ -40,3 +40,17 @@ SUPPORTED_SIZES = {
     'i2v-14B': ('720*1280', '1280*720', '480*832', '832*480'),
     't2i-14B': tuple(SIZE_CONFIGS.keys()),
 }
+
+VACE_SIZE_CONFIGS = {
+    '480*832': (480, 832),
+    '832*480': (832, 480),
+}
+
+VACE_MAX_AREA_CONFIGS = {
+    '480*832': 480 * 832,
+    '832*480': 832 * 480,
+}
+
+VACE_SUPPORTED_SIZES = {
+    'vace-1.3B': ('480*832', '832*480'),
+}

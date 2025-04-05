@@ -377,6 +377,7 @@ class WanI2VCrossAttention(WanSelfAttention):
         return x
 
 
+
 WAN_CROSSATTENTION_CLASSES = {
     't2v_cross_attn': WanT2VCrossAttention,
     'i2v_cross_attn': WanI2VCrossAttention,
@@ -393,7 +394,9 @@ class WanAttentionBlock(nn.Module):
                  window_size=(-1, -1),
                  qk_norm=True,
                  cross_attn_norm=False,
-                 eps=1e-6):
+                 eps=1e-6,
+                 block_id=None
+                 ):
         super().__init__()
         self.dim = dim
         self.ffn_dim = ffn_dim
@@ -422,6 +425,7 @@ class WanAttentionBlock(nn.Module):
 
         # modulation
         self.modulation = nn.Parameter(torch.randn(1, 6, dim) / dim**0.5)
+        self.block_id = block_id
 
     def forward(
         self,
@@ -432,6 +436,8 @@ class WanAttentionBlock(nn.Module):
         freqs,
         context,
         context_lens,
+        hints= None, 
+        context_scale=1.0,
     ):
         r"""
         Args:
@@ -480,10 +486,49 @@ class WanAttentionBlock(nn.Module):
         x.addcmul_(y, e[5])
 
        
+        if self.block_id is not None and hints != None:
+            if context_scale == 1:
+                x.add_(hints[self.block_id])
+            else:
+                x.add_(hints[self.block_id], alpha =context_scale)
+        return x    
 
-        return x
+class VaceWanAttentionBlock(WanAttentionBlock):
+    def __init__(
+            self,
+            cross_attn_type,
+            dim,
+            ffn_dim,
+            num_heads,
+            window_size=(-1, -1),
+            qk_norm=True,
+            cross_attn_norm=False,
+            eps=1e-6,
+            block_id=0
+    ):
+        super().__init__(cross_attn_type, dim, ffn_dim, num_heads, window_size, qk_norm, cross_attn_norm, eps)
+        self.block_id = block_id
+        if block_id == 0:
+            self.before_proj = nn.Linear(self.dim, self.dim)
+            nn.init.zeros_(self.before_proj.weight)
+            nn.init.zeros_(self.before_proj.bias)
+        self.after_proj = nn.Linear(self.dim, self.dim)
+        nn.init.zeros_(self.after_proj.weight)
+        nn.init.zeros_(self.after_proj.bias)
 
-
+    def forward(self, c, x, **kwargs):
+        # behold dbm magic !
+        if self.block_id == 0:
+            c = self.before_proj(c) + x
+            all_c = []
+        else:
+            all_c = c
+            c = all_c.pop(-1)
+        c = super().forward(c, **kwargs)
+        c_skip = self.after_proj(c)
+        all_c += [c_skip, c]
+        return all_c
+    
 class Head(nn.Module):
 
     def __init__(self, dim, out_dim, patch_size, eps=1e-6):
@@ -544,6 +589,8 @@ class WanModel(ModelMixin, ConfigMixin):
 
     @register_to_config
     def __init__(self,
+                 vace_layers=None,
+                 vace_in_dim=None,                 
                  model_type='t2v',
                  patch_size=(1, 2, 2),
                  text_len=512,
@@ -628,12 +675,13 @@ class WanModel(ModelMixin, ConfigMixin):
         self.time_projection = nn.Sequential(nn.SiLU(), nn.Linear(dim, dim * 6))
 
         # blocks
-        cross_attn_type = 't2v_cross_attn' if model_type == 't2v' else 'i2v_cross_attn'
-        self.blocks = nn.ModuleList([
-            WanAttentionBlock(cross_attn_type, dim, ffn_dim, num_heads,
-                              window_size, qk_norm, cross_attn_norm, eps)
-            for _ in range(num_layers)
-        ])
+        if vace_layers == None:
+            cross_attn_type = 't2v_cross_attn' if model_type == 't2v' else 'i2v_cross_attn'
+            self.blocks = nn.ModuleList([
+                WanAttentionBlock(cross_attn_type, dim, ffn_dim, num_heads,
+                                window_size, qk_norm, cross_attn_norm, eps)
+                for _ in range(num_layers)
+            ])
 
         # head
         self.head = Head(dim, out_dim, patch_size, eps)
@@ -645,6 +693,33 @@ class WanModel(ModelMixin, ConfigMixin):
 
         # initialize weights
         self.init_weights()
+
+        if vace_layers != None:            
+            self.vace_layers = [i for i in range(0, self.num_layers, 2)] if vace_layers is None else vace_layers
+            self.vace_in_dim = self.in_dim if vace_in_dim is None else vace_in_dim
+
+            assert 0 in self.vace_layers
+            self.vace_layers_mapping = {i: n for n, i in enumerate(self.vace_layers)}
+
+            # blocks
+            self.blocks = nn.ModuleList([
+                WanAttentionBlock('t2v_cross_attn', self.dim, self.ffn_dim, self.num_heads, self.window_size, self.qk_norm,
+                                    self.cross_attn_norm, self.eps,
+                                    block_id=self.vace_layers_mapping[i] if i in self.vace_layers else None)
+                for i in range(self.num_layers)
+            ])
+
+            # vace blocks
+            self.vace_blocks = nn.ModuleList([
+                VaceWanAttentionBlock('t2v_cross_attn', self.dim, self.ffn_dim, self.num_heads, self.window_size, self.qk_norm,
+                                        self.cross_attn_norm, self.eps, block_id=i)
+                for i in self.vace_layers
+            ])
+
+            # vace patch embeddings
+            self.vace_patch_embedding = nn.Conv3d(
+                self.vace_in_dim, self.dim, kernel_size=self.patch_size, stride=self.patch_size
+            )
 
 
     def compute_teacache_threshold(self, start_step, timesteps = None, speed_factor =0):
@@ -688,6 +763,36 @@ class WanModel(ModelMixin, ConfigMixin):
         self.rel_l1_thresh = best_threshold
         print(f"Tea Cache, best threshold found:{best_threshold:0.2f} with gain x{len(timesteps)/(target_nb_steps - best_signed_diff):0.2f} for a target of x{speed_factor}")
         return best_threshold
+
+    def forward_vace(
+        self,
+        x,
+        vace_context,
+        seq_len,
+        context,
+        e,
+        kwargs
+    ):
+        # embeddings
+        c = [self.vace_patch_embedding(u.unsqueeze(0)) for u in vace_context]
+        c = [u.flatten(2).transpose(1, 2) for u in c]
+        if (len(c) == 1 and seq_len == c[0].size(1)):
+            c = c[0]
+        else:
+            c = torch.cat([
+                torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))],
+                        dim=1) for u in c
+            ])
+
+        # arguments
+        new_kwargs = dict(x=x)
+        new_kwargs.update(kwargs)
+
+        for block in self.vace_blocks:
+            c = block(c, context= context, e= e, **new_kwargs)
+        hints = c[:-1]
+
+        return hints
     
     def forward(
         self,
@@ -695,6 +800,8 @@ class WanModel(ModelMixin, ConfigMixin):
         t,
         context,
         seq_len,
+        vace_context = None,
+        vace_context_scale=1.0,        
         clip_fea=None,
         y=None,
         freqs = None,
@@ -829,13 +936,23 @@ class WanModel(ModelMixin, ConfigMixin):
                     self.previous_residual_cond = None
                 ori_hidden_states = x_list[0].clone()
             # arguments
+
             kwargs = dict(
-                # e=e0,
                 seq_lens=seq_lens,
                 grid_sizes=grid_sizes,
                 freqs=freqs,
-                # context=context,
                 context_lens=context_lens)
+
+            if vace_context == None:
+                hints_list = [None ] *len(x_list)
+            else:
+                hints_list = []
+                for x, context in  zip(x_list,  context_list) :
+                    hints_list.append( self.forward_vace(x, vace_context, seq_len, context= context, e= e0,  kwargs= kwargs))
+                del x, context
+                kwargs['context_scale'] = vace_context_scale                
+
+            
             for block_idx, block in enumerate(self.blocks):
                 offload.shared_state["layer"] = block_idx
                 if callback != None:
@@ -852,9 +969,10 @@ class WanModel(ModelMixin, ConfigMixin):
                     x_list[0] = block(x_list[0], context = context_list[0], e= e0, **kwargs)
 
                 else:
-                    for i, (x, context) in enumerate(zip(x_list, context_list)):
-                        x_list[i] = block(x, context = context, e= e0, **kwargs)
+                    for i, (x, context, hints) in enumerate(zip(x_list, context_list, hints_list)):
+                        x_list[i] = block(x, context = context, hints= hints, e= e0, **kwargs)
                         del x
+                    del context, hints
 
             if self.enable_teacache:
                 if joint_pass:
