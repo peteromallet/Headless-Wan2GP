@@ -10,15 +10,14 @@
 <b>Wan2.1 GP by DeepBeepMeep based on Wan2.1's Alibaba: Open and Advanced Large-Scale Video Generative Models for the GPU Poor</b>
 </p>
 
-In this repository, we present **Wan2.1**, a comprehensive and open suite of video foundation models that pushes the boundaries of video generation. **Wan2.1** offers these key features:
-- 👍 **SOTA Performance**: **Wan2.1** consistently outperforms existing open-source models and state-of-the-art commercial solutions across multiple benchmarks.
-- 👍 **Supports Consumer-grade GPUs**: The T2V-1.3B model requires only 8.19 GB VRAM, making it compatible with almost all consumer-grade GPUs. It can generate a 5-second 480P video on an RTX 4090 in about 4 minutes (without optimization techniques like quantization). Its performance is even comparable to some closed-source models.
-- 👍 **Multiple Tasks**: **Wan2.1** excels in Text-to-Video, Image-to-Video, Video Editing, Text-to-Image, and Video-to-Audio, advancing the field of video generation.
-- 👍 **Visual Text Generation**: **Wan2.1** is the first video model capable of generating both Chinese and English text, featuring robust text generation that enhances its practical applications.
-- 👍 **Powerful Video VAE**: **Wan-VAE** delivers exceptional efficiency and performance, encoding and decoding 1080P videos of any length while preserving temporal information, making it an ideal foundation for video and image generation.
+
 
 
 ## 🔥 Latest News!!
+* April 4 2025: 👋 Wan 2.1GP v4.0: lots of goodies for you !
+    - A new queuing system that lets you stack in a queue as many text2video and imag2video tasks as you want. Each task can rely on complete different generation parameters (different number of frames, steps, loras, ...).
+    - Temporal upsampling (Rife) and spatial upsampling (Lanczos) for a smoother video (32 fps or 64 fps) and to enlarge you video by x2 or x4. Check these new advanced options.
+    - Wan Vace Control Net support : with Vace you can inject in the scene people or objects, animate a person, perform inpainting or outpainting, continue a video, ... I have provided an introduction guide below.
 * Mar 27 2025: 👋 Added support for the new Wan Fun InP models (image2video). The 14B Fun InP has probably better end image support but unfortunately existing loras do not work so well with it. The great novelty is the Fun InP image2 1.3B model : Image 2 Video is now accessible to even lower hardware configuration. It is not as good as the 14B models but very impressive for its size. You can choose any of those models in the Configuration tab. Many thanks to the VideoX-Fun team  (https://github.com/aigc-apps/VideoX-Fun)
 * Mar 26 2025: 👋 Good news ! Official support for RTX 50xx please check the installation instructions below. 
 * Mar 24 2025: 👋 Wan2.1GP v3.2: 
@@ -224,7 +223,7 @@ python gradio_server.py --attention sdpa
 
 Every lora stored in the subfoler 'loras' for t2v and 'loras_i2v' will be automatically loaded. You will be then able to activate / desactive any of them when running the application by selecting them in the area below "Activated Loras" .
 
-If you want to manage in differenta areas Loras for the 1.3B model and the 14B as they are not comptatible, just create the following subfolders:
+If you want to manage in different areas Loras for the 1.3B model and the 14B as they are not compatible, just create the following subfolders:
 - loras/1.3B
 - loras/14B
 
@@ -271,6 +270,32 @@ In the video, a woman is presented. The woman is in a city and looks at her watc
 
 You can define multiple lines of macros. If there is only one macro line, the app will generate a simple user interface to enter the macro variables when getting back to *Normal Mode* (advanced mode turned off)
 
+### VACE ControlNet introduction
+
+Vace is a ControlNet 1.3B text2video model that allows you on top of a text prompt to provide visual hints to guide the generation. It can do more things than image2video although it is not as good for just starting a video with an image because it only a 1.3B model (in fact 3B) versus 14B and (it is not specialized for start frames). However, with Vace you can inject in the scene people or objects, animate a person, perform inpainting or outpainting, continue a video, ... 
+
+First you need to switch the t2v model to Vace 1.3 in the Configuration Tab. Please note that Vace works well for the moment only with videos up to 5s (81 frames).
+
+Beside the usual Text Prompt, three new types of visual hints can be provided (and combined !):
+- reference Images: use this to inject people or objects in the video. You can select multiple reference Images. The integration of the image is more efficient if the background is replaced by the full white color. You can do that with your preferred background remover or use the built in background remover by checking the box *Remove background*
+
+- a Video: this can be a video that contains a body pose (an animated wireframe that indicates the positions of limbs of a person), a greyed depth map video, a normal video combined with a masked video (see below),... The Vace model will detect automatically what to do depending on the video content. You can tell WanGP to use only the n first frames of this Video. All the frames beyond and up the number of requested frames will be generated by following the Text prompt and the other visual hints (for instance reference images). If the video contains area of grey color 127, they will be considered as masks and will be filled based on the Text prompt of the reference Images. There
+
+- a Video Mask
+This offers a stronger mechanism to tell Vace which parts should be kept (black) or replaced (white). You can do as well inpainting / outpainting, fill the missing part of a video more efficientlty with just the video hint.
+
+
+Examples:
+- Inject people and / objects into a scene describe by a text promtp: Ref. Images + text Prompt
+- Animate a character described in a text prompt: Body Pose Video + text Prompt
+- Animate a character of your choice : Ref Images + Body Pose Video + text Prompt
+
+
+There are lots of possible combinations. Some of them require to prepare some materials (masks on top of video, full masks, etc...).
+
+Vace provides on its github (https://github.com/ali-vilab/VACE/tree/main/vace/gradios) annotators / preprocessors Gradio tool that can help you build some of these materials depending on the task you want to achieve.
+
+There is also a guide that describes the various combination of hints (https://github.com/ali-vilab/VACE/blob/main/UserGuide.md).Good luck ! 
 ### Command line parameters for Gradio Server
 --i2v : launch the image to video generator\
 --t2v : launch the text to video generator (default defined in the configuration)\
