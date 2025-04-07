@@ -96,6 +96,7 @@ def process_prompt_and_add_tasks(state, model_choice):
  
     inputs = state.get(get_model_type(model_filename), None)
     inputs["state"] =  state
+    inputs.pop("lset_name")
     if inputs == None:
         return
     prompt = inputs["prompt"]
@@ -1165,7 +1166,7 @@ def load_models(model_filename):
 
     return wan_model, offloadobj, pipe["transformer"] 
 
-if reload_model ==3:
+if reload_model ==3 or reload_model ==4:
     wan_model, offloadobj, transformer = None, None, None
     reload_needed = True
 else:
@@ -1550,7 +1551,7 @@ def generate_video(
     #     gr.Info("Unable to generate a Video while a new configuration is being applied.")
     #     return
 
-    if reload_model !=3 :
+    if reload_model !=3 and reload_model !=4 :
         while wan_model == None:
             time.sleep(1)
         
@@ -2352,7 +2353,6 @@ def prepare_inputs_dict(target, inputs ):
 
     if target == "state":
         return inputs
-
     unsaved_params = ["image_start", "image_end", "image_refs", "video_guide", "video_mask"]
     for k in unsaved_params:
         inputs.pop(k)
@@ -2387,6 +2387,7 @@ def get_function_arguments(func, locals):
 
 def save_inputs(
             target,
+            lset_name,
             prompt,
             negative_prompt,
             resolution,
@@ -2557,7 +2558,7 @@ def preload_model(state):
 
 def unload_model_if_needed(state):
     global reload_needed, wan_model, offloadobj
-    if reload_model == 3:
+    if reload_model == 4:
         if wan_model != None:
             wan_model = None
             if offloadobj is not None:
@@ -2605,6 +2606,8 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
         launch_loras = default_loras_choices
         launch_multis_str = default_loras_multis_str
 
+    if len(launch_preset) == 0:
+        launch_preset = ui_defaults.get("lset_name","")
     if len(launch_prompt) == 0:
         launch_prompt = ui_defaults.get("prompt","")
     if len(launch_loras) == 0:
@@ -2673,18 +2676,19 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                     image_end = gr.Image(label= "Last Image for a new video", type ="pil", visible="E" in image_prompt_type_value, value= ui_defaults.get("image_end", None))
 
             with gr.Column(visible= "Vace" in model_filename ) as video_prompt_column: 
+                gr.Markdown("<B>Control conditions: Images References (custom Faces or Objects), Video (Open Pose, Depth maps), Mask (inpainting)")
                 video_prompt_type_value= ui_defaults.get("video_prompt_type","I")
-                video_prompt_type = gr.Radio( [("Use Images Ref", "I"),("a Video", "V"), ("Images + a Video", "IV"), ("Video + Video Mask", "VM"), ("Images + Video + Mask", "IVM")], value =video_prompt_type_value, label="Location", show_label= False, scale= 3)
+                video_prompt_type = gr.Radio( [("Images Ref", "I"),("a Video", "V"), ("Images Refs + a Video", "IV"), ("Video + Video Mask", "VM"), ("Images + Video + Mask", "IVM")], value =video_prompt_type_value, label="Location", show_label= False, scale= 3)
                 image_refs = gr.Gallery(
-                        label="Reference Images of Faces and / or Object to be found in the Video", type ="pil",  
+                        label="Images Referencse (Custom faces and Objects to be found in the Video)", type ="pil",  
                         columns=[3], rows=[1], object_fit="contain", height="auto", selected_index=0, interactive= True, visible= "I" in video_prompt_type_value, value= ui_defaults.get("image_refs", None) )
 
-                video_guide = gr.Video(label= "Reference Video", visible= "V" in video_prompt_type_value, value= ui_defaults.get("video_guide", None) )
+                video_guide = gr.Video(label= "Reference Video (an animated Video in the Open Pose format or Depth Map video)", visible= "V" in video_prompt_type_value, value= ui_defaults.get("video_guide", None) )
                 with gr.Row():
                     max_frames = gr.Slider(0, 100, value=ui_defaults.get("max_frames",0), step=1, label="Nb of frames in Ref. Video (0 = as many as possible)", visible= "V" in video_prompt_type_value, scale = 2 ) 
                     remove_background_image_ref = gr.Checkbox(value=ui_defaults.get("remove_background_image_ref",1), label= "Remove Images Ref. Background", visible= "I" in video_prompt_type_value, scale =1 ) 
 
-                video_mask = gr.Video(label= "Video Mask (white pixels = Mask)", visible= "M" in video_prompt_type_value, value= ui_defaults.get("video_mask", None) ) 
+                video_mask = gr.Video(label= "Video Mask (for Inpainting or Outpaing, white pixels = Mask)", visible= "M" in video_prompt_type_value, value= ui_defaults.get("video_mask", None) ) 
 
 
             advanced_prompt = advanced_ui
@@ -3147,9 +3151,10 @@ def generate_configuration_tab(header, model_choice):
         )
         reload_choice = gr.Dropdown(
             choices=[
-                ("Load Model When Changing Model", 1), 
-                ("Load Model When Pressing Generate", 2), 
-                ("Load Model When Pressing Generate and Unload Model when Finished", 3), 
+                ("Load Model When Starting the App and Changing Model if Model Changed", 1), 
+                ("Load Model When Starting the App and Pressing Generate if Model Changed", 2), 
+                ("Load Model When Pressing Generate if Model Changed", 3), 
+                ("Load Model When Pressing Generate and Unload Model when Finished", 4), 
             ],
             value=server_config.get("reload_model",2),
             label="RAM Loading / Unloading Model Policy (in any case VRAM will be freed once the queue has been processed)"
