@@ -174,35 +174,35 @@ pip install -e .
 
 To run the text to video generator (in Low VRAM mode): 
 ```bash
-python gradio_server.py
+python wgp.py.py
 #or
-python gradio_server.py --t2v #launch the default text 2 video model
+python wgp.py.py --t2v #launch the default text 2 video model
 #or
-python gradio_server.py --t2v-14B #for the 14B model 
+python wgp.py.py --t2v-14B #for the 14B model 
 #or
-python gradio_server.py --t2v-1-3B #for the 1.3B model
+python wgp.py.py --t2v-1-3B #for the 1.3B model
 
 ```
 
 To run the image to video generator (in Low VRAM mode): 
 ```bash
-python gradio_server.py --i2v
+python wgp.py.py --i2v
 ```
 To run the 1.3B Fun InP image to video generator (in Low VRAM mode): 
 ```bash
-python gradio_server.py --i2v-1-3B
+python wgp.py.py --i2v-1-3B
 ```
 
 To be able to input multiple images with the image to video generator:
 ```bash
-python gradio_server.py --i2v --multiple-images
+python wgp.py.py --i2v --multiple-images
 ```
 
 Within the application you can configure which video generator will be launched without specifying a command line switch.
 
 To run the application while loading entirely the diffusion model in VRAM (slightly faster but requires 24 GB of VRAM for a 8 bits quantized 14B model )
 ```bash
-python gradio_server.py --profile 3
+python wgp.py.py --profile 3
 ```
 
 **Trouble shooting**:\
@@ -215,7 +215,7 @@ Therefore you may have no choice but to fallback to sdpa attention, to do so:
 or
 - Launch the application this way:
 ```bash
-python gradio_server.py --attention sdpa
+python wgp.py.py --attention sdpa
 ```
 
 ### Loras support
@@ -249,7 +249,7 @@ Each preset, is a file with ".lset" extension stored in the loras directory and 
 
 Last but not least you can pre activate Loras corresponding and prefill a prompt (comments only or full prompt) by specifying a preset when launching the gradio server:
 ```bash
-python gradio_server.py --lora-preset  mylorapreset.lset # where 'mylorapreset.lset' is a preset stored in the 'loras' folder
+python wgp.py.py --lora-preset  mylorapreset.lset # where 'mylorapreset.lset' is a preset stored in the 'loras' folder
 ```
 
 You will find prebuilt Loras on https://civitai.com/ or you will be able to build them with tools such as kohya or onetrainer.
@@ -274,7 +274,7 @@ You can define multiple lines of macros. If there is only one macro line, the ap
 
 Vace is a ControlNet 1.3B text2video model that allows you on top of a text prompt to provide visual hints to guide the generation. It can do more things than image2video although it is not as good for just starting a video with an image because it only a 1.3B model (in fact 3B) versus 14B and (it is not specialized for start frames). However, with Vace you can inject in the scene people or objects, animate a person, perform inpainting or outpainting, continue a video, ... 
 
-First you need to switch the t2v model to Vace 1.3 in the Configuration Tab. Please note that Vace works well for the moment only with videos up to 5s (81 frames).
+First you need to select the Vace 1.3B model in the Drop Down box at the top. Please note that Vace works well for the moment only with videos up to 5s (81 frames).
 
 Beside the usual Text Prompt, three new types of visual hints can be provided (and combined !):
 - reference Images: use this to inject people or objects in the video. You can select multiple reference Images. The integration of the image is more efficient if the background is replaced by the full white color. You can do that with your preferred background remover or use the built in background remover by checking the box *Remove background*
@@ -296,6 +296,8 @@ There are lots of possible combinations. Some of them require to prepare some ma
 Vace provides on its github (https://github.com/ali-vilab/VACE/tree/main/vace/gradios) annotators / preprocessors Gradio tool that can help you build some of these materials depending on the task you want to achieve.
 
 There is also a guide that describes the various combination of hints (https://github.com/ali-vilab/VACE/blob/main/UserGuide.md).Good luck ! 
+
+It seems you will get better results if you turn on "Skip Layer Guidance" with its default configuration
 ### Command line parameters for Gradio Server
 --i2v : launch the image to video generator\
 --t2v : launch the text to video generator (default defined in the configuration)\
@@ -303,6 +305,7 @@ There is also a guide that describes the various combination of hints (https://g
 --t2v-1-3B : launch the 1.3B model text to video generator\
 --i2v-14B : launch the 14B model image to video generator\
 --i2v-1-3B : launch the Fun InP 1.3B model image to video generator\
+--vace : launch the Vace ControlNet 1.3B model image to video generator\
 --quantize-transformer bool: (default True) : enable / disable on the fly transformer quantization\
 --lora-dir path : Path of directory that contains Loras in diffusers / safetensor format\
 --lora-preset preset : name of preset gile (without the extension) to preload
@@ -324,8 +327,6 @@ There is also a guide that describes the various combination of hints (https://g
 --slg : turn on skip layer guidance for improved quality\
 --check-loras : filter loras that are incompatible (will take a few seconds while refreshing the lora list or while starting the app)\
 --advanced : turn on the advanced mode while launching the app\
---i2v-settings : path to launch settings for i2v\
---t2v-settings : path to launch settings for t2v\
 --listen : make server accessible on network\
 --gpu device : run Wan on device for instance "cuda:1"
 

@@ -183,7 +183,7 @@ class VaceVideoProcessor(object):
     def _get_frameid_bbox_adjust_last(self, fps, frame_timestamps, h, w, crop_box, rng, max_frames= 0):
         import math
         target_fps = self.max_fps
-        video_duration = frame_timestamps[-1][1]
+        video_frames_count = len(frame_timestamps)
         video_frame_duration = 1 /fps
         target_frame_duration = 1 / target_fps 
         
@@ -197,9 +197,9 @@ class VaceVideoProcessor(object):
             frame_ids.append(frame_no)
             cur_time += add_frames_count * video_frame_duration
             target_time += target_frame_duration
-            if cur_time > video_duration: 
+            if frame_no >= video_frames_count -1: 
                 break
-
+        frame_ids = frame_ids[:video_frames_count]
         x1, x2, y1, y2 = [0, w, 0, h] if crop_box is None else crop_box
         h, w = y2 - y1, x2 - x1
         ratio = h / w
