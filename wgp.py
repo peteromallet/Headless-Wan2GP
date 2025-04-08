@@ -104,6 +104,8 @@ def process_prompt_and_add_tasks(state, model_choice):
     inputs.pop("lset_name")
     if inputs == None:
         gr.Warning("Internal state error: Could not retrieve inputs for the model.")
+        gen = get_gen_info(state)
+        queue = gen.get("queue", [])
         return get_queue_table(queue)
     prompt = inputs["prompt"]
     if len(prompt) ==0:
