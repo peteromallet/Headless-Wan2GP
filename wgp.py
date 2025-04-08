@@ -30,7 +30,6 @@ import io
 from PIL import Image
 import zipfile
 import tempfile
-import shutil
 import atexit
 global_queue_ref = []
 AUTOSAVE_FILENAME = "queue.zip"
@@ -105,7 +104,7 @@ def process_prompt_and_add_tasks(state, model_choice):
     inputs.pop("lset_name")
     if inputs == None:
         gr.Warning("Internal state error: Could not retrieve inputs for the model.")
-        return update_queue_data(queue)
+        return get_queue_table(queue)
     prompt = inputs["prompt"]
     if len(prompt) ==0:
         gr.Info("Prompt cannot be empty.")
