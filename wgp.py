@@ -178,9 +178,9 @@ def process_prompt_and_add_tasks(state, model_choice):
             max_frames= inputs["max_frames"] 
             video_length = inputs["video_length"]
             if max_frames ==0: 
-                gr.Info(f"Warning : you have asked to reuse all the frames of the control Video in the Alternate Video End it. Please make sure the number of frames of the control Video is lower than the total number of frames to generate otherwise it won't make a difference.")
+                gr.Info(f"Warning : you have asked to reuse all the frames of the control Video in the Alternate Video Ending it. Please make sure the number of frames of the control Video is lower than the total number of frames to generate otherwise it won't make a difference.")
             elif max_frames >= video_length:
-                gr.Info(f"The number of frames in the control Video to reuse ({max_frames}) in Alternate Video End can not be bigger than the total number of frames ({video_length}) to generate.")
+                gr.Info(f"The number of frames in the control Video to reuse ({max_frames}) in Alternate Video Ending can not be bigger than the total number of frames ({video_length}) to generate.")
                 return
 
         if isinstance(image_refs, list):
@@ -3361,7 +3361,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                             ("Transfer Human Motion from the Control Video", "PV"),
                             ("Transfer Depth from the Control Video", "DV"),
                             ("Recolorize the Control Video", "CV"),
-                            ("Alternate Video End", "OV"),
+                            ("Alternate Video Ending", "OV"),
                             ("(adv) Video contains Open Pose, Depth or Black & White ", "V"),
                             ("(adv) Inpainting of Control Video using Mask Video ", "MV"),
                         ],
