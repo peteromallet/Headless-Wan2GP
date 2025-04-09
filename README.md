@@ -288,7 +288,7 @@ This offers a stronger mechanism to tell Vace which parts should be kept (black)
 Examples:
 - Inject people and / objects into a scene describe by a text prompt: Ref. Images + text Prompt
 - Animate a character described in a text prompt: a Video of person moving + text Prompt
-- Animate a character of your choice (pose transfer) : Ref Images + a Video of person moving + text Prompt
+- Animate a character of your choice (motion transfer) : Ref Images + a Video of person moving + text Prompt
 - Change the style of a scene (depth transfer): a Video that contains objects / person at differen depths + text Prompt
 
 
