@@ -177,10 +177,10 @@ def process_prompt_and_add_tasks(state, model_choice):
         if "O" in video_prompt_type :
             max_frames= inputs["max_frames"] 
             video_length = inputs["video_length"]
-            if max_frames ==0:
-                gr.Info(f"Warning : you have asked to reuse all the frames of the control Video before extending it. Please make sure the number of frames of the control Video is lower than the total number of frames to generate otherwise it won't make a difference.")
+            if max_frames ==0: 
+                gr.Info(f"Warning : you have asked to reuse all the frames of the control Video in the Alternate Video End it. Please make sure the number of frames of the control Video is lower than the total number of frames to generate otherwise it won't make a difference.")
             elif max_frames >= video_length:
-                gr.Info(f"The number of frames in the control Video to reuse ({max_frames}) before extending the Video can not be bigger than the total number of frames ({video_length}) to generate.")
+                gr.Info(f"The number of frames in the control Video to reuse ({max_frames}) in Alternate Video End can not be bigger than the total number of frames ({video_length}) to generate.")
                 return
 
         if isinstance(image_refs, list):
@@ -3232,6 +3232,8 @@ def del_in_sequence(source_str, letters):
 
 
 def refresh_video_prompt_type_image_refs(video_prompt_type, video_prompt_type_image_refs):
+    # video_prompt_type = add_to_sequence(video_prompt_type, "I") if video_prompt_type_image_refs else  del_in_sequence(video_prompt_type, "I")
+    video_prompt_type_image_refs = "I" in video_prompt_type_image_refs
     video_prompt_type = add_to_sequence(video_prompt_type, "I") if video_prompt_type_image_refs else  del_in_sequence(video_prompt_type, "I")
     return video_prompt_type, gr.update(visible = video_prompt_type_image_refs),gr.update(visible = video_prompt_type_image_refs)
                 
@@ -3352,20 +3354,31 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
             with gr.Column(visible= "Vace" in model_filename ) as video_prompt_column: 
                 video_prompt_type_value= ui_defaults.get("video_prompt_type","")
                 video_prompt_type = gr.Text(value= video_prompt_type_value, visible= False)
-                video_prompt_type_video_guide = gr.Dropdown(
-                    choices=[
-                        ("None, use only the Text Prompt", ""),
-                        ("Extend the Control Video", "OV"),
-                        ("Transfer Human Motion from the Control Video", "PV"),
-                        ("Transfer Depth from the Control Video", "DV"),
-                        ("Recolorize the Control Video", "CV"),
-                        ("Control Video contains Open Pose, Depth or Black & White ", "V"),
-                        ("Inpainting of Control Video using Mask Video ", "MV"),
-                    ],
-                    value=filter_letters(video_prompt_type_value, "ODPCMV"),
-                    label="Video to Video"
-                )
-                video_prompt_type_image_refs = gr.Checkbox(value="I" in video_prompt_type_value , label= "Use References Images (Faces, Objects) to customize New Video",  scale =1 ) 
+                with gr.Row():
+                    video_prompt_type_video_guide = gr.Dropdown(
+                        choices=[
+                            ("None", ""),
+                            ("Transfer Human Motion from the Control Video", "PV"),
+                            ("Transfer Depth from the Control Video", "DV"),
+                            ("Recolorize the Control Video", "CV"),
+                            ("Alternate Video End", "OV"),
+                            ("(adv) Video contains Open Pose, Depth or Black & White ", "V"),
+                            ("(adv) Inpainting of Control Video using Mask Video ", "MV"),
+                        ],
+                        value=filter_letters(video_prompt_type_value, "ODPCMV"),
+                        label="Video to Video", scale = 3
+                    )
+
+                    video_prompt_type_image_refs = gr.Dropdown(
+                        choices=[
+                            ("None", ""),
+                            ("Inject custom Faces / Objects", "I"),
+                        ],
+                        value="I" if "I" in video_prompt_type_value  else "",
+                        label="Reference Images", scale = 2
+                    )
+
+                # video_prompt_type_image_refs = gr.Checkbox(value="I" in video_prompt_type_value , label= "Use References Images (Faces, Objects) to customize New Video",  scale =1 ) 
 
                 video_guide = gr.Video(label= "Control Video", visible= "V" in video_prompt_type_value, value= ui_defaults.get("video_guide", None),)
                 max_frames = gr.Slider(0, 100, value=ui_defaults.get("max_frames",0), step=1, label="Nb of frames in Control Video to use (0 = max)", visible= "V" in video_prompt_type_value, scale = 2 ) 
