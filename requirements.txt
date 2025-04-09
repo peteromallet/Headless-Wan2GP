@@ -23,4 +23,5 @@ decord
 onnxruntime-gpu
 rembg[gpu]==2.0.65
 matplotlib
+timm
 # rembg==2.0.65
