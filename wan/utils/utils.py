@@ -21,6 +21,30 @@ __all__ = ['cache_video', 'cache_image', 'str2bool']
 
 from PIL import Image
 
+
+def resample(video_fps, video_frames_count, max_frames, target_fps):
+    import math
+
+    video_frame_duration = 1 /video_fps
+    target_frame_duration = 1 / target_fps 
+    
+    cur_time = 0
+    target_time = 0
+    frame_no = 0
+    frame_ids =[]
+    while True:
+        if max_frames != 0 and len(frame_ids) >= max_frames:
+            break
+        add_frames_count = math.ceil( (target_time -cur_time) / video_frame_duration )
+        frame_no += add_frames_count
+        frame_ids.append(frame_no)
+        cur_time += add_frames_count * video_frame_duration
+        target_time += target_frame_duration
+        if frame_no >= video_frames_count -1: 
+            break
+    frame_ids = frame_ids[:video_frames_count]    
+    return frame_ids
+
 def get_video_frame(file_name, frame_no):
     decord.bridge.set_bridge('torch')
     reader = decord.VideoReader(file_name)

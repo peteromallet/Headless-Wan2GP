@@ -180,26 +180,17 @@ class VaceVideoProcessor(object):
         ), axis=1).tolist()
         return frame_ids, (x1, x2, y1, y2), (oh, ow), target_fps
 
-    def _get_frameid_bbox_adjust_last(self, fps, frame_timestamps, h, w, crop_box, rng, max_frames= 0):
-        import math
-        target_fps = self.max_fps
-        video_frames_count = len(frame_timestamps)
-        video_frame_duration = 1 /fps
-        target_frame_duration = 1 / target_fps 
+
         
-        cur_time = 0
-        target_time = 0
-        frame_no = 0
-        frame_ids =[]
-        for i in range(max_frames):
-            add_frames_count = math.ceil( (target_time -cur_time) / video_frame_duration )
-            frame_no += add_frames_count
-            frame_ids.append(frame_no)
-            cur_time += add_frames_count * video_frame_duration
-            target_time += target_frame_duration
-            if frame_no >= video_frames_count -1: 
-                break
-        frame_ids = frame_ids[:video_frames_count]
+    def _get_frameid_bbox_adjust_last(self, fps, video_frames_count, h, w, crop_box, rng, max_frames= 0):
+        from wan.utils.utils import resample
+
+        target_fps = self.max_fps
+
+        # video_frames_count = len(frame_timestamps)
+
+        frame_ids= resample(fps, video_frames_count, max_frames, target_fps)
+
         x1, x2, y1, y2 = [0, w, 0, h] if crop_box is None else crop_box
         h, w = y2 - y1, x2 - x1
         ratio = h / w
@@ -235,11 +226,11 @@ class VaceVideoProcessor(object):
 
         return frame_ids, (x1, x2, y1, y2), (oh, ow), target_fps
 
-    def _get_frameid_bbox(self, fps, frame_timestamps, h, w, crop_box, rng, max_frames= 0):
+    def _get_frameid_bbox(self, fps, video_frames_count, h, w, crop_box, rng, max_frames= 0):
         if self.keep_last:
-            return self._get_frameid_bbox_adjust_last(fps, frame_timestamps, h, w, crop_box, rng, max_frames= max_frames)
+            return self._get_frameid_bbox_adjust_last(fps, video_frames_count, h, w, crop_box, rng, max_frames= max_frames)
         else:
-            return self._get_frameid_bbox_default(fps, frame_timestamps, h, w, crop_box, rng, max_frames= max_frames)
+            return self._get_frameid_bbox_default(fps, video_frames_count, h, w, crop_box, rng, max_frames= max_frames)
 
     def load_video(self, data_key, crop_box=None, seed=2024, **kwargs):
         return self.load_video_batch(data_key, crop_box=crop_box, seed=seed, **kwargs)
@@ -253,23 +244,37 @@ class VaceVideoProcessor(object):
         import decord
         decord.bridge.set_bridge('torch')
         readers = []
+        src_video = None
         for data_k in data_key_batch:
-            reader = decord.VideoReader(data_k)
-            readers.append(reader)
+            if torch.is_tensor(data_k):
+                src_video = data_k
+            else:
+                reader = decord.VideoReader(data_k)
+                readers.append(reader)
 
-        fps = readers[0].get_avg_fps()
-        length = min([len(r) for r in readers])
-        frame_timestamps = [readers[0].get_frame_timestamp(i) for i in range(length)]
-        frame_timestamps = np.array(frame_timestamps, dtype=np.float32)
-        # # frame_timestamps = frame_timestamps[ :max_frames]
-        # if trim_video > 0:
-        #     frame_timestamps = frame_timestamps[ :trim_video]
+        if src_video != None:
+            fps = 16
+            length = src_video.shape[1]
+            if len(readers) > 0:
+                min_readers = min([len(r) for r in readers])
+                length = min(length, min_readers )
+        else:
+            fps = readers[0].get_avg_fps()
+            length = min([len(r) for r in readers])
+        # frame_timestamps = [readers[0].get_frame_timestamp(i) for i in range(length)]
+        # frame_timestamps = np.array(frame_timestamps, dtype=np.float32)
         max_frames = min(max_frames, trim_video) if trim_video > 0 else max_frames
-        h, w = readers[0].next().shape[:2]
-        frame_ids, (x1, x2, y1, y2), (oh, ow), fps = self._get_frameid_bbox(fps, frame_timestamps, h, w, crop_box, rng, max_frames=max_frames)
+        if src_video != None:
+            src_video = src_video[:max_frames]
+            h, w = src_video.shape[1:3]
+        else:
+            h, w = readers[0].next().shape[:2]
+        frame_ids, (x1, x2, y1, y2), (oh, ow), fps = self._get_frameid_bbox(fps, length, h, w, crop_box, rng, max_frames=max_frames)
 
         # preprocess video
         videos = [reader.get_batch(frame_ids)[:, y1:y2, x1:x2, :] for reader in readers]
+        if src_video != None:
+            videos = [src_video] + videos
         videos = [self._video_preprocess(video, oh, ow) for video in videos]
         return *videos, frame_ids, (oh, ow), fps
         # return videos if len(videos) > 1 else videos[0]
