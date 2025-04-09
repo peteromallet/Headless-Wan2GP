@@ -3479,7 +3479,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                     with gr.Row():
                         onemore_btn = gr.Button("One More Sample Please !")
                         abort_btn = gr.Button("Abort")
-
+                with gr.Accordion("Queue Management", open=False) as queue_accordion:
                     queue_df = gr.DataFrame(
                         headers=["Qty","Prompt", "Length","Steps","", "", "", "", ""],
                         datatype=[ "str","markdown","str", "markdown", "markdown", "markdown", "str", "str", "str"],
@@ -3489,14 +3489,14 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                         wrap=True,
                         value=[],
                         line_breaks= True,
-                        visible= False,
+                        visible= True,
                         elem_id="queue_df"
                     )
-                with gr.Row():
-                     queue_zip_base64_output = gr.Text(visible=False)
-                     save_queue_btn = gr.DownloadButton("Save Queue", size="sm")
-                     load_queue_btn = gr.UploadButton("Load Queue", file_types=[".zip"], size="sm")
-                     clear_queue_btn = gr.Button("Clear Queue", size="sm", variant="stop")
+                    with gr.Row():
+                         queue_zip_base64_output = gr.Text(visible=False)
+                         save_queue_btn = gr.DownloadButton("Save Queue", size="sm")
+                         load_queue_btn = gr.UploadButton("Load Queue", file_types=[".zip"], size="sm")
+                         clear_queue_btn = gr.Button("Clear Queue", size="sm", variant="stop")
             trigger_zip_download_js = """
             (base64String) => {
               if (!base64String) {
@@ -3544,9 +3544,9 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                 inputs=[load_queue_btn, state],
                 outputs=[queue_df]
             ).then(
-                 fn=lambda s: gr.update(visible=bool(get_gen_info(s).get("queue",[]))),
+                 fn=lambda s: (gr.update(visible=bool(get_gen_info(s).get("queue",[]))), gr.Accordion(open=True)) if bool(get_gen_info(s).get("queue",[])) else (gr.update(visible=False), gr.update()),
                  inputs=[state],
-                 outputs=[current_gen_column]
+                 outputs=[current_gen_column, queue_accordion]
             )
 
             clear_queue_btn.click(
@@ -3554,9 +3554,9 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                 inputs=[state],
                 outputs=[queue_df]
             ).then(
-                 fn=lambda: gr.update(visible=False),
+                 fn=lambda: (gr.update(visible=False), gr.Accordion(open=False)),
                  inputs=None,
-                 outputs=[current_gen_column]
+                 outputs=[current_gen_column, queue_accordion]
             )
 
         extra_inputs = prompt_vars + [wizard_prompt, wizard_variables_var, wizard_prompt_activated_var, video_prompt_column, image_prompt_column,
@@ -3639,6 +3639,10 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
             ).then(finalize_generation,
                 inputs= [state], 
                 outputs= [output, abort_btn, generate_btn, add_to_queue_btn, current_gen_column, gen_info]
+            ).then(
+                fn=lambda s: gr.Accordion(open=False) if len(get_gen_info(s).get("queue", [])) <= 1 else gr.update(),
+                inputs=[state],
+                outputs=[queue_accordion]
             ).then(unload_model_if_needed,
                 inputs= [state], 
                 outputs= []
@@ -3653,6 +3657,10 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
             ).then(fn=process_prompt_and_add_tasks,
                 inputs = [state, model_choice],
                 outputs=queue_df
+            ).then(
+                fn=lambda s: gr.Accordion(open=True) if len(get_gen_info(s).get("queue", [])) > 1 else gr.update(), # Expand if queue has items (len > 1 assumes placeholder)
+                inputs=[state],
+                outputs=[queue_accordion]
             ).then(
                 fn=update_status,
                 inputs = [state],
@@ -3670,7 +3678,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
         gen_info,
         prompt, wizard_prompt, wizard_prompt_activated_var, wizard_variables_var,
         prompt_column_advanced, prompt_column_wizard, prompt_column_wizard_vars,
-        advanced_row, image_prompt_column, video_prompt_column,
+        advanced_row, image_prompt_column, video_prompt_column, queue_accordion,
         *prompt_vars
     ) 
  
@@ -4153,7 +4161,7 @@ def create_demo():
                         gen_info,
                         prompt, wizard_prompt, wizard_prompt_activated_var, wizard_variables_var,
                         prompt_column_advanced, prompt_column_wizard, prompt_column_wizard_vars,
-                        advanced_row, image_prompt_column, video_prompt_column,
+                        advanced_row, image_prompt_column, video_prompt_column, queue_accordion,
                         *prompt_vars_outputs
                     ) = generate_video_tab(model_choice=model_choice, header=header)
             with gr.Tab("Informations"):
@@ -4170,7 +4178,8 @@ def create_demo():
         def run_autoload_and_prepare_ui(current_state):
             df_update, loaded_flag, modified_state = autoload_queue(current_state)
             should_start_processing = loaded_flag
-            return df_update, gr.update(visible=loaded_flag), should_start_processing, modified_state
+            accordion_update = gr.Accordion(open=True) if loaded_flag else gr.update()
+            return df_update, gr.update(visible=loaded_flag), accordion_update, should_start_processing, modified_state
 
         def start_processing_if_needed(should_start, current_state):
             if not isinstance(current_state, dict) or 'gen' not in current_state:
@@ -4179,18 +4188,20 @@ def create_demo():
             if should_start:
                 yield from process_tasks(current_state)
             else:
-                yield "Autoload complete. Processing not started."
+                yield None
 
         def finalize_generation_with_state(current_state):
              if not isinstance(current_state, dict) or 'gen' not in current_state:
-                 return gr.update(), gr.update(interactive=True), gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False, value=""), current_state
+                 return gr.update(), gr.update(interactive=True), gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False, value=""), gr.update(), current_state
+
              gallery_update, abort_btn_update, gen_btn_update, add_queue_btn_update, current_gen_col_update, gen_info_update = finalize_generation(current_state)
-             return gallery_update, abort_btn_update, gen_btn_update, add_queue_btn_update, current_gen_col_update, gen_info_update, current_state
+             accordion_update = gr.Accordion(open=False) if len(get_gen_info(current_state).get("queue", [])) <= 1 else gr.update()
+             return gallery_update, abort_btn_update, gen_btn_update, add_queue_btn_update, current_gen_col_update, gen_info_update, accordion_update, current_state
 
         demo.load(
             fn=run_autoload_and_prepare_ui,
             inputs=[state],
-            outputs=[queue_df, current_gen_column, should_start_flag, state]
+            outputs=[queue_df, current_gen_column, queue_accordion, should_start_flag, state]
         ).then(
             fn=start_processing_if_needed,
             inputs=[should_start_flag, state],
@@ -4199,7 +4210,7 @@ def create_demo():
         ).then(
             fn=finalize_generation_with_state,
             inputs=[state],
-            outputs=[output, abort_btn, generate_btn, add_to_queue_btn, current_gen_column, gen_info, state],
+            outputs=[output, abort_btn, generate_btn, add_to_queue_btn, current_gen_column, gen_info, queue_accordion, state],
             trigger_mode="always_last"
         )
 
