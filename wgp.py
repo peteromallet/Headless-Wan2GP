@@ -362,24 +362,21 @@ def save_queue_action(state):
     gen = get_gen_info(state)
     queue = gen.get("queue", [])
 
-    if not queue or len(queue) <=1 : # Check if queue is empty or only has the placeholder
+    if not queue or len(queue) <=1 :
         gr.Info("Queue is empty. Nothing to save.")
-        return None # Return None if nothing to save
+        return None
 
-    # Use an in-memory buffer for the zip file
     zip_buffer = io.BytesIO()
 
-    # Still use a temporary directory *only* for storing images before zipping
     with tempfile.TemporaryDirectory() as tmpdir:
         queue_manifest = []
-        image_paths_in_zip = {} # Tracks image PIL object ID -> filename in zip
+        image_paths_in_zip = {}
 
         for task_index, task in enumerate(queue):
-             # Skip the placeholder item if it exists
             if task is None or not isinstance(task, dict) or task_index == 0: continue
 
             params_copy = task.get('params', {}).copy()
-            task_id_s = task.get('id', f"task_{task_index}") # Use a different var name
+            task_id_s = task.get('id', f"task_{task_index}")
 
             image_keys = ["image_start", "image_end", "image_refs"]
             for key in image_keys:
@@ -387,95 +384,71 @@ def save_queue_action(state):
                 if images_pil is None:
                     continue
 
-                # Ensure images_pil is always a list for processing
                 is_originally_list = isinstance(images_pil, list)
                 if not is_originally_list:
                     images_pil = [images_pil]
 
                 image_filenames_for_json = []
                 for img_index, pil_image in enumerate(images_pil):
-                    # Ensure it's actually a PIL Image object before proceeding
                     if not isinstance(pil_image, Image.Image):
                          print(f"Warning: Expected PIL Image for key '{key}' in task {task_id_s}, got {type(pil_image)}. Skipping image.")
                          continue
 
-                    # Use object ID to check if this specific image instance is already saved
                     img_id = id(pil_image)
                     if img_id in image_paths_in_zip:
-                         # If already saved, just add its filename to the list
                          image_filenames_for_json.append(image_paths_in_zip[img_id])
-                         continue # Move to the next image in the list
+                         continue
 
-                    # Image not saved yet, create filename and save path
                     img_filename_in_zip = f"task{task_id_s}_{key}_{img_index}.png"
                     img_save_path = os.path.join(tmpdir, img_filename_in_zip)
 
                     try:
-                        # Save the image to the temporary directory
                         pil_image.save(img_save_path, "PNG")
                         image_filenames_for_json.append(img_filename_in_zip)
-                        # Store the mapping from image ID to its filename in the zip
                         image_paths_in_zip[img_id] = img_filename_in_zip
                     except Exception as e:
                         print(f"Error saving image {img_filename_in_zip} for task {task_id_s}: {e}")
-                        # Optionally decide if you want to continue or fail here
 
-                # Update the params_copy with the list of filenames (or single filename)
                 if image_filenames_for_json:
                      params_copy[key] = image_filenames_for_json if is_originally_list else image_filenames_for_json[0]
                 else:
-                     # If no images were successfully processed for this key, remove it
                      params_copy.pop(key, None)
 
 
-            # Clean up parameters before adding to manifest
             params_copy.pop('state', None)
-            params_copy.pop('start_image_data_base64', None) # Don't need base64 in saved queue
+            params_copy.pop('start_image_data_base64', None)
             params_copy.pop('end_image_data_base64', None)
-            # Also remove the actual PIL data if it somehow remained
             params_copy.pop('start_image_data', None)
             params_copy.pop('end_image_data', None)
 
             manifest_entry = {
                 "id": task.get('id'),
                 "params": params_copy,
-                # Keep other necessary top-level task info if needed, like repeats etc.
-                # Example: "repeats": task.get('repeats', 1)
             }
             queue_manifest.append(manifest_entry)
 
-        # --- Create queue.json content ---
         manifest_path = os.path.join(tmpdir, "queue.json")
         try:
             with open(manifest_path, 'w', encoding='utf-8') as f:
-                # Dump only the relevant manifest data
                 json.dump(queue_manifest, f, indent=4)
         except Exception as e:
             print(f"Error writing queue.json: {e}")
             gr.Warning("Failed to create queue manifest.")
-            return None # Return None on failure
+            return None
 
-        # --- Create the zip file in memory ---
         try:
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-                # Add queue.json
                 zf.write(manifest_path, arcname="queue.json")
 
-                # Add all unique images that were saved to the temp dir
                 for saved_img_rel_path in image_paths_in_zip.values():
                     saved_img_abs_path = os.path.join(tmpdir, saved_img_rel_path)
                     if os.path.exists(saved_img_abs_path):
                         zf.write(saved_img_abs_path, arcname=saved_img_rel_path)
                     else:
-                        # This shouldn't happen if saving was successful, but good to check
                         print(f"Warning: Image file {saved_img_rel_path} not found during zipping.")
 
-            # --- Prepare for return ---
-            # Move buffer position to the beginning
             zip_buffer.seek(0)
-            # Read the binary content
             zip_binary_content = zip_buffer.getvalue()
-            # Encode as base64 string
             zip_base64 = base64.b64encode(zip_binary_content).decode('utf-8')
             print(f"Queue successfully prepared as base64 string ({len(zip_base64)} chars).")
             return zip_base64
@@ -483,18 +456,17 @@ def save_queue_action(state):
         except Exception as e:
             print(f"Error creating zip file in memory: {e}")
             gr.Warning("Failed to create zip data for download.")
-            return None # Return None on failure
+            return None
         finally:
             zip_buffer.close()
 
 def load_queue_action(filepath, state):
     global task_id
     gen = get_gen_info(state)
-    original_queue = gen.get("queue", []) # Store original queue for error case
+    original_queue = gen.get("queue", [])
 
     if not filepath or not hasattr(filepath, 'name') or not Path(filepath.name).is_file():
         print("[load_queue_action] Warning: No valid file selected or file not found.")
-        # Return the current state of the DataFrame
         return update_queue_data(original_queue)
 
     newly_loaded_queue = []
@@ -518,7 +490,6 @@ def load_queue_action(filepath, state):
             print(f"[load_queue_action] Manifest loaded. Processing {len(loaded_manifest)} tasks.")
 
             for task_index, task_data in enumerate(loaded_manifest):
-                # (Keep the existing task processing logic here...)
                 if task_data is None or not isinstance(task_data, dict):
                     print(f"[load_queue_action] Skipping invalid task data at index {task_index}")
                     continue
@@ -528,7 +499,7 @@ def load_queue_action(filepath, state):
                 max_id_in_file = max(max_id_in_file, task_id_loaded)
                 loaded_pil_images = {}
                 image_keys = ["image_start", "image_end", "image_refs"]
-                params['state'] = state # Add state back temporarily for consistency if needed by internal logic, but it's removed before saving
+                params['state'] = state
 
                 for key in image_keys:
                     image_filenames = params.get(key)
@@ -544,26 +515,22 @@ def load_queue_action(filepath, state):
                              continue
                          try:
                              pil_image = Image.open(img_load_path)
-                             # Ensure the image data is loaded into memory before the temp dir is cleaned up
                              pil_image.load()
-                             # Convert image right after loading
                              converted_image = convert_image(pil_image)
                              loaded_pils.append(converted_image)
-                             pil_image.close() # Close the file handle
+                             pil_image.close()
                          except Exception as img_e:
                              print(f"[load_queue_action] Error loading image {img_filename_in_zip}: {img_e}")
                     if loaded_pils:
                         params[key] = loaded_pils if is_list else loaded_pils[0]
-                        loaded_pil_images[key] = params[key] # Store loaded PILs for preview generation
+                        loaded_pil_images[key] = params[key]
                     else: params.pop(key, None)
 
-                # Generate preview base64 strings
                 primary_preview_pil, secondary_preview_pil = None, None
                 start_prev_pil_list = loaded_pil_images.get("image_start")
                 end_prev_pil_list = loaded_pil_images.get("image_end")
                 ref_prev_pil_list = loaded_pil_images.get("image_refs")
 
-                # Extract first image for preview if available
                 if start_prev_pil_list:
                     primary_preview_pil = start_prev_pil_list[0] if isinstance(start_prev_pil_list, list) and start_prev_pil_list else start_prev_pil_list if not isinstance(start_prev_pil_list, list) else None
                     if end_prev_pil_list:
@@ -571,97 +538,102 @@ def load_queue_action(filepath, state):
                 elif ref_prev_pil_list and isinstance(ref_prev_pil_list, list) and ref_prev_pil_list:
                      primary_preview_pil = ref_prev_pil_list[0]
 
-                # Generate base64 only if PIL image exists
                 start_b64 = [pil_to_base64_uri(primary_preview_pil, format="jpeg", quality=70)] if primary_preview_pil else None
                 end_b64 = [pil_to_base64_uri(secondary_preview_pil, format="jpeg", quality=70)] if secondary_preview_pil else None
 
-                # Get top-level image data (PIL objects) for runtime task
                 top_level_start_image = loaded_pil_images.get("image_start")
                 top_level_end_image = loaded_pil_images.get("image_end")
 
-                # Construct the runtime task dictionary
                 runtime_task = {
                     "id": task_id_loaded,
-                    "params": params.copy(), # Use a copy of params
-                     # Extract necessary params for top level if they exist
+                    "params": params.copy(),
                     "repeats": params.get('repeat_generation', 1),
                     "length": params.get('video_length'),
                     "steps": params.get('num_inference_steps'),
                     "prompt": params.get('prompt'),
-                    # Store the actual loaded PIL image data here
                     "start_image_data": top_level_start_image,
                     "end_image_data": top_level_end_image,
-                    # Store base64 previews generated above
                     "start_image_data_base64": start_b64,
                     "end_image_data_base64": end_b64,
                 }
                 newly_loaded_queue.append(runtime_task)
                 print(f"[load_queue_action] Processed task {task_index+1}/{len(loaded_manifest)}, ID: {task_id_loaded}")
 
-        # --- State Update ---
         with lock:
             print("[load_queue_action] Acquiring lock to update state...")
-            gen["queue"] = newly_loaded_queue[:] # Replace the queue in the state
-            local_queue_copy_for_global_ref = gen["queue"][:] # Copy for global ref update
-            current_max_id_in_new_queue = max([t['id'] for t in newly_loaded_queue if 'id' in t] + [0]) # Safer max ID calculation
+            gen["queue"] = newly_loaded_queue[:]
+            local_queue_copy_for_global_ref = gen["queue"][:]
+            current_max_id_in_new_queue = max([t['id'] for t in newly_loaded_queue if 'id' in t] + [0])
 
-            # Update global task ID only if the loaded max ID is higher
             if current_max_id_in_new_queue > task_id:
                  print(f"[load_queue_action] Updating global task_id from {task_id} to {current_max_id_in_new_queue + 1}")
-                 task_id = current_max_id_in_new_queue + 1 # Ensure next ID is unique
+                 task_id = current_max_id_in_new_queue + 1
             else:
                  print(f"[load_queue_action] Global task_id ({task_id}) is >= max in file ({current_max_id_in_new_queue}). Not changing task_id.")
 
             gen["prompts_max"] = len(newly_loaded_queue)
             print("[load_queue_action] State update complete. Releasing lock.")
 
-        # --- Global Reference Update ---
         if local_queue_copy_for_global_ref is not None:
              print("[load_queue_action] Updating global queue reference...")
              update_global_queue_ref(local_queue_copy_for_global_ref)
         else:
-             # This case should ideally not be reached if state update happens
              print("[load_queue_action] Warning: Skipping global ref update as local copy is None.")
 
         print(f"[load_queue_action] Queue load successful. Returning DataFrame update for {len(newly_loaded_queue)} tasks.")
-        # *** Return the DataFrame update object ***
         return update_queue_data(newly_loaded_queue)
 
     except (ValueError, zipfile.BadZipFile, FileNotFoundError, Exception) as e:
         error_message = f"Error during queue load: {e}"
         print(f"[load_queue_action] Caught error: {error_message}")
         traceback.print_exc()
-        # Optionally show a Gradio warning/error to the user
-        gr.Warning(f"Failed to load queue: {error_message[:200]}") # Show truncated error
+        gr.Warning(f"Failed to load queue: {error_message[:200]}")
 
-        # *** Return the DataFrame update for the original queue ***
         print("[load_queue_action] Load failed. Returning DataFrame update for original queue.")
         return update_queue_data(original_queue)
     finally:
-        # Clean up the uploaded file object if it exists and has a path
         if filepath and hasattr(filepath, 'name') and filepath.name and os.path.exists(filepath.name):
              try:
-                 # Gradio often uses temp files, attempting removal is good practice
-                 # os.remove(filepath.name)
-                 # print(f"[load_queue_action] Cleaned up temporary upload file: {filepath.name}")
-                 pass # Let Gradio manage its temp files unless specifically needed
+                 pass
              except OSError as e:
-                 # Ignore errors like "file not found" if already cleaned up
                  print(f"[load_queue_action] Info: Could not remove temp file {filepath.name}: {e}")
                  pass
 
 def clear_queue_action(state):
     gen = get_gen_info(state)
     queue = gen.get("queue", [])
-    if not queue:
-        gr.Info("Queue is already empty.")
-        return update_queue_data([])
+    aborted_current = False
+    cleared_pending = False
 
     with lock:
-        queue.clear()
-        gen["prompts_max"] = 0
+        if "in_progress" in gen and gen["in_progress"]:
+            print("Clear Queue: Signalling abort for in-progress task.")
+            gen["abort"] = True
+            gen["extra_orders"] = 0
+            if wan_model is not None:
+                wan_model._interrupt = True
+            aborted_current = True
 
-    gr.Info("Queue cleared.")
+        if queue:
+             if len(queue) > 1 or (len(queue) == 1 and queue[0] is not None and queue[0].get('id') is not None):
+                 print(f"Clear Queue: Clearing {len(queue)} tasks from queue.")
+                 queue.clear()
+                 cleared_pending = True
+             else:
+                 pass
+
+        if aborted_current or cleared_pending:
+            gen["prompts_max"] = 0
+
+    if aborted_current and cleared_pending:
+        gr.Info("Queue cleared and current generation aborted.")
+    elif aborted_current:
+        gr.Info("Current generation aborted.")
+    elif cleared_pending:
+        gr.Info("Queue cleared.")
+    else:
+        gr.Info("Queue is already empty or only contains the active task (which wasn't aborted now).")
+
     return update_queue_data([])
 
 def autosave_queue():
@@ -725,7 +697,7 @@ def autosave_queue():
                         if os.path.exists(saved_img_abs_path):
                              zf.write(saved_img_abs_path, arcname=saved_img_rel_path)
                 return output_filename
-             return None # Should not happen if queue has items
+             return None
 
         saved_path = _save_queue_to_file(global_queue_ref, AUTOSAVE_FILENAME)
 
@@ -740,17 +712,15 @@ def autosave_queue():
 
 def autoload_queue(state):
     global task_id
-    # Initial check using the original state
     try:
-        gen = get_gen_info(state) # Make sure initial state is a dict
+        gen = get_gen_info(state)
         original_queue = gen.get("queue", [])
     except AttributeError:
         print("[autoload_queue] Error: Initial state is not a dictionary. Cannot autoload.")
-        # Return default values indicating no load occurred and the state is unchanged
-        return gr.update(visible=False), False, state # Return an empty DF update
+        return gr.update(visible=False), False, state
 
     loaded_flag = False
-    dataframe_update = update_queue_data(original_queue) # Default update is the original queue
+    dataframe_update = update_queue_data(original_queue)
 
     if not original_queue and Path(AUTOSAVE_FILENAME).is_file():
         print(f"Autoloading queue from {AUTOSAVE_FILENAME}...")
@@ -758,38 +728,32 @@ def autoload_queue(state):
             def __init__(self, name):
                 self.name = name
         mock_filepath = MockFile(AUTOSAVE_FILENAME)
-
-        # Call load_queue_action, it modifies 'state' internally and returns a DataFrame update
         dataframe_update = load_queue_action(mock_filepath, state)
 
-        # Now check the 'state' dictionary which should have been modified by load_queue_action
-        gen = get_gen_info(state) # Use the (potentially) modified state dictionary
+        gen = get_gen_info(state)
         loaded_queue_after_action = gen.get("queue", [])
 
-        if loaded_queue_after_action: # Check if the queue in the state is now populated
+        if loaded_queue_after_action:
             print(f"Autoload successful. Loaded {len(loaded_queue_after_action)} tasks into state.")
             loaded_flag = True
-            # Global ref update was already done inside load_queue_action if successful
         else:
             print("Autoload attempted but queue in state remains empty (file might be empty or invalid).")
-            # Ensure state reflects empty queue if load failed but file existed
             with lock:
                 gen["queue"] = []
                 gen["prompts_max"] = 0
                 update_global_queue_ref([])
-            dataframe_update = update_queue_data([]) # Ensure UI shows empty queue
+            dataframe_update = update_queue_data([])
 
-    else: # Handle cases where autoload shouldn't happen
+    else:
         if original_queue:
             print("Autoload skipped: Queue is not empty.")
-            update_global_queue_ref(original_queue) # Ensure global ref matches current state
-            dataframe_update = update_queue_data(original_queue) # UI should show current queue
+            update_global_queue_ref(original_queue)
+            dataframe_update = update_queue_data(original_queue)
         else:
             print(f"Autoload skipped: {AUTOSAVE_FILENAME} not found.")
-            update_global_queue_ref([]) # Ensure global ref is empty
-            dataframe_update = update_queue_data([]) # UI should show empty queue
+            update_global_queue_ref([])
+            dataframe_update = update_queue_data([])
 
-    # Return the DataFrame update needed for the UI, the flag, and the final state dictionary
     return dataframe_update, loaded_flag, state
 
 
