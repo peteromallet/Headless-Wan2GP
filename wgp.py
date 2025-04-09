@@ -173,9 +173,14 @@ def process_prompt_and_add_tasks(state, model_choice):
                 return
         else:
             video_mask = None
-        if "O" in video_prompt_type and inputs["max_frames"]==0:
-            gr.Info(f"In order to extend a video, you need to indicate how many frames you want to reuse in the source video.")
-            return
+        if "O" in video_prompt_type :
+            max_frames= inputs["max_frames"] 
+            video_length = inputs["video_length"]
+            if max_frames ==0:
+                gr.Info(f"Warning : you have asked to reuse all the frames of the control Video before extending it. Please make sure the number of frames of the control Video is lower than the total number of frames to generate otherwise it won't make a difference.")
+            elif max_frames >= video_length:
+                gr.Info(f"The number of frames in the control Video to reuse ({max_frames}) before extending the Video can not be bigger than the total number of frames ({video_length}) to generate.")
+                return
 
         if isinstance(image_refs, list):
             image_refs = [ convert_image(tup[0]) for tup in image_refs ]
@@ -2060,7 +2065,7 @@ def generate_video(
     #     gr.Info("Unable to generate a Video while a new configuration is being applied.")
     #     return
 
-    if "P" in preload_model_policy:
+    if "P" in preload_model_policy and not "U" in preload_model_policy:
         while wan_model == None:
             time.sleep(1)
         

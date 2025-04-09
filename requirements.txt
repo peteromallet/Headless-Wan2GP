@@ -22,4 +22,5 @@ mutagen
 decord
 onnxruntime-gpu
 rembg[gpu]==2.0.65
+matplotlib
 # rembg==2.0.65
