@@ -3361,7 +3361,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                             ("Transfer Human Motion from the Control Video", "PV"),
                             ("Transfer Depth from the Control Video", "DV"),
                             ("Recolorize the Control Video", "CV"),
-                            ("Alternate Video Ending", "OV"),
+                            # ("Alternate Video Ending", "OV"),
                             ("(adv) Video contains Open Pose, Depth or Black & White ", "V"),
                             ("(adv) Inpainting of Control Video using Mask Video ", "MV"),
                         ],
