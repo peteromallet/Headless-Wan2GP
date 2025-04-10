@@ -731,6 +731,12 @@ def quit_application():
     import signal
     os.kill(os.getpid(), signal.SIGINT)
 
+def request_quit_confirmation():
+    return gr.update(visible=False), gr.update(visible=True)
+
+def cancel_quit_confirmation():
+    return gr.update(visible=True), gr.update(visible=False)
+
 def autosave_queue():
     global global_queue_ref
     if not global_queue_ref:
@@ -3630,6 +3636,55 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                          load_queue_btn = gr.UploadButton("Load Queue", file_types=[".zip"], size="sm")
                          clear_queue_btn = gr.Button("Clear Queue", size="sm", variant="stop")
                          quit_button = gr.Button("Save and Quit", size="sm", variant="secondary")
+                         with gr.Row(visible=False) as quit_confirmation_row:
+                             gr.Markdown("Quitting in 5 seconds...", elem_id="quit_timer_label")
+                             confirm_quit_button = gr.Button("Confirm Quit Now", elem_id="comfirm_quit_btn_hidden", size="sm", variant="stop")
+                             cancel_quit_button = gr.Button("Cancel Quit", size="sm", variant="secondary")
+                         hidden_force_quit_trigger = gr.Button("force_quit", visible=False, elem_id="force_quit_btn_hidden")
+
+            start_quit_timer_js = """
+            () => {
+                function findAndClickGradioButton(elemId) {
+                    const gradioApp = document.querySelector('gradio-app') || document;
+                    const button = gradioApp.querySelector(`#${elemId}`);
+                    if (button) {
+                        button.click();
+                    }
+                }
+                window.quitTimerId = setTimeout(() => {
+                }, 5000);
+                let countdown = 5;
+                const label = document.getElementById('quit_timer_label');
+                if (label) {
+                     label.innerText = `Quitting in ${countdown}...`;
+                     window.quitCountdownInterval = setInterval(() => {
+                         countdown--;
+                         if (countdown > 0) {
+                             label.innerText = `Quitting in ${countdown}...`;
+                         } else {
+                              clearInterval(window.quitCountdownInterval);
+                              findAndClickGradioButton('comfirm_quit_btn_hidden');
+                         }
+                     }, 1000);
+                }
+            }
+            """
+
+            cancel_quit_timer_js = """
+            () => {
+                if (window.quitTimerId) {
+                    clearTimeout(window.quitTimerId);
+                    window.quitTimerId = null;
+                }
+                if(window.quitCountdownInterval) {
+                     clearInterval(window.quitCountdownInterval);
+                     window.quitCountdownInterval = null;
+                }
+                const label = document.getElementById('quit_timer_label');
+                 if(label) { label.innerText = 'Quit cancelled.'; }
+            }
+            """
+
             trigger_zip_download_js = """
             (base64String) => {
               if (!base64String) {
@@ -3661,6 +3716,35 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
               }
             }
             """
+
+            quit_button.click(
+                fn=request_quit_confirmation,
+                inputs=[],
+                outputs=[quit_button, quit_confirmation_row]
+            ).then(
+                fn=None, inputs=None, outputs=None, js=start_quit_timer_js
+            )
+
+            confirm_quit_button.click(
+                fn=quit_application,
+                inputs=[],
+                outputs=[]
+            )
+
+            cancel_quit_button.click(
+                fn=cancel_quit_confirmation,
+                inputs=[],
+                outputs=[quit_button, quit_confirmation_row]
+            ).then(
+                fn=None, inputs=None, outputs=None, js=cancel_quit_timer_js
+            )
+
+            hidden_force_quit_trigger.click(
+                fn=quit_application,
+                inputs=[],
+                outputs=[]
+            )
+
             save_queue_btn.click(
                 fn=save_queue_action,
                 inputs=[state],
@@ -3713,11 +3797,6 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                  fn=lambda: (gr.update(visible=False), gr.Accordion(open=False)),
                  inputs=None,
                  outputs=[current_gen_column, queue_accordion]
-            )
-            quit_button.click(
-                fn=quit_application,
-                inputs=[],
-                outputs=[]
             )
 
         extra_inputs = prompt_vars + [wizard_prompt, wizard_variables_var, wizard_prompt_activated_var, video_prompt_column, image_prompt_column,
