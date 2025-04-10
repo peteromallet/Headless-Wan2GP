@@ -910,14 +910,6 @@ def get_queue_table(queue):
     if len(queue) == 1:
         return data 
 
-    # def td(l, content, width =None):
-    #     if width !=None:
-    #         l.append("<TD WIDTH="+ str(width) + "px>" + content + "</TD>")
-    #     else:
-    #         l.append("<TD>" + content + "</TD>")
-
-    # data.append("<STYLE> .TB, .TB  th, .TB td {border: 1px solid #CCCCCC};></STYLE><TABLE CLASS=TB><TR BGCOLOR=#F2F2F2><TD Style='Bold'>Qty</TD><TD>Prompt</TD><TD>Steps</TD><TD></TD><TD><TD></TD><TD></TD><TD></TD></TR>")
-
     for i, item in enumerate(queue):
         if i==0:
             continue
@@ -937,22 +929,7 @@ def get_queue_table(queue):
             start_img_md = f'<img src="{start_img_uri}" alt="Start" style="max-width:{thumbnail_size}; max-height:{thumbnail_size}; display: block; margin: auto; object-fit: contain;" />'
         if end_img_uri:
             end_img_md = f'<img src="{end_img_uri}" alt="End" style="max-width:{thumbnail_size}; max-height:{thumbnail_size}; display: block; margin: auto; object-fit: contain;" />'
-    #     if i % 2 == 1:
-    #         data.append("<TR>")
-    #     else:
-    #         data.append("<TR BGCOLOR=#F2F2F2>")
 
-    #     td(data,str(item.get('repeats', "1")) )
-    #     td(data, prompt_cell, "100%")
-    #     td(data, num_steps, "100%")
-    #     td(data, start_img_md)
-    #     td(data, end_img_md)
-    #     td(data, "↑")
-    #     td(data, "↓")
-    #     td(data, "✖")
-    #     data.append("</TR>")
-    # data.append("</TABLE>")
-    # return ''.join(data)
 
         data.append([item.get('repeats', "1"),
                     prompt_cell,

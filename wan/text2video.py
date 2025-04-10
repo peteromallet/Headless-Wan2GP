@@ -143,6 +143,8 @@ class WanT2V:
                                             seq_len=32760,
                                             keep_last=True)
 
+            self.adapt_vace_model()
+
     def vace_encode_frames(self, frames, ref_images, masks=None, tile_size = 0):
         if ref_images is None:
             ref_images = [None] * len(frames)
@@ -505,3 +507,14 @@ class WanT2V:
             dist.barrier()
 
         return videos[0] if self.rank == 0 else None
+
+    def adapt_vace_model(self):
+        model = self.model
+        modules_dict= { k: m for k, m in model.named_modules()}
+        for num in range(15):
+            module = modules_dict[f"vace_blocks.{num}"]
+            target = modules_dict[f"blocks.{2*num}"]
+            setattr(target, "vace", module )
+        delattr(model, "vace_blocks")
+                    
+ 
