@@ -700,6 +700,15 @@ def clear_queue_action(state):
         if aborted_current or cleared_pending:
             gen["prompts_max"] = 0
 
+    if cleared_pending:
+        try:
+            if os.path.isfile(AUTOSAVE_FILENAME):
+                os.remove(AUTOSAVE_FILENAME)
+                print(f"Clear Queue: Deleted autosave file '{AUTOSAVE_FILENAME}'.")
+        except OSError as e:
+            print(f"Clear Queue: Error deleting autosave file '{AUTOSAVE_FILENAME}': {e}")
+            gr.Warning(f"Could not delete the autosave file '{AUTOSAVE_FILENAME}'. You may need to remove it manually.")
+
     if aborted_current and cleared_pending:
         gr.Info("Queue cleared and current generation aborted.")
     elif aborted_current:
@@ -3792,7 +3801,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                 inputs = [state, model_choice],
                 outputs=queue_df
             ).then(
-                fn=lambda s: gr.Accordion(open=True) if len(get_gen_info(s).get("queue", [])) > 1 else gr.update(), # Expand if queue has items (len > 1 assumes placeholder)
+                fn=lambda s: gr.Accordion(open=True) if len(get_gen_info(s).get("queue", [])) > 1 else gr.update(),
                 inputs=[state],
                 outputs=[queue_accordion]
             ).then(
