@@ -421,7 +421,8 @@ def save_queue_action(state):
                 if image_filenames_for_json:
                      params_copy[key] = image_filenames_for_json if is_originally_list else image_filenames_for_json[0]
                 else:
-                     params_copy.pop(key, None)
+                     pass
+                    #  params_copy.pop(key, None) #cant pop otherwise crash during reload
 
             for key in video_keys:
                 video_path_orig = params_copy.get(key)
@@ -885,6 +886,15 @@ def autoload_queue(state):
                 update_global_queue_ref([])
             dataframe_update = update_queue_data([])
 
+        # need to remove queue otherwise every new tab will be processed it again
+        try:
+            if os.path.isfile(AUTOSAVE_FILENAME):
+                os.remove(AUTOSAVE_FILENAME)
+                print(f"Clear Queue: Deleted autosave file '{AUTOSAVE_FILENAME}'.")
+        except OSError as e:
+            print(f"Clear Queue: Error deleting autosave file '{AUTOSAVE_FILENAME}': {e}")
+            gr.Warning(f"Could not delete the autosave file '{AUTOSAVE_FILENAME}'. You may need to remove it manually.")
+
     else:
         if original_queue:
             print("Autoload skipped: Queue is not empty.")
@@ -894,6 +904,7 @@ def autoload_queue(state):
             print(f"Autoload skipped: {AUTOSAVE_FILENAME} not found.")
             update_global_queue_ref([])
             dataframe_update = update_queue_data([])
+
 
     return dataframe_update, loaded_flag, state
 
@@ -2313,10 +2324,10 @@ def generate_video(
                 progress(*progress_args )   
                 gen["progress_args"] = progress_args
                 video_guide = preprocess_video(preprocess_type, width=width, height=height,video_in=video_guide, max_frames= video_length)
-
+        image_refs = image_refs.copy() if image_refs != None else None # required since prepare_source do inplace modifications
         src_video, src_mask, src_ref_images = wan_model.prepare_source([video_guide],
                                                                 [video_mask],
-                                                                [image_refs],
+                                                                [image_refs], 
                                                                 video_length, VACE_SIZE_CONFIGS[resolution_reformated], "cpu",
                                                                 original_video= "O" in video_prompt_type,
                                                                 trim_video=max_frames)
@@ -3598,7 +3609,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                     queue_df = gr.DataFrame(
                         headers=["Qty","Prompt", "Length","Steps","", "", "", "", ""],
                         datatype=[ "str","markdown","str", "markdown", "markdown", "markdown", "str", "str", "str"],
-                        column_widths= ["5%", None, "7%", "7%", "10%", "10%", "3%", "3%", "3%"],
+                        column_widths= ["5%", None, "7%", "7%", "10%", "10%", "3%", "3%", "34"],
                         interactive=False,
                         col_count=(9, "fixed"),
                         wrap=True,

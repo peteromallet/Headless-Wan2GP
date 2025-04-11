@@ -960,7 +960,7 @@ class WanModel(ModelMixin, ConfigMixin):
                 ])
  
             kwargs['context_scale'] = vace_context_scale
-            hints_list = [ [c] if i==0 else [c.clone()] for i in range(len(x_list)) ] 
+            hints_list = [ [c] for _ in range(len(x_list)) ] 
             del c
 
         should_calc = True

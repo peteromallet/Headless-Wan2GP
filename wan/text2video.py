@@ -511,9 +511,9 @@ class WanT2V:
     def adapt_vace_model(self):
         model = self.model
         modules_dict= { k: m for k, m in model.named_modules()}
-        for num in range(15):
-            module = modules_dict[f"vace_blocks.{num}"]
-            target = modules_dict[f"blocks.{2*num}"]
+        for model_layer, vace_layer in model.vace_layers_mapping.items():
+            module = modules_dict[f"vace_blocks.{vace_layer}"]
+            target = modules_dict[f"blocks.{model_layer}"]
             setattr(target, "vace", module )
         delattr(model, "vace_blocks")
                     
