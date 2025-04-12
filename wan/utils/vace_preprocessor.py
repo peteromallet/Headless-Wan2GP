@@ -254,7 +254,7 @@ class VaceVideoProcessor(object):
 
         if src_video != None:
             fps = 16
-            length = src_video.shape[1]
+            length = src_video.shape[0]
             if len(readers) > 0:
                 min_readers = min([len(r) for r in readers])
                 length = min(length, min_readers )

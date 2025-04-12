@@ -153,7 +153,7 @@ def process_prompt_and_add_tasks(state, model_choice):
         if "Vace" in model_filename and "1.3B" in model_filename :                
             resolution_reformated = str(height) + "*" + str(width) 
             if not resolution_reformated in VACE_SIZE_CONFIGS:
-                res = VACE_SIZE_CONFIGS.keys().join(" and ")
+                res = (" and ").join(VACE_SIZE_CONFIGS.keys())
                 gr.Info(f"Video Resolution for Vace model is not supported. Only {res} resolutions are allowed.")
                 return
         if "I" in video_prompt_type:
@@ -175,12 +175,19 @@ def process_prompt_and_add_tasks(state, model_choice):
         else:
             video_mask = None
         if "O" in video_prompt_type :
-            max_frames= inputs["max_frames"] 
+            keep_frames= inputs["keep_frames"] 
             video_length = inputs["video_length"]
-            if max_frames ==0: 
+            if len(keep_frames) ==0: 
                 gr.Info(f"Warning : you have asked to reuse all the frames of the control Video in the Alternate Video Ending it. Please make sure the number of frames of the control Video is lower than the total number of frames to generate otherwise it won't make a difference.")
-            elif max_frames >= video_length:
-                gr.Info(f"The number of frames in the control Video to reuse ({max_frames}) in Alternate Video Ending can not be bigger than the total number of frames ({video_length}) to generate.")
+            # elif keep_frames >= video_length:
+            #     gr.Info(f"The number of frames in the control Video to reuse ({keep_frames}) in Alternate Video Ending can not be bigger than the total number of frames ({video_length}) to generate.")
+            #     return
+        elif "V" in video_prompt_type:
+            keep_frames= inputs["keep_frames"] 
+            video_length = inputs["video_length"]
+            _, error = parse_keep_frames(keep_frames, video_length)
+            if len(error) > 0:
+                gr.Info(f"Invalid Keep Frames property: {error}")
                 return
 
         if isinstance(image_refs, list):
@@ -1540,8 +1547,8 @@ def download_models(transformer_filename, text_encoder_filename):
     
     from huggingface_hub import hf_hub_download, snapshot_download    
     repoId = "DeepBeepMeep/Wan2.1" 
-    sourceFolderList = ["xlm-roberta-large", "pose", "depth", "",  ]
-    fileList = [ [], [],[], ["Wan2.1_VAE_bf16.safetensors", "models_clip_open-clip-xlm-roberta-large-vit-huge-14-bf16.safetensors", "flownet.pkl" ] + computeList(text_encoder_filename) + computeList(transformer_filename) ]   
+    sourceFolderList = ["xlm-roberta-large", "pose", "depth", "mask", "",  ]
+    fileList = [ [], [],[], ["sam_vit_h_4b8939_fp16.safetensors"], ["Wan2.1_VAE_bf16.safetensors", "models_clip_open-clip-xlm-roberta-large-vit-huge-14-bf16.safetensors", "flownet.pkl" ] + computeList(text_encoder_filename) + computeList(transformer_filename) ]   
     targetRoot = "ckpts/" 
     for sourceFolder, files in zip(sourceFolderList,fileList ):
         if len(files)==0:
@@ -1782,25 +1789,6 @@ def get_model_name(model_filename):
 
     return model_name
 
-# def generate_header(model_filename, compile, attention_mode):
-    
-#     header = "<div class='title-with-lines'><div class=line></div><h2>"
-    
-#     model_name = get_model_name(model_filename)
-
-#     header += model_name 
-#     header += " (attention mode: " + (attention_mode if attention_mode!="auto" else "auto/" + get_auto_attention() )
-#     if attention_mode not in attention_modes_installed:
-#         header += " -NOT INSTALLED-"
-#     elif attention_mode not in attention_modes_supported:
-#         header += " -NOT SUPPORTED-"
-
-#     if compile:
-#         header += ", pytorch compilation ON"
-#     header += ") </h2><div class=line></div>    "
-
-
-#     return header
 
 
 def generate_header(model_filename, compile, attention_mode):
@@ -2122,6 +2110,57 @@ def preprocess_video(process_type, height, width, video_in, max_frames):
 
     return torch.stack(torch_frames) 
 
+def parse_keep_frames(keep_frames, video_length):
+    def is_integer(n):
+        try:
+            float(n)
+        except ValueError:
+            return False
+        else:
+            return float(n).is_integer()
+        
+    def absolute(n):
+        if n==0:
+            return 0
+        elif n < 0:
+            return max(0, video_length + n)
+        else:
+            return min(n-1, video_length-1)
+
+    if len(keep_frames) == 0:
+        return [True] *video_length, "" 
+    frames =[False] *video_length
+    error = ""
+    sections = keep_frames.split(" ")
+    for section in sections:
+        section = section.strip()
+        if ":" in section:
+            parts = section.split(":")
+            if not is_integer(parts[0]):
+                error =f"Invalid integer {parts[0]}"
+                break
+            start_range = absolute(int(parts[0]))
+            if not is_integer(parts[1]):
+                error =f"Invalid integer {parts[1]}"
+                break
+            end_range = absolute(int(parts[1]))
+            for i in range(start_range, end_range + 1):
+                frames[i] = True
+        else:
+            if not is_integer(section):
+                error =f"Invalid integer {section}"
+                break
+            index = absolute(int(section))
+            frames[index] = True
+
+    if len(error ) > 0:
+        return [], error
+    for i in range(len(frames)-1, 0, -1):
+        if frames[i]:
+            break
+    frames= frames[0: i+1]
+    return  frames, error
+
 def generate_video(
     task_id,
     progress,
@@ -2147,7 +2186,7 @@ def generate_video(
     image_refs,
     video_guide,
     video_mask,
-    max_frames,
+    keep_frames,
     remove_background_image_ref,
     temporal_upsampling,
     spatial_upsampling,
@@ -2325,12 +2364,16 @@ def generate_video(
                 gen["progress_args"] = progress_args
                 video_guide = preprocess_video(preprocess_type, width=width, height=height,video_in=video_guide, max_frames= video_length)
         image_refs = image_refs.copy() if image_refs != None else None # required since prepare_source do inplace modifications
+        keep_frames_parsed, error = parse_keep_frames(keep_frames, video_length)
+        if len(error) > 0:
+            raise gr.Error(f"invalid keep frames {keep_frames}")
+
         src_video, src_mask, src_ref_images = wan_model.prepare_source([video_guide],
                                                                 [video_mask],
                                                                 [image_refs], 
                                                                 video_length, VACE_SIZE_CONFIGS[resolution_reformated], "cpu",
                                                                 original_video= "O" in video_prompt_type,
-                                                                trim_video=max_frames)
+                                                                keep_frames=keep_frames_parsed)
     else:
         src_video, src_mask, src_ref_images = None, None, None
 
@@ -2635,6 +2678,8 @@ def process_tasks(state, progress=gr.Progress()):
             finally:
                 if not ok:
                     queue.clear()
+                    gen["prompts_max"] = 0
+                    gen["prompt"] = ""
             yield status
 
         queue[:] = [item for item in queue if item['id'] != task['id']]
@@ -3014,7 +3059,7 @@ def prepare_inputs_dict(target, inputs ):
 
 
     if not "Vace" in model_filename:
-        unsaved_params = ["video_prompt_type", "max_frames", "remove_background_image_ref"]
+        unsaved_params = ["video_prompt_type", "keep_frames", "remove_background_image_ref"]
         for k in unsaved_params:
             inputs.pop(k)
 
@@ -3056,7 +3101,7 @@ def save_inputs(
             image_refs,
             video_guide,
             video_mask,
-            max_frames,
+            keep_frames,
             remove_background_image_ref,
             temporal_upsampling,
             spatial_upsampling,
@@ -3246,6 +3291,13 @@ def refresh_video_prompt_type_video_guide(video_prompt_type, video_prompt_type_v
     visible = "V" in video_prompt_type
     return video_prompt_type, gr.update(visible = visible), gr.update(visible = visible), gr.update(visible= "M" in video_prompt_type )
 
+def refresh_video_prompt_video_guide_trigger(video_prompt_type, video_prompt_type_video_guide):
+    video_prompt_type_video_guide = video_prompt_type_video_guide.split("#")[0]
+    video_prompt_type = del_in_sequence(video_prompt_type, "ODPCMV")
+    video_prompt_type = add_to_sequence(video_prompt_type, video_prompt_type_video_guide)
+
+    return video_prompt_type, video_prompt_type_video_guide, gr.update(visible= "V" in video_prompt_type ), gr.update(visible= "M" in video_prompt_type) , gr.update(visible= "V" in video_prompt_type )
+
  
 def generate_video_tab(update_form = False, state_dict = None, ui_defaults = None, model_choice = None, header = None):
     global inputs_names #, advanced
@@ -3365,12 +3417,13 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                             ("Transfer Depth from the Control Video", "DV"),
                             ("Recolorize the Control Video", "CV"),
                             # ("Alternate Video Ending", "OV"),
-                            ("(adv) Video contains Open Pose, Depth or Black & White ", "V"),
-                            ("(adv) Inpainting of Control Video using Mask Video ", "MV"),
+                            ("Video contains Open Pose, Depth, Black & White, Inpainting ", "V"),
+                            ("Control Video and Mask video for stronger Inpainting ", "MV"),
                         ],
                         value=filter_letters(video_prompt_type_value, "ODPCMV"),
                         label="Video to Video", scale = 3
                     )
+                    video_prompt_video_guide_trigger = gr.Text(visible=False, value="")
 
                     video_prompt_type_image_refs = gr.Dropdown(
                         choices=[
@@ -3384,8 +3437,8 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                 # video_prompt_type_image_refs = gr.Checkbox(value="I" in video_prompt_type_value , label= "Use References Images (Faces, Objects) to customize New Video",  scale =1 ) 
 
                 video_guide = gr.Video(label= "Control Video", visible= "V" in video_prompt_type_value, value= ui_defaults.get("video_guide", None),)
-                max_frames = gr.Slider(0, 100, value=ui_defaults.get("max_frames",0), step=1, label="Nb of frames in Control Video to use (0 = max)", visible= "V" in video_prompt_type_value, scale = 2 ) 
-
+                # keep_frames = gr.Slider(0, 100, value=ui_defaults.get("keep_frames",0), step=1, label="Nb of frames in Control Video to use (0 = max)", visible= "V" in video_prompt_type_value, scale = 2 ) 
+                keep_frames = gr.Text(value=ui_defaults.get("keep_frames","") , visible= "V" in video_prompt_type_value, scale = 2, label= "Frames to keep in Control Video (empty=All, 1=first, a:b for a range, space to separate values)" ) #, -1=last
                 image_refs = gr.Gallery( label ="Reference Images",
                         type ="pil",   show_label= True,
                         columns=[3], rows=[1], object_fit="contain", height="auto", selected_index=0, interactive= True, visible= "I" in video_prompt_type_value, 
@@ -3798,9 +3851,9 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
             target_settings = gr.Text(value = "settings", interactive= False, visible= False)
 
             image_prompt_type.change(fn=refresh_image_prompt_type, inputs=[state, image_prompt_type], outputs=[image_start, image_end]) 
-            # video_prompt_type.change(fn=refresh_video_prompt_type, inputs=[state, video_prompt_type], outputs=[image_refs, video_guide, video_mask, max_frames, remove_background_image_ref])
+            video_prompt_video_guide_trigger.change(fn=refresh_video_prompt_video_guide_trigger, inputs=[video_prompt_type, video_prompt_video_guide_trigger], outputs=[video_prompt_type, video_prompt_type_video_guide, video_guide, video_mask, keep_frames])
             video_prompt_type_image_refs.input(fn=refresh_video_prompt_type_image_refs, inputs = [video_prompt_type, video_prompt_type_image_refs], outputs = [video_prompt_type, image_refs, remove_background_image_ref ])
-            video_prompt_type_video_guide.input(fn=refresh_video_prompt_type_video_guide, inputs = [video_prompt_type, video_prompt_type_video_guide], outputs = [video_prompt_type, video_guide, max_frames, video_mask])
+            video_prompt_type_video_guide.input(fn=refresh_video_prompt_type_video_guide, inputs = [video_prompt_type, video_prompt_type_video_guide], outputs = [video_prompt_type, video_guide, keep_frames, video_mask])
 
             show_advanced.change(fn=switch_advanced, inputs=[state, show_advanced, lset_name], outputs=[advanced_row, preset_buttons_rows, refresh_lora_btn, refresh2_row ,lset_name ]).then(
                 fn=switch_prompt_type, inputs = [state, wizard_prompt_activated_var, wizard_variables_var, prompt, wizard_prompt, *prompt_vars], outputs = [wizard_prompt_activated_var, wizard_variables_var, prompt, wizard_prompt, prompt_column_advanced, prompt_column_wizard, prompt_column_wizard_vars, *prompt_vars])
@@ -3903,12 +3956,8 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
     return (
         loras_choices, lset_name, state, queue_df, current_gen_column,
         gen_status, output, abort_btn, generate_btn, add_to_queue_btn,
-        gen_info,
-        prompt, wizard_prompt, wizard_prompt_activated_var, wizard_variables_var,
-        prompt_column_advanced, prompt_column_wizard, prompt_column_wizard_vars,
-        advanced_row, image_prompt_column, video_prompt_column, queue_accordion,
-        *prompt_vars
-    ) 
+        gen_info, queue_accordion, video_guide, video_mask,  video_prompt_video_guide_trigger   
+        ) 
  
 
 def generate_download_tab(lset_name,loras_choices, state):
@@ -4132,8 +4181,30 @@ def generate_dropdown_model_list():
         )
 
 
+def select_tab(tab_state, evt:gr.SelectData):
+    tab_video_mask_creator = 2
+
+    old_tab_no = tab_state.get("tab_no",0)
+    new_tab_no = evt.index 
+    if old_tab_no == tab_video_mask_creator:
+        vmc_event_handler(False)
+    elif new_tab_no == tab_video_mask_creator:
+        if gen_in_progress:
+            gr.Info("Unable to access this Tab while a Generation is in Progress. Please come back later")
+            tab_state["tab_auto"]=old_tab_no
+        else:
+            vmc_event_handler(True)
+    tab_state["tab_no"] = new_tab_no
+def select_tab_auto(tab_state):
+    old_tab_no = tab_state.pop("tab_auto", -1)
+    if old_tab_no>= 0:
+        tab_state["tab_auto"]=old_tab_no        
+        return gr.Tabs(selected=old_tab_no) # !! doesnt work !!
+    return gr.Tab()
+ 
 
 def create_demo():
+    global vmc_event_handler
     css = """
         #model_list{
         background-color:black;
@@ -4370,6 +4441,8 @@ def create_demo():
         gr.Markdown("<div align=center><H1>Wan<SUP>GP</SUP> v4.0 <FONT SIZE=4>by <I>DeepBeepMeep</I></FONT> <FONT SIZE=3>") # (<A HREF='https://github.com/deepbeepmeep/Wan2GP'>Updates</A>)</FONT SIZE=3></H1></div>")
         global model_list
 
+        tab_state = gr.State({ "tab_no":0 }) 
+
         with gr.Tabs(selected="video_gen", ) as main_tabs:
             with gr.Tab("Video Generator", id="video_gen") as t2v_tab:
                 with gr.Row():
@@ -4386,14 +4459,15 @@ def create_demo():
                     (
                         loras_choices, lset_name, state, queue_df, current_gen_column,
                         gen_status, output, abort_btn, generate_btn, add_to_queue_btn,
-                        gen_info,
-                        prompt, wizard_prompt, wizard_prompt_activated_var, wizard_variables_var,
-                        prompt_column_advanced, prompt_column_wizard, prompt_column_wizard_vars,
-                        advanced_row, image_prompt_column, video_prompt_column, queue_accordion,
-                        *prompt_vars_outputs
+                        gen_info, queue_accordion, video_guide, video_mask, video_prompt_type_video_trigger
                     ) = generate_video_tab(model_choice=model_choice, header=header)
             with gr.Tab("Informations"):
                 generate_info_tab()
+            with gr.Tab("Video Mask Creator", id="video_mask_creator") as video_mask_creator:
+                from preprocessing.matanyone  import app as matanyone_app
+                vmc_event_handler = matanyone_app.get_vmc_event_handler()
+
+                matanyone_app.display(video_guide, video_mask, video_prompt_type_video_trigger)
             if not args.lock_config:
                 with gr.Tab("Downloads", id="downloads") as downloads_tab:
                     generate_download_tab(lset_name, loras_choices, state)
@@ -4420,6 +4494,7 @@ def create_demo():
             trigger_mode="always_last"
         )
 
+        main_tabs.select(fn=select_tab, inputs= [tab_state], outputs= None).then(fn=select_tab_auto, inputs=  [tab_state], outputs=[main_tabs])
         return demo
 
 if __name__ == "__main__":

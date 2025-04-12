@@ -37,12 +37,11 @@ def resample(video_fps, video_frames_count, max_frames, target_fps):
             break
         add_frames_count = math.ceil( (target_time -cur_time) / video_frame_duration )
         frame_no += add_frames_count
+        if frame_no >= video_frames_count:             
+            break
         frame_ids.append(frame_no)
         cur_time += add_frames_count * video_frame_duration
         target_time += target_frame_duration
-        if frame_no >= video_frames_count -1: 
-            break
-    frame_ids = frame_ids[:video_frames_count]    
     return frame_ids
 
 def get_video_frame(file_name, frame_no):

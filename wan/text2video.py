@@ -209,8 +209,9 @@ class WanT2V:
     def vace_latent(self, z, m):
         return [torch.cat([zz, mm], dim=0) for zz, mm in zip(z, m)]
 
-    def prepare_source(self, src_video, src_mask, src_ref_images, num_frames, image_size,  device, original_video = False, trim_video= 0):
+    def prepare_source(self, src_video, src_mask, src_ref_images, num_frames, image_size,  device, original_video = False, keep_frames= []):
         image_sizes = []
+        trim_video = len(keep_frames)
         for i, (sub_src_video, sub_src_mask) in enumerate(zip(src_video, src_mask)):
             if sub_src_mask is not None and sub_src_video is not None:
                 src_video[i], src_mask[i], _, _, _ = self.vid_proc.load_video_pair(sub_src_video, sub_src_mask, max_frames= num_frames, trim_video = trim_video)
@@ -237,6 +238,10 @@ class WanT2V:
                     src_video[i] =  torch.cat( [src_video[i], src_video[i].new_zeros(src_video_shape[0], num_frames -src_video_shape[1], *src_video_shape[-2:])], dim=1)
                     src_mask[i] =  torch.cat( [src_mask[i], src_mask[i].new_ones(src_video_shape[0], num_frames -src_video_shape[1], *src_video_shape[-2:])], dim=1)
                 image_sizes.append(src_video[i].shape[2:])
+            for k, keep in enumerate(keep_frames):
+                if not keep:
+                    src_video[i][:, k:k+1] = 0
+                    src_mask[i][:, k:k+1] = 1
 
         for i, ref_images in enumerate(src_ref_images):
             if ref_images is not None:
