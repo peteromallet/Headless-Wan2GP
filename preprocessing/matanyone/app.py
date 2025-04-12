@@ -163,10 +163,10 @@ def get_frames_from_video(video_input, video_state):
     model.samcontroler.sam_controler.set_image(video_state["origin_images"][0])
     return video_state, video_info, video_state["origin_images"][0], \
                         gr.update(visible=True, maximum=len(frames), value=1), gr.update(visible=True, maximum=len(frames), value=len(frames)), gr.update(visible=False, maximum=len(frames), value=len(frames)), \
-                        gr.update(visible=True), gr.update(visible=True), \
+                        gr.update(visible=True), gr.update(visible=True), gr.update(visible=True), \
                         gr.update(visible=True), gr.update(visible=True),\
-                        gr.update(visible=True), gr.update(visible=True), \
                         gr.update(visible=True), gr.update(visible=False), \
+                        gr.update(visible=False), gr.update(visible=False), \
                         gr.update(visible=False), gr.update(visible=True), \
                         gr.update(visible=True)
 
@@ -273,7 +273,7 @@ def save_video(frames, output_path, fps):
     return output_path
 
 # video matting
-def video_matting(video_state, end_slider, interactive_state, mask_dropdown, erode_kernel_size, dilate_kernel_size):
+def video_matting(video_state, end_slider, matting_type, interactive_state, mask_dropdown, erode_kernel_size, dilate_kernel_size):
     matanyone_processor = InferenceCore(matanyone_model, cfg=matanyone_model.cfg)
     # if interactive_state["track_end_number"]:
     #     following_frames = video_state["origin_images"][video_state["select_frame_number"]:interactive_state["track_end_number"]]
@@ -301,9 +301,16 @@ def video_matting(video_state, end_slider, interactive_state, mask_dropdown, ero
         template_mask[0][0]=1
     foreground, alpha = matanyone(matanyone_processor, following_frames, template_mask*255, r_erode=erode_kernel_size, r_dilate=dilate_kernel_size)
     output_frames = []
+    foreground_mat = matting_type == "Foreground"
     for frame_origin, frame_alpha in zip(following_frames, alpha):
-        frame_alpha[frame_alpha > 127] = 255
-        frame_alpha[frame_alpha <= 127] = 0
+        if foreground_mat:
+            frame_alpha[frame_alpha > 127] = 255
+            frame_alpha[frame_alpha <= 127] = 0
+        else:
+            frame_temp = frame_alpha.copy()
+            frame_alpha[frame_temp > 127] = 0
+            frame_alpha[frame_temp <= 127] = 255
+
         output_frame = np.bitwise_and(frame_origin, 255-frame_alpha)
         frame_grey = frame_alpha.copy()
         frame_grey[frame_alpha == 255] = 127
@@ -314,14 +321,18 @@ def video_matting(video_state, end_slider, interactive_state, mask_dropdown, ero
     if not os.path.exists("mask_outputs"):
         os.makedirs("mask_outputs")
 
-
-    foreground_output = save_video(foreground, output_path="./mask_outputs/{}_fg.mp4".format(video_state["video_name"]), fps=fps)
+    file_name= video_state["video_name"]
+    file_name = ".".join(file_name.split(".")[:-1]) 
+    foreground_output = save_video(foreground, output_path="./mask_outputs/{}_fg.mp4".format(file_name), fps=fps)
     # foreground_output = generate_video_from_frames(foreground, output_path="./results/{}_fg.mp4".format(video_state["video_name"]), fps=fps, audio_path=audio_path) # import video_input to name the output video
-    alpha_output = save_video(alpha, output_path="./mask_outputs/{}_alpha.mp4".format(video_state["video_name"]), fps=fps)
+    alpha_output = save_video(alpha, output_path="./mask_outputs/{}_alpha.mp4".format(file_name), fps=fps)
     # alpha_output = generate_video_from_frames(alpha, output_path="./results/{}_alpha.mp4".format(video_state["video_name"]), fps=fps, gray2rgb=True, audio_path=audio_path) # import video_input to name the output video
 
-    return foreground_output, alpha_output
+    return foreground_output, alpha_output, gr.update(visible=True), gr.update(visible=True), gr.update(visible=True), gr.update(visible=True)
 
+
+def show_outputs():
+    return gr.update(visible=True), gr.update(visible=True)
 
 def add_audio_to_video(video_path, audio_path, output_path):
     try:
@@ -392,8 +403,8 @@ def restart():
             },
             "track_end_number": None,
         }, [[],[]], None, None, \
-        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),\
-        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), \
+        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),\
+        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), \
         gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), \
         gr.update(visible=False), gr.update(visible=False, choices=[], value=[]), "", gr.update(visible=False)
 
@@ -529,7 +540,16 @@ def display(vace_video_input, vace_video_mask, video_prompt_video_guide_trigger)
                             visible=False,
                             min_width=100,
                             scale=1)
-                        mask_dropdown = gr.Dropdown(multiselect=True, value=[], label="Mask Selection", info="Choose 1~all mask(s) added in Step 2", visible=False)
+                        matting_type = gr.Radio(
+                            choices=["Foreground", "Background"],
+                            value="Foreground",
+                            label="Matting Type",
+                            info="Type of Video Matting to Generate",
+                            interactive=True,
+                            visible=False,
+                            min_width=100,
+                            scale=1)
+                        mask_dropdown = gr.Dropdown(multiselect=True, value=[], label="Mask Selection", info="Choose 1~all mask(s) added in Step 2", visible=False, scale=2)
         
         gr.Markdown("---")
 
@@ -549,9 +569,9 @@ def display(vace_video_input, vace_video_mask, video_prompt_video_guide_trigger)
                     template_frame = gr.Image(label="Start Frame", type="pil",interactive=True, elem_id="template_frame", visible=False, elem_classes="image")
                     with gr.Row():
                         clear_button_click = gr.Button(value="Clear Clicks", interactive=True, visible=False,  min_width=100)
-                        add_mask_button = gr.Button(value="Add Mask", interactive=True, visible=False, min_width=100)
+                        add_mask_button = gr.Button(value="Set Mask", interactive=True, visible=False, min_width=100)
                         remove_mask_button = gr.Button(value="Remove Mask", interactive=True, visible=False,  min_width=100) # no use
-                        matting_button = gr.Button(value="Video Matting", interactive=True, visible=False,  min_width=100)
+                        matting_button = gr.Button(value="Generate Video Matting", interactive=True, visible=False,  min_width=100)
                     with gr.Row():
                         gr.Markdown("")            
 
@@ -560,11 +580,11 @@ def display(vace_video_input, vace_video_mask, video_prompt_video_guide_trigger)
                 with gr.Column(scale=2):
                     foreground_video_output = gr.Video(label="Masked Video Output", visible=False, elem_classes="video")
                     foreground_output_button = gr.Button(value="Black & White Video Output", visible=False, elem_classes="new_button")
-                    export_to_vace_video_input_btn = gr.Button("Export to Vace Video Input Video For Inpainting")
+                    export_to_vace_video_input_btn = gr.Button("Export to Vace Video Input Video For Inpainting", visible= False)
                 with gr.Column(scale=2):
                     alpha_video_output = gr.Video(label="B & W Mask Video Output", visible=False, elem_classes="video")
                     alpha_output_button = gr.Button(value="Alpha Mask Output", visible=False, elem_classes="new_button")
-                    export_to_vace_video_mask_btn = gr.Button("Export to Vace Video Input and Video Mask for stronger Inpainting")
+                    export_to_vace_video_mask_btn = gr.Button("Export to Vace Video Input and Video Mask for stronger Inpainting", visible= False)
             
         export_to_vace_video_input_btn.click(fn=export_to_vace_video_input, inputs= [foreground_video_output], outputs= [video_prompt_video_guide_trigger, vace_video_input])
         export_to_vace_video_mask_btn.click(fn=export_to_vace_video_mask, inputs= [foreground_video_output, alpha_video_output], outputs= [video_prompt_video_guide_trigger, vace_video_input, vace_video_mask])
@@ -575,7 +595,7 @@ def display(vace_video_input, vace_video_mask, video_prompt_video_guide_trigger)
                 video_input, video_state
             ],
             outputs=[video_state, video_info, template_frame,
-                    image_selection_slider, end_selection_slider,  track_pause_number_slider, point_prompt, clear_button_click, add_mask_button, matting_button, template_frame,
+                    image_selection_slider, end_selection_slider,  track_pause_number_slider, point_prompt, matting_type, clear_button_click, add_mask_button, matting_button, template_frame,
                     foreground_video_output, alpha_video_output, foreground_output_button, alpha_output_button, mask_dropdown, step2_title]
         )   
 
@@ -609,9 +629,12 @@ def display(vace_video_input, vace_video_mask, video_prompt_video_guide_trigger)
 
         # video matting
         matting_button.click(
+            fn=show_outputs,
+            inputs=[],
+            outputs=[foreground_video_output, alpha_video_output]).then(
             fn=video_matting,
-            inputs=[video_state, end_selection_slider,  interactive_state, mask_dropdown, erode_kernel_size, dilate_kernel_size],
-            outputs=[foreground_video_output, alpha_video_output]
+            inputs=[video_state, end_selection_slider,  matting_type, interactive_state, mask_dropdown, erode_kernel_size, dilate_kernel_size],
+            outputs=[foreground_video_output, alpha_video_output,foreground_video_output, alpha_video_output, export_to_vace_video_input_btn, export_to_vace_video_mask_btn]
         )
 
         # click to get mask
@@ -631,7 +654,7 @@ def display(vace_video_input, vace_video_mask, video_prompt_video_guide_trigger)
                 click_state,
                 foreground_video_output, alpha_video_output,
                 template_frame,
-                image_selection_slider , track_pause_number_slider,point_prompt, clear_button_click, 
+                image_selection_slider, end_selection_slider, track_pause_number_slider,point_prompt, export_to_vace_video_input_btn, export_to_vace_video_mask_btn, matting_type, clear_button_click, 
                 add_mask_button, matting_button, template_frame, foreground_video_output, alpha_video_output, remove_mask_button, foreground_output_button, alpha_output_button, mask_dropdown, video_info, step2_title
             ],
             queue=False,
@@ -646,7 +669,7 @@ def display(vace_video_input, vace_video_mask, video_prompt_video_guide_trigger)
                 click_state,
                 foreground_video_output, alpha_video_output,
                 template_frame,
-                image_selection_slider , track_pause_number_slider,point_prompt, clear_button_click, 
+                image_selection_slider , end_selection_slider, track_pause_number_slider,point_prompt, export_to_vace_video_input_btn, export_to_vace_video_mask_btn, matting_type, clear_button_click, 
                 add_mask_button, matting_button, template_frame, foreground_video_output, alpha_video_output, remove_mask_button, foreground_output_button, alpha_output_button, mask_dropdown, video_info, step2_title
             ],
             queue=False,
