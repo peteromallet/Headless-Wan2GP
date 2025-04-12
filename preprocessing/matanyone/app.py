@@ -311,9 +311,13 @@ def video_matting(video_state, end_slider, interactive_state, mask_dropdown, ero
         output_frames.append(output_frame)
     foreground = output_frames
 
-    foreground_output = save_video(foreground, output_path="./results/{}_fg.mp4".format(video_state["video_name"]), fps=fps)
+    if not os.path.exists("mask_outputs"):
+        os.makedirs("mask_outputs")
+
+
+    foreground_output = save_video(foreground, output_path="./mask_outputs/{}_fg.mp4".format(video_state["video_name"]), fps=fps)
     # foreground_output = generate_video_from_frames(foreground, output_path="./results/{}_fg.mp4".format(video_state["video_name"]), fps=fps, audio_path=audio_path) # import video_input to name the output video
-    alpha_output = save_video(alpha, output_path="./results/{}_alpha.mp4".format(video_state["video_name"]), fps=fps)
+    alpha_output = save_video(alpha, output_path="./mask_outputs/{}_alpha.mp4".format(video_state["video_name"]), fps=fps)
     # alpha_output = generate_video_from_frames(alpha, output_path="./results/{}_alpha.mp4".format(video_state["video_name"]), fps=fps, gray2rgb=True, audio_path=audio_path) # import video_input to name the output video
 
     return foreground_output, alpha_output

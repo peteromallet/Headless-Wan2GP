@@ -26,4 +26,6 @@ matplotlib
 timm
 segment-anything
 ffmpeg-python
+omegaconf
+hydra-core
 # rembg==2.0.65
