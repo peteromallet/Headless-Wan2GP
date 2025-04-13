@@ -3717,7 +3717,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
 
                 with gr.Tab("Sliding Window", visible= "Vace" in model_filename ) as sliding_window_tab:
 
-                    with gr.Column(visible= "Vace" in model_filename ) as sliding_window_row: 
+                    with gr.Column():  
                         gr.Markdown("<B>A Sliding Window allows you to generate video longer than those of the model limits</B>")
 
                         sliding_window_repeat = gr.Slider(0, 20, value=ui_defaults.get("sliding_window_repeat", 0), step=1, label="Sliding Window Iterations (O=Disabled)")
@@ -3791,7 +3791,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                 let countdown = 5;
                 const label = document.getElementById('quit_timer_label');
                 if (label) {
-                     label.innerText = `${countdown}...`;
+                     label.innerText = `M${countdown}...`;
                      window.quitCountdownInterval = setInterval(() => {
                          countdown--;
                          if (countdown > 0) {
