@@ -182,14 +182,14 @@ class VaceVideoProcessor(object):
 
 
         
-    def _get_frameid_bbox_adjust_last(self, fps, video_frames_count, h, w, crop_box, rng, max_frames= 0):
+    def _get_frameid_bbox_adjust_last(self, fps, video_frames_count, h, w, crop_box, rng, max_frames= 0, start_frame =0):
         from wan.utils.utils import resample
 
         target_fps = self.max_fps
 
         # video_frames_count = len(frame_timestamps)
 
-        frame_ids= resample(fps, video_frames_count, max_frames, target_fps)
+        frame_ids= resample(fps, video_frames_count, max_frames, target_fps, start_frame )
 
         x1, x2, y1, y2 = [0, w, 0, h] if crop_box is None else crop_box
         h, w = y2 - y1, x2 - x1
@@ -206,7 +206,7 @@ class VaceVideoProcessor(object):
             np.log2(np.sqrt(max_area_z))
         )))
 
-        seq_len =  max_area_z * ((max_frames- 1) // df +1)
+        seq_len =  max_area_z * ((max_frames- start_frame - 1) // df +1)
 
         # of = min(
         #     (len(frame_ids) - 1) // df + 1,
@@ -226,9 +226,9 @@ class VaceVideoProcessor(object):
 
         return frame_ids, (x1, x2, y1, y2), (oh, ow), target_fps
 
-    def _get_frameid_bbox(self, fps, video_frames_count, h, w, crop_box, rng, max_frames= 0):
+    def _get_frameid_bbox(self, fps, video_frames_count, h, w, crop_box, rng, max_frames= 0, start_frame= 0):
         if self.keep_last:
-            return self._get_frameid_bbox_adjust_last(fps, video_frames_count, h, w, crop_box, rng, max_frames= max_frames)
+            return self._get_frameid_bbox_adjust_last(fps, video_frames_count, h, w, crop_box, rng, max_frames= max_frames, start_frame= start_frame)
         else:
             return self._get_frameid_bbox_default(fps, video_frames_count, h, w, crop_box, rng, max_frames= max_frames)
 
@@ -238,7 +238,7 @@ class VaceVideoProcessor(object):
     def load_video_pair(self, data_key, data_key2, crop_box=None, seed=2024, **kwargs):
         return self.load_video_batch(data_key, data_key2, crop_box=crop_box, seed=seed, **kwargs)
 
-    def load_video_batch(self, *data_key_batch, crop_box=None, seed=2024, max_frames= 0, trim_video =0, **kwargs):
+    def load_video_batch(self, *data_key_batch, crop_box=None, seed=2024, max_frames= 0, trim_video =0, start_frame = 0, **kwargs):
         rng = np.random.default_rng(seed + hash(data_key_batch[0]) % 10000)
         # read video
         import decord
@@ -254,7 +254,7 @@ class VaceVideoProcessor(object):
 
         if src_video != None:
             fps = 16
-            length = src_video.shape[1]
+            length = src_video.shape[0] + start_frame
             if len(readers) > 0:
                 min_readers = min([len(r) for r in readers])
                 length = min(length, min_readers )
@@ -269,7 +269,7 @@ class VaceVideoProcessor(object):
             h, w = src_video.shape[1:3]
         else:
             h, w = readers[0].next().shape[:2]
-        frame_ids, (x1, x2, y1, y2), (oh, ow), fps = self._get_frameid_bbox(fps, length, h, w, crop_box, rng, max_frames=max_frames)
+        frame_ids, (x1, x2, y1, y2), (oh, ow), fps = self._get_frameid_bbox(fps, length, h, w, crop_box, rng, max_frames=max_frames, start_frame = start_frame )
 
         # preprocess video
         videos = [reader.get_batch(frame_ids)[:, y1:y2, x1:x2, :] for reader in readers]

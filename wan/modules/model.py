@@ -482,7 +482,6 @@ class WanAttentionBlock(nn.Module):
         y *= 1 + e[4]
         y += e[3]
 
-
         ffn = self.ffn[0]
         gelu = self.ffn[1]
         ffn2= self.ffn[2]
@@ -499,8 +498,6 @@ class WanAttentionBlock(nn.Module):
         y = y.view(y_shape)
 
         x.addcmul_(y, e[5])
-
-
 
         if hint is not None:
             if context_scale == 1:
@@ -539,24 +536,13 @@ class VaceWanAttentionBlock(WanAttentionBlock):
         c = hints[0]
         hints[0] = None
         if self.block_id == 0:
-            c = self.before_proj(c) + x
+            c = self.before_proj(c)
+            c += x
         c = super().forward(c, **kwargs)
         c_skip = self.after_proj(c)
         hints[0] = c
         return c_skip
 
-    # def forward(self, c, x, **kwargs):
-    #     # behold dbm magic !
-    #     if self.block_id == 0:
-    #         c = self.before_proj(c) + x
-    #         all_c = []
-    #     else:
-    #         all_c = c
-    #         c = all_c.pop(-1)
-    #     c = super().forward(c, **kwargs)
-    #     c_skip = self.after_proj(c)
-    #     all_c += [c_skip, c]
-    #     return all_c
     
 class Head(nn.Module):
 
@@ -793,37 +779,6 @@ class WanModel(ModelMixin, ConfigMixin):
         print(f"Tea Cache, best threshold found:{best_threshold:0.2f} with gain x{len(timesteps)/(target_nb_steps - best_signed_diff):0.2f} for a target of x{speed_factor}")
         return best_threshold
 
-
-
-    # def forward_vace(
-    #     self,
-    #     x,
-    #     vace_context,
-    #     seq_len,
-    #     context,
-    #     e,
-    #     kwargs
-    # ):
-    #     # embeddings
-    #     c = [self.vace_patch_embedding(u.unsqueeze(0)) for u in vace_context]
-    #     c = [u.flatten(2).transpose(1, 2) for u in c]
-    #     if (len(c) == 1 and seq_len == c[0].size(1)):
-    #         c = c[0]
-    #     else:
-    #         c = torch.cat([
-    #             torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))],
-    #                     dim=1) for u in c
-    #         ])
-
-    #     # arguments
-    #     new_kwargs = dict(x=x)
-    #     new_kwargs.update(kwargs)
-
-    #     for block in self.vace_blocks:
-    #         c = block(c, context= context, e= e, **new_kwargs)
-    #     hints = c[:-1]
-
-    #     return hints
     
     def forward(
         self,

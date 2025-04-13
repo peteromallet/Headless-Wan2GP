@@ -14,10 +14,14 @@
 
 
 ## 🔥 Latest News!!
-* April 9 2025: 👋 Wan 2.1GP v4.0: lots of goodies for you !
+* April 13 2025: 👋 Wan 2.1GP v4.0: lots of goodies for you !
     - A new queuing system that lets you stack in a queue as many text2video and imag2video tasks as you want. Each task can rely on complete different generation parameters (different number of frames, steps, loras, ...).
     - Temporal upsampling (Rife) and spatial upsampling (Lanczos) for a smoother video (32 fps or 64 fps) and to enlarge you video by x2 or x4. Check these new advanced options.
     - Wan Vace Control Net support : with Vace you can inject in the scene people or objects, animate a person, perform inpainting or outpainting, continue a video, ... I have provided an introduction guide below.
+    - Integrated *Matanyone* tool directly inside WanGP so that you can create easily inpainting masks
+    - Sliding Window generation for Vace, create windows that can last dozen of seconds
+    - A new UI, tabs were replaced by a Dropdown box to easily switch models
+
 * Mar 27 2025: 👋 Added support for the new Wan Fun InP models (image2video). The 14B Fun InP has probably better end image support but unfortunately existing loras do not work so well with it. The great novelty is the Fun InP image2 1.3B model : Image 2 Video is now accessible to even lower hardware configuration. It is not as good as the 14B models but very impressive for its size. You can choose any of those models in the Configuration tab. Many thanks to the VideoX-Fun team  (https://github.com/aigc-apps/VideoX-Fun)
 * Mar 26 2025: 👋 Good news ! Official support for RTX 50xx please check the installation instructions below. 
 * Mar 24 2025: 👋 Wan2.1GP v3.2: 

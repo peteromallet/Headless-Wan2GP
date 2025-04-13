@@ -209,34 +209,52 @@ class WanT2V:
     def vace_latent(self, z, m):
         return [torch.cat([zz, mm], dim=0) for zz, mm in zip(z, m)]
 
-    def prepare_source(self, src_video, src_mask, src_ref_images, num_frames, image_size,  device, original_video = False, trim_video= 0):
+    def prepare_source(self, src_video, src_mask, src_ref_images, total_frames, image_size,  device, original_video = False, keep_frames= [], start_frame = 0, pre_src_video = None):
         image_sizes = []
-        for i, (sub_src_video, sub_src_mask) in enumerate(zip(src_video, src_mask)):
+        trim_video = len(keep_frames)
+
+        for i, (sub_src_video, sub_src_mask, sub_pre_src_video) in enumerate(zip(src_video, src_mask,pre_src_video)):
+            prepend_count = 0 if sub_pre_src_video == None else sub_pre_src_video.shape[1]
+            num_frames = total_frames - prepend_count 
             if sub_src_mask is not None and sub_src_video is not None:
-                src_video[i], src_mask[i], _, _, _ = self.vid_proc.load_video_pair(sub_src_video, sub_src_mask, max_frames= num_frames, trim_video = trim_video)
+                src_video[i], src_mask[i], _, _, _ = self.vid_proc.load_video_pair(sub_src_video, sub_src_mask, max_frames= num_frames, trim_video = trim_video - prepend_count, start_frame = start_frame)
                 # src_video is [-1, 1], 0 = inpainting area (in fact 127  in [0, 255])
                 # src_mask is [-1, 1], 0 = preserve original video (in fact 127  in [0, 255]) and 1 = Inpainting (in fact 255  in [0, 255])
                 src_video[i] = src_video[i].to(device)
                 src_mask[i] = src_mask[i].to(device)
+                if prepend_count > 0:
+                    src_video[i] =  torch.cat( [sub_pre_src_video, src_video[i]], dim=1)
+                    src_mask[i] =  torch.cat( [torch.zeros_like(sub_pre_src_video), src_mask[i]] ,1)
                 src_video_shape = src_video[i].shape
-                if src_video_shape[1] != num_frames:
-                    src_video[i] =  torch.cat( [src_video[i], src_video[i].new_zeros(src_video_shape[0], num_frames -src_video_shape[1], *src_video_shape[-2:])], dim=1)
-                    src_mask[i] =  torch.cat( [src_mask[i], src_mask[i].new_ones(src_video_shape[0], num_frames -src_video_shape[1], *src_video_shape[-2:])], dim=1)
+                if src_video_shape[1] != total_frames:
+                    src_video[i] =  torch.cat( [src_video[i], src_video[i].new_zeros(src_video_shape[0], total_frames -src_video_shape[1], *src_video_shape[-2:])], dim=1)
+                    src_mask[i] =  torch.cat( [src_mask[i], src_mask[i].new_ones(src_video_shape[0], total_frames -src_video_shape[1], *src_video_shape[-2:])], dim=1)
                 src_mask[i] = torch.clamp((src_mask[i][:1, :, :, :] + 1) / 2, min=0, max=1)
                 image_sizes.append(src_video[i].shape[2:])
             elif sub_src_video is None:
-                src_video[i] = torch.zeros((3, num_frames, image_size[0], image_size[1]), device=device)
-                src_mask[i] = torch.ones_like(src_video[i], device=device)
+                if prepend_count > 0:
+                    src_video[i] =  torch.cat( [sub_pre_src_video, torch.zeros((3, num_frames, image_size[0], image_size[1]), device=device)], dim=1)
+                    src_mask[i] =  torch.cat( [torch.zeros_like(sub_pre_src_video), torch.ones((3, num_frames, image_size[0], image_size[1]), device=device)] ,1)
+                else:
+                    src_video[i] = torch.zeros((3, num_frames, image_size[0], image_size[1]), device=device)
+                    src_mask[i] = torch.ones_like(src_video[i], device=device)
                 image_sizes.append(image_size)
             else:
-                src_video[i], _, _, _ = self.vid_proc.load_video(sub_src_video, max_frames= num_frames, trim_video = trim_video)
+                src_video[i], _, _, _ = self.vid_proc.load_video(sub_src_video, max_frames= num_frames, trim_video = trim_video - prepend_count, start_frame = start_frame)
                 src_video[i] = src_video[i].to(device)
                 src_mask[i] = torch.zeros_like(src_video[i], device=device) if original_video else torch.ones_like(src_video[i], device=device)
+                if prepend_count > 0:
+                    src_video[i] =  torch.cat( [sub_pre_src_video, src_video[i]], dim=1)
+                    src_mask[i] =  torch.cat( [torch.zeros_like(sub_pre_src_video), src_mask[i]] ,1)
                 src_video_shape = src_video[i].shape
-                if  src_video_shape[1] != num_frames:
-                    src_video[i] =  torch.cat( [src_video[i], src_video[i].new_zeros(src_video_shape[0], num_frames -src_video_shape[1], *src_video_shape[-2:])], dim=1)
-                    src_mask[i] =  torch.cat( [src_mask[i], src_mask[i].new_ones(src_video_shape[0], num_frames -src_video_shape[1], *src_video_shape[-2:])], dim=1)
+                if src_video_shape[1] != total_frames:
+                    src_video[i] =  torch.cat( [src_video[i], src_video[i].new_zeros(src_video_shape[0], total_frames -src_video_shape[1], *src_video_shape[-2:])], dim=1)
+                    src_mask[i] =  torch.cat( [src_mask[i], src_mask[i].new_ones(src_video_shape[0], total_frames -src_video_shape[1], *src_video_shape[-2:])], dim=1)
                 image_sizes.append(src_video[i].shape[2:])
+            for k, keep in enumerate(keep_frames):
+                if not keep:
+                    src_video[i][:, k:k+1] = 0
+                    src_mask[i][:, k:k+1] = 1
 
         for i, ref_images in enumerate(src_ref_images):
             if ref_images is not None:
