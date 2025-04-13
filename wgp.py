@@ -32,7 +32,6 @@ import zipfile
 import tempfile
 import atexit
 import shutil
-import urllib.request
 from tqdm import tqdm
 import requests
 global_queue_ref = []
