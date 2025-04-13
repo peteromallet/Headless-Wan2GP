@@ -32,6 +32,9 @@ import zipfile
 import tempfile
 import atexit
 import shutil
+import urllib.request
+from tqdm import tqdm
+import requests
 global_queue_ref = []
 AUTOSAVE_FILENAME = "queue.zip"
 PROMPT_VARS_MAX = 10
@@ -47,6 +50,30 @@ current_task_id = None
 task_id = 0
 # progress_tracker = {}
 # tracker_lock = threading.Lock()
+
+def download_ffmpeg():
+    if os.name != 'nt': return
+    exes = ['ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe']
+    if all(os.path.exists(e) for e in exes): return
+    api_url = 'https://api.github.com/repos/GyanD/codexffmpeg/releases/latest'
+    r = requests.get(api_url, headers={'Accept': 'application/vnd.github+json'})
+    assets = r.json().get('assets', [])
+    zip_asset = next((a for a in assets if 'essentials_build.zip' in a['name']), None)
+    if not zip_asset: return
+    zip_url = zip_asset['browser_download_url']
+    zip_name = zip_asset['name']
+    with requests.get(zip_url, stream=True) as resp:
+        total = int(resp.headers.get('Content-Length', 0))
+        with open(zip_name, 'wb') as f, tqdm(total=total, unit='B', unit_scale=True) as pbar:
+            for chunk in resp.iter_content(chunk_size=8192):
+                f.write(chunk)
+                pbar.update(len(chunk))
+    with zipfile.ZipFile(zip_name) as z:
+        for f in z.namelist():
+            if f.endswith(tuple(exes)) and '/bin/' in f:
+                z.extract(f)
+                os.rename(f, os.path.basename(f))
+    os.remove(zip_name)
 
 def format_time(seconds):
     if seconds < 60:
@@ -4601,6 +4628,7 @@ def create_demo():
 
 if __name__ == "__main__":
     atexit.register(autosave_queue)
+    download_ffmpeg()
     # threading.Thread(target=runner, daemon=True).start()
     os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
     server_port = int(args.server_port)
