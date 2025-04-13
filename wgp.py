@@ -2376,9 +2376,9 @@ def generate_video(
     gen["prompt"] = prompt    
     repeat_no = 0
     extra_generation = 0
+    start_frame = 0
     sliding_window = sliding_window_repeat > 0
     if sliding_window:
-        start_frame = 0
         reuse_frames = sliding_window_overlap
         discard_last_frames = sliding_window_discard_last_frames #4
         repeat_generation = sliding_window_repeat
@@ -3718,7 +3718,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                 with gr.Tab("Sliding Window", visible= "Vace" in model_filename ) as sliding_window_tab:
 
                     with gr.Column():  
-                        gr.Markdown("<B>A Sliding Window allows you to generate video longer than those of the model limits</B>")
+                        gr.Markdown("<B>A Sliding Window allows you to generate video with a duration not limited by the Model</B>")
 
                         sliding_window_repeat = gr.Slider(0, 20, value=ui_defaults.get("sliding_window_repeat", 0), step=1, label="Sliding Window Iterations (O=Disabled)")
                         sliding_window_overlap = gr.Slider(1, 32, value=ui_defaults.get("sliding_window_overlap",16), step=1, label="Windows Frames Overlap (needed to maintain continuity between windows, a higher value will require more windows)")
