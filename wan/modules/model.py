@@ -77,73 +77,6 @@ def rope_params_riflex(max_seq_len, dim, theta=10000, L_test=30, k=6):
 
 
 
-
-def rope_apply_(x, grid_sizes, freqs):
-    assert x.shape[0]==1
-
-    n, c = x.size(2), x.size(3) // 2
-
-    # split freqs
-    freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-
-    f, h, w = grid_sizes[0]
-    seq_len = f * h * w
-    x_i = x[0, :seq_len, :, :]
-
-    x_i = x_i.to(torch.float32)
-    x_i = x_i.reshape(seq_len, n, -1, 2)        
-    x_i = torch.view_as_complex(x_i)
-    freqs_i = torch.cat([
-        freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
-        freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
-        freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)
-    ], dim=-1)
-    freqs_i= freqs_i.reshape(seq_len, 1, -1)
-
-    # apply rotary embedding
-    x_i *= freqs_i
-    x_i = torch.view_as_real(x_i).flatten(2)
-    x[0, :seq_len, :, :] = x_i.to(torch.bfloat16)
-    # x_i = torch.cat([x_i, x[0, seq_len:]])
-    return x
-
-# @amp.autocast(enabled=False)
-def rope_apply(x, grid_sizes, freqs):
-    n, c = x.size(2), x.size(3) // 2
-
-    # split freqs
-    freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-
-    # loop over samples
-    output = []
-    for i, (f, h, w) in enumerate(grid_sizes):
-        seq_len = f * h * w
-
-        # precompute multipliers
-        # x_i = x[i, :seq_len]
-        x_i = x[i]
-        x_i = x_i[:seq_len, :, :]
-
-        x_i = x_i.to(torch.float32)
-        x_i = x_i.reshape(seq_len, n, -1, 2)        
-        x_i = torch.view_as_complex(x_i)
-        freqs_i = torch.cat([
-            freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
-            freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
-            freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)
-        ],
-                            dim=-1).reshape(seq_len, 1, -1)
-
-        # apply rotary embedding
-        x_i *= freqs_i
-        x_i = torch.view_as_real(x_i).flatten(2)
-        x_i = x_i.to(torch.bfloat16)
-        x_i = torch.cat([x_i, x[i, seq_len:]])
-
-        # append to collection
-        output.append(x_i)
-    return torch.stack(output) #.float()
-
 def relative_l1_distance(last_tensor, current_tensor):
     l1_distance = torch.abs(last_tensor - current_tensor).mean()
     norm = torch.abs(last_tensor).mean()
@@ -256,8 +189,6 @@ class WanSelfAttention(nn.Module):
         k = k.view(b, s, n, d) 
         v = self.v(x).view(b, s, n, d)
         del x
-        # rope_apply_(q, grid_sizes, freqs)
-        # rope_apply_(k, grid_sizes, freqs)
         qklist = [q,k]
         del q,k
         q,k = apply_rotary_emb(qklist, freqs, head_first=False)
@@ -568,9 +499,9 @@ class Head(nn.Module):
             e(Tensor): Shape [B, C]
         """
         # assert e.dtype == torch.float32
-
+        dtype = x.dtype
         e = (self.modulation + e.unsqueeze(1)).chunk(2, dim=1)
-        x = self.norm(x).to(torch.bfloat16)
+        x = self.norm(x).to(dtype)
         x *= (1 + e[1])
         x += e[0]
         x = self.head(x)
@@ -857,7 +788,7 @@ class WanModel(ModelMixin, ConfigMixin):
         # time embeddings
         e = self.time_embedding(
             sinusoidal_embedding_1d(self.freq_dim, t))
-        e0 = self.time_projection(e).unflatten(1, (6, self.dim)).to(torch.bfloat16)
+        e0 = self.time_projection(e).unflatten(1, (6, self.dim)).to(e.dtype)
 
         # context
         context_lens = None

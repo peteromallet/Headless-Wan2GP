@@ -24,6 +24,7 @@ from .matanyone_wrapper import matanyone
 arg_device = "cuda"
 arg_sam_model_type="vit_h"
 arg_mask_save = False
+model_loaded = False
 model = None
 matanyone_model = None
 
@@ -409,36 +410,42 @@ def restart():
         gr.update(visible=False), gr.update(visible=False, choices=[], value=[]), "", gr.update(visible=False)
 
 def load_unload_models(selected):
+    global model_loaded
     global model
     global matanyone_model 
     if selected:
-        # args, defined in track_anything.py
-        sam_checkpoint_url_dict = {
-            'vit_h': "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
-            'vit_l': "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
-            'vit_b': "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth"
-        }
-        # os.path.join('.')
+        if model_loaded:
+            model.samcontroler.sam_controler.model.to(arg_device)
+            matanyone_model.to(arg_device)
+        else:
+            # args, defined in track_anything.py
+            sam_checkpoint_url_dict = {
+                'vit_h': "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
+                'vit_l': "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
+                'vit_b': "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth"
+            }
+            # os.path.join('.')
 
-        from mmgp import offload
+            from mmgp import offload
 
-        # sam_checkpoint = load_file_from_url(sam_checkpoint_url_dict[arg_sam_model_type], ".")
-        sam_checkpoint = None
+            # sam_checkpoint = load_file_from_url(sam_checkpoint_url_dict[arg_sam_model_type], ".")
+            sam_checkpoint = None
 
-        transfer_stream = torch.cuda.Stream()
-        with torch.cuda.stream(transfer_stream):
-            # initialize sams
-            model = MaskGenerator(sam_checkpoint, "cuda")
-            from .matanyone.model.matanyone import MatAnyone
-            matanyone_model = MatAnyone.from_pretrained("PeiqingYang/MatAnyone")
-            # pipe ={"mat" : matanyone_model, "sam" :model.samcontroler.sam_controler.model }
-            # offload.profile(pipe)
-            matanyone_model = matanyone_model.to(arg_device).eval()
-            matanyone_processor = InferenceCore(matanyone_model, cfg=matanyone_model.cfg)
+            transfer_stream = torch.cuda.Stream()
+            with torch.cuda.stream(transfer_stream):
+                # initialize sams
+                model = MaskGenerator(sam_checkpoint, arg_device)
+                from .matanyone.model.matanyone import MatAnyone
+                matanyone_model = MatAnyone.from_pretrained("PeiqingYang/MatAnyone")
+                # pipe ={"mat" : matanyone_model, "sam" :model.samcontroler.sam_controler.model }
+                # offload.profile(pipe)
+                matanyone_model = matanyone_model.to(arg_device).eval()
+                matanyone_processor = InferenceCore(matanyone_model, cfg=matanyone_model.cfg)
+            model_loaded  = True
     else:
         import gc
-        model = None
-        matanyone_model = None
+        model.samcontroler.sam_controler.model.to("cpu")
+        matanyone_model.to("cpu")
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -451,10 +458,13 @@ def export_to_vace_video_input(foreground_video_output):
     return "V#" + str(time.time()), foreground_video_output
 
 def export_to_vace_video_mask(foreground_video_output, alpha_video_output):
-    gr.Info("Masked Video Input and Full Mask transferred to Vace For Stronger Inpainting")
+    gr.Info("Masked Video Input and Full Mask transferred to Vace For Inpainting")
     return "MV#" + str(time.time()), foreground_video_output, alpha_video_output
 
-def display(vace_video_input, vace_video_mask, video_prompt_video_guide_trigger):
+def teleport_to_vace():
+    return gr.Tabs(selected="video_gen"), gr.Dropdown(value="vace_1.3B")
+
+def display(tabs, model_choice, vace_video_input, vace_video_mask, video_prompt_video_guide_trigger):
     # my_tab.select(fn=load_unload_models, inputs=[], outputs=[])
 
     media_url = "https://github.com/pq-yang/MatAnyone/releases/download/media/"
@@ -576,18 +586,23 @@ def display(vace_video_input, vace_video_mask, video_prompt_video_guide_trigger)
                         gr.Markdown("")            
 
             # output video
-            with gr.Row(equal_height=True) as output_row:
-                with gr.Column(scale=2):
-                    foreground_video_output = gr.Video(label="Masked Video Output", visible=False, elem_classes="video")
-                    foreground_output_button = gr.Button(value="Black & White Video Output", visible=False, elem_classes="new_button")
-                    export_to_vace_video_input_btn = gr.Button("Export to Vace Video Input Video For Inpainting", visible= False)
-                with gr.Column(scale=2):
-                    alpha_video_output = gr.Video(label="B & W Mask Video Output", visible=False, elem_classes="video")
-                    alpha_output_button = gr.Button(value="Alpha Mask Output", visible=False, elem_classes="new_button")
-                    export_to_vace_video_mask_btn = gr.Button("Export to Vace Video Input and Video Mask for stronger Inpainting", visible= False)
+            with gr.Column() as output_row: #equal_height=True
+                with gr.Row():
+                    with gr.Column(scale=2):
+                        foreground_video_output = gr.Video(label="Masked Video Output", visible=False, elem_classes="video")
+                        foreground_output_button = gr.Button(value="Black & White Video Output", visible=False, elem_classes="new_button")
+                    with gr.Column(scale=2):
+                        alpha_video_output = gr.Video(label="B & W Mask Video Output", visible=False, elem_classes="video")
+                        alpha_output_button = gr.Button(value="Alpha Mask Output", visible=False, elem_classes="new_button")
+                with gr.Row():
+                    with gr.Row(visible= False):
+                        export_to_vace_video_input_btn = gr.Button("Export to Vace Video Input Video For Inpainting",    visible= False)
+                    with gr.Row(visible= True):
+                        export_to_vace_video_mask_btn = gr.Button("Export to Vace Video Input and Video Mask", visible= False)
             
         export_to_vace_video_input_btn.click(fn=export_to_vace_video_input, inputs= [foreground_video_output], outputs= [video_prompt_video_guide_trigger, vace_video_input])
-        export_to_vace_video_mask_btn.click(fn=export_to_vace_video_mask, inputs= [foreground_video_output, alpha_video_output], outputs= [video_prompt_video_guide_trigger, vace_video_input, vace_video_mask])
+        export_to_vace_video_mask_btn.click(fn=export_to_vace_video_mask, inputs= [foreground_video_output, alpha_video_output], outputs= [video_prompt_video_guide_trigger, vace_video_input, vace_video_mask]).then(
+            fn=teleport_to_vace, inputs=[], outputs=[tabs, model_choice])
         # first step: get the video information     
         extract_frames_button.click(
             fn=get_frames_from_video,

@@ -20,7 +20,7 @@ from wan.modules.attention import get_attention_modes, get_supported_attention_m
 import torch
 import gc
 import traceback
-import math
+import math 
 import typing
 import asyncio
 import inspect
@@ -32,6 +32,8 @@ import zipfile
 import tempfile
 import atexit
 import shutil
+import glob
+
 global_queue_ref = []
 AUTOSAVE_FILENAME = "queue.zip"
 PROMPT_VARS_MAX = 10
@@ -203,6 +205,7 @@ def process_prompt_and_add_tasks(state, model_choice):
         if isinstance(image_refs, list):
             image_refs = [ convert_image(tup[0]) for tup in image_refs ]
 
+            os.environ["U2NET_HOME"] = os.path.join(os.getcwd(), "ckpts", "rembg")
             from wan.utils.utils import resize_and_remove_background
             image_refs = resize_and_remove_background(image_refs, width, height, inputs["remove_background_image_ref"] ==1)
         
@@ -921,7 +924,7 @@ def autoload_queue(state):
             update_global_queue_ref(original_queue)
             dataframe_update = update_queue_data(original_queue)
         else:
-            print(f"Autoload skipped: {AUTOSAVE_FILENAME} not found.")
+            # print(f"Autoload skipped: {AUTOSAVE_FILENAME} not found.")
             update_global_queue_ref([])
             dataframe_update = update_queue_data([])
 
@@ -1090,19 +1093,13 @@ def _parse_args():
         help="Lora preset to preload"
     )
 
-    # parser.add_argument(
-    #     "--i2v-settings",
-    #     type=str,
-    #     default="i2v_settings.json",
-    #     help="Path to settings file for i2v"
-    # )
+    parser.add_argument(
+        "--settings",
+        type=str,
+        default="settings",
+        help="Path to settings folder"
+    )
 
-    # parser.add_argument(
-    #     "--t2v-settings",
-    #     type=str,
-    #     default="t2v_settings.json",
-    #     help="Path to settings file for t2v"
-    # )
 
     # parser.add_argument(
     #     "--lora-preset-i2v",
@@ -1153,11 +1150,33 @@ def _parse_args():
     )
 
     parser.add_argument(
+        "--fp16",
+        action="store_true",
+        help="For using fp16 transformer model"
+    )
+
+    parser.add_argument(
         "--server-port",
         type=str,
         default=0,
         help="Server port"
     )
+
+    parser.add_argument(
+        "--theme",
+        type=str,
+        default="",
+        help="set UI Theme"
+    )
+
+    parser.add_argument(
+        "--perc-reserved-mem-max",
+        type=float,
+        default=0,
+        help="% of RAM allocated to Reserved RAM"
+    )
+
+
 
     parser.add_argument(
         "--server-name",
@@ -1307,6 +1326,12 @@ transformer_choices_i2v=["ckpts/wan2.1_image2video_480p_14B_bf16.safetensors", "
 transformer_choices = transformer_choices_t2v + transformer_choices_i2v
 text_encoder_choices = ["ckpts/models_t5_umt5-xxl-enc-bf16.safetensors", "ckpts/models_t5_umt5-xxl-enc-quanto_int8.safetensors"]
 server_config_filename = "wgp_config.json"
+if not os.path.isdir("settings"):
+    os.mkdir("settings")    
+if os.path.isfile("t2v_settings.json"):
+    for f in glob.glob(os.path.join(".", "*_settings.json*")):
+        target_file = os.path.join("settings",  Path(f).parts[-1] )
+        shutil.move(f, target_file) 
 
 if not os.path.isfile(server_config_filename) and os.path.isfile("gradio_config.json"):
     shutil.move("gradio_config.json", server_config_filename) 
@@ -1321,10 +1346,11 @@ if not Path(server_config_filename).is_file():
                      "metadata_type": "metadata",
                      "default_ui": "t2v",
                      "boost" : 1,
-                     "clear_file_list" : 0,
+                     "clear_file_list" : 5,
                      "vae_config": 0,
                      "profile" : profile_type.LowRAM_LowVRAM,
-                     "preload_model_policy": [] }
+                     "preload_model_policy": [],
+                     "UI_theme": "default" }
 
     with open(server_config_filename, "w", encoding="utf-8") as writer:
         writer.write(json.dumps(server_config))
@@ -1380,7 +1406,7 @@ def get_model_filename(model_type, quantization):
         return choices[0]
     
 def get_settings_file_name(model_filename):
-    return  get_model_type(model_filename) + "_settings.json"
+    return  os.path.join(args.settings, get_model_type(model_filename) + "_settings.json")
 
 def get_default_settings(filename):
     def get_default_prompt(i2v):
@@ -1388,11 +1414,11 @@ def get_default_settings(filename):
             return "Several giant wooly mammoths approach treading through a snowy meadow, their long wooly fur lightly blows in the wind as they walk, snow covered trees and dramatic snow capped mountains in the distance, mid afternoon light with wispy clouds and a sun high in the distance creates a warm glow, the low camera view is stunning capturing the large furry mammal with beautiful photography, depth of field."
         else:
             return "A large orange octopus is seen resting on the bottom of the ocean floor, blending in with the sandy and rocky terrain. Its tentacles are spread out around its body, and its eyes are closed. The octopus is unaware of a king crab that is crawling towards it from behind a rock, its claws raised and ready to attack. The crab is brown and spiny, with long legs and antennae. The scene is captured from a wide angle, showing the vastness and depth of the ocean. The water is clear and blue, with rays of sunlight filtering through. The shot is sharp and crisp, with a high dynamic range. The octopus and the crab are in focus, while the background is slightly blurred, creating a depth of field effect."
-    i2v = "image2video" in file_name
+    i2v = "image2video" in filename or "Fun_InP" in filename
     defaults_filename = get_settings_file_name(filename)
     if not Path(defaults_filename).is_file():
         ui_defaults = {
-            "prompts": get_default_prompt(i2v),
+            "prompt": get_default_prompt(i2v),
             "resolution": "832x480",
             "video_length": 81,
             "num_inference_steps": 30,
@@ -1651,7 +1677,6 @@ def setup_loras(model_filename, transformer,  lora_dir, lora_preselected_preset,
 
 
     if lora_dir != None:
-        import glob
         dir_loras =  glob.glob( os.path.join(lora_dir , "*.sft") ) + glob.glob( os.path.join(lora_dir , "*.safetensors") ) 
         dir_loras.sort()
         loras += [element for element in dir_loras if element not in loras ]
@@ -1676,7 +1701,7 @@ def setup_loras(model_filename, transformer,  lora_dir, lora_preselected_preset,
     return loras, loras_names, loras_presets, default_loras_choices, default_loras_multis_str, default_lora_preset_prompt, default_lora_preset
 
 
-def load_t2v_model(model_filename, value):
+def load_t2v_model(model_filename, value, quantizeTransformer = False, dtype = torch.bfloat16):
 
     cfg = WAN_CONFIGS['t2v-14B']
     # cfg = WAN_CONFIGS['t2v-1.3B']    
@@ -1685,20 +1710,21 @@ def load_t2v_model(model_filename, value):
     wan_model = wan.WanT2V(
         config=cfg,
         checkpoint_dir="ckpts",
-        device_id=0,
         rank=0,
         t5_fsdp=False,
         dit_fsdp=False,
         use_usp=False,
         model_filename=model_filename,
-        text_encoder_filename= text_encoder_filename
+        text_encoder_filename= text_encoder_filename,
+        quantizeTransformer = quantizeTransformer,
+        dtype = dtype 
     )
 
     pipe = {"transformer": wan_model.model, "text_encoder" : wan_model.text_encoder.model,  "vae": wan_model.vae.model } 
 
     return wan_model, pipe
 
-def load_i2v_model(model_filename, value):
+def load_i2v_model(model_filename, value, quantizeTransformer = False, dtype = torch.bfloat16):
 
     print(f"Loading '{model_filename}' model...")
 
@@ -1707,14 +1733,15 @@ def load_i2v_model(model_filename, value):
         wan_model = wan.WanI2V(
             config=cfg,
             checkpoint_dir="ckpts",
-            device_id=0,
             rank=0,
             t5_fsdp=False,
             dit_fsdp=False,
             use_usp=False,
             i2v720p= True,
             model_filename=model_filename,
-            text_encoder_filename=text_encoder_filename
+            text_encoder_filename=text_encoder_filename,
+            quantizeTransformer = quantizeTransformer,
+            dtype = dtype
         )            
         pipe = {"transformer": wan_model.model, "text_encoder" : wan_model.text_encoder.model,  "text_encoder_2": wan_model.clip.model, "vae": wan_model.vae.model } #
 
@@ -1723,15 +1750,15 @@ def load_i2v_model(model_filename, value):
         wan_model = wan.WanI2V(
             config=cfg,
             checkpoint_dir="ckpts",
-            device_id=0,
             rank=0,
             t5_fsdp=False,
             dit_fsdp=False,
             use_usp=False,
             i2v720p= False,
             model_filename=model_filename,
-            text_encoder_filename=text_encoder_filename
-
+            text_encoder_filename=text_encoder_filename,
+            quantizeTransformer = quantizeTransformer,
+            dtype = dtype
         )
         pipe = {"transformer": wan_model.model, "text_encoder" : wan_model.text_encoder.model,  "text_encoder_2": wan_model.clip.model, "vae": wan_model.vae.model } #
     else:
@@ -1744,12 +1771,20 @@ def load_models(model_filename):
     global transformer_filename
 
     transformer_filename = model_filename
+    perc_reserved_mem_max = args.perc_reserved_mem_max
+
+    major, minor = torch.cuda.get_device_capability(args.gpu if len(args.gpu) > 0 else None)
+    default_dtype = torch.float16 if major < 8 else torch.bfloat16
+    if default_dtype == torch.float16 or args.fp16:
+        print("Switching to f16 model as GPU architecture doesn't support bf16")
+        if "quanto" in model_filename:
+            model_filename = model_filename.replace("quanto_int8", "quanto_fp16_int8")
     download_models(model_filename, text_encoder_filename)
     if test_class_i2v(model_filename):
         res720P = "720p" in model_filename
-        wan_model, pipe = load_i2v_model(model_filename, "720P" if res720P else "480P")
+        wan_model, pipe = load_i2v_model(model_filename, "720P" if res720P else "480P", quantizeTransformer = quantizeTransformer, dtype = default_dtype )
     else:
-        wan_model, pipe = load_t2v_model(model_filename, "")
+        wan_model, pipe = load_t2v_model(model_filename, "", quantizeTransformer = quantizeTransformer, dtype = default_dtype)
     wan_model._model_file_name = model_filename
     kwargs = { "extraModelsToQuantize": None}
     if profile == 2 or profile == 4:
@@ -1758,7 +1793,7 @@ def load_models(model_filename):
         #     kwargs["partialPinning"] = True
     elif profile == 3:
         kwargs["budgets"] = { "*" : "70%" }
-    offloadobj = offload.profile(pipe, profile_no= profile, compile = compile, quantizeTransformer = quantizeTransformer, loras = "transformer", coTenantsMap= {}, **kwargs)  
+    offloadobj = offload.profile(pipe, profile_no= profile, compile = compile, quantizeTransformer = quantizeTransformer, loras = "transformer", coTenantsMap= {}, perc_reserved_mem_max = perc_reserved_mem_max , convertWeightsFloatTo = default_dtype, **kwargs)  
     if len(args.gpu) > 0:
         torch.set_default_device(args.gpu)
 
@@ -1834,6 +1869,7 @@ def apply_changes(  state,
                     boost_choice = 1,
                     clear_file_list = 0,
                     preload_model_policy_choice = 1,
+                    UI_theme_choice = "default"
 ):
     if args.lock_config:
         return
@@ -1852,6 +1888,7 @@ def apply_changes(  state,
                      "boost" : boost_choice,
                      "clear_file_list" : clear_file_list,
                      "preload_model_policy" : preload_model_policy_choice,
+                     "UI_theme" : UI_theme_choice
                        }
 
     if Path(server_config_filename).is_file():
@@ -1874,7 +1911,7 @@ def apply_changes(  state,
         if v != v_old:
             changes.append(k)
 
-    global attention_mode, profile, compile, transformer_filename, text_encoder_filename, vae_config, boost, lora_dir, reload_needed, preload_model_policy, transformer_quantization, transformer_types
+    global attention_mode, profile, compile, text_encoder_filename, vae_config, boost, lora_dir, reload_needed, preload_model_policy, transformer_quantization, transformer_types
     attention_mode = server_config["attention_mode"]
     profile = server_config["profile"]
     compile = server_config["compile"]
@@ -1884,10 +1921,13 @@ def apply_changes(  state,
     preload_model_policy = server_config["preload_model_policy"]
     transformer_quantization = server_config["transformer_quantization"]
     transformer_types = server_config["transformer_types"]
-    transformer_type = get_model_type(transformer_filename)
-    if not transformer_type in transformer_types:
-        transformer_type = transformer_types[0] if len(transformer_types) > 0 else  model_types[0]
-        transformer_filename = get_model_filename(transformer_type, transformer_quantization)
+    model_filename = state["model_filename"]
+    model_transformer_type = get_model_type(model_filename)
+
+    if not model_transformer_type in transformer_types:
+        model_transformer_type = transformer_types[0] if len(transformer_types) > 0 else  model_types[0]
+    model_filename = get_model_filename(model_transformer_type, transformer_quantization)
+    state["model_filename"] = model_filename 
     if  all(change in ["attention_mode", "vae_config", "boost", "save_path", "metadata_choice", "clear_file_list"] for change in changes ):
         model_choice = gr.Dropdown()
     else:
@@ -1990,6 +2030,15 @@ def refresh_gallery(state, msg):
         start_img_md = ""
         end_img_md = ""
         prompt =  task["prompt"]
+        params = task["params"]
+        if "\n" in prompt and params.get("sliding_window_repeat", 0) > 0:
+            prompts = prompt.split("\n")
+            repeat_no= gen.get("repeat_no",1)
+            if repeat_no > len(prompts):
+                repeat_no = len(prompts)
+            repeat_no -= 1
+            prompts[repeat_no]="<B>" + prompts[repeat_no] + "</B>"
+            prompt = "<BR>".join(prompts)
 
         start_img_uri = task.get('start_image_data_base64')
         start_img_uri = start_img_uri[0] if start_img_uri !=None else None
@@ -2463,15 +2512,7 @@ def generate_video(
 
         try:
             start_time = time.time()
-            # with tracker_lock:
-            #     progress_tracker[task_id] = {
-            #         'current_step': 0,
-            #         'total_steps': num_inference_steps,
-            #         'start_time': start_time,
-            #         'last_update': start_time,
-            #         'repeats': repeat_generation, # f"{video_no}/{repeat_generation}",
-            #         'status': "Encoding Prompt"
-            #     }
+
             if trans.enable_teacache:
                 trans.teacache_counter = 0
                 trans.num_steps = num_inference_steps                
@@ -2542,20 +2583,17 @@ def generate_video(
             gc.collect()
             torch.cuda.empty_cache()
             s = str(e)
-            keyword_list = ["vram", "VRAM", "memory","allocat"]
-            VRAM_crash= False
-            if any( keyword in s for keyword in keyword_list):
-                VRAM_crash = True
-            else:
-                stack = traceback.extract_stack(f=None, limit=5)
-                for frame in stack:
-                    if any( keyword in frame.name for keyword in keyword_list):
-                        VRAM_crash = True
-                        break
-
+            keyword_list = {"CUDA out of memory" : "VRAM", "Tried to allocate":"VRAM", "CUDA error: out of memory": "RAM", "CUDA error: too many resources requested": "RAM"}
+            crash_type = ""
+            for keyword, tp  in keyword_list.items():
+                if keyword in s:
+                   crash_type = tp 
+                   break
             state["prompt"] = ""
-            if VRAM_crash:
+            if crash_type == "VRAM":
                 new_error = "The generation of the video has encountered an error: it is likely that you have unsufficient VRAM and you should therefore reduce the video resolution or its number of frames."
+            elif crash_type == "RAM":
+                new_error = "The generation of the video has encountered an error: it is likely that you have unsufficient RAM and / or Reserved RAM allocation should be reduced using 'perc_reserved_mem_max' or using a different Profile."
             else:
                 new_error =  gr.Error(f"The generation of the video has encountered an error, please check your terminal for more information. '{s}'")
             tb = traceback.format_exc().split('\n')[:-1] 
@@ -2929,12 +2967,13 @@ def refresh_lora_list(state, lset_name, loras_choices):
         pos = len(loras_presets)
         lset_name =""
     
-    errors = getattr(wan_model.model, "_loras_errors", "")
-    if errors !=None and len(errors) > 0:
-        error_files = [path for path, _ in errors]
-        gr.Info("Error while refreshing Lora List, invalid Lora files: " + ", ".join(error_files))
-    else:
-        gr.Info("Lora List has been refreshed")
+    if wan_model != None:
+        errors = getattr(wan_model.model, "_loras_errors", "")
+        if errors !=None and len(errors) > 0:
+            error_files = [path for path, _ in errors]
+            gr.Info("Error while refreshing Lora List, invalid Lora files: " + ", ".join(error_files))
+        else:
+            gr.Info("Lora List has been refreshed")
 
 
     return gr.Dropdown(choices=lset_choices, value= lset_choices[pos][1]), gr.Dropdown(choices=new_loras_choices, value= lora_names_selected) 
@@ -3210,7 +3249,7 @@ def save_inputs(
 def download_loras():
     from huggingface_hub import  snapshot_download    
     yield gr.Row(visible=True), "<B><FONT SIZE=3>Please wait while the Loras are being downloaded</B></FONT>", *[gr.Column(visible=False)] * 2
-    lora_dir = get_lora_dir(get_model_filename("i2v"), quantizeTransformer)
+    lora_dir = get_lora_dir(get_model_filename("i2v", transformer_quantization))
     log_path = os.path.join(lora_dir, "log.txt")
     if not os.path.isfile(log_path):
         tmp_path = os.path.join(lora_dir, "tmp_lora_dowload")
@@ -4047,7 +4086,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                 outputs=[modal_container]
             )
 
-    return (
+    return ( state,
         loras_choices, lset_name, state, queue_df, current_gen_column,
         gen_status, output, abort_btn, generate_btn, add_to_queue_btn,
         gen_info, queue_accordion, video_guide, video_mask,  video_prompt_video_guide_trigger   
@@ -4068,9 +4107,7 @@ def generate_download_tab(lset_name,loras_choices, state):
     download_loras_btn.click(fn=download_loras, inputs=[], outputs=[download_status_row, download_status]).then(fn=refresh_lora_list, inputs=[state, lset_name,loras_choices], outputs=[lset_name, loras_choices])
 
     
-def generate_configuration_tab(header, model_choice):
-    state_dict = {}
-    state = gr.State(state_dict)
+def generate_configuration_tab(state, blocks, header, model_choice):
     gr.Markdown("Please click Apply Changes at the bottom so that the changes are effective. Some choices below may be locked if the app has been launched by specifying a config preset.")
     with gr.Column():
         model_list = []
@@ -4090,7 +4127,7 @@ def generate_configuration_tab(header, model_choice):
         quantization_choice = gr.Dropdown(
             choices=[
                 ("Int8 Quantization (recommended)", "int8"),
-                ("BF16 (no quantization)", "bf16"),
+                ("16 bits (no quantization)", "bf16"),
             ],
             value= transformer_quantization,
             label="Wan Transformer Model Quantization Type (if available)",
@@ -4122,7 +4159,7 @@ def generate_configuration_tab(header, model_choice):
                 ("Auto : pick sage2 > sage > sdpa depending on what is installed", "auto"),
                 ("Scale Dot Product Attention: default, always available", "sdpa"),
                 ("Flash" + check("flash")+ ": good quality - requires additional install (usually complex to set up on Windows without WSL)", "flash"),
-                # ("Xformers" + check("xformers")+ ": good quality - requires additional install (usually complex, may consume less VRAM to set up on Windows without WSL)", "xformers"),
+                ("Xformers" + check("xformers")+ ": good quality - requires additional install (usually complex, may consume less VRAM to set up on Windows without WSL)", "xformers"),
                 ("Sage" + check("sage")+ ": 30% faster but slightly worse quality - requires additional install (usually complex to set up on Windows without WSL)", "sage"),
                 ("Sage2" + check("sage2")+ ": 40% faster but slightly worse quality - requires additional install (usually complex to set up on Windows without WSL)", "sage2"),
             ],
@@ -4201,8 +4238,17 @@ def generate_configuration_tab(header, model_choice):
                 ("Keep the last 20 videos", 20),
                 ("Keep the last 30 videos", 30),
             ],
-            value=server_config.get("clear_file_list", 0),
+            value=server_config.get("clear_file_list", 5),
             label="Keep Previously Generated Videos when starting a Generation Batch"
+        )
+
+        UI_theme_choice = gr.Dropdown(
+            choices=[
+                ("Blue Sky", "default"),
+                ("Classic Gradio", "gradio"),
+            ],
+            value=server_config.get("UI_theme_choice", "default"),
+            label="User Interface Theme. You will need to restart the App the see new Theme."
         )
 
         
@@ -4224,6 +4270,7 @@ def generate_configuration_tab(header, model_choice):
                     boost_choice,
                     clear_file_list_choice,
                     preload_model_policy_choice,
+                    UI_theme_choice
                 ],
                 outputs= [msg , header, model_choice]
         )
@@ -4286,20 +4333,15 @@ def select_tab(tab_state, evt:gr.SelectData):
     elif new_tab_no == tab_video_mask_creator:
         if gen_in_progress:
             gr.Info("Unable to access this Tab while a Generation is in Progress. Please come back later")
-            tab_state["tab_auto"]=old_tab_no
+            tab_state["tab_no"] = 0
+            return gr.Tabs(selected="video_gen") 
         else:
             vmc_event_handler(True)
     tab_state["tab_no"] = new_tab_no
-def select_tab_auto(tab_state):
-    old_tab_no = tab_state.pop("tab_auto", -1)
-    if old_tab_no>= 0:
-        tab_state["tab_auto"]=old_tab_no        
-        return gr.Tabs(selected=old_tab_no) # !! doesnt work !!
-    return gr.Tab()
- 
+    return gr.Tabs() 
 
 def create_demo():
-    global vmc_event_handler
+    global vmc_event_handler    
     css = """
         #model_list{
         background-color:black;
@@ -4532,14 +4574,21 @@ def create_demo():
             pointer-events: none;
         }
     """
-    with gr.Blocks(css=css, theme=gr.themes.Soft(font=["Verdana"], primary_hue="sky", neutral_hue="slate", text_size="md"), title= "Wan2GP") as demo:
+    UI_theme = server_config.get("UI_theme", "default")
+    UI_theme  = args.theme if len(args.theme) > 0 else UI_theme
+    if UI_theme == "gradio":
+        theme = None
+    else:
+        theme = gr.themes.Soft(font=["Verdana"], primary_hue="sky", neutral_hue="slate", text_size="md")
+
+    with gr.Blocks(css=css, theme=theme, title= "Wan2GP") as demo:
         gr.Markdown("<div align=center><H1>Wan<SUP>GP</SUP> v4.0 <FONT SIZE=4>by <I>DeepBeepMeep</I></FONT> <FONT SIZE=3>") # (<A HREF='https://github.com/deepbeepmeep/Wan2GP'>Updates</A>)</FONT SIZE=3></H1></div>")
         global model_list
 
         tab_state = gr.State({ "tab_no":0 }) 
 
         with gr.Tabs(selected="video_gen", ) as main_tabs:
-            with gr.Tab("Video Generator", id="video_gen") as t2v_tab:
+            with gr.Tab("Video Generator", id="video_gen"):
                 with gr.Row():
                     if args.lock_model:    
                         gr.Markdown("<div class='title-with-lines'><div class=line></div><h2>" + get_model_name(transformer_filename) + "</h2><div class=line></div>")
@@ -4551,23 +4600,23 @@ def create_demo():
                 with gr.Row():
                     header = gr.Markdown(generate_header(transformer_filename, compile, attention_mode), visible= True)
                 with gr.Row():
-                    (
+                    (   state,
                         loras_choices, lset_name, state, queue_df, current_gen_column,
                         gen_status, output, abort_btn, generate_btn, add_to_queue_btn,
                         gen_info, queue_accordion, video_guide, video_mask, video_prompt_type_video_trigger
                     ) = generate_video_tab(model_choice=model_choice, header=header)
-            with gr.Tab("Informations"):
+            with gr.Tab("Informations", id="info"):
                 generate_info_tab()
             with gr.Tab("Video Mask Creator", id="video_mask_creator") as video_mask_creator:
                 from preprocessing.matanyone  import app as matanyone_app
                 vmc_event_handler = matanyone_app.get_vmc_event_handler()
 
-                matanyone_app.display(video_guide, video_mask, video_prompt_type_video_trigger)
+                matanyone_app.display(main_tabs, model_choice, video_guide, video_mask, video_prompt_type_video_trigger)
             if not args.lock_config:
                 with gr.Tab("Downloads", id="downloads") as downloads_tab:
                     generate_download_tab(lset_name, loras_choices, state)
-                with gr.Tab("Configuration"):
-                    generate_configuration_tab(header, model_choice)
+                with gr.Tab("Configuration", id="configuration"):
+                    generate_configuration_tab(state, demo, header, model_choice)
             with gr.Tab("About"):
                 generate_about_tab()
 
@@ -4589,7 +4638,7 @@ def create_demo():
             trigger_mode="always_last"
         )
 
-        main_tabs.select(fn=select_tab, inputs= [tab_state], outputs= None).then(fn=select_tab_auto, inputs=  [tab_state], outputs=[main_tabs])
+        main_tabs.select(fn=select_tab, inputs= [tab_state], outputs= main_tabs)
         return demo
 
 if __name__ == "__main__":

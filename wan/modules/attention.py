@@ -6,6 +6,11 @@ import torch.nn.functional as F
 
 
 try:
+    from xformers.ops import memory_efficient_attention
+except ImportError:
+    memory_efficient_attention = None
+
+try:
     import flash_attn_interface
     FLASH_ATTN_3_AVAILABLE = True
 except ModuleNotFoundError:
@@ -123,13 +128,13 @@ def get_attention_modes():
     ret = ["sdpa", "auto"]
     if flash_attn != None:
         ret.append("flash")
-    # if memory_efficient_attention != None:
-    #     ret.append("xformers")
+    if memory_efficient_attention != None:
+        ret.append("xformers")
     if sageattn_varlen_wrapper != None:
         ret.append("sage")
     if sageattn != None and version("sageattention").startswith("2") :
         ret.append("sage2")
-
+        
     return ret
 
 def get_supported_attention_modes():
@@ -338,6 +343,14 @@ def pay_attention(
             deterministic=deterministic).unflatten(0, (b, lq))
 
     # output
+
+    elif attn=="xformers":
+        x = memory_efficient_attention(
+            q.unsqueeze(0),
+            k.unsqueeze(0),
+            v.unsqueeze(0),
+        ) #.unsqueeze(0)    
+    
     return x.type(out_dtype)
 
 

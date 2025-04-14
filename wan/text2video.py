@@ -47,14 +47,15 @@ class WanT2V:
         self,
         config,
         checkpoint_dir,
-        device_id=0,
         rank=0,
         t5_fsdp=False,
         dit_fsdp=False,
         use_usp=False,
         t5_cpu=False,
         model_filename = None,
-        text_encoder_filename = None
+        text_encoder_filename = None,
+        quantizeTransformer = False,
+        dtype = torch.bfloat16
     ):
         r"""
         Initializes the Wan text-to-video generation model components.
@@ -77,25 +78,24 @@ class WanT2V:
             t5_cpu (`bool`, *optional*, defaults to False):
                 Whether to place T5 model on CPU. Only works without t5_fsdp.
         """
-        self.device = torch.device(f"cuda:{device_id}")
+        self.device = torch.device(f"cuda")
         self.config = config
         self.rank = rank
         self.t5_cpu = t5_cpu
-
+        self.dtype = dtype
         self.num_train_timesteps = config.num_train_timesteps
         self.param_dtype = config.param_dtype
 
-        shard_fn = partial(shard_model, device_id=device_id)
         self.text_encoder = T5EncoderModel(
             text_len=config.text_len,
             dtype=config.t5_dtype,
             device=torch.device('cpu'),
             checkpoint_path=text_encoder_filename,
             tokenizer_path=os.path.join(checkpoint_dir, config.t5_tokenizer),
-            shard_fn=shard_fn if t5_fsdp else None)
+            shard_fn= None)
 
         self.vae_stride = config.vae_stride
-        self.patch_size = config.patch_size
+        self.patch_size = config.patch_size 
 
         
         self.vae = WanVAE(
@@ -105,31 +105,14 @@ class WanT2V:
         logging.info(f"Creating WanModel from {model_filename}")
         from mmgp import offload
 
-
-        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel, writable_tensors= False)
-
+        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer, writable_tensors= False)
+        if self.dtype == torch.float16 and not "fp16" in model_filename:
+            self.model.to(self.dtype) 
+        # offload.save_model(self.model, "t2v_fp16.safetensors",do_quantize=True)
+        if self.dtype == torch.float16:
+            self.vae.model.to(self.dtype)
         self.model.eval().requires_grad_(False)
 
-        if use_usp:
-            from xfuser.core.distributed import \
-                get_sequence_parallel_world_size
-
-            from .distributed.xdit_context_parallel import (usp_attn_forward,
-                                                            usp_dit_forward)
-            for block in self.model.blocks:
-                block.self_attn.forward = types.MethodType(
-                    usp_attn_forward, block.self_attn)
-            self.model.forward = types.MethodType(usp_dit_forward, self.model)
-            self.sp_size = get_sequence_parallel_world_size()
-        else:
-            self.sp_size = 1
-
-        # if dist.is_initialized():
-        #     dist.barrier()
-        # if dit_fsdp:
-        #     self.model = shard_fn(self.model)
-        # else:
-        #     self.model.to(self.device)
 
         self.sample_neg_prompt = config.sample_neg_prompt
 
@@ -389,8 +372,10 @@ class WanT2V:
 
         seq_len = math.ceil((target_shape[2] * target_shape[3]) /
                             (self.patch_size[1] * self.patch_size[2]) *
-                            target_shape[1] / self.sp_size) * self.sp_size
+                            target_shape[1]) 
 
+        context  = [u.to(self.dtype) for u in context]
+        context_null  = [u.to(self.dtype) for u in context_null]
 
         noise = [
             torch.randn(
