@@ -97,8 +97,8 @@ You will find the original Wan2.1 Video repository here: https://github.com/Wan-
 
 ## Installation Guide for Linux and Windows for GPUs up to RTX40xx
 
-**If you are looking for a one click installation, just go to the Pinokio App store : https://pinokio.computer/**
-
+**If you are looking for a one click installation, just go to the Pinokio App store : https://pinokio.computer/**\
+(!!!Script of Pinokio Install not yet updated for WanGP 4, if you have an installation error you will need to change the reference in the script of **gradio_server.py** with **wgp.py**!!!)\
 Otherwise you will find the instructions below:
 
 This app has been tested on Python 3.10 / 2.6.0  / Cuda 12.4.
