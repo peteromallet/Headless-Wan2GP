@@ -186,29 +186,29 @@ python wgp.py.py --t2v #launch the default text 2 video model
 #or
 python wgp.py.py --t2v-14B #for the 14B model 
 #or
-python wgp.py.py --t2v-1-3B #for the 1.3B model
+python wgp.py --t2v-1-3B #for the 1.3B model
 
 ```
 
 To run the image to video generator (in Low VRAM mode): 
 ```bash
-python wgp.py.py --i2v
+python wgp.py --i2v
 ```
 To run the 1.3B Fun InP image to video generator (in Low VRAM mode): 
 ```bash
-python wgp.py.py --i2v-1-3B
+python wgp.py --i2v-1-3B
 ```
 
 To be able to input multiple images with the image to video generator:
 ```bash
-python wgp.py.py --i2v --multiple-images
+python wgp.py --i2v --multiple-images
 ```
 
 Within the application you can configure which video generator will be launched without specifying a command line switch.
 
 To run the application while loading entirely the diffusion model in VRAM (slightly faster but requires 24 GB of VRAM for a 8 bits quantized 14B model )
 ```bash
-python wgp.py.py --profile 3
+python wgp.py --profile 3
 ```
 
 **Trouble shooting**:\
@@ -221,7 +221,7 @@ Therefore you may have no choice but to fallback to sdpa attention, to do so:
 or
 - Launch the application this way:
 ```bash
-python wgp.py.py --attention sdpa
+python wgp.py --attention sdpa
 ```
 
 ### Loras support
