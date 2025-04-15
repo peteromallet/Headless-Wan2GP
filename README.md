@@ -180,11 +180,11 @@ pip install -e .
 
 To run the text to video generator (in Low VRAM mode): 
 ```bash
-python wgp.py.py
+python wgp.py
 #or
-python wgp.py.py --t2v #launch the default text 2 video model
+python wgp.py --t2v #launch the default text 2 video model
 #or
-python wgp.py.py --t2v-14B #for the 14B model 
+python wgp.py --t2v-14B #for the 14B model 
 #or
 python wgp.py --t2v-1-3B #for the 1.3B model
 
