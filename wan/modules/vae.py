@@ -51,10 +51,11 @@ class RMS_norm(nn.Module):
         self.bias = nn.Parameter(torch.zeros(shape)) if bias else 0.
 
     def forward(self, x):
+        dtype = x.dtype
         x = F.normalize(
             x, dim=(1 if self.channel_first else
                     -1)) * self.scale * self.gamma + self.bias
-        x = x.to(torch.bfloat16)
+        x = x.to(dtype)
         return x 
 
 class Upsample(nn.Upsample):
@@ -208,6 +209,7 @@ class ResidualBlock(nn.Module):
 
     def forward(self, x, feat_cache=None, feat_idx=[0]):
         h = self.shortcut(x)
+        dtype = x.dtype
         for layer in self.residual:
             if isinstance(layer, CausalConv3d) and feat_cache is not None:
                 idx = feat_idx[0]
@@ -219,11 +221,11 @@ class ResidualBlock(nn.Module):
                             cache_x.device), cache_x
                     ],
                                         dim=2)
-                x = layer(x, feat_cache[idx]).to(torch.bfloat16)
+                x = layer(x, feat_cache[idx]).to(dtype)
                 feat_cache[idx] = cache_x#.to("cpu")
                 feat_idx[0] += 1
             else:
-                x = layer(x).to(torch.bfloat16)
+                x = layer(x).to(dtype)
         return x + h
 
 
@@ -323,6 +325,7 @@ class Encoder3d(nn.Module):
             CausalConv3d(out_dim, z_dim, 3, padding=1))
 
     def forward(self, x, feat_cache=None, feat_idx=[0]):
+        dtype = x.dtype
         if feat_cache is not None:
             idx = feat_idx[0]
             cache_x = x[:, :, -CACHE_T:, :, :].clone()
@@ -333,7 +336,7 @@ class Encoder3d(nn.Module):
                         cache_x.device), cache_x
                 ],
                                     dim=2)
-            x = self.conv1(x, feat_cache[idx]).to(torch.bfloat16)
+            x = self.conv1(x, feat_cache[idx]).to(dtype)
             feat_cache[idx] = cache_x
             del cache_x
             feat_idx[0] += 1

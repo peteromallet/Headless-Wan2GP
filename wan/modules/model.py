@@ -77,73 +77,6 @@ def rope_params_riflex(max_seq_len, dim, theta=10000, L_test=30, k=6):
 
 
 
-
-def rope_apply_(x, grid_sizes, freqs):
-    assert x.shape[0]==1
-
-    n, c = x.size(2), x.size(3) // 2
-
-    # split freqs
-    freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-
-    f, h, w = grid_sizes[0]
-    seq_len = f * h * w
-    x_i = x[0, :seq_len, :, :]
-
-    x_i = x_i.to(torch.float32)
-    x_i = x_i.reshape(seq_len, n, -1, 2)        
-    x_i = torch.view_as_complex(x_i)
-    freqs_i = torch.cat([
-        freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
-        freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
-        freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)
-    ], dim=-1)
-    freqs_i= freqs_i.reshape(seq_len, 1, -1)
-
-    # apply rotary embedding
-    x_i *= freqs_i
-    x_i = torch.view_as_real(x_i).flatten(2)
-    x[0, :seq_len, :, :] = x_i.to(torch.bfloat16)
-    # x_i = torch.cat([x_i, x[0, seq_len:]])
-    return x
-
-# @amp.autocast(enabled=False)
-def rope_apply(x, grid_sizes, freqs):
-    n, c = x.size(2), x.size(3) // 2
-
-    # split freqs
-    freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-
-    # loop over samples
-    output = []
-    for i, (f, h, w) in enumerate(grid_sizes):
-        seq_len = f * h * w
-
-        # precompute multipliers
-        # x_i = x[i, :seq_len]
-        x_i = x[i]
-        x_i = x_i[:seq_len, :, :]
-
-        x_i = x_i.to(torch.float32)
-        x_i = x_i.reshape(seq_len, n, -1, 2)        
-        x_i = torch.view_as_complex(x_i)
-        freqs_i = torch.cat([
-            freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
-            freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
-            freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)
-        ],
-                            dim=-1).reshape(seq_len, 1, -1)
-
-        # apply rotary embedding
-        x_i *= freqs_i
-        x_i = torch.view_as_real(x_i).flatten(2)
-        x_i = x_i.to(torch.bfloat16)
-        x_i = torch.cat([x_i, x[i, seq_len:]])
-
-        # append to collection
-        output.append(x_i)
-    return torch.stack(output) #.float()
-
 def relative_l1_distance(last_tensor, current_tensor):
     l1_distance = torch.abs(last_tensor - current_tensor).mean()
     norm = torch.abs(last_tensor).mean()
@@ -256,8 +189,6 @@ class WanSelfAttention(nn.Module):
         k = k.view(b, s, n, d) 
         v = self.v(x).view(b, s, n, d)
         del x
-        # rope_apply_(q, grid_sizes, freqs)
-        # rope_apply_(k, grid_sizes, freqs)
         qklist = [q,k]
         del q,k
         q,k = apply_rotary_emb(qklist, freqs, head_first=False)
@@ -377,6 +308,7 @@ class WanI2VCrossAttention(WanSelfAttention):
         return x
 
 
+
 WAN_CROSSATTENTION_CLASSES = {
     't2v_cross_attn': WanT2VCrossAttention,
     'i2v_cross_attn': WanI2VCrossAttention,
@@ -393,7 +325,9 @@ class WanAttentionBlock(nn.Module):
                  window_size=(-1, -1),
                  qk_norm=True,
                  cross_attn_norm=False,
-                 eps=1e-6):
+                 eps=1e-6,
+                 block_id=None
+                 ):
         super().__init__()
         self.dim = dim
         self.ffn_dim = ffn_dim
@@ -422,6 +356,7 @@ class WanAttentionBlock(nn.Module):
 
         # modulation
         self.modulation = nn.Parameter(torch.randn(1, 6, dim) / dim**0.5)
+        self.block_id = block_id
 
     def forward(
         self,
@@ -432,6 +367,8 @@ class WanAttentionBlock(nn.Module):
         freqs,
         context,
         context_lens,
+        hints= None, 
+        context_scale=1.0,
     ):
         r"""
         Args:
@@ -441,6 +378,21 @@ class WanAttentionBlock(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
+        hint = None
+        if self.block_id is not None and hints is not None:
+            kwargs = { 
+                "seq_lens" : seq_lens,
+                "grid_sizes" : grid_sizes,
+                "freqs" :freqs, 
+                "context" : context,
+                "context_lens" : context_lens,
+                "e" : e,
+            }
+            if self.block_id == 0:
+                hint = self.vace(hints, x, **kwargs)
+            else:
+                hint = self.vace(hints, None, **kwargs)
+
         e = (self.modulation + e).chunk(6, dim=1)
  
         # self-attention
@@ -461,7 +413,6 @@ class WanAttentionBlock(nn.Module):
         y *= 1 + e[4]
         y += e[3]
 
-
         ffn = self.ffn[0]
         gelu = self.ffn[1]
         ffn2= self.ffn[2]
@@ -479,11 +430,51 @@ class WanAttentionBlock(nn.Module):
 
         x.addcmul_(y, e[5])
 
-       
+        if hint is not None:
+            if context_scale == 1:
+                x.add_(hint)
+            else:
+                x.add_(hint, alpha= context_scale)
+        return x 
 
-        return x
 
 
+class VaceWanAttentionBlock(WanAttentionBlock):
+    def __init__(
+            self,
+            cross_attn_type,
+            dim,
+            ffn_dim,
+            num_heads,
+            window_size=(-1, -1),
+            qk_norm=True,
+            cross_attn_norm=False,
+            eps=1e-6,
+            block_id=0
+    ):
+        super().__init__(cross_attn_type, dim, ffn_dim, num_heads, window_size, qk_norm, cross_attn_norm, eps)
+        self.block_id = block_id
+        if block_id == 0:
+            self.before_proj = nn.Linear(self.dim, self.dim)
+            nn.init.zeros_(self.before_proj.weight)
+            nn.init.zeros_(self.before_proj.bias)
+        self.after_proj = nn.Linear(self.dim, self.dim)
+        nn.init.zeros_(self.after_proj.weight)
+        nn.init.zeros_(self.after_proj.bias)
+
+    def forward(self, hints, x, **kwargs):
+        # behold dbm magic !
+        c = hints[0]
+        hints[0] = None
+        if self.block_id == 0:
+            c = self.before_proj(c)
+            c += x
+        c = super().forward(c, **kwargs)
+        c_skip = self.after_proj(c)
+        hints[0] = c
+        return c_skip
+
+    
 class Head(nn.Module):
 
     def __init__(self, dim, out_dim, patch_size, eps=1e-6):
@@ -508,9 +499,9 @@ class Head(nn.Module):
             e(Tensor): Shape [B, C]
         """
         # assert e.dtype == torch.float32
-
+        dtype = x.dtype
         e = (self.modulation + e.unsqueeze(1)).chunk(2, dim=1)
-        x = self.norm(x).to(torch.bfloat16)
+        x = self.norm(x).to(dtype)
         x *= (1 + e[1])
         x += e[0]
         x = self.head(x)
@@ -544,6 +535,8 @@ class WanModel(ModelMixin, ConfigMixin):
 
     @register_to_config
     def __init__(self,
+                 vace_layers=None,
+                 vace_in_dim=None,                 
                  model_type='t2v',
                  patch_size=(1, 2, 2),
                  text_len=512,
@@ -628,12 +621,13 @@ class WanModel(ModelMixin, ConfigMixin):
         self.time_projection = nn.Sequential(nn.SiLU(), nn.Linear(dim, dim * 6))
 
         # blocks
-        cross_attn_type = 't2v_cross_attn' if model_type == 't2v' else 'i2v_cross_attn'
-        self.blocks = nn.ModuleList([
-            WanAttentionBlock(cross_attn_type, dim, ffn_dim, num_heads,
-                              window_size, qk_norm, cross_attn_norm, eps)
-            for _ in range(num_layers)
-        ])
+        if vace_layers == None:
+            cross_attn_type = 't2v_cross_attn' if model_type == 't2v' else 'i2v_cross_attn'
+            self.blocks = nn.ModuleList([
+                WanAttentionBlock(cross_attn_type, dim, ffn_dim, num_heads,
+                                window_size, qk_norm, cross_attn_norm, eps)
+                for _ in range(num_layers)
+            ])
 
         # head
         self.head = Head(dim, out_dim, patch_size, eps)
@@ -645,6 +639,33 @@ class WanModel(ModelMixin, ConfigMixin):
 
         # initialize weights
         self.init_weights()
+
+        if vace_layers != None:            
+            self.vace_layers = [i for i in range(0, self.num_layers, 2)] if vace_layers is None else vace_layers
+            self.vace_in_dim = self.in_dim if vace_in_dim is None else vace_in_dim
+
+            assert 0 in self.vace_layers
+            self.vace_layers_mapping = {i: n for n, i in enumerate(self.vace_layers)}
+
+            # blocks
+            self.blocks = nn.ModuleList([
+                WanAttentionBlock('t2v_cross_attn', self.dim, self.ffn_dim, self.num_heads, self.window_size, self.qk_norm,
+                                    self.cross_attn_norm, self.eps,
+                                    block_id=self.vace_layers_mapping[i] if i in self.vace_layers else None)
+                for i in range(self.num_layers)
+            ])
+
+            # vace blocks
+            self.vace_blocks = nn.ModuleList([
+                VaceWanAttentionBlock('t2v_cross_attn', self.dim, self.ffn_dim, self.num_heads, self.window_size, self.qk_norm,
+                                        self.cross_attn_norm, self.eps, block_id=i)
+                for i in self.vace_layers
+            ])
+
+            # vace patch embeddings
+            self.vace_patch_embedding = nn.Conv3d(
+                self.vace_in_dim, self.dim, kernel_size=self.patch_size, stride=self.patch_size
+            )
 
 
     def compute_teacache_threshold(self, start_step, timesteps = None, speed_factor =0):
@@ -688,6 +709,7 @@ class WanModel(ModelMixin, ConfigMixin):
         self.rel_l1_thresh = best_threshold
         print(f"Tea Cache, best threshold found:{best_threshold:0.2f} with gain x{len(timesteps)/(target_nb_steps - best_signed_diff):0.2f} for a target of x{speed_factor}")
         return best_threshold
+
     
     def forward(
         self,
@@ -695,6 +717,8 @@ class WanModel(ModelMixin, ConfigMixin):
         t,
         context,
         seq_len,
+        vace_context = None,
+        vace_context_scale=1.0,        
         clip_fea=None,
         y=None,
         freqs = None,
@@ -704,6 +728,7 @@ class WanModel(ModelMixin, ConfigMixin):
         is_uncond=False,
         max_steps = 0, 
         slg_layers=None,
+        callback = None,
     ):
         r"""
         Forward pass through the diffusion model
@@ -763,7 +788,7 @@ class WanModel(ModelMixin, ConfigMixin):
         # time embeddings
         e = self.time_embedding(
             sinusoidal_embedding_1d(self.freq_dim, t))
-        e0 = self.time_projection(e).unflatten(1, (6, self.dim)).to(torch.bfloat16)
+        e0 = self.time_projection(e).unflatten(1, (6, self.dim)).to(e.dtype)
 
         # context
         context_lens = None
@@ -796,6 +821,34 @@ class WanModel(ModelMixin, ConfigMixin):
             x_list = [x]
             context_list = [context]
         del x
+
+            # arguments
+
+        kwargs = dict(
+            seq_lens=seq_lens,
+            grid_sizes=grid_sizes,
+            freqs=freqs,
+            context_lens=context_lens,
+            )
+
+        if vace_context == None:
+            hints_list = [None ] *len(x_list)
+        else:
+            # embeddings
+            c = [self.vace_patch_embedding(u.unsqueeze(0)) for u in vace_context]
+            c = [u.flatten(2).transpose(1, 2) for u in c]
+            if (len(c) == 1 and seq_len == c[0].size(1)):
+                c = c[0]
+            else:
+                c = torch.cat([
+                    torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))],
+                            dim=1) for u in c
+                ])
+ 
+            kwargs['context_scale'] = vace_context_scale
+            hints_list = [ [c] for _ in range(len(x_list)) ] 
+            del c
+
         should_calc = True
         if self.enable_teacache: 
             if is_uncond:
@@ -827,20 +880,11 @@ class WanModel(ModelMixin, ConfigMixin):
                 if joint_pass or not is_uncond:
                     self.previous_residual_cond = None
                 ori_hidden_states = x_list[0].clone()
-            # arguments
-            kwargs = dict(
-                # e=e0,
-                seq_lens=seq_lens,
-                grid_sizes=grid_sizes,
-                freqs=freqs,
-                # context=context,
-                context_lens=context_lens)
-
+            
             for block_idx, block in enumerate(self.blocks):
                 offload.shared_state["layer"] = block_idx
-                if "refresh" in offload.shared_state:
-                    del offload.shared_state["refresh"]
-                    offload.shared_state["callback"](-1, -1, True)
+                if callback != None:
+                    callback(-1, False, True)
                 if pipeline._interrupt:
                     if joint_pass:
                         return None, None
@@ -853,9 +897,10 @@ class WanModel(ModelMixin, ConfigMixin):
                     x_list[0] = block(x_list[0], context = context_list[0], e= e0, **kwargs)
 
                 else:
-                    for i, (x, context) in enumerate(zip(x_list, context_list)):
-                        x_list[i] = block(x, context = context, e= e0, **kwargs)
+                    for i, (x, context, hints) in enumerate(zip(x_list, context_list, hints_list)):
+                        x_list[i] = block(x, context = context, hints= hints, e= e0, **kwargs)
                         del x
+                    del context, hints
 
             if self.enable_teacache:
                 if joint_pass:

@@ -25,8 +25,7 @@ from .utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
                                get_sampling_sigmas, retrieve_timesteps)
 from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
 from wan.modules.posemb_layers import get_rotary_pos_embed
-
-from PIL import Image
+from wan.utils.utils import resize_lanczos
 
 def optimized_scale(positive_flat, negative_flat):
 
@@ -40,7 +39,8 @@ def optimized_scale(positive_flat, negative_flat):
     st_star = dot_product / squared_norm
     
     return st_star
-    
+
+
 
 class WanI2V:
 
@@ -48,7 +48,6 @@ class WanI2V:
         self,
         config,
         checkpoint_dir,
-        device_id=0,
         rank=0,
         t5_fsdp=False,
         dit_fsdp=False,
@@ -58,6 +57,8 @@ class WanI2V:
         i2v720p= True,
         model_filename ="",
         text_encoder_filename="",
+        quantizeTransformer = False,
+        dtype = torch.bfloat16
     ):
         r"""
         Initializes the image-to-video generation model components.
@@ -82,23 +83,22 @@ class WanI2V:
                 Enable initializing Transformer Model on CPU. Only works without FSDP or USP.
             init_on_cpu (`bool`, *optional*, defaults to True):
         """
-        self.device = torch.device(f"cuda:{device_id}")
+        self.device = torch.device(f"cuda")
         self.config = config
         self.rank = rank
         self.use_usp = use_usp
         self.t5_cpu = t5_cpu
-
+        self.dtype = dtype
         self.num_train_timesteps = config.num_train_timesteps
         self.param_dtype = config.param_dtype
-
-        shard_fn = partial(shard_model, device_id=device_id)
+        # shard_fn = partial(shard_model, device_id=device_id)
         self.text_encoder = T5EncoderModel(
             text_len=config.text_len,
             dtype=config.t5_dtype,
             device=torch.device('cpu'),
             checkpoint_path=text_encoder_filename,
             tokenizer_path=os.path.join(checkpoint_dir, config.t5_tokenizer),
-            shard_fn=shard_fn if t5_fsdp else None,
+            shard_fn=None,
         )
 
         self.vae_stride = config.vae_stride
@@ -117,34 +117,16 @@ class WanI2V:
         logging.info(f"Creating WanModel from {model_filename}")
         from mmgp import offload
 
-        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,  writable_tensors= False) #forcedConfigPath= "ckpts/config2.json", 
+        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer, writable_tensors= False)
+        if self.dtype == torch.float16 and not "fp16" in model_filename:
+            self.model.to(self.dtype) 
+        # offload.save_model(self.model, "i2v_720p_fp16.safetensors",do_quantize=True)
+        if self.dtype == torch.float16:
+            self.vae.model.to(self.dtype)
+
         # offload.save_model(self.model, "wan2.1_Fun_InP_1.3B_bf16_bis.safetensors")
         self.model.eval().requires_grad_(False)
 
-        if t5_fsdp or dit_fsdp or use_usp:
-            init_on_cpu = False
-
-        if use_usp:
-            from xfuser.core.distributed import \
-                get_sequence_parallel_world_size
-
-            from .distributed.xdit_context_parallel import (usp_attn_forward,
-                                                            usp_dit_forward)
-            for block in self.model.blocks:
-                block.self_attn.forward = types.MethodType(
-                    usp_attn_forward, block.self_attn)
-            self.model.forward = types.MethodType(usp_dit_forward, self.model)
-            self.sp_size = get_sequence_parallel_world_size()
-        else:
-            self.sp_size = 1
-
-        # if dist.is_initialized():
-        #     dist.barrier()
-        # if dit_fsdp:
-        #     self.model = shard_fn(self.model)
-        # else:
-        #     if not init_on_cpu:
-        #         self.model.to(self.device)
 
         self.sample_neg_prompt = config.sample_neg_prompt
 
@@ -208,16 +190,16 @@ class WanI2V:
                 - H: Frame height (from max_area)
                 - W: Frame width from max_area)
         """
-        img = TF.to_tensor(img).sub_(0.5).div_(0.5).to(self.device)
+        img = TF.to_tensor(img)
         lat_frames = int((frame_num - 1) // self.vae_stride[0] + 1)
         any_end_frame = img2 !=None 
         if any_end_frame:
             any_end_frame = True
-            img2 = TF.to_tensor(img2).sub_(0.5).div_(0.5).to(self.device)
+            img2 = TF.to_tensor(img2) 
             if add_frames_for_end_image:
                 frame_num +=1
                 lat_frames = int((frame_num - 2) // self.vae_stride[0] + 2)
-
+                
         h, w = img.shape[1:]
         aspect_ratio = h / w
         lat_h = round(
@@ -229,8 +211,16 @@ class WanI2V:
         h = lat_h * self.vae_stride[1]
         w = lat_w * self.vae_stride[2]
 
+        clip_image_size = self.clip.model.image_size
+        img_interpolated = resize_lanczos(img, h, w).sub_(0.5).div_(0.5).unsqueeze(0).transpose(0,1).to(self.device, self.dtype)
+        img = resize_lanczos(img, clip_image_size, clip_image_size)
+        img = img.sub_(0.5).div_(0.5).to(self.device, self.dtype)
+        if img2!= None:
+            img_interpolated2 = resize_lanczos(img2, h, w).sub_(0.5).div_(0.5).unsqueeze(0).transpose(0,1).to(self.device, self.dtype)
+            img2 = resize_lanczos(img2, clip_image_size, clip_image_size)
+            img2 = img2.sub_(0.5).div_(0.5).to(self.device, self.dtype)
+
         max_seq_len = lat_frames * lat_h * lat_w // ( self.patch_size[1] * self.patch_size[2])
-        max_seq_len = int(math.ceil(max_seq_len / self.sp_size)) * self.sp_size
 
         seed = seed if seed >= 0 else random.randint(0, sys.maxsize)
         seed_g = torch.Generator(device=self.device)
@@ -267,27 +257,26 @@ class WanI2V:
             context = [t.to(self.device) for t in context]
             context_null = [t.to(self.device) for t in context_null]
 
+        context  = [u.to(self.dtype) for u in context]
+        context_null  = [u.to(self.dtype) for u in context_null]
+
         clip_context = self.clip.visual([img[:, None, :, :]])
         if offload_model:
             self.clip.model.cpu()
 
         from mmgp import offload
-
         offload.last_offload_obj.unload_all()
         if any_end_frame:
-            img_interpolated = torch.nn.functional.interpolate(img[None].cpu(), size=(h, w), mode='bicubic').transpose(0, 1).to(torch.bfloat16)
-            img2_interpolated = torch.nn.functional.interpolate(img2[None].cpu(), size=(h, w), mode='bicubic').transpose(0, 1).to(torch.bfloat16) 
             mean2 = 0
             enc= torch.concat([
                     img_interpolated,
-                    torch.full( (3, frame_num-2,  h, w), mean2, device="cpu", dtype= torch.bfloat16),
-                    img2_interpolated,
+                    torch.full( (3, frame_num-2,  h, w), mean2, device=self.device, dtype= self.dtype),
+                    img_interpolated2,
             ], dim=1).to(self.device)
         else:
             enc= torch.concat([
-                torch.nn.functional.interpolate(
-                    img[None].cpu(),   size=(h, w), mode='bicubic').transpose(0, 1).to(torch.bfloat16),
-                    torch.zeros(3, frame_num-1, h, w, device="cpu", dtype= torch.bfloat16)
+                    img_interpolated,
+                    torch.zeros(3, frame_num-1, h, w, device=self.device, dtype= self.dtype)
             ], dim=1).to(self.device)
 
         lat_y = self.vae.encode([enc], VAE_tile_size, any_end_frame= any_end_frame and add_frames_for_end_image)[0]
@@ -333,7 +322,8 @@ class WanI2V:
             'seq_len': max_seq_len,
             'y': [y],
             'freqs' : freqs,
-            'pipeline' : self
+            'pipeline' : self,
+            'callback' : callback
         }
 
         arg_null = {
@@ -342,7 +332,8 @@ class WanI2V:
             'seq_len': max_seq_len,
             'y': [y],
             'freqs' : freqs,
-            'pipeline' : self
+            'pipeline' : self,
+            'callback' : callback
         }
 
         arg_both= {
@@ -352,7 +343,8 @@ class WanI2V:
             'seq_len': max_seq_len,
             'y': [y],
             'freqs' : freqs,
-            'pipeline' : self
+            'pipeline' : self,
+            'callback' : callback
         }
 
         if offload_model:
@@ -363,7 +355,7 @@ class WanI2V:
 
         # self.model.to(self.device)
         if callback != None:
-            callback(-1, None)
+            callback(-1, True)
 
         for i, t in enumerate(tqdm(timesteps)):
             offload.set_step_no_for_lora(self.model, i)
@@ -437,10 +429,10 @@ class WanI2V:
             del timestep
 
             if callback is not None:
-                callback(i, latent) 
+                callback(i, False) 
 
 
-        x0 = [latent.to(self.device, dtype=torch.bfloat16)]
+        x0 = [latent.to(self.device, dtype=self.dtype)]
 
         if offload_model:
             self.model.cpu()
@@ -451,7 +443,7 @@ class WanI2V:
             video = self.vae.decode(x0, VAE_tile_size, any_end_frame= any_end_frame and add_frames_for_end_image)[0]
 
             if any_end_frame and add_frames_for_end_image:
-                # video[:,  -1:] = img2_interpolated
+                # video[:,  -1:] = img_interpolated2
                 video = video[:,  :-1]  
 
         else:
