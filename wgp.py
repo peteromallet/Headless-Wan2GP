@@ -2818,6 +2818,8 @@ def process_tasks(state, progress=gr.Progress()):
     gen_in_progress = True
     gen["in_progress"] = True
 
+    yield "Generating Video"
+
     prompt_no = 0
     while len(queue) > 0:
         prompt_no += 1
@@ -4132,7 +4134,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                 outputs= queue_df
             ).then(fn=prepare_generate_video,
                 inputs= [state],
-                outputs= [generate_btn, add_to_queue_btn, current_gen_column],
+                outputs= [generate_btn, add_to_queue_btn, current_gen_column]
             ).then(fn=process_tasks,
                 inputs= [state],
                 outputs= [gen_status],             
