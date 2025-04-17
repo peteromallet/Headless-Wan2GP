@@ -174,7 +174,25 @@ def process_prompt_and_add_tasks(state, model_choice):
 
     sliding_window_repeat = inputs["sliding_window_repeat"]
     sliding_window = sliding_window_repeat  > 0
-    if "Vace" in model_filename:
+
+    if "recam" in model_filename:
+        video_source = inputs["video_source"]
+        if video_source == None:
+            gr.Info("You must provide a Source Video")
+            return
+        frames = get_resampled_video(video_source, 0, 81)
+        if len(frames)<81:
+            gr.Info("Recammaster source video should be at least 81 frames one the resampling at 16 fps has been done")
+            return
+        for single_prompt  in prompts:
+            extra_inputs = {
+                "prompt" : single_prompt,
+                "video_source" : video_source,
+            }
+            inputs.update(extra_inputs) 
+            add_video_task(**inputs)
+
+    elif "Vace" in model_filename:
         video_prompt_type = inputs["video_prompt_type"]
         image_refs = inputs["image_refs"]
         video_guide = inputs["video_guide"]
@@ -334,14 +352,8 @@ def process_prompt_and_add_tasks(state, model_choice):
     queue= gen.get("queue", [])
     return update_queue_data(queue)
 
-def add_video_task(**inputs):
-    global task_id
-    state = inputs["state"]
-    gen = get_gen_info(state)
-    queue = gen["queue"]
-    task_id += 1
-    current_task_id = task_id
-    inputs_to_query = ["image_start", "image_end", "video_guide", "image_refs","video_mask"]
+def get_preview_images(inputs):
+    inputs_to_query = ["image_start", "image_end", "video_guide", "image_refs","video_mask", "video_source"]
     start_image_data = None
     end_image_data = None
     for name in inputs_to_query:
@@ -353,6 +365,17 @@ def add_video_task(**inputs):
             else:
                 end_image_data = image
                 break
+    return start_image_data, end_image_data 
+
+def add_video_task(**inputs):
+    global task_id
+    state = inputs["state"]
+    gen = get_gen_info(state)
+    queue = gen["queue"]
+    task_id += 1
+    current_task_id = task_id
+
+    start_image_data, end_image_data = get_preview_images(inputs)
 
     queue.append({
         "id": current_task_id,
@@ -434,7 +457,7 @@ def save_queue_action(state):
             task_id_s = task.get('id', f"task_{task_index}")
 
             image_keys = ["image_start", "image_end", "image_refs"]
-            video_keys = ["video_guide", "video_mask"]
+            video_keys = ["video_guide", "video_mask", "video_source"]
 
             for key in image_keys:
                 images_pil = params_copy.get(key)
@@ -595,7 +618,7 @@ def load_queue_action(filepath, state):
                 params['state'] = state
 
                 image_keys = ["image_start", "image_end", "image_refs"]
-                video_keys = ["video_guide", "video_mask"]
+                video_keys = ["video_guide", "video_mask", "video_source"]
 
                 loaded_pil_images = {}
                 loaded_video_paths = {}
@@ -652,20 +675,10 @@ def load_queue_action(filepath, state):
                         print(f"[load_queue_action] Error copying video {video_filename_in_zip} to cache: {vid_e}")
                         params.pop(key, None)
 
+                primary_preview_pil_list, secondary_preview_pil_list = get_preview_images(params)
 
-                primary_preview_pil_list = loaded_pil_images.get("image_start") or loaded_pil_images.get("image_refs")
-                secondary_preview_pil_list = loaded_pil_images.get("image_end")
-
-                primary_preview_pil = None
-                if primary_preview_pil_list:
-                    primary_preview_pil = primary_preview_pil_list[0] if isinstance(primary_preview_pil_list, list) else primary_preview_pil_list
-
-                secondary_preview_pil = None
-                if secondary_preview_pil_list:
-                     secondary_preview_pil = secondary_preview_pil_list[0] if isinstance(secondary_preview_pil_list, list) else secondary_preview_pil_list
-
-                start_b64 = [pil_to_base64_uri(primary_preview_pil, format="jpeg", quality=70)] if primary_preview_pil else None
-                end_b64 = [pil_to_base64_uri(secondary_preview_pil, format="jpeg", quality=70)] if secondary_preview_pil else None
+                start_b64 = [pil_to_base64_uri(primary_preview_pil_list[0], format="jpeg", quality=70)] if primary_preview_pil_list[0] else None
+                end_b64 = [pil_to_base64_uri(secondary_preview_pil_list[0], format="jpeg", quality=70)] if secondary_preview_pil_list[0] else None
 
                 top_level_start_image = params.get("image_start") or params.get("image_refs")
                 top_level_end_image = params.get("image_end")
@@ -818,7 +831,7 @@ def autosave_queue():
                     task_id_s = task.get('id', f"task_{task_index}")
 
                     image_keys = ["image_start", "image_end", "image_refs"]
-                    video_keys = ["video_guide", "video_mask"]
+                    video_keys = ["video_guide", "video_mask", "video_source"]
 
                     for key in image_keys:
                         images_pil = params_copy.get(key)
@@ -1352,13 +1365,13 @@ quantizeTransformer = args.quantize_transformer
 check_loras = args.check_loras ==1
 advanced = args.advanced
 
-transformer_choices_t2v=["ckpts/wan2.1_text2video_1.3B_bf16.safetensors", "ckpts/wan2.1_text2video_14B_bf16.safetensors", "ckpts/wan2.1_text2video_14B_quanto_int8.safetensors", "ckpts/wan2.1_Vace_1.3B_preview_bf16.safetensors"]   
+transformer_choices_t2v=["ckpts/wan2.1_text2video_1.3B_bf16.safetensors", "ckpts/wan2.1_text2video_14B_bf16.safetensors", "ckpts/wan2.1_text2video_14B_quanto_int8.safetensors", "ckpts/wan2.1_Vace_1.3B_preview_bf16.safetensors", "ckpts/wan2.1_recammaster_1.3B_bf16.safetensors"]   
 transformer_choices_i2v=["ckpts/wan2.1_image2video_480p_14B_bf16.safetensors", "ckpts/wan2.1_image2video_480p_14B_quanto_int8.safetensors", "ckpts/wan2.1_image2video_720p_14B_bf16.safetensors", "ckpts/wan2.1_image2video_720p_14B_quanto_int8.safetensors", "ckpts/wan2.1_Fun_InP_1.3B_bf16.safetensors", "ckpts/wan2.1_Fun_InP_14B_bf16.safetensors", "ckpts/wan2.1_Fun_InP_14B_quanto_int8.safetensors", ]
 transformer_choices = transformer_choices_t2v + transformer_choices_i2v
 text_encoder_choices = ["ckpts/models_t5_umt5-xxl-enc-bf16.safetensors", "ckpts/models_t5_umt5-xxl-enc-quanto_int8.safetensors"]
 server_config_filename = "wgp_config.json"
 if not os.path.isdir("settings"):
-    os.mkdir("settings")    
+    os.mkdir("settings") 
 if os.path.isfile("t2v_settings.json"):
     for f in glob.glob(os.path.join(".", "*_settings.json*")):
         target_file = os.path.join("settings",  Path(f).parts[-1] )
@@ -1391,30 +1404,16 @@ else:
     server_config = json.loads(text)
 
 
-model_types = [ "t2v_1.3B", "vace_1.3B", "fun_inp_1.3B", "t2v", "i2v", "i2v_720p", "fun_inp"]
+model_types = [ "t2v_1.3B", "vace_1.3B", "fun_inp_1.3B", "t2v", "i2v", "i2v_720p", "fun_inp", "recam_1.3B"]
 model_signatures = {"t2v": "text2video_14B", "t2v_1.3B" : "text2video_1.3B",   "fun_inp_1.3B" : "Fun_InP_1.3B",  "fun_inp" :  "Fun_InP_14B", 
-                    "i2v" : "image2video_480p", "i2v_720p" : "image2video_720p" , "vace_1.3B" : "Vace_1.3B" }
+                    "i2v" : "image2video_480p", "i2v_720p" : "image2video_720p" , "vace_1.3B" : "Vace_1.3B", "recam_1.3B": "recammaster_1.3B" }
 
 
 def get_model_type(model_filename):
-    if "text2video" in model_filename and "14B" in model_filename:
-        return "t2v"
-    elif "text2video" in model_filename and "1.3B" in model_filename:
-        return "t2v_1.3B"
-    elif "Fun_InP" in model_filename and "1.3B" in model_filename:
-        return "fun_inp_1.3B"
-    elif "Fun_InP" in model_filename and "14B" in model_filename:
-        return "fun_inp"
-    elif "image2video_480p" in model_filename :
-        return "i2v" 
-    elif "image2video_720p" in model_filename :
-        return "i2v_720p" 
-    elif "Vace" in model_filename and "1.3B" in model_filename:
-        return "vace_1.3B"
-    elif "Vace" in model_filename and "14B" in model_filename:
-        return "vace"
-    else:
-        raise Exception("Unknown model:" + model_filename)
+    for model_type, signature in model_signatures.items():
+        if signature in model_filename:
+            return model_type        
+    raise Exception("Unknown model:" + model_filename)
 
 def test_class_i2v(model_filename):
     return "image2video" in model_filename or "Fun_InP" in model_filename 
@@ -1862,6 +1861,9 @@ def get_model_name(model_filename):
     elif "image" in model_filename:
         model_name = "Wan2.1 image2video"
         model_name += " 720p" if "720p" in model_filename else " 480p"
+    elif "recam" in model_filename:
+        model_name = "ReCamMaster"
+        model_name += " 14B" if "14B" in model_filename else " 1.3B"
     else:
         model_name = "Wan2.1 text2video"
         model_name += " 14B" if "14B" in model_filename else " 1.3B"
@@ -2145,9 +2147,7 @@ def convert_image(image):
 
     return cast(Image, ImageOps.exif_transpose(image))
 
-
-def preprocess_video(process_type, height, width, video_in, max_frames, start_frame=0):
-
+def get_resampled_video(video_in, start_frame, max_frames):
     from wan.utils.utils import resample
 
     import decord
@@ -2158,15 +2158,26 @@ def preprocess_video(process_type, height, width, video_in, max_frames, start_fr
 
     frame_nos = resample(fps, len(reader), max_target_frames_count= max_frames, target_fps=16, start_target_frame= start_frame)
     frames_list = reader.get_batch(frame_nos)
+    return frames_list
+
+def preprocess_video(process_type, height, width, video_in, max_frames, start_frame=0, fit_canvas = False):
+
+    frames_list = get_resampled_video(video_in, start_frame, max_frames)
+
     if len(frames_list) == 0:
         return None
     frame_height, frame_width, _ = frames_list[0].shape
 
-    scale =   ((height * width ) /  (frame_height * frame_width))**(1/2)
-    # scale = min(height / frame_height, width /  frame_width)
+    if fit_canvas :
+        scale = min(height / frame_height, width /  frame_width)
+    else:
+        scale =   ((height * width ) /  (frame_height * frame_width))**(1/2)
 
     new_height = (int(frame_height * scale) // 16) * 16
     new_width = (int(frame_width * scale) // 16) * 16
+    # if fit_canvas :
+    #     new_height = height
+    #     new_width = width
 
     processed_frames_list = []
     for frame in frames_list:
@@ -2188,12 +2199,17 @@ def preprocess_video(process_type, height, width, video_in, max_frames, start_fr
             "PRETRAINED_MODEL": "ckpts/depth/dpt_hybrid-midas-501f0c75.pt"
         }
         anno_ins = DepthVideoAnnotator(cfg_dict)
-    else:
+    elif process_type=="gray":
         from preprocessing.gray import GrayVideoAnnotator
         cfg_dict = {}
         anno_ins = GrayVideoAnnotator(cfg_dict)
-
-    np_frames = anno_ins.forward(processed_frames_list)
+    else:
+        anno_ins = None
+    
+    if anno_ins == None:
+        np_frames = [np.array(frame) for frame in processed_frames_list]
+    else:
+        np_frames = anno_ins.forward(processed_frames_list)
 
     # from preprocessing.dwpose.pose import save_one_video
     # save_one_video("test.mp4", np_frames, fps=8, quality=8, macro_block_size=None)
@@ -2281,6 +2297,8 @@ def generate_video(
     image_refs,
     video_guide,
     video_mask,
+    camera_type,
+    video_source,
     keep_frames,
     sliding_window_repeat,
     sliding_window_overlap,
@@ -2439,8 +2457,11 @@ def generate_video(
                 trans.coefficients = [-5784.54975374,  5449.50911966, -1811.16591783,   256.27178429, -13.02252404]
             else:
                     raise gr.Error("Teacache not supported for this model")
-
-
+    source_video = None
+    target_camera = None
+    if "recam" in model_filename:
+        source_video = preprocess_video("", width=width, height=height,video_in=video_source, max_frames= video_length, start_frame = 0, fit_canvas= True)
+        target_camera = camera_type
     import random
     if seed == None or seed <0:
         seed = random.randint(0, 999999999)
@@ -2532,7 +2553,6 @@ def generate_video(
         prompts_max = gen["prompts_max"]
         status = get_generation_status(prompt_no, prompts_max, repeat_no, total_generation, sliding_window)
 
-        yield status
 
         gen["progress_status"] = status 
         gen["progress_phase"] = (" - Encoding Prompt", -1 )
@@ -2582,6 +2602,8 @@ def generate_video(
                     input_frames = src_video,
                     input_ref_images=  src_ref_images,
                     input_masks = src_mask,
+                    source_video= source_video,
+                    target_camera= target_camera,
                     frame_num=(video_length // 4)* 4 + 1,
                     size=(width, height),
                     shift=flow_shift,
@@ -2755,7 +2777,8 @@ def generate_video(
             state['update_gallery'] = True
         if not sliding_window:
             seed += 1
-  
+        yield status
+
     if temp_filename!= None and  os.path.isfile(temp_filename):
         os.remove(temp_filename)
     offload.unload_loras_from_model(trans)
@@ -2858,7 +2881,7 @@ def update_status(state):
     gen = get_gen_info(state)
     prompt_no = gen["prompt_no"] 
     prompts_max = gen.get("prompts_max",0)
-    total_generation = gen["total_generation"] 
+    total_generation = gen.get("total_generation", 1)
     repeat_no = gen["repeat_no"]
     sliding_window = gen["sliding_window"]
     status = get_generation_status(prompt_no, prompts_max, repeat_no, total_generation, sliding_window)
@@ -3186,7 +3209,7 @@ def prepare_inputs_dict(target, inputs ):
 
     if target == "state":
         return inputs
-    unsaved_params = ["image_start", "image_end", "image_refs", "video_guide", "video_mask"]
+    unsaved_params = ["image_start", "image_end", "image_refs", "video_guide", "video_source", "video_mask"]
     for k in unsaved_params:
         inputs.pop(k)
 
@@ -3199,6 +3222,9 @@ def prepare_inputs_dict(target, inputs ):
     if not any(k in model_filename for k in ["image2video", "Fun_InP"]):
         inputs.pop("image_prompt_type")
 
+
+    if not "recam" in model_filename:
+        inputs.pop("camera_type")
 
     if not "Vace" in model_filename:
         unsaved_params = ["video_prompt_type", "keep_frames", "remove_background_image_ref", "sliding_window_repeat", "sliding_window_overlap", "sliding_window_discard_last_frames"]
@@ -3243,6 +3269,8 @@ def save_inputs(
             image_refs,
             video_guide,
             video_mask,
+            camera_type,
+            video_source,
             keep_frames,
             sliding_window_repeat,
             sliding_window_overlap,
@@ -3551,6 +3579,26 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                 else:
                     image_end = gr.Image(label= "Last Image for a new video", type ="pil", visible="E" in image_prompt_type_value, value= ui_defaults.get("image_end", None))
 
+            with gr.Column(visible= "recam" in model_filename ) as recam_column: 
+                camera_type = gr.Dropdown(
+                    choices=[
+                        ("Pan Right", 1),
+                        ("Pan Left", 2),
+                        ("Tilt Up", 3),
+                        ("Tilt Down", 4),
+                        ("Zoom In", 5),
+                        ("Zoom Out", 6),
+                        ("Translate Up (with rotation)", 7),
+                        ("Translate Down (with rotation)", 8),
+                        ("Arc Left (with rotation)", 9),
+                        ("Arc Right (with rotation)", 10),
+                    ],
+                    value=ui_defaults.get("camera_type", 1),
+                    label="Camera Movement Type", scale = 3
+                )
+                video_source = gr.Video(label= "Video Source",  value= ui_defaults.get("video_source", None),)
+
+
             with gr.Column(visible= "Vace" in model_filename ) as video_prompt_column: 
                 video_prompt_type_value= ui_defaults.get("video_prompt_type","")
                 video_prompt_type = gr.Text(value= video_prompt_type_value, visible= False)
@@ -3657,7 +3705,11 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                         label="Resolution"
                     )
             with gr.Row():
-                video_length = gr.Slider(5, 193, value=ui_defaults.get("video_length", 81), step=4, label="Number of frames (16 = 1s)")
+                if "recam" in model_filename:
+                    video_length = gr.Slider(5, 193, value=ui_defaults.get("video_length", 81), step=4, label="Number of frames (16 = 1s), locked", interactive= False)
+                else:
+                    video_length = gr.Slider(5, 193, value=ui_defaults.get("video_length", 81), step=4, label="Number of frames (16 = 1s)", interactive= True)
+                                            
                 num_inference_steps = gr.Slider(1, 100, value=ui_defaults.get("num_inference_steps",30), step=1, label="Number of Inference Steps")
 
 
@@ -3794,7 +3846,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                         sliding_window_overlap = gr.Slider(1, 32, value=ui_defaults.get("sliding_window_overlap",16), step=1, label="Windows Frames Overlap (needed to maintain continuity between windows, a higher value will require more windows)")
                         sliding_window_discard_last_frames = gr.Slider(1, 10, value=ui_defaults.get("sliding_window_discard_last_frames", 4), step=1, label="Discard Last Frames of a Window (that may have bad quality)")
 
-                with gr.Tab("Miscellaneous"):
+                with gr.Tab("Miscellaneous", visible= not "recam" in model_filename):
                     gr.Markdown("<B>With Riflex you can generate videos longer than 5s which is the default duration of videos used to train the model</B>")
                     RIFLEx_setting = gr.Dropdown(
                         choices=[
@@ -4007,7 +4059,8 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
             )
 
         extra_inputs = prompt_vars + [wizard_prompt, wizard_variables_var, wizard_prompt_activated_var, video_prompt_column, image_prompt_column,
-                                      prompt_column_advanced, prompt_column_wizard_vars, prompt_column_wizard, lset_name, advanced_row, sliding_window_tab] # show_advanced presets_column,
+                                      prompt_column_advanced, prompt_column_wizard_vars, prompt_column_wizard, lset_name, advanced_row, sliding_window_tab, 
+                                      video_prompt_type_video_guide, video_prompt_type_image_refs, recam_column] # show_advanced presets_column,
         if update_form:
             locals_dict = locals()
             gen_inputs = [state_dict if k=="state" else locals_dict[k]  for k in inputs_names] + [state_dict] + extra_inputs
@@ -4615,7 +4668,7 @@ def create_demo():
         theme = gr.themes.Soft(font=["Verdana"], primary_hue="sky", neutral_hue="slate", text_size="md")
 
     with gr.Blocks(css=css, theme=theme, title= "Wan2GP") as demo:
-        gr.Markdown("<div align=center><H1>Wan<SUP>GP</SUP> v4.0 <FONT SIZE=4>by <I>DeepBeepMeep</I></FONT> <FONT SIZE=3>") # (<A HREF='https://github.com/deepbeepmeep/Wan2GP'>Updates</A>)</FONT SIZE=3></H1></div>")
+        gr.Markdown("<div align=center><H1>Wan<SUP>GP</SUP> v4.1 <FONT SIZE=4>by <I>DeepBeepMeep</I></FONT> <FONT SIZE=3>") # (<A HREF='https://github.com/deepbeepmeep/Wan2GP'>Updates</A>)</FONT SIZE=3></H1></div>")
         global model_list
 
         tab_state = gr.State({ "tab_no":0 }) 
