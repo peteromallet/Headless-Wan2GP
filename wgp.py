@@ -2150,7 +2150,7 @@ def convert_image(image):
 
     from PIL import ImageOps
     from typing import cast
-
+    image = image.convert('RGB')
     return cast(Image, ImageOps.exif_transpose(image))
 
 def get_resampled_video(video_in, start_frame, max_frames):
