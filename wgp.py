@@ -2850,14 +2850,17 @@ def process_tasks(state, progress=gr.Progress()):
                     gen["prompts_max"] = 0
                     gen["prompt"] = ""
             yield status
-
+        abort = gen.get("abort", False)
+        if abort:
+            gen["abort"] = False
+            yield "Video Generation Aborted"
         queue[:] = [item for item in queue if item['id'] != task['id']]
         update_global_queue_ref(queue)
 
     gen["prompts_max"] = 0
     gen["prompt"] = ""
     end_time = time.time()
-    if gen.get("abort"):
+    if abort:
         yield f"Video generation was aborted. Total Generation Time: {end_time-start_time:.1f}s"
     else:
         yield f"Total Generation Time: {end_time-start_time:.1f}s"
