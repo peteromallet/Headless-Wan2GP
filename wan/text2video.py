@@ -368,8 +368,8 @@ class WanT2V:
                 shift=1,
                 use_dynamic_shifting=False)
             sample_scheduler.set_timesteps(
-                sampling_steps, device=self.device, shift=shift)
-            timesteps = sample_scheduler.timesteps
+                sampling_steps + 4, device=self.device, shift=shift)
+            timesteps = sample_scheduler.timesteps[:-4]
         elif sample_solver == 'dpm++':
             sample_scheduler = FlowDPMSolverMultistepScheduler(
                 num_train_timesteps=self.num_train_timesteps,
