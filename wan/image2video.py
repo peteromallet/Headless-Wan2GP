@@ -8,7 +8,7 @@ import sys
 import types
 from contextlib import contextmanager
 from functools import partial
-
+import json
 import numpy as np
 import torch
 import torch.cuda.amp as amp
@@ -84,13 +84,29 @@ class WanI2V:
                                          config.clip_checkpoint),
             tokenizer_path=os.path.join(checkpoint_dir, config.clip_tokenizer))
 
-        logging.info(f"Creating WanModel from {model_filename}")
+        logging.info(f"Creating WanModel from {model_filename[-1]}")
         from mmgp import offload
 
-        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer, writable_tensors= False)
-        self.model.lock_layers_dtypes(torch.float32 if mixed_precision_transformer else dtype, True)
-        offload.change_dtype(self.model, dtype, True)
-        # offload.save_model(self.model, "i2v_720p_fp16.safetensors",do_quantize=True)
+        # fantasy = torch.load("c:/temp/fantasy.ckpt")
+        # proj_model = fantasy["proj_model"]
+        # audio_processor = fantasy["audio_processor"]
+        # offload.safetensors2.torch_write_file(proj_model, "proj_model.safetensors")
+        # offload.safetensors2.torch_write_file(audio_processor, "audio_processor.safetensors")
+        # for k,v in audio_processor.items():
+        #     audio_processor[k] = v.to(torch.bfloat16)
+        # with open("fantasy_config.json", "r", encoding="utf-8") as reader:
+        #     config_text = reader.read()
+        # config_json = json.loads(config_text)
+        # offload.safetensors2.torch_write_file(audio_processor, "audio_processor_bf16.safetensors", config=config_json)
+        # model_filename = [model_filename, "audio_processor_bf16.safetensors"] 
+        # model_filename = "c:/temp/i2v480p/diffusion_pytorch_model-00001-of-00007.safetensors"
+        # dtype = torch.float16
+        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer, writable_tensors= False) #, forcedConfigPath= "c:/temp/i2v720p/config.json")
+        self.model.lock_layers_dtypes(torch.float32 if mixed_precision_transformer else dtype)
+        # offload.change_dtype(self.model, dtype, True)
+        # offload.save_model(self.model, "wan2.1_image2video_720p_14B_mbf16.safetensors", config_file_path="c:/temp/i2v720p/config.json")
+        # offload.save_model(self.model, "wan2.1_image2video_720p_14B_quanto_mbf16_int8.safetensors",do_quantize=True, config_file_path="c:/temp/i2v720p/config.json")
+        # offload.save_model(self.model, "wan2.1_image2video_720p_14B_quanto_mfp16_int8.safetensors",do_quantize=True, config_file_path="c:/temp/i2v720p/config.json")
 
         # offload.save_model(self.model, "wan2.1_Fun_InP_1.3B_bf16_bis.safetensors")
         self.model.eval().requires_grad_(False)
@@ -102,6 +118,8 @@ class WanI2V:
         input_prompt,
         img,
         img2 = None,
+        height =720,
+        width = 1280,
         max_area=720 * 1280,
         frame_num=81,
         shift=5.0,
@@ -119,7 +137,11 @@ class WanI2V:
         slg_end = 1.0,
         cfg_star_switch = True,
         cfg_zero_step = 5,
-        add_frames_for_end_image = True
+        add_frames_for_end_image = True,
+        audio_scale=None,
+        audio_cfg_scale=None,
+        audio_proj=None,
+        audio_context_lens=None,
     ):
         r"""
         Generates video frames from input image and text prompt using diffusion process.
@@ -167,17 +189,25 @@ class WanI2V:
                 frame_num +=1
                 lat_frames = int((frame_num - 2) // self.vae_stride[0] + 2)
                 
+
         h, w = img.shape[1:]
-        aspect_ratio = h / w
+        # aspect_ratio = h / w
+
+        scale1  = min(height / h, width /  w)
+        scale2  = min(height / h, width /  w)
+        scale = max(scale1, scale2) 
+        new_height = int(h * scale) 
+        new_width = int(w * scale) 
+
         lat_h = round(
-            np.sqrt(max_area * aspect_ratio) // self.vae_stride[1] //
+            new_height // self.vae_stride[1] //
             self.patch_size[1] * self.patch_size[1])
         lat_w = round(
-            np.sqrt(max_area / aspect_ratio) // self.vae_stride[2] //
+            new_width // self.vae_stride[2] //
             self.patch_size[2] * self.patch_size[2])
         h = lat_h * self.vae_stride[1]
         w = lat_w * self.vae_stride[2]
-
+        
         clip_image_size = self.clip.model.image_size
         img_interpolated = resize_lanczos(img, h, w).sub_(0.5).div_(0.5).unsqueeze(0).transpose(0,1).to(self.device) #, self.dtype
         img = resize_lanczos(img, clip_image_size, clip_image_size)
@@ -271,98 +301,101 @@ class WanI2V:
 
         # sample videos
         latent = noise
-        batch_size  = latent.shape[0]
+        batch_size  = 1
         freqs = get_rotary_pos_embed(latent.shape[1:],  enable_RIFLEx= enable_RIFLEx) 
 
-        arg_c = {
-            'context': [context],
-            'clip_fea': clip_context,
-            'y': [y],
-            'freqs' : freqs,
-            'pipeline' : self,
-            'callback' : callback
-        }
+        kwargs = {  'clip_fea': clip_context, 'y': y, 'freqs' : freqs, 'pipeline' : self, 'callback' : callback }
 
-        arg_null = {
-            'context': [context_null],
-            'clip_fea': clip_context,
-            'y': [y],
-            'freqs' : freqs,
-            'pipeline' : self,
-            'callback' : callback
-        }
-
-        arg_both= {
-            'context': [context, context_null],
-            'clip_fea': clip_context,
-            'y': [y],
-            'freqs' : freqs,
-            'pipeline' : self,
-            'callback' : callback
-        }
+        if audio_proj != None:
+            kwargs.update({
+            "audio_proj": audio_proj.to(self.dtype),
+            "audio_context_lens": audio_context_lens,
+            }) 
 
         if self.model.enable_teacache:
+            self.model.previous_residual = [None] * (3 if audio_cfg_scale !=None else 2)
             self.model.compute_teacache_threshold(self.model.teacache_start_step, timesteps, self.model.teacache_multiplier)
 
         # self.model.to(self.device)
         if callback != None:
             callback(-1, None, True)
-
+        latent = latent.to(self.device)
         for i, t in enumerate(tqdm(timesteps)):
             offload.set_step_no_for_lora(self.model, i)
-            slg_layers_local = None
-            if int(slg_start * sampling_steps) <= i < int(slg_end * sampling_steps):
-                slg_layers_local = slg_layers
-
-            latent_model_input = [latent.to(self.device)]
+            kwargs["slg_layers"] = slg_layers if int(slg_start * sampling_steps) <= i < int(slg_end * sampling_steps) else None
+            latent_model_input = latent
             timestep = [t]
 
             timestep = torch.stack(timestep).to(self.device)
+            kwargs.update({
+                't' :timestep,
+                'current_step' :i,
+            })
+              
+              
             if joint_pass:
-                noise_pred_cond, noise_pred_uncond = self.model(
-                    latent_model_input, t=timestep, current_step=i, slg_layers=slg_layers_local, **arg_both)
+                if audio_proj == None:
+                    noise_pred_cond, noise_pred_uncond = self.model(
+                        [latent_model_input, latent_model_input],
+                        context=[context, context_null],
+                        **kwargs)
+                else:
+                    noise_pred_cond, noise_pred_noaudio, noise_pred_uncond = self.model(
+                        [latent_model_input, latent_model_input, latent_model_input],
+                        context=[context, context, context_null],
+                        audio_scale = [audio_scale, None, None ],
+                        **kwargs)
+
                 if self._interrupt:
                     return None                
             else:
                 noise_pred_cond = self.model(
-                    latent_model_input,
-                    t=timestep,
-                    current_step=i,
-                    is_uncond=False,
-                    **arg_c,
+                    [latent_model_input],
+                    context=[context],
+                    audio_scale = None if audio_scale == None else [audio_scale],
+                    x_id=0,
+                    **kwargs,
                 )[0]
                 if self._interrupt:
-                    return None                
+                    return None
+                
+                if audio_proj != None:
+                    noise_pred_noaudio = self.model(
+                        [latent_model_input],
+                        x_id=1,
+                        context=[context],
+                        **kwargs,
+                    )[0]
+                    if self._interrupt:
+                        return None
+
                 noise_pred_uncond = self.model(
-                    latent_model_input,
-                    t=timestep,
-                    current_step=i,
-                    is_uncond=True,
-                    slg_layers=slg_layers_local,
-                    **arg_null,
+                    [latent_model_input],
+                    x_id=1 if audio_scale == None else 2,
+                    context=[context_null],
+                    **kwargs,
                 )[0]
                 if self._interrupt:
                     return None                
             del latent_model_input
 
             # CFG Zero *. Thanks to https://github.com/WeichenFan/CFG-Zero-star/
-            noise_pred_text = noise_pred_cond
             if cfg_star_switch:
-                positive_flat = noise_pred_text.view(batch_size, -1)  
+                positive_flat = noise_pred_cond.view(batch_size, -1)  
                 negative_flat = noise_pred_uncond.view(batch_size, -1)  
 
                 alpha = optimized_scale(positive_flat,negative_flat)
                 alpha = alpha.view(batch_size, 1, 1, 1)
 
-
                 if (i <= cfg_zero_step):
-                    noise_pred = noise_pred_text*0.  # it would be faster not to compute noise_pred...
+                    noise_pred = noise_pred_cond*0.  # it would be faster not to compute noise_pred...
                 else:
                     noise_pred_uncond *= alpha
-            noise_pred = noise_pred_uncond + guide_scale * (noise_pred_text - noise_pred_uncond)            
-
-            del noise_pred_uncond
-
+            if audio_scale == None:
+                noise_pred = noise_pred_uncond + guide_scale * (noise_pred_cond - noise_pred_uncond)            
+            else:
+                noise_pred = noise_pred_uncond + guide_scale * (noise_pred_noaudio - noise_pred_uncond) + audio_cfg_scale * (noise_pred_cond  - noise_pred_noaudio)                
+            noise_pred_uncond, noise_pred_noaudio = None, None
             temp_x0 = sample_scheduler.step(
                 noise_pred.unsqueeze(0),
                 t,
@@ -375,9 +408,6 @@ class WanI2V:
 
             if callback is not None:
                 callback(i, latent, False) 
-
-
-        # x0 = [latent.to(self.device, dtype=self.dtype)]
 
         x0 = [latent]
 

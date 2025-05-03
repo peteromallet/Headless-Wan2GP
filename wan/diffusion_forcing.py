@@ -56,16 +56,18 @@ class DTT2V:
             vae_pth=os.path.join(checkpoint_dir, config.vae_checkpoint), dtype= VAE_dtype,
             device=self.device)
 
-        logging.info(f"Creating WanModel from {model_filename}")
+        logging.info(f"Creating WanModel from {model_filename[-1]}")
         from mmgp import offload
         # model_filename = "model.safetensors"
-        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer, writable_tensors= False) #, forcedConfigPath="config.json")
+        # model_filename = "c:/temp/diffusion_pytorch_model-00001-of-00006.safetensors"
+        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer, writable_tensors= False) # , forcedConfigPath="c:/temp/config _df720.json")
         # offload.load_model_data(self.model, "recam.ckpt")
         # self.model.cpu()
-        self.model.lock_layers_dtypes(torch.float32 if mixed_precision_transformer else dtype, True)
+        # dtype = torch.float16
+        self.model.lock_layers_dtypes(torch.float32 if mixed_precision_transformer else dtype)
         offload.change_dtype(self.model, dtype, True)
         # offload.save_model(self.model, "sky_reels2_diffusion_forcing_1.3B_mbf16.safetensors", config_file_path="config.json") 
-        # offload.save_model(self.model, "sky_reels2_diffusion_forcing_720p_14B_quanto_xbf16_int8.safetensors", do_quantize= True, config_file_path="config.json") 
+        # offload.save_model(self.model, "sky_reels2_diffusion_forcing_720p_14B_quanto_mbf16_int8.safetensors", do_quantize= True, config_file_path="c:/temp/config _df720.json") 
         # offload.save_model(self.model, "rtfp16_int8.safetensors", do_quantize= "config.json") 
 
         self.model.eval().requires_grad_(False)
@@ -200,6 +202,9 @@ class DTT2V:
         fps: int = 24,
         VAE_tile_size = 0,
         joint_pass = False,
+        slg_layers = None,
+        slg_start = 0.0,
+        slg_end = 1.0,
         callback = None,
     ):
         self._interrupt = False
@@ -211,6 +216,7 @@ class DTT2V:
 
         if ar_step == 0: 
             causal_block_size = 1
+            causal_attention = False
 
         i2v_extra_kwrags = {}
         prefix_video = None
@@ -252,31 +258,33 @@ class DTT2V:
                 prefix_video = output_video.to(self.device)
             else:
                 causal_block_size = 1
+                causal_attention = False
                 ar_step = 0
                 prefix_video = image
                 prefix_video = torch.tensor(prefix_video).unsqueeze(1)  # .to(image_embeds.dtype).unsqueeze(1)
                 if prefix_video.dtype == torch.uint8:
                     prefix_video = (prefix_video.float() / (255.0 / 2.0)) - 1.0
                 prefix_video = prefix_video.to(self.device)
-            prefix_video = [self.vae.encode(prefix_video.unsqueeze(0))[0]]  # [(c, f, h, w)]
-            predix_video_latent_length = prefix_video[0].shape[1]
+            prefix_video = self.vae.encode(prefix_video.unsqueeze(0))[0]  # [(c, f, h, w)]
+            predix_video_latent_length = prefix_video.shape[1]
             truncate_len = predix_video_latent_length % causal_block_size
             if truncate_len != 0:
                 if truncate_len == predix_video_latent_length:
                     causal_block_size = 1
+                    causal_attention = False
+                    ar_step = 0
                 else:
                     print("the length of prefix video is truncated for the casual block size alignment.")
                     predix_video_latent_length -= truncate_len
-                    prefix_video[0] = prefix_video[0][:, : predix_video_latent_length]
+                    prefix_video = prefix_video[:, : predix_video_latent_length]
 
         base_num_frames_iter = latent_length
         latent_shape = [16, base_num_frames_iter, latent_height, latent_width]
         latents = self.prepare_latents(
             latent_shape, dtype=torch.float32, device=self.device, generator=generator
         )
-        latents = [latents]
         if prefix_video is not None:
-            latents[0][:, :predix_video_latent_length] = prefix_video[0].to(torch.float32)
+            latents[:, :predix_video_latent_length] = prefix_video.to(torch.float32)
         step_matrix, _, step_update_mask, valid_interval = self.generate_timestep_matrix(
             base_num_frames_iter,
             init_timesteps,
@@ -298,6 +306,8 @@ class DTT2V:
         if callback != None:
             callback(-1, None, True, override_num_inference_steps = updated_num_steps)
         if self.model.enable_teacache:
+            x_count = 2 if self.do_classifier_free_guidance else 1
+            self.model.previous_residual = [None] * x_count 
             time_steps_comb = []
             self.model.num_steps = updated_num_steps
             for i, timestep_i in enumerate(step_matrix):
@@ -309,7 +319,7 @@ class DTT2V:
             self.model.compute_teacache_threshold(self.model.teacache_start_step, time_steps_comb, self.model.teacache_multiplier)
             del time_steps_comb
         from mmgp import offload
-        freqs = get_rotary_pos_embed(latents[0].shape[1 :], enable_RIFLEx= False) 
+        freqs = get_rotary_pos_embed(latents.shape[1 :], enable_RIFLEx= False) 
         kwrags = {
             "freqs" :freqs,
             "fps" : fps_embeds,
@@ -320,27 +330,27 @@ class DTT2V:
         }   
         kwrags.update(i2v_extra_kwrags)
 
-
         for i, timestep_i in enumerate(tqdm(step_matrix)):
+            kwrags["slg_layers"] = slg_layers if int(slg_start * updated_num_steps) <= i < int(slg_end * updated_num_steps) else None
+
             offload.set_step_no_for_lora(self.model, i)
             update_mask_i = step_update_mask[i]
             valid_interval_start, valid_interval_end = valid_interval[i]
             timestep = timestep_i[None, valid_interval_start:valid_interval_end].clone()
-            latent_model_input = [latents[0][:, valid_interval_start:valid_interval_end, :, :].clone()]
+            latent_model_input = latents[:, valid_interval_start:valid_interval_end, :, :].clone()
             if addnoise_condition > 0 and valid_interval_start < predix_video_latent_length:
                 noise_factor = 0.001 * addnoise_condition
                 timestep_for_noised_condition = addnoise_condition
-                latent_model_input[0][:, valid_interval_start:predix_video_latent_length] = (
-                    latent_model_input[0][:, valid_interval_start:predix_video_latent_length]
+                latent_model_input[:, valid_interval_start:predix_video_latent_length] = (
+                    latent_model_input[:, valid_interval_start:predix_video_latent_length]
                     * (1.0 - noise_factor)
                     + torch.randn_like(
-                        latent_model_input[0][:, valid_interval_start:predix_video_latent_length]
+                        latent_model_input[:, valid_interval_start:predix_video_latent_length]
                     )
                     * noise_factor
                 )
                 timestep[:, valid_interval_start:predix_video_latent_length] = timestep_for_noised_condition
             kwrags.update({
-                "x" : torch.stack([latent_model_input[0]]),
                 "t" : timestep,
                 "current_step" : i,                 
                 })
@@ -349,6 +359,7 @@ class DTT2V:
             if True:
                 if not self.do_classifier_free_guidance:
                     noise_pred = self.model(
+                        x=[latent_model_input],
                         context=[prompt_embeds],
                         **kwrags,
                     )[0]
@@ -358,6 +369,7 @@ class DTT2V:
                 else:
                     if joint_pass:
                         noise_pred_cond, noise_pred_uncond = self.model(
+                            x=[latent_model_input, latent_model_input],
                             context= [prompt_embeds, negative_prompt_embeds],
                             **kwrags,
                         )
@@ -365,12 +377,16 @@ class DTT2V:
                             return None                
                     else:
                         noise_pred_cond = self.model(
+                            x=[latent_model_input],
+                            x_id=0,
                             context=[prompt_embeds],
                             **kwrags,
                         )[0]
                         if self._interrupt:
                             return None                
                         noise_pred_uncond = self.model(
+                            x=[latent_model_input],
+                            x_id=1,
                             context=[negative_prompt_embeds],
                             **kwrags,
                         )[0]
@@ -380,18 +396,18 @@ class DTT2V:
                     del noise_pred_cond, noise_pred_uncond
             for idx in range(valid_interval_start, valid_interval_end):
                 if update_mask_i[idx].item():
-                    latents[0][:, idx] = sample_schedulers[idx].step(
+                    latents[:, idx] = sample_schedulers[idx].step(
                         noise_pred[:, idx - valid_interval_start],
                         timestep_i[idx],
-                        latents[0][:, idx],
+                        latents[:, idx],
                         return_dict=False,
                         generator=generator,
                     )[0]
                     sample_schedulers_counter[idx] += 1
             if callback is not None:
-                callback(i, latents[0].squeeze(0), False)         
+                callback(i, latents.squeeze(0), False)         
 
-        x0 = latents[0].unsqueeze(0)
+        x0 = latents.unsqueeze(0)
         videos = [self.vae.decode(x0, tile_size= VAE_tile_size)[0]]
         output_video = videos[0].clamp(-1, 1).cpu()  # c, f, h, w
         return output_video
