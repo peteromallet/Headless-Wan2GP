@@ -627,7 +627,9 @@ def main():
             user_prompt,
             input_img,
             frame_num=frame_count,
-            max_area=MAX_AREA_CONFIGS[f"{width}*{height}"],  # or you can pass your custom
+            width=width,
+            height=height,
+            # max_area=MAX_AREA_CONFIGS[f"{width}*{height}"],  # or you can pass your custom
             shift=args.flow_shift,
             sampling_steps=args.steps,
             guide_scale=args.guidance_scale,
