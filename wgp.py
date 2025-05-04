@@ -1727,7 +1727,7 @@ def download_models(transformer_filename, text_encoder_filename):
     repoId = "DeepBeepMeep/Wan2.1" 
     sourceFolderList = ["xlm-roberta-large", "pose", "depth", "mask", "wav2vec", ""  ]
     fileList = [ [], [],[], ["sam_vit_h_4b8939_fp16.safetensors"], ["config.json", "feature_extractor_config.json", "model.safetensors", "preprocessor_config.json", "special_tokens_map.json", "tokenizer_config.json", "vocab.json"],
-             ["Wan2.1_VAE.safetensors", "models_clip_open-clip-xlm-roberta-large-vit-huge-14-bf16.safetensors", "flownet.pkl" ] + computeList(text_encoder_filename) + computeList(transformer_filename) ]   
+             ["Wan2.1_VAE.safetensors", "models_clip_open-clip-xlm-roberta-large-vit-huge-14-bf16.safetensors", "flownet.pkl", "fantasy_proj_model.safetensors" ] + computeList(text_encoder_filename) + computeList(transformer_filename) ]   
     targetRoot = "ckpts/" 
     for sourceFolder, files in zip(sourceFolderList,fileList ):
         if len(files)==0:
