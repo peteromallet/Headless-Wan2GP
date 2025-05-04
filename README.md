@@ -233,6 +233,10 @@ If you want to manage in different areas Loras for the 1.3B model and the 14B as
 - loras/1.3B
 - loras/14B
 
+You can also put all the loras in the same place by launching the app with following command line (*path* is a path to shared loras directory):
+```
+python wgp.exe --lora-dir path --lora-dir-i2v path
+```
 
 For each activated Lora, you may specify a *multiplier* that is one float number that corresponds to its weight (default is 1.0) .The multipliers for each Lora should be separated by a space character or a carriage return. For instance:\
 *1.2 0.8* means that the first lora will have a 1.2 multiplier and the second one will have 0.8. 

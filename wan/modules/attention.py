@@ -56,10 +56,10 @@ def sageattn_wrapper(
         attention_length
     ):
     q,k, v = qkv_list
-    padding_length = q.shape[0] -attention_length
-    q = q[:attention_length, :, : ] 
-    k = k[:attention_length, :, : ]
-    v = v[:attention_length, :, : ]
+    padding_length = q.shape[1] -attention_length
+    q = q[:, :attention_length, :, : ] 
+    k = k[:, :attention_length, :, : ]
+    v = v[:, :attention_length, :, : ]
     if True:
         qkv_list = [q,k,v]
         del q, k ,v

@@ -797,11 +797,12 @@ class WanModel(ModelMixin, ConfigMixin):
 
 
     def compute_teacache_threshold(self, start_step, timesteps = None, speed_factor =0): 
-        rescale_func = np.poly1d(self.coefficients)         
+        modulation_dtype = self.time_projection[1].weight.dtype
+        rescale_func = np.poly1d(self.coefficients)
         e_list = []
         for t in timesteps:
             t = torch.stack([t])
-            time_emb =  self.time_embedding( sinusoidal_embedding_1d(self.freq_dim, t.flatten()).to(self.patch_embedding.weight.dtype) )  # b, dim   
+            time_emb =  self.time_embedding( sinusoidal_embedding_1d(self.freq_dim, t.flatten()).to(modulation_dtype) )  # b, dim   
             e_list.append(time_emb)
         best_deltas = None
         best_threshold = 0.01
