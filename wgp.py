@@ -2891,7 +2891,7 @@ def generate_video(
                     exp = 1
                 elif temporal_upsampling == "rife4":
                     exp = 2
-                
+                output_fps = fps
                 if exp > 0: 
                     from rife.inference import temporal_interpolation
                     if sliding_window and window_no > 1:
@@ -2901,7 +2901,7 @@ def generate_video(
                     else:
                         sample = temporal_interpolation( os.path.join("ckpts", "flownet.pkl"), sample, exp, device=processing_device)
 
-                    fps = fps * 2**exp
+                    output_fps = output_fps * 2**exp
 
                 if len(spatial_upsampling) > 0:
                     from wan.utils.utils import resize_lanczos # need multithreading or to do lanczos with cuda
@@ -2933,10 +2933,10 @@ def generate_video(
                     frames_already_processed = sample
 
                 if audio_guide == None:
-                    cache_video( tensor=sample[None], save_file=video_path, fps=fps, nrow=1, normalize=True, value_range=(-1, 1))
+                    cache_video( tensor=sample[None], save_file=video_path, fps=output_fps, nrow=1, normalize=True, value_range=(-1, 1))
                 else:
                     save_path_tmp = video_path[:-4] + "_tmp.mp4"
-                    cache_video( tensor=sample[None], save_file=save_path_tmp, fps=fps, nrow=1, normalize=True, value_range=(-1, 1))
+                    cache_video( tensor=sample[None], save_file=save_path_tmp, fps=output_fps, nrow=1, normalize=True, value_range=(-1, 1))
                     final_command = [ "ffmpeg", "-y", "-i", save_path_tmp, "-i", audio_guide, "-c:v", "libx264", "-c:a", "aac", "-shortest", "-loglevel", "warning", "-nostats", video_path, ]
                     import subprocess
                     subprocess.run(final_command, check=True)
