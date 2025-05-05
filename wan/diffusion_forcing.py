@@ -15,6 +15,7 @@ from .modules.model import WanModel
 from .modules.t5 import T5EncoderModel
 from .modules.vae import WanVAE
 from wan.modules.posemb_layers import get_rotary_pos_embed
+from wan.utils.utils import calculate_new_dimensions
 from .utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
                                get_sampling_sigmas, retrieve_timesteps)
 from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
@@ -190,6 +191,7 @@ class DTT2V:
         input_video = None,
         height: int = 480,
         width: int = 832,
+        fit_into_canvas = True,
         num_frames: int = 97,
         num_inference_steps: int = 50,
         shift: float = 1.0,
@@ -221,15 +223,16 @@ class DTT2V:
         i2v_extra_kwrags = {}
         prefix_video = None
         predix_video_latent_length = 0
+
         if input_video != None:
             _ , _ , height, width  = input_video.shape
         elif image != None:
             image = image[0]
             frame_width, frame_height  = image.size
-            scale = min(height / frame_height, width /  frame_width)
-            height = (int(frame_height * scale) // 16) * 16
-            width = (int(frame_width * scale) // 16) * 16
+            height, width = calculate_new_dimensions(height, width, frame_height, frame_width, fit_into_canvas)
             image = np.array(image.resize((width, height))).transpose(2, 0, 1)
+
+
         latent_length = (num_frames - 1) // 4 + 1
         latent_height = height // 8
         latent_width = width // 8

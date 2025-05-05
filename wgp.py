@@ -84,7 +84,6 @@ def format_time(seconds):
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
         return f"{hours}h {minutes}m"
-
 def pil_to_base64_uri(pil_image, format="png", quality=75):
     if pil_image is None:
         return None
@@ -275,12 +274,12 @@ def process_prompt_and_add_tasks(state, model_choice):
         video_guide = inputs["video_guide"]
         video_mask = inputs["video_mask"]
         
-        if "1.3B" in model_filename :                
-            resolution_reformated = str(height) + "*" + str(width) 
-            if not resolution_reformated in VACE_SIZE_CONFIGS:
-                res = (" and ").join(VACE_SIZE_CONFIGS.keys())
-                gr.Info(f"Video Resolution for Vace model is not supported. Only {res} resolutions are allowed.")
-                return
+        # if "1.3B" in model_filename :                
+        #     resolution_reformated = str(height) + "*" + str(width) 
+        #     if not resolution_reformated in VACE_SIZE_CONFIGS:
+        #         res = (" and ").join(VACE_SIZE_CONFIGS.keys())
+        #         gr.Info(f"Video Resolution for Vace model is not supported. Only {res} resolutions are allowed.")
+        #         return
         if "I" in video_prompt_type:
             if image_refs == None:
                 gr.Info("You must provide at least one Refererence Image")
@@ -1995,7 +1994,8 @@ def apply_changes(  state,
                     boost_choice = 1,
                     clear_file_list = 0,
                     preload_model_policy_choice = 1,
-                    UI_theme_choice = "default"
+                    UI_theme_choice = "default",
+                    fit_canvas_choice = 0
 ):
     if args.lock_config:
         return
@@ -2016,7 +2016,8 @@ def apply_changes(  state,
                      "boost" : boost_choice,
                      "clear_file_list" : clear_file_list,
                      "preload_model_policy" : preload_model_policy_choice,
-                     "UI_theme" : UI_theme_choice
+                     "UI_theme" : UI_theme_choice,
+                     "fit_canvas": fit_canvas_choice,
                        }
 
     if Path(server_config_filename).is_file():
@@ -2050,7 +2051,7 @@ def apply_changes(  state,
     transformer_quantization = server_config["transformer_quantization"]
     transformer_types = server_config["transformer_types"]
 
-    if  all(change in ["attention_mode", "vae_config", "boost", "save_path", "metadata_type", "clear_file_list"] for change in changes ):
+    if  all(change in ["attention_mode", "vae_config", "boost", "save_path", "metadata_type", "clear_file_list", "fit_canvas"] for change in changes ):
         model_choice = gr.Dropdown()
     else:
         reload_needed = True
@@ -2413,7 +2414,7 @@ def generate_video(
     file_list = gen["file_list"]
     prompt_no = gen["prompt_no"]
 
-
+    fit_canvas = server_config.get("fit_canvas", 0)
     # if wan_model == None:
     #     gr.Info("Unable to generate a Video while a new configuration is being applied.")
     #     return
@@ -2555,7 +2556,7 @@ def generate_video(
     source_video = None
     target_camera = None
     if "recam" in model_filename:
-        source_video = preprocess_video("", width=width, height=height,video_in=video_source, max_frames= video_length, start_frame = 0, fit_canvas= True)
+        source_video = preprocess_video("", width=width, height=height,video_in=video_source, max_frames= video_length, start_frame = 0, fit_canvas= fit_canvas)
         target_camera = model_mode
 
     audio_proj_split = None
@@ -2646,7 +2647,7 @@ def generate_video(
             elif diffusion_forcing:
                 if video_source != None and len(video_source) > 0 and window_no == 1:
                     keep_frames_video_source= 1000 if len(keep_frames_video_source) ==0 else int(keep_frames_video_source) 
-                    prefix_video  = preprocess_video(None, width=width, height=height,video_in=video_source, max_frames= keep_frames_video_source , start_frame = 0, fit_canvas= True, target_fps = fps)
+                    prefix_video  = preprocess_video(None, width=width, height=height,video_in=video_source, max_frames= keep_frames_video_source , start_frame = 0, fit_canvas= fit_canvas, target_fps = fps)
                     prefix_video  = prefix_video .permute(3, 0, 1, 2)
                     prefix_video  = prefix_video .float().div_(127.5).sub_(1.) # c, f, h, w
                     prefix_video_frames_count = prefix_video.shape[1]
@@ -2675,13 +2676,13 @@ def generate_video(
 
                     if preprocess_type != None :
                         send_cmd("progress", progress_args)
-                        video_guide_copy = preprocess_video(preprocess_type, width=width, height=height,video_in=video_guide, max_frames= video_length if window_no == 1 else video_length - reuse_frames, start_frame = guide_start_frame, fit_canvas = True, target_fps = fps)
+                        video_guide_copy = preprocess_video(preprocess_type, width=width, height=height,video_in=video_guide, max_frames= video_length if window_no == 1 else video_length - reuse_frames, start_frame = guide_start_frame, fit_canvas = fit_canvas, target_fps = fps)
                 keep_frames_parsed, error = parse_keep_frames_video_guide(keep_frames_video_guide, max_frames_to_generate)
                 if len(error) > 0:
                     raise gr.Error(f"invalid keep frames {keep_frames_video_guide}")
                 keep_frames_parsed = keep_frames_parsed[guide_start_frame: guide_start_frame + video_length]
                 if window_no == 1:
-                    image_size = VACE_SIZE_CONFIGS[resolution_reformated] # default frame dimensions until it is set by video_src (if there is any)
+                    image_size = (height, width) # VACE_SIZE_CONFIGS[resolution_reformated] # default frame dimensions until it is set by video_src (if there is any)
                 src_video, src_mask, src_ref_images = wan_model.prepare_source([video_guide_copy],
                                                                         [video_mask_copy ],
                                                                         [image_refs_copy], 
@@ -2689,10 +2690,11 @@ def generate_video(
                                                                         original_video= "O" in video_prompt_type,
                                                                         keep_frames=keep_frames_parsed,
                                                                         start_frame = guide_start_frame,
-                                                                        pre_src_video = [pre_video_guide]
+                                                                        pre_src_video = [pre_video_guide],
+                                                                        fit_into_canvas = fit_canvas 
                                                                         )
-                if window_no == 1 and src_video != None and len(src_video) > 0:
-                    image_size = src_video[0].shape[-2:]
+                # if window_no == 1 and src_video != None and len(src_video) > 0:
+                #     image_size = src_video[0].shape[-2:]
             prompts_max = gen["prompts_max"]
             status = get_latest_status(state)
 
@@ -2722,6 +2724,7 @@ def generate_video(
                         # max_area=MAX_AREA_CONFIGS[resolution_reformated], 
                         height =  height,
                         width = width,
+                        fit_into_canvas = fit_canvas,
                         shift=flow_shift,
                         sampling_steps=num_inference_steps,
                         guide_scale=guidance_scale,
@@ -2750,6 +2753,7 @@ def generate_video(
                         input_video= pre_video_guide,
                         height =  height,
                         width = width,
+                        fit_into_canvas = fit_canvas,
                         seed = seed,
                         num_frames =  (video_length // 4)* 4 + 1, #377
                         num_inference_steps = num_inference_steps,
@@ -2777,6 +2781,7 @@ def generate_video(
                         target_camera= target_camera,
                         frame_num=(video_length // 4)* 4 + 1,
                         size=(width, height),
+                        fit_into_canvas = fit_canvas,
                         shift=flow_shift,
                         sampling_steps=num_inference_steps,
                         guide_scale=guidance_scale,
@@ -4042,39 +4047,35 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                 wizard_prompt_activated_var = gr.Text(wizard_prompt_activated, visible= False)
                 wizard_variables_var = gr.Text(wizard_variables, visible = False)
             with gr.Row():
-                if test_class_i2v(model_filename) and False:
-                    resolution = gr.Dropdown(
-                        choices=[
-                            # 720p
-                            ("720p (same amount of pixels)", "1280x720"),
-                            ("480p (same amount of pixels)", "832x480"),
-                        ],
-                        value=ui_defaults.get("resolution","480p"),
-                        label="Resolution (video will have the same height / width ratio than the original image)"
-                    )
+                if test_class_i2v(model_filename):
+                    if server_config.get("fit_canvas", 0) == 1:
+                        label = "Max Resolution (as it maybe less depending on video width / height ratio)"
+                    else:
+                        label = "Max Resolution (as it maybe less depending on video width / height ratio)" 
                 else:
-                    resolution = gr.Dropdown(
-                        choices=[
-                            # 720p
-                            ("1280x720 (16:9, 720p)", "1280x720"),
-                            ("720x1280 (9:16, 720p)", "720x1280"), 
-                            ("1024x1024 (4:3, 720p)", "1024x024"),
-                            ("832x1104 (3:4, 720p)", "832x1104"),
-                            ("1104x832 (3:4, 720p)", "1104x832"),
-                            ("960x960 (1:1, 720p)", "960x960"),
-                            # 480p
-                            ("960x544 (16:9, 540p)", "960x544"),
-                            ("544x960 (16:9, 540p)", "544x960"),
-                            ("832x480 (16:9, 480p)", "832x480"),
-                            ("480x832 (9:16, 480p)", "480x832"),
-                            ("832x624 (4:3, 480p)", "832x624"), 
-                            ("624x832 (3:4, 480p)", "624x832"),
-                            ("720x720 (1:1, 480p)", "720x720"),
-                            ("512x512 (1:1, 480p)", "512x512"),
-                        ],
-                        value=ui_defaults.get("resolution","832x480"),
-                        label="Max Resolution (as it maybe less depending on video width / height ratio)" if  test_class_i2v(model_filename) else "Resolution"
-                    )
+                    label = "Max Resolution (as it maybe less depending on video width / height ratio)" 
+                resolution = gr.Dropdown(
+                    choices=[
+                        # 720p
+                        ("1280x720 (16:9, 720p)", "1280x720"),
+                        ("720x1280 (9:16, 720p)", "720x1280"), 
+                        ("1024x1024 (4:3, 720p)", "1024x024"),
+                        ("832x1104 (3:4, 720p)", "832x1104"),
+                        ("1104x832 (3:4, 720p)", "1104x832"),
+                        ("960x960 (1:1, 720p)", "960x960"),
+                        # 480p
+                        ("960x544 (16:9, 540p)", "960x544"),
+                        ("544x960 (16:9, 540p)", "544x960"),
+                        ("832x480 (16:9, 480p)", "832x480"),
+                        ("480x832 (9:16, 480p)", "480x832"),
+                        ("832x624 (4:3, 480p)", "832x624"), 
+                        ("624x832 (3:4, 480p)", "624x832"),
+                        ("720x720 (1:1, 480p)", "720x720"),
+                        ("512x512 (1:1, 480p)", "512x512"),
+                    ],
+                    value=ui_defaults.get("resolution","832x480"),
+                    label= label 
+                )
             with gr.Row():
                 if recammaster:
                     video_length = gr.Slider(5, 193, value=ui_defaults.get("video_length", 81), step=4, label="Number of frames (16 = 1s), locked", interactive= False)
@@ -4556,156 +4557,181 @@ def generate_configuration_tab(state, blocks, header, model_choice):
     with gr.Column():
         model_list = []
 
-        for model_type in model_types:
-            choice = get_model_filename(model_type, transformer_quantization)
-            model_list.append(choice)
-        dropdown_choices = [ ( get_model_name(choice),  get_model_type(choice) ) for choice in model_list]
-        transformer_types_choices = gr.Dropdown(
-            choices= dropdown_choices,
-            value= transformer_types,
-            label= "Selectable Wan Transformer Models (keep empty to get All of them)",
-            scale= 2,
-            multiselect= True
-            )
 
-        quantization_choice = gr.Dropdown(
-            choices=[
-                ("Scaled Int8 Quantization (recommended)", "int8"),
-                ("16 bits (no quantization)", "bf16"),
-            ],
-            value= transformer_quantization,
-            label="Wan Transformer Model Quantization Type (if available)",
-         )                
+        with gr.Tabs():
+            # with gr.Row(visible=advanced_ui) as advanced_row:
+            with gr.Tab("General"):
+                for model_type in model_types:
+                    choice = get_model_filename(model_type, transformer_quantization)
+                    model_list.append(choice)
+                dropdown_choices = [ ( get_model_name(choice),  get_model_type(choice) ) for choice in model_list]
+                transformer_types_choices = gr.Dropdown(
+                    choices= dropdown_choices,
+                    value= transformer_types,
+                    label= "Selectable Wan Transformer Models (keep empty to get All of them)",
+                    scale= 2,
+                    multiselect= True
+                    )
 
-        mixed_precision_choice = gr.Dropdown(
-            choices=[
-                ("16 bits only, requires less VRAM", "0"),
-                ("Mixed 16 / 32 bits, slightly more VRAM needed but better Quality", "1"),
-            ],
-            value= server_config.get("mixed_precision", "0"),
-            label="Transformer Engine Calculation"
-         )
+                fit_canvas_choice = gr.Dropdown(
+                    choices=[
+                        ("Dimensions correspond to the Pixels Budget (as the Prompt Image/Video will be resized to match this pixels budget, output video height or width may exceed the requested dimensions )", 0),
+                        ("Dimensions correspond to the Maximum Width and Height (as the Prompt Image/Video will be resized to fit into these dimensions, the output video may be smaller)", 1),
+                    ],
+                    value= server_config.get("fit_canvas", 0),
+                    label="Generated Video Dimensions when Prompt contains an Image or a Video",
+                    interactive= not lock_ui_attention
+                 )
 
-        index = text_encoder_choices.index(text_encoder_filename)
-        index = 0 if index ==0 else index
-        text_encoder_choice = gr.Dropdown(
-            choices=[
-                ("UMT5 XXL 16 bits - unquantized text encoder, better quality uses more RAM", 0),
-                ("UMT5 XXL quantized to 8 bits - quantized text encoder, slightly worse quality but uses less RAM", 1),
-            ],
-            value= index,
-            label="Text Encoder model"
-         )
 
-        VAE_precision_choice = gr.Dropdown(
-            choices=[
-                ("16 bits, requires less VRAM and faster", "16"),
-                ("32 bits, requires twice more VRAM and slower but recommended with Window Sliding", "32"),
-            ],
-            value= server_config.get("vae_precision", "16"),
-            label="VAE Encoding / Decoding precision"
-         )
+                def check(mode): 
+                    if not mode in attention_modes_installed:
+                        return " (NOT INSTALLED)"
+                    elif not mode in attention_modes_supported:
+                        return " (NOT SUPPORTED)"
+                    else:
+                        return ""
+                attention_choice = gr.Dropdown(
+                    choices=[
+                        ("Auto : pick sage2 > sage > sdpa depending on what is installed", "auto"),
+                        ("Scale Dot Product Attention: default, always available", "sdpa"),
+                        ("Flash" + check("flash")+ ": good quality - requires additional install (usually complex to set up on Windows without WSL)", "flash"),
+                        ("Xformers" + check("xformers")+ ": good quality - requires additional install (usually complex, may consume less VRAM to set up on Windows without WSL)", "xformers"),
+                        ("Sage" + check("sage")+ ": 30% faster but slightly worse quality - requires additional install (usually complex to set up on Windows without WSL)", "sage"),
+                        ("Sage2" + check("sage2")+ ": 40% faster but slightly worse quality - requires additional install (usually complex to set up on Windows without WSL)", "sage2"),
+                    ],
+                    value= attention_mode,
+                    label="Attention Type",
+                    interactive= not lock_ui_attention
+                 )
 
-        save_path_choice = gr.Textbox(
-            label="Output Folder for Generated Videos",
-            value=server_config.get("save_path", save_path)
-        )
-        def check(mode): 
-            if not mode in attention_modes_installed:
-                return " (NOT INSTALLED)"
-            elif not mode in attention_modes_supported:
-                return " (NOT SUPPORTED)"
-            else:
-                return ""
-        attention_choice = gr.Dropdown(
-            choices=[
-                ("Auto : pick sage2 > sage > sdpa depending on what is installed", "auto"),
-                ("Scale Dot Product Attention: default, always available", "sdpa"),
-                ("Flash" + check("flash")+ ": good quality - requires additional install (usually complex to set up on Windows without WSL)", "flash"),
-                ("Xformers" + check("xformers")+ ": good quality - requires additional install (usually complex, may consume less VRAM to set up on Windows without WSL)", "xformers"),
-                ("Sage" + check("sage")+ ": 30% faster but slightly worse quality - requires additional install (usually complex to set up on Windows without WSL)", "sage"),
-                ("Sage2" + check("sage2")+ ": 40% faster but slightly worse quality - requires additional install (usually complex to set up on Windows without WSL)", "sage2"),
-            ],
-            value= attention_mode,
-            label="Attention Type",
-            interactive= not lock_ui_attention
-         )
-        gr.Markdown("Beware: when restarting the server or changing a resolution or video duration, the first step of generation for a duration / resolution may last a few minutes due to recompilation")
-        compile_choice = gr.Dropdown(
-            choices=[
-                ("ON: works only on Linux / WSL", "transformer"),
-                ("OFF: no other choice if you have Windows without using WSL", "" ),
-            ],
-            value= compile,
-            label="Compile Transformer (up to 50% faster and 30% more frames but requires Linux / WSL and Flash or Sage attention)",
-            interactive= not lock_ui_compile
-         )              
-        vae_config_choice = gr.Dropdown(
-            choices=[
-        ("Auto", 0),
-        ("Disabled (faster but may require up to 22 GB of VRAM)", 1),
-        ("256 x 256 : If at least 8 GB of VRAM", 2),
-        ("128 x 128 : If at least 6 GB of VRAM", 3),
-            ],
-            value= vae_config,
-            label="VAE Tiling - reduce the high VRAM requirements for VAE decoding and VAE encoding (if enabled it will be slower)"
-         )
-        boost_choice = gr.Dropdown(
-            choices=[
-                # ("Auto (ON if Video longer than 5s)", 0),
-                ("ON", 1), 
-                ("OFF", 2), 
-            ],
-            value=boost,
-            label="Boost: Give a 10% speed speedup without losing quality at the cost of a litle VRAM (up to 1GB for max frames and resolution)"
-        )
-        profile_choice = gr.Dropdown(
-            choices=[
-        ("HighRAM_HighVRAM, profile 1: at least 48 GB of RAM and 24 GB of VRAM, the fastest for short videos a RTX 3090 / RTX 4090", 1),
-        ("HighRAM_LowVRAM, profile 2 (Recommended): at least 48 GB of RAM and 12 GB of VRAM, the most versatile profile with high RAM, better suited for RTX 3070/3080/4070/4080 or for RTX 3090 / RTX 4090 with large pictures batches or long videos", 2),
-        ("LowRAM_HighVRAM, profile 3: at least 32 GB of RAM and 24 GB of VRAM, adapted for RTX 3090 / RTX 4090 with limited RAM for good speed short video",3),
-        ("LowRAM_LowVRAM, profile 4 (Default): at least 32 GB of RAM and 12 GB of VRAM, if you have little VRAM or want to generate longer videos",4),
-        ("VerylowRAM_LowVRAM, profile 5: (Fail safe): at least 16 GB of RAM and 10 GB of VRAM, if you don't have much it won't be fast but maybe it will work",5)
-            ],
-            value= profile,
-            label="Profile (for power users only, not needed to change it)"
-         )
-      
-        metadata_choice = gr.Dropdown(
-            choices=[
-                ("Export JSON files", "json"),
-                ("Add metadata to video", "metadata"),
-                ("Neither", "none")
-            ],
-            value=server_config.get("metadata_type", "metadata"),
-            label="Metadata Handling"
-        )
-        preload_model_policy_choice = gr.CheckboxGroup([("Preload Model while Launching the App","P"), ("Preload Model while Switching Model", "S"), ("Unload Model when Queue is Done", "U")],
-            value=server_config.get("preload_model_policy",[]),
-            label="RAM Loading / Unloading Model Policy (in any case VRAM will be freed once the queue has been processed)"
-        )
 
-        clear_file_list_choice = gr.Dropdown(
-            choices=[
-                ("None", 0),
-                ("Keep the last video", 1),
-                ("Keep the last 5 videos", 5),
-                ("Keep the last 10 videos", 10),
-                ("Keep the last 20 videos", 20),
-                ("Keep the last 30 videos", 30),
-            ],
-            value=server_config.get("clear_file_list", 5),
-            label="Keep Previously Generated Videos when starting a Generation Batch"
-        )
+                metadata_choice = gr.Dropdown(
+                    choices=[
+                        ("Export JSON files", "json"),
+                        ("Add metadata to video", "metadata"),
+                        ("Neither", "none")
+                    ],
+                    value=server_config.get("metadata_type", "metadata"),
+                    label="Metadata Handling"
+                )
+                preload_model_policy_choice = gr.CheckboxGroup([("Preload Model while Launching the App","P"), ("Preload Model while Switching Model", "S"), ("Unload Model when Queue is Done", "U")],
+                    value=server_config.get("preload_model_policy",[]),
+                    label="RAM Loading / Unloading Model Policy (in any case VRAM will be freed once the queue has been processed)"
+                )
 
-        UI_theme_choice = gr.Dropdown(
-            choices=[
-                ("Blue Sky", "default"),
-                ("Classic Gradio", "gradio"),
-            ],
-            value=server_config.get("UI_theme_choice", "default"),
-            label="User Interface Theme. You will need to restart the App the see new Theme."
-        )
+                clear_file_list_choice = gr.Dropdown(
+                    choices=[
+                        ("None", 0),
+                        ("Keep the last video", 1),
+                        ("Keep the last 5 videos", 5),
+                        ("Keep the last 10 videos", 10),
+                        ("Keep the last 20 videos", 20),
+                        ("Keep the last 30 videos", 30),
+                    ],
+                    value=server_config.get("clear_file_list", 5),
+                    label="Keep Previously Generated Videos when starting a new Generation Batch"
+                )
+
+                UI_theme_choice = gr.Dropdown(
+                    choices=[
+                        ("Blue Sky", "default"),
+                        ("Classic Gradio", "gradio"),
+                    ],
+                    value=server_config.get("UI_theme_choice", "default"),
+                    label="User Interface Theme. You will need to restart the App the see new Theme."
+                )
+
+                save_path_choice = gr.Textbox(
+                    label="Output Folder for Generated Videos",
+                    value=server_config.get("save_path", save_path)
+                )
+
+            with gr.Tab("Performance"):
+
+                quantization_choice = gr.Dropdown(
+                    choices=[
+                        ("Scaled Int8 Quantization (recommended)", "int8"),
+                        ("16 bits (no quantization)", "bf16"),
+                    ],
+                    value= transformer_quantization,
+                    label="Wan Transformer Model Quantization Type (if available)",
+                )                
+
+                mixed_precision_choice = gr.Dropdown(
+                    choices=[
+                        ("16 bits only, requires less VRAM", "0"),
+                        ("Mixed 16 / 32 bits, slightly more VRAM needed but better Quality", "1"),
+                    ],
+                    value= server_config.get("mixed_precision", "0"),
+                    label="Transformer Engine Calculation"
+                )
+
+                index = text_encoder_choices.index(text_encoder_filename)
+                index = 0 if index ==0 else index
+                text_encoder_choice = gr.Dropdown(
+                    choices=[
+                        ("UMT5 XXL 16 bits - unquantized text encoder, better quality uses more RAM", 0),
+                        ("UMT5 XXL quantized to 8 bits - quantized text encoder, slightly worse quality but uses less RAM", 1),
+                    ],
+                    value= index,
+                    label="Text Encoder model"
+                )
+
+                VAE_precision_choice = gr.Dropdown(
+                    choices=[
+                        ("16 bits, requires less VRAM and faster", "16"),
+                        ("32 bits, requires twice more VRAM and slower but recommended with Window Sliding", "32"),
+                    ],
+                    value= server_config.get("vae_precision", "16"),
+                    label="VAE Encoding / Decoding precision"
+                )
+
+                gr.Text("Beware: when restarting the server or changing a resolution or video duration, the first step of generation for a duration / resolution may last a few minutes due to recompilation", interactive= False, show_label= False )
+                compile_choice = gr.Dropdown(
+                    choices=[
+                        ("ON: works only on Linux / WSL", "transformer"),
+                        ("OFF: no other choice if you have Windows without using WSL", "" ),
+                    ],
+                    value= compile,
+                    label="Compile Transformer (up to 50% faster and 30% more frames but requires Linux / WSL and Flash or Sage attention)",
+                    interactive= not lock_ui_compile
+                )              
+
+                vae_config_choice = gr.Dropdown(
+                    choices=[
+                ("Auto", 0),
+                ("Disabled (faster but may require up to 22 GB of VRAM)", 1),
+                ("256 x 256 : If at least 8 GB of VRAM", 2),
+                ("128 x 128 : If at least 6 GB of VRAM", 3),
+                    ],
+                    value= vae_config,
+                    label="VAE Tiling - reduce the high VRAM requirements for VAE decoding and VAE encoding (if enabled it will be slower)"
+                )
+
+                boost_choice = gr.Dropdown(
+                    choices=[
+                        # ("Auto (ON if Video longer than 5s)", 0),
+                        ("ON", 1), 
+                        ("OFF", 2), 
+                    ],
+                    value=boost,
+                    label="Boost: Give a 10% speedup without losing quality at the cost of a litle VRAM (up to 1GB at max frames and resolution)"
+                )
+
+                profile_choice = gr.Dropdown(
+                    choices=[
+                ("HighRAM_HighVRAM, profile 1: at least 48 GB of RAM and 24 GB of VRAM, the fastest for short videos a RTX 3090 / RTX 4090", 1),
+                ("HighRAM_LowVRAM, profile 2 (Recommended): at least 48 GB of RAM and 12 GB of VRAM, the most versatile profile with high RAM, better suited for RTX 3070/3080/4070/4080 or for RTX 3090 / RTX 4090 with large pictures batches or long videos", 2),
+                ("LowRAM_HighVRAM, profile 3: at least 32 GB of RAM and 24 GB of VRAM, adapted for RTX 3090 / RTX 4090 with limited RAM for good speed short video",3),
+                ("LowRAM_LowVRAM, profile 4 (Default): at least 32 GB of RAM and 12 GB of VRAM, if you have little VRAM or want to generate longer videos",4),
+                ("VerylowRAM_LowVRAM, profile 5: (Fail safe): at least 16 GB of RAM and 10 GB of VRAM, if you don't have much it won't be fast but maybe it will work",5)
+                    ],
+                    value= profile,
+                    label="Profile (for power users only, not needed to change it)"
+                )
+
+
 
         
         msg = gr.Markdown()            
@@ -4728,7 +4754,8 @@ def generate_configuration_tab(state, blocks, header, model_choice):
                     boost_choice,
                     clear_file_list_choice,
                     preload_model_policy_choice,
-                    UI_theme_choice
+                    UI_theme_choice,
+                    fit_canvas_choice
                 ],
                 outputs= [msg , header, model_choice]
         )

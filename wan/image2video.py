@@ -25,7 +25,7 @@ from .utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
                                get_sampling_sigmas, retrieve_timesteps)
 from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
 from wan.modules.posemb_layers import get_rotary_pos_embed
-from wan.utils.utils import resize_lanczos
+from wan.utils.utils import resize_lanczos, calculate_new_dimensions
 
 def optimized_scale(positive_flat, negative_flat):
 
@@ -120,7 +120,7 @@ class WanI2V:
         img2 = None,
         height =720,
         width = 1280,
-        max_area=720 * 1280,
+        fit_into_canvas = True,
         frame_num=81,
         shift=5.0,
         sample_solver='unipc',
@@ -188,22 +188,16 @@ class WanI2V:
             if add_frames_for_end_image:
                 frame_num +=1
                 lat_frames = int((frame_num - 2) // self.vae_stride[0] + 2)
-                
-
+        
         h, w = img.shape[1:]
-        # aspect_ratio = h / w
 
-        scale1  = min(height / h, width /  w)
-        scale2  = min(height / h, width /  w)
-        scale = max(scale1, scale2) 
-        new_height = int(h * scale) 
-        new_width = int(w * scale) 
-
+        h, w = calculate_new_dimensions(height, width, h, w, fit_into_canvas)
+ 
         lat_h = round(
-            new_height // self.vae_stride[1] //
+            h // self.vae_stride[1] //
             self.patch_size[1] * self.patch_size[1])
         lat_w = round(
-            new_width // self.vae_stride[2] //
+            w // self.vae_stride[2] //
             self.patch_size[2] * self.patch_size[2])
         h = lat_h * self.vae_stride[1]
         w = lat_w * self.vae_stride[2]

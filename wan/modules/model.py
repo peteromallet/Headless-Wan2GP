@@ -963,7 +963,7 @@ class WanModel(ModelMixin, ConfigMixin):
             hints_list = [None ] *len(x_list)
         else:
             # Vace embeddings
-            c = [self.vace_patch_embedding(u.unsqueeze(0)) for u in vace_context]
+            c = [self.vace_patch_embedding(u.to(self.vace_patch_embedding.weight.dtype).unsqueeze(0)) for u in vace_context]
             c = [u.flatten(2).transpose(1, 2) for u in c]
             c = c[0]
  

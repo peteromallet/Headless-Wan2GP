@@ -177,15 +177,16 @@ class WanT2V:
     def vace_latent(self, z, m):
         return [torch.cat([zz, mm], dim=0) for zz, mm in zip(z, m)]
 
-    def prepare_source(self, src_video, src_mask, src_ref_images, total_frames, image_size,  device, original_video = False, keep_frames= [], start_frame = 0, pre_src_video = None):
+    def prepare_source(self, src_video, src_mask, src_ref_images, total_frames, image_size,  device, original_video = False, keep_frames= [], start_frame = 0,  fit_into_canvas = True, pre_src_video = None):
         image_sizes = []
         trim_video = len(keep_frames)
+        canvas_height, canvas_width = image_size
 
         for i, (sub_src_video, sub_src_mask, sub_pre_src_video) in enumerate(zip(src_video, src_mask,pre_src_video)):
             prepend_count = 0 if sub_pre_src_video == None else sub_pre_src_video.shape[1]
             num_frames = total_frames - prepend_count 
             if sub_src_mask is not None and sub_src_video is not None:
-                src_video[i], src_mask[i], _, _, _ = self.vid_proc.load_video_pair(sub_src_video, sub_src_mask, max_frames= num_frames, trim_video = trim_video - prepend_count, start_frame = start_frame)
+                src_video[i], src_mask[i], _, _, _ = self.vid_proc.load_video_pair(sub_src_video, sub_src_mask, max_frames= num_frames, trim_video = trim_video - prepend_count, start_frame = start_frame, canvas_height = canvas_height, canvas_width = canvas_width, fit_into_canvas = fit_into_canvas)
                 # src_video is [-1, 1], 0 = inpainting area (in fact 127  in [0, 255])
                 # src_mask is [-1, 1], 0 = preserve original video (in fact 127  in [0, 255]) and 1 = Inpainting (in fact 255  in [0, 255])
                 src_video[i] = src_video[i].to(device)
@@ -208,7 +209,7 @@ class WanT2V:
                     src_mask[i] = torch.ones_like(src_video[i], device=device)
                 image_sizes.append(image_size)
             else:
-                src_video[i], _, _, _ = self.vid_proc.load_video(sub_src_video, max_frames= num_frames, trim_video = trim_video - prepend_count, start_frame = start_frame)
+                src_video[i], _, _, _ = self.vid_proc.load_video(sub_src_video, max_frames= num_frames, trim_video = trim_video - prepend_count, start_frame = start_frame, canvas_height = canvas_height, canvas_width = canvas_width, fit_into_canvas = fit_into_canvas)
                 src_video[i] = src_video[i].to(device)
                 src_mask[i] = torch.zeros_like(src_video[i], device=device) if original_video else torch.ones_like(src_video[i], device=device)
                 if prepend_count > 0:
@@ -277,6 +278,7 @@ class WanT2V:
                 target_camera=None,                  
                 context_scale=1.0,
                 size=(1280, 720),
+                fit_into_canvas = True,
                 frame_num=81,
                 shift=5.0,
                 sample_solver='unipc',
@@ -430,7 +432,7 @@ class WanT2V:
             kwargs.update({'cam_emb': cam_emb})
 
         if vace:
-            ref_images_count = len(input_ref_images[0]) if input_ref_images != None else 0 
+            ref_images_count = len(input_ref_images[0]) if input_ref_images != None and input_ref_images[0] != None else 0 
             kwargs.update({'vace_context' : z, 'vace_context_scale' : context_scale})
             if overlapped_latents > 0:
                 z_reactive = [  zz[0:16, ref_images_count:overlapped_latents + ref_images_count].clone() for zz in z]
