@@ -103,7 +103,7 @@ class WanI2V:
         # dtype = torch.float16
         self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer, writable_tensors= False) #, forcedConfigPath= "c:/temp/i2v720p/config.json")
         self.model.lock_layers_dtypes(torch.float32 if mixed_precision_transformer else dtype)
-        # offload.change_dtype(self.model, dtype, True)
+        offload.change_dtype(self.model, dtype, True)
         # offload.save_model(self.model, "wan2.1_image2video_720p_14B_mbf16.safetensors", config_file_path="c:/temp/i2v720p/config.json")
         # offload.save_model(self.model, "wan2.1_image2video_720p_14B_quanto_mbf16_int8.safetensors",do_quantize=True, config_file_path="c:/temp/i2v720p/config.json")
         # offload.save_model(self.model, "wan2.1_image2video_720p_14B_quanto_mfp16_int8.safetensors",do_quantize=True, config_file_path="c:/temp/i2v720p/config.json")
@@ -403,9 +403,7 @@ class WanI2V:
             if callback is not None:
                 callback(i, latent, False) 
 
-        x0 = [latent]
-
-        # x0 = [lat_y]
+        x0 = [latent]        
         video = self.vae.decode(x0, VAE_tile_size, any_end_frame= any_end_frame and add_frames_for_end_image)[0]
 
         if any_end_frame and add_frames_for_end_image:

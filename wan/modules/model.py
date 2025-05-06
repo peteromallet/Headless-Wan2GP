@@ -312,8 +312,6 @@ class WanI2VCrossAttention(WanSelfAttention):
         del x
         self.norm_q(q)
         q= q.view(b, -1, n, d)
-        if audio_scale != None:
-            audio_x = self.processor(q, audio_proj, grid_sizes[0], audio_context_lens)
         k = self.k(context)
         self.norm_k(k)
         k = k.view(b, -1, n, d)
@@ -323,6 +321,8 @@ class WanI2VCrossAttention(WanSelfAttention):
         del k,v
         x = pay_attention(qkv_list)
 
+        if audio_scale != None:
+            audio_x = self.processor(q, audio_proj, grid_sizes[0], audio_context_lens)
         k_img = self.k_img(context_img)
         self.norm_k_img(k_img)
         k_img = k_img.view(b, -1, n, d)
