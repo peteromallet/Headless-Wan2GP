@@ -40,7 +40,7 @@ global_queue_ref = []
 AUTOSAVE_FILENAME = "queue.zip"
 PROMPT_VARS_MAX = 10
 
-target_mmgp_version = "3.4.3"
+target_mmgp_version = "3.4.4"
 from importlib.metadata import version
 mmgp_version = version("mmgp")
 if mmgp_version != target_mmgp_version:
@@ -1922,7 +1922,7 @@ def load_models(model_filename):
     wan_model._model_file_name = new_transformer_filename
     kwargs = { "extraModelsToQuantize": None}   
     if profile == 2 or profile == 4:
-        kwargs["budgets"] = { "transformer" : 100 if preload  == 0 else preload, "text_encoder" : 100, "*" : 1000 }
+        kwargs["budgets"] = { "transformer" : 100 if preload  == 0 else preload, "text_encoder" : 100 if preload  == 0 else preload, "*" : 1000 }
         # if profile == 4:
         #     kwargs["partialPinning"] = True
     elif profile == 3:
