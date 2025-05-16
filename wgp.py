@@ -1618,7 +1618,7 @@ def get_model_name(model_filename, description_container = [""]):
         description = "A good looking image 2 video model, but not so good in prompt adherence."
     elif "hunyuan_video_custom" in model_filename:
         model_name = "Hunyuan Video Custom 720p"
-        description = "The Hunyuan Video Custom model is proably the best model  to transfer people (only people for the momment) as it is quite good to keep their identity. However it is slow as to get good results, you to generate 720p videos with 30 steps."
+        description = "The Hunyuan Video Custom model is proably the best model  to transfer people (only people for the momment) as it is quite good to keep their identity. However it is slow as to get good results, you need to generate 720p videos with 30 steps."
     else:
         model_name = "Wan2.1 text2video"
         model_name += " 14B" if "14B" in model_filename else " 1.3B"
@@ -1732,7 +1732,7 @@ def get_default_settings(filename):
                 "resolution": "1280x720" 
             })
 
-        elif get_model_type(filename) in ("hunyuan_video_custom"):
+        elif get_model_type(filename) in ("hunyuan_custom"):
             ui_defaults.update({
                 "guidance_scale": 7.5,
                 "flow_shift": 13,
@@ -1929,7 +1929,7 @@ def download_models(transformer_filename):
         text_encoder_filename = get_hunyuan_text_encoder_filename(text_encoder_quantization)    
         model_def = {  
             "repoId" : "DeepBeepMeep/HunyuanVideo", 
-            "sourceFolderList" :  [ "llava-llama-3-8b", "clip_vit_large_patch14" ""  ],
+            "sourceFolderList" :  [ "llava-llama-3-8b", "clip_vit_large_patch14", ""  ],
             "fileList" :[ ["config.json", "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json", "preprocessor_config.json"] + computeList(text_encoder_filename) , ["config.json", "model.safetensors", "preprocessor_config.json", "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json", "vocab.json"],  [ "hunyuan_video_720_quanto_int8_map.json", "hunyuan_video_custom_VAE_fp32.safetensors", "hunyuan_video_custom_VAE_config.json", "hunyuan_video_VAE_fp32.safetensors", "hunyuan_video_VAE_config.json" , "hunyuan_video_720_quanto_int8_map.json"   ] + computeList(transformer_filename)  ]
         } 
 

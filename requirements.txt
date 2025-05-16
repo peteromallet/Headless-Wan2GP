@@ -30,5 +30,5 @@ segment-anything
 omegaconf
 hydra-core
 librosa
-#loguru
+loguru
 # rembg==2.0.65
