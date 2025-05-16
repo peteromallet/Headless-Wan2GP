@@ -13,7 +13,7 @@ import torchvision
 from PIL import Image
 import numpy as np
 from rembg import remove, new_session
-
+import random
 
 __all__ = ['cache_video', 'cache_image', 'str2bool']
 
@@ -21,9 +21,20 @@ __all__ = ['cache_video', 'cache_image', 'str2bool']
 
 from PIL import Image
 
-
+def seed_everything(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+    if torch.backends.mps.is_available():
+        torch.mps.manual_seed(seed)
+        
 def resample(video_fps, video_frames_count, max_target_frames_count, target_fps, start_target_frame ):
     import math
+
+    if video_fps < target_fps :
+        video_fps = target_fps
 
     video_frame_duration = 1 /video_fps
     target_frame_duration = 1 / target_fps 
@@ -67,7 +78,7 @@ def remove_background(img, session=None):
     return torch.from_numpy(np.array(img).astype(np.float32) / 255.0).movedim(-1, 0)
 
 
-def calculate_new_dimensions(canvas_height, canvas_width, height, width, fit_into_canvas):
+def calculate_new_dimensions(canvas_height, canvas_width, height, width, fit_into_canvas, block_size = 16):
     if fit_into_canvas:
         scale1  = min(canvas_height / height, canvas_width / width)
         scale2  = min(canvas_width / height, canvas_height / width)
@@ -75,8 +86,8 @@ def calculate_new_dimensions(canvas_height, canvas_width, height, width, fit_int
     else:
         scale = (canvas_height * canvas_width / (height * width))**(1/2)
 
-    new_height = round( height * scale / 16) * 16
-    new_width = round( width * scale / 16) * 16
+    new_height = round( height * scale / block_size) * block_size
+    new_width = round( width * scale / block_size) * block_size
     return new_height, new_width
 
 def resize_and_remove_background(img_list, budget_width, budget_height, rm_background, fit_into_canvas = False ):

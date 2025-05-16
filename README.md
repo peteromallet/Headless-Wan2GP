@@ -2,14 +2,35 @@
 
 -----
 <p align="center">
-<b>Wan2.1 GP by DeepBeepMeep based on Wan2.1's Alibaba: Open and Advanced Large-Scale Video Generative Models for the GPU Poor</b>
+<b>WanGP by DeepBeepMeep : The best Open Source Video Generative Models Accessible to the GPU Poor</b>
 </p>
 
-**NEW Discord Server to get Help from Other Users and show your Best Videos:** https://discord.gg/g7efUW9jGV
+WanGP supports the Wan (and derived models), Hunyuan Video and LTV Video models with:
+- Low VRAM requirements (as low as 6 GB of VRAM is sufficient for certain models)
+- Support for old GPUs (RTX 10XX, 20xx, ...)
+- Very Fast on the latest GPUs
+- Easy to use Full Web based interface
+- Auto download of the required model adapted to your specific architecture
+- Tools integrated to facilitate Video Generation : Mask Editor, Prompt Enhancer, Temporal and Spatial Generation
+- Loras Support to customize each model
+- Queuing system : make your shopping list of videos to generate and come back later 
+
+
+**Discord Server to get Help from Other Users and show your Best Videos:** https://discord.gg/g7efUW9jGV
 
 
 
 ## 🔥 Latest News!!
+* May 17 2025: 👋 Wan 2.1GP v5.0 : One App to Rule Them All !\
+    Added support for the other great open source architectures:
+    - Hunyuan Video : text 2 video (one of the best, if not the best t2v) ,image 2 video and the recently released Hunyuan Custom (very good identify preservation when injecting a person into a video)
+    - LTX Video 13B (released last week): very long video support and fast 720p generation.Wan GP version has been greatly optimzed and reduced VRAM requirements by 4 !
+
+    Also:
+    - Added supported for the best Control Video Model, released 2 days ago : Vace 14B
+    - New Integrated prompt enhancer to increase the quality of the generated videos
+    You will need one more *pip install -r requirements.txt*
+
 * May 5 2025: 👋 Wan 2.1GP v4.5: FantasySpeaking model, you can animate a talking head using a voice track. This works not only on people but also on objects. Also better seamless transitions between Vace sliding windows for very long videos (see recommended settings). New high quality processing features (mixed 16/32 bits calculation and 32 bitsVAE)
 * April 27 2025: 👋 Wan 2.1GP v4.4: Phantom model support, very good model to transfer people or objects into video, works quite well at 720p and with the number of steps > 30
 * April 25 2025: 👋 Wan 2.1GP v4.3: Added preview mode and support for Sky Reels v2 Diffusion Forcing for high quality "infinite length videos" (see Window Sliding section below).Note that Skyreel uses causal attention that is only supported by Sdpa attention so even if chose an other type of attention, some of the processes will use Sdpa attention. 
@@ -70,30 +91,6 @@ If you upgrade you will need to do a 'pip install -r requirements.txt' again.
 * Feb 25, 2025: 👋 We've released the inference code and weights of Wan2.1.
 * Feb 27, 2025: 👋 Wan2.1 has been integrated into [ComfyUI](https://comfyanonymous.github.io/ComfyUI_examples/wan/). Enjoy!
 
-
-## Features
-*GPU Poor version by **DeepBeepMeep**. This great video generator can now run smoothly on any GPU.*
-
-This version has the following improvements over the original Alibaba model:
-- Reduce greatly the RAM requirements and VRAM requirements 
-- Much faster thanks to compilation and fast loading / unloading
-- Multiple profiles in order to able to run the model at a decent speed on a low end consumer config (32 GB of RAM and 12 VRAM) and to run it at a very good speed on a high end consumer config (48 GB of RAM and 24 GB of VRAM)
-- Autodownloading of the needed model files
-- Improved gradio interface with progression bar and more options
-- Multiples prompts / multiple generations per prompt
-- Support multiple pretrained Loras with 32 GB of RAM or less
-- Much simpler installation
-
-
-This fork by DeepBeepMeep is an integration of the mmpg module on the original model
-
-It is an illustration on how one can set up on an existing model some fast and properly working CPU offloading with changing only a few lines of code in the core model.
-
-For more information on how to use the mmpg module, please go to: https://github.com/deepbeepmeep/mmgp
-
-You will find the original Wan2.1 Video repository here: https://github.com/Wan-Video/Wan2.1
-
- 
 
 
 ## Installation Guide for Linux and Windows for GPUs up to RTX40xx
@@ -182,11 +179,11 @@ To run the text to video generator (in Low VRAM mode):
 ```bash
 python wgp.py
 #or
-python wgp.py --t2v #launch the default text 2 video model
+python wgp.py --t2v #launch the default Wan text 2 video model
 #or
-python wgp.py --t2v-14B #for the 14B model 
+python wgp.py --t2v-14B #for the Wan 14B model 
 #or
-python wgp.py --t2v-1-3B #for the 1.3B model
+python wgp.py --t2v-1-3B #for the Wan 1.3B model
 
 ```
 
@@ -227,16 +224,22 @@ python wgp.py --attention sdpa
 ### Loras support
 
 
-Every lora stored in the subfoler 'loras' for t2v and 'loras_i2v' will be automatically loaded. You will be then able to activate / desactive any of them when running the application by selecting them in the area below "Activated Loras" .
+Lora for the Wan models are stored in the subfoler 'loras' for t2v and 'loras_i2v'. You will be then able to activate / desactive any of them when running the application by selecting them in the Advanced Tab "Loras" .
 
-If you want to manage in different areas Loras for the 1.3B model and the 14B as they are not compatible, just create the following subfolders:
+If you want to manage in different areas Loras for the 1.3B model and the 14B of Wan t2v models (as they are not compatible), just create the following subfolders:
 - loras/1.3B
 - loras/14B
 
-You can also put all the loras in the same place by launching the app with following command line (*path* is a path to shared loras directory):
+You can also put all the loras in the same place by launching the app with the following command line (*path* is a path to shared loras directory):
 ```
 python wgp.exe --lora-dir path --lora-dir-i2v path
 ```
+
+Hunyuan Video and LTX Video models have also their own loras subfolders:
+-loras_hunyuan
+-loras_hunyuan_i2v
+-loras_ltxv
+
 
 For each activated Lora, you may specify a *multiplier* that is one float number that corresponds to its weight (default is 1.0) .The multipliers for each Lora should be separated by a space character or a carriage return. For instance:\
 *1.2 0.8* means that the first lora will have a 1.2 multiplier and the second one will have 0.8. 
@@ -342,7 +345,11 @@ Experimental: if your prompt is broken into multiple lines (each line separated 
 --i2v-1-3B : launch the Fun InP 1.3B model image to video generator\
 --vace : launch the Vace ControlNet 1.3B model image to video generator\
 --quantize-transformer bool: (default True) : enable / disable on the fly transformer quantization\
---lora-dir path : Path of directory that contains Loras in diffusers / safetensor format\
+--lora-dir path : Path of directory that contains Wan t2v Loras\
+--lora-dir-i2v path : Path of directory that contains Wan i2v Loras\
+--lora-dir-hunyuan path : Path of directory that contains Hunyuan t2v Loras\
+--lora-dir-hunyuan-i2v path : Path of directory that contains Hunyuan i2v Loras\
+--lora-dir-ltxv path : Path of directory that contains LTX Video Loras\
 --lora-preset preset : name of preset gile (without the extension) to preload
 --verbose level : default (1) : level of information between 0 and 2\
 --server-port portno : default (7860) : Gradio port no\

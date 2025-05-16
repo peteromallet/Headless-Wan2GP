@@ -457,12 +457,19 @@ def export_to_vace_video_input(foreground_video_output):
     gr.Info("Masked Video Input transferred to Vace For Inpainting")
     return "V#" + str(time.time()), foreground_video_output
 
-def export_to_vace_video_mask(foreground_video_output, alpha_video_output):
-    gr.Info("Masked Video Input and Full Mask transferred to Vace For Inpainting")
-    return "MV#" + str(time.time()), foreground_video_output, alpha_video_output
+def export_to_current_video_engine(foreground_video_output, alpha_video_output):
+    gr.Info("Masked Video Input and Full Mask transferred to Current Video Engine For Inpainting")
+    # return "MV#" + str(time.time()), foreground_video_output, alpha_video_output
+    return foreground_video_output, alpha_video_output
 
-def teleport_to_vace():
+def teleport_to_video_tab():
+    return gr.Tabs(selected="video_gen")
+
+def teleport_to_vace_1_3B():
     return gr.Tabs(selected="video_gen"), gr.Dropdown(value="vace_1.3B")
+
+def teleport_to_vace_14B():
+    return gr.Tabs(selected="video_gen"), gr.Dropdown(value="vace_14B")
 
 def display(tabs, model_choice, vace_video_input, vace_video_mask, video_prompt_video_guide_trigger):
     # my_tab.select(fn=load_unload_models, inputs=[], outputs=[])
@@ -596,13 +603,16 @@ def display(tabs, model_choice, vace_video_input, vace_video_mask, video_prompt_
                         alpha_output_button = gr.Button(value="Alpha Mask Output", visible=False, elem_classes="new_button")
                 with gr.Row():
                     with gr.Row(visible= False):
-                        export_to_vace_video_input_btn = gr.Button("Export to Vace Video Input Video For Inpainting",    visible= False)
+                        export_to_vace_video_14B_btn = gr.Button("Export to current Video Input Video For Inpainting", visible= False)
                     with gr.Row(visible= True):
-                        export_to_vace_video_mask_btn = gr.Button("Export to Vace Video Input and Video Mask", visible= False)
+                        export_to_current_video_engine_btn = gr.Button("Export to current Video Input and Video Mask", visible= False)
             
-        export_to_vace_video_input_btn.click(fn=export_to_vace_video_input, inputs= [foreground_video_output], outputs= [video_prompt_video_guide_trigger, vace_video_input])
-        export_to_vace_video_mask_btn.click(fn=export_to_vace_video_mask, inputs= [foreground_video_output, alpha_video_output], outputs= [video_prompt_video_guide_trigger, vace_video_input, vace_video_mask]).then(
-            fn=teleport_to_vace, inputs=[], outputs=[tabs, model_choice])
+        export_to_vace_video_14B_btn.click( fn=teleport_to_vace_14B, inputs=[], outputs=[tabs, model_choice]).then(
+            fn=export_to_current_video_engine, inputs= [foreground_video_output, alpha_video_output], outputs= [video_prompt_video_guide_trigger, vace_video_input, vace_video_mask])
+        
+        export_to_current_video_engine_btn.click(  fn=export_to_current_video_engine, inputs= [foreground_video_output, alpha_video_output], outputs= [vace_video_input, vace_video_mask]).then( #video_prompt_video_guide_trigger, 
+             fn=teleport_to_video_tab, inputs= [], outputs= [tabs])
+        
         # first step: get the video information     
         extract_frames_button.click(
             fn=get_frames_from_video,
@@ -649,7 +659,7 @@ def display(tabs, model_choice, vace_video_input, vace_video_mask, video_prompt_
             outputs=[foreground_video_output, alpha_video_output]).then(
             fn=video_matting,
             inputs=[video_state, end_selection_slider,  matting_type, interactive_state, mask_dropdown, erode_kernel_size, dilate_kernel_size],
-            outputs=[foreground_video_output, alpha_video_output,foreground_video_output, alpha_video_output, export_to_vace_video_input_btn, export_to_vace_video_mask_btn]
+            outputs=[foreground_video_output, alpha_video_output,foreground_video_output, alpha_video_output, export_to_vace_video_14B_btn, export_to_current_video_engine_btn]
         )
 
         # click to get mask
@@ -669,7 +679,7 @@ def display(tabs, model_choice, vace_video_input, vace_video_mask, video_prompt_
                 click_state,
                 foreground_video_output, alpha_video_output,
                 template_frame,
-                image_selection_slider, end_selection_slider, track_pause_number_slider,point_prompt, export_to_vace_video_input_btn, export_to_vace_video_mask_btn, matting_type, clear_button_click, 
+                image_selection_slider, end_selection_slider, track_pause_number_slider,point_prompt, export_to_vace_video_14B_btn, export_to_current_video_engine_btn, matting_type, clear_button_click, 
                 add_mask_button, matting_button, template_frame, foreground_video_output, alpha_video_output, remove_mask_button, foreground_output_button, alpha_output_button, mask_dropdown, video_info, step2_title
             ],
             queue=False,
@@ -684,7 +694,7 @@ def display(tabs, model_choice, vace_video_input, vace_video_mask, video_prompt_
                 click_state,
                 foreground_video_output, alpha_video_output,
                 template_frame,
-                image_selection_slider , end_selection_slider, track_pause_number_slider,point_prompt, export_to_vace_video_input_btn, export_to_vace_video_mask_btn, matting_type, clear_button_click, 
+                image_selection_slider , end_selection_slider, track_pause_number_slider,point_prompt, export_to_vace_video_14B_btn, export_to_current_video_engine_btn, matting_type, clear_button_click, 
                 add_mask_button, matting_button, template_frame, foreground_video_output, alpha_video_output, remove_mask_button, foreground_output_button, alpha_output_button, mask_dropdown, video_info, step2_title
             ],
             queue=False,

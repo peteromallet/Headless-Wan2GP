@@ -589,6 +589,62 @@ class MLPProj(torch.nn.Module):
 
 
 class WanModel(ModelMixin, ConfigMixin):
+    @staticmethod
+    def preprocess_loras(model_filename, sd):
+
+        first = next(iter(sd), None)
+        if first == None:
+            return sd
+        
+        if first.startswith("lora_unet_"):
+            new_sd = {}
+            print("Converting Lora Safetensors format to Lora Diffusers format")
+            alphas = {}
+            repl_list = ["cross_attn", "self_attn", "ffn"]
+            src_list = ["_" + k + "_" for k in repl_list]
+            tgt_list = ["." + k + "." for k in repl_list]
+
+            for k,v in sd.items():
+                k = k.replace("lora_unet_blocks_","diffusion_model.blocks.")
+
+                for s,t in zip(src_list, tgt_list):
+                    k = k.replace(s,t)
+
+                k = k.replace("lora_up","lora_B")
+                k = k.replace("lora_down","lora_A")
+
+                if "alpha" in k:
+                    alphas[k] = v
+                else:
+                    new_sd[k] = v
+
+            new_alphas = {}
+            for k,v in new_sd.items():
+                if "lora_B" in k:
+                    dim = v.shape[1]
+                elif "lora_A" in k:
+                    dim = v.shape[0]
+                else:
+                    continue
+                alpha_key = k[:-len("lora_X.weight")] +"alpha"
+                if alpha_key in alphas:
+                    scale = alphas[alpha_key] / dim
+                    new_alphas[alpha_key] = scale
+                else:
+                    print(f"Lora alpha'{alpha_key}' is missing")
+            new_sd.update(new_alphas)
+            sd = new_sd
+
+        if "text2video" in model_filename:
+            new_sd = {}
+            # convert loras for i2v to t2v
+            for k,v in sd.items():
+                if  any(layer in k for layer in ["cross_attn.k_img", "cross_attn.v_img"]):
+                    continue
+                new_sd[k] = v
+            sd = new_sd
+
+        return sd    
     r"""
     Wan diffusion backbone supporting both text-to-video and image-to-video.
     """

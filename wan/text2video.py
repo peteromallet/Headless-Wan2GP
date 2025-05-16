@@ -40,7 +40,7 @@ def optimized_scale(positive_flat, negative_flat):
     st_star = dot_product / squared_norm
     
     return st_star
-    
+
 
 class WanT2V:
 
@@ -77,20 +77,21 @@ class WanT2V:
         self.vae = WanVAE(
             vae_pth=os.path.join(checkpoint_dir, config.vae_checkpoint), dtype= VAE_dtype,
             device=self.device)
-
+        
         logging.info(f"Creating WanModel from {model_filename[-1]}")
         from mmgp import offload
-        # model_filename
-
-        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer, writable_tensors= False ) #, forcedConfigPath= "e:/vace_config.json")
+        # model_filename = "c:/temp/vace/diffusion_pytorch_model-00001-of-00007.safetensors"
+        # model_filename = "vace14B_quanto_bf16_int8.safetensors"
+        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer, writable_tensors= False) # , forcedConfigPath= "c:/temp/vace/vace_config.json")
         # offload.load_model_data(self.model, "e:/vace.safetensors")
         # offload.load_model_data(self.model, "c:/temp/Phantom-Wan-1.3B.pth")
         # self.model.to(torch.bfloat16)
         # self.model.cpu()
         self.model.lock_layers_dtypes(torch.float32 if mixed_precision_transformer else dtype)
+        # dtype = torch.bfloat16
         offload.change_dtype(self.model, dtype, True)
-        # offload.save_model(self.model, "mvace.safetensors", config_file_path="e:/vace_config.json")
-        # offload.save_model(self.model, "phantom_1.3B.safetensors")
+        # offload.save_model(self.model, "vace14B_bf16.safetensors", config_file_path="c:/temp/vace/vace_config.json")
+        # offload.save_model(self.model, "vace14B_quanto_fp16_int8.safetensors", do_quantize= True, config_file_path="c:/temp/vace/vace_config.json")
         self.model.eval().requires_grad_(False)
 
 
@@ -274,10 +275,11 @@ class WanT2V:
                 input_frames= None,
                 input_masks = None,
                 input_ref_images = None,      
-                source_video=None,
+                input_video=None,
                 target_camera=None,                  
                 context_scale=1.0,
-                size=(1280, 720),
+                width = 1280,
+                height = 720,
                 fit_into_canvas = True,
                 frame_num=81,
                 shift=5.0,
@@ -298,7 +300,8 @@ class WanT2V:
                 cfg_zero_step = 5,
                 overlapped_latents  = 0,
                 overlap_noise = 0,
-                vace = False
+                model_filename = None,
+                **bbargs
                 ):
         r"""
         Generates video frames from text prompt using diffusion process.
@@ -334,6 +337,7 @@ class WanT2V:
                 - W: Frame width from size)
         """
         # preprocess
+        vace = "Vace" in model_filename
 
         if n_prompt == "":
             n_prompt = self.sample_neg_prompt
@@ -351,11 +355,12 @@ class WanT2V:
         phantom = False
 
         if target_camera != None:
-            size = (source_video.shape[2], source_video.shape[1])
-            source_video = source_video.to(dtype=self.dtype , device=self.device)
-            source_video = source_video.permute(3, 0, 1, 2).div_(127.5).sub_(1.)            
-            source_latents = self.vae.encode([source_video])[0] #.to(dtype=self.dtype, device=self.device)
-            del source_video
+            width = input_video.shape[2]
+            height = input_video.shape[1]
+            input_video = input_video.to(dtype=self.dtype , device=self.device)
+            input_video = input_video.permute(3, 0, 1, 2).div_(127.5).sub_(1.)            
+            source_latents = self.vae.encode([input_video])[0] #.to(dtype=self.dtype, device=self.device)
+            del input_video
             # Process target camera (recammaster)
             from wan.utils.cammmaster_tools import get_camera_embedding
             cam_emb = get_camera_embedding(target_camera)       
@@ -380,8 +385,8 @@ class WanT2V:
                 input_ref_images_neg = torch.zeros_like(input_ref_images)
             F = frame_num
             target_shape = (self.vae.model.z_dim, (F - 1) // self.vae_stride[0] + 1 + (input_ref_images.shape[1] if input_ref_images != None else 0),
-                            size[1] // self.vae_stride[1],
-                            size[0] // self.vae_stride[2])
+                            height // self.vae_stride[1],
+                            width // self.vae_stride[2])
 
         seq_len = math.ceil((target_shape[2] * target_shape[3]) /
                             (self.patch_size[1] * self.patch_size[2]) *
@@ -560,5 +565,5 @@ class WanT2V:
             target = modules_dict[f"blocks.{model_layer}"]
             setattr(target, "vace", module )
         delattr(model, "vace_blocks")
-                    
+
  

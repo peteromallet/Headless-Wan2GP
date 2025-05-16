@@ -80,9 +80,9 @@ class WanI2V:
         self.clip = CLIPModel(
             dtype=config.clip_dtype,
             device=self.device,
-            checkpoint_path=os.path.join(checkpoint_dir,
+            checkpoint_path=os.path.join(checkpoint_dir , 
                                          config.clip_checkpoint),
-            tokenizer_path=os.path.join(checkpoint_dir, config.clip_tokenizer))
+            tokenizer_path=os.path.join(checkpoint_dir ,  config.clip_tokenizer))
 
         logging.info(f"Creating WanModel from {model_filename[-1]}")
         from mmgp import offload
@@ -116,8 +116,8 @@ class WanI2V:
 
     def generate(self,
         input_prompt,
-        img,
-        img2 = None,
+        image_start,
+        image_end = None,
         height =720,
         width = 1280,
         fit_into_canvas = True,
@@ -137,11 +137,12 @@ class WanI2V:
         slg_end = 1.0,
         cfg_star_switch = True,
         cfg_zero_step = 5,
-        add_frames_for_end_image = True,
         audio_scale=None,
         audio_cfg_scale=None,
         audio_proj=None,
         audio_context_lens=None,
+        model_filename = None,
+        **bbargs
     ):
         r"""
         Generates video frames from input image and text prompt using diffusion process.
@@ -149,7 +150,7 @@ class WanI2V:
         Args:
             input_prompt (`str`):
                 Text prompt for content generation.
-            img (PIL.Image.Image):
+            image_start (PIL.Image.Image):
                 Input image tensor. Shape: [3, H, W]
             max_area (`int`, *optional*, defaults to 720*1280):
                 Maximum pixel area for latent space calculation. Controls video resolution scaling
@@ -179,17 +180,20 @@ class WanI2V:
                 - H: Frame height (from max_area)
                 - W: Frame width from max_area)
         """
-        img = TF.to_tensor(img)
+
+        add_frames_for_end_image = "image2video" in model_filename or "fantasy" in model_filename
+
+        image_start = TF.to_tensor(image_start)
         lat_frames = int((frame_num - 1) // self.vae_stride[0] + 1)
-        any_end_frame = img2 !=None 
+        any_end_frame = image_end !=None 
         if any_end_frame:
             any_end_frame = True
-            img2 = TF.to_tensor(img2) 
+            image_end = TF.to_tensor(image_end) 
             if add_frames_for_end_image:
                 frame_num +=1
                 lat_frames = int((frame_num - 2) // self.vae_stride[0] + 2)
         
-        h, w = img.shape[1:]
+        h, w = image_start.shape[1:]
 
         h, w = calculate_new_dimensions(height, width, h, w, fit_into_canvas)
  
@@ -203,13 +207,13 @@ class WanI2V:
         w = lat_w * self.vae_stride[2]
         
         clip_image_size = self.clip.model.image_size
-        img_interpolated = resize_lanczos(img, h, w).sub_(0.5).div_(0.5).unsqueeze(0).transpose(0,1).to(self.device) #, self.dtype
-        img = resize_lanczos(img, clip_image_size, clip_image_size)
-        img = img.sub_(0.5).div_(0.5).to(self.device) #, self.dtype
-        if img2!= None:
-            img_interpolated2 = resize_lanczos(img2, h, w).sub_(0.5).div_(0.5).unsqueeze(0).transpose(0,1).to(self.device) #, self.dtype
-            img2 = resize_lanczos(img2, clip_image_size, clip_image_size)
-            img2 = img2.sub_(0.5).div_(0.5).to(self.device) #, self.dtype
+        img_interpolated = resize_lanczos(image_start, h, w).sub_(0.5).div_(0.5).unsqueeze(0).transpose(0,1).to(self.device) #, self.dtype
+        image_start = resize_lanczos(image_start, clip_image_size, clip_image_size)
+        image_start = image_start.sub_(0.5).div_(0.5).to(self.device) #, self.dtype
+        if image_end!= None:
+            img_interpolated2 = resize_lanczos(image_end, h, w).sub_(0.5).div_(0.5).unsqueeze(0).transpose(0,1).to(self.device) #, self.dtype
+            image_end = resize_lanczos(image_end, clip_image_size, clip_image_size)
+            image_end = image_end.sub_(0.5).div_(0.5).to(self.device) #, self.dtype
 
         max_seq_len = lat_frames * lat_h * lat_w // ( self.patch_size[1] * self.patch_size[2])
 
@@ -247,7 +251,7 @@ class WanI2V:
         if self._interrupt:
             return None
 
-        clip_context = self.clip.visual([img[:, None, :, :]])
+        clip_context = self.clip.visual([image_start[:, None, :, :]])
 
         from mmgp import offload
         offload.last_offload_obj.unload_all()
@@ -263,7 +267,7 @@ class WanI2V:
                     img_interpolated,
                     torch.zeros(3, frame_num-1, h, w, device=self.device, dtype= self.VAE_dtype)
             ], dim=1).to(self.device)
-        img, img2, img_interpolated, img_interpolated2 = None, None, None, None
+        image_start, image_end, img_interpolated, img_interpolated2 = None, None, None, None
 
         lat_y = self.vae.encode([enc], VAE_tile_size, any_end_frame= any_end_frame and add_frames_for_end_image)[0]
         y = torch.concat([msk, lat_y])
