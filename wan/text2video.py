@@ -82,7 +82,7 @@ class WanT2V:
         from mmgp import offload
         # model_filename = "c:/temp/vace1.3/diffusion_pytorch_model.safetensors"
         # model_filename = "vace14B_quanto_bf16_int8.safetensors"
-        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer, writable_tensors= False , forcedConfigPath= "c:/temp/vace1.3/config.json")
+        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer, writable_tensors= False) # , forcedConfigPath= "c:/temp/vace1.3/config.json")
         # offload.load_model_data(self.model, "e:/vace.safetensors")
         # offload.load_model_data(self.model, "c:/temp/Phantom-Wan-1.3B.pth")
         # self.model.to(torch.bfloat16)
