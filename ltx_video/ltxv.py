@@ -148,6 +148,7 @@ class LTXV:
     def __init__(
         self,
         model_filepath: str,
+        loras_filepath: str,
         text_encoder_filepath: str,
         dtype = torch.bfloat16,
         VAE_dtype = torch.bfloat16, 
@@ -155,7 +156,8 @@ class LTXV:
     ):
 
         self.mixed_precision_transformer = mixed_precision_transformer
-        self.distilled = "distilled" in model_filepath[0]
+        self.distilled = loras_filepath != None
+        
         # with safe_open(ckpt_path, framework="pt") as f:
         #     metadata = f.metadata()
         #     config_str = metadata.get("config")
