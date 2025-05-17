@@ -175,7 +175,7 @@ class LTXV:
         # offload.save_model(vae, "vae.safetensors", config_file_path="config_vae.json")
 
         # model_filepath = "c:/temp/ltxd/ltxv-13b-0.9.7-distilled.safetensors"
-        transformer = offload.fast_load_transformers_model(model_filepath, modelClass=Transformer3DModel, forcedConfigPath= "c:/temp/ltxd/config.json") 
+        transformer = offload.fast_load_transformers_model(model_filepath, modelClass=Transformer3DModel) 
         # offload.save_model(transformer, "ckpts/ltxv_0.9.7_13B_distilled_bf16.safetensors", config_file_path= "c:/temp/ltxd/config.json")
         # offload.save_model(transformer, "ckpts/ltxv_0.9.7_13B_distilled_quanto_bf16_int8.safetensors", do_quantize= True, config_file_path="c:/temp/ltxd/config.json")
         # transformer = offload.fast_load_transformers_model(model_filepath, modelClass=Transformer3DModel) 
