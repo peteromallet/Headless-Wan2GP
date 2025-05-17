@@ -134,6 +134,11 @@ def get_supported_attention_modes():
     if not sage2_supported:
         if "sage2" in ret:
             ret.remove("sage2")
+
+    major, minor = torch.cuda.get_device_capability()
+    if  major < 7:
+        if "sage" in ret:
+            ret.remove("sage")
     return ret
 
 __all__ = [
@@ -173,6 +178,8 @@ def pay_attention(
     # assume if k_lens is non null, each k is padded up to lk (one k out of two will need to be discarded or ignored)
     if attention_mask != None:
         force_attention = "sdpa"
+        if  attention_mask.dtype == torch.bfloat16 and not bfloat16_supported:
+            attention_mask = attention_mask.to(torch.float16)
     attn = offload.shared_state["_attention"] if force_attention== None else force_attention
 
     q,k,v = qkv_list
