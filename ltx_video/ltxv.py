@@ -155,14 +155,14 @@ class LTXV:
     ):
 
         self.mixed_precision_transformer = mixed_precision_transformer
-        # ckpt_path = Path(ckpt_path)
+        self.distilled = "distilled" in model_filepath[0]
         # with safe_open(ckpt_path, framework="pt") as f:
         #     metadata = f.metadata()
         #     config_str = metadata.get("config")
         #     configs = json.loads(config_str)
         #     allowed_inference_steps = configs.get("allowed_inference_steps", None)
         # transformer = Transformer3DModel.from_pretrained(ckpt_path)
-        # offload.save_model(transformer, "ckpts/ltxv_0.9.7_13B_dev_bf16.safetensors", config_file_path="config_transformer.json")
+        # transformer = offload.fast_load_transformers_model("c:/temp/ltxdistilled/diffusion_pytorch_model-00001-of-00006.safetensors",  forcedConfigPath="c:/temp/ltxdistilled/config.json")
 
         # vae = CausalVideoAutoencoder.from_pretrained(ckpt_path)
         vae = offload.fast_load_transformers_model("ckpts/ltxv_0.9.7_VAE.safetensors", modelClass=CausalVideoAutoencoder)
@@ -174,8 +174,11 @@ class LTXV:
         # vae = offload.fast_load_transformers_model("vae.safetensors", modelClass=CausalVideoAutoencoder, modelPrefix= "vae",  forcedConfigPath="config_vae.json")
         # offload.save_model(vae, "vae.safetensors", config_file_path="config_vae.json")
 
-
-        transformer = offload.fast_load_transformers_model(model_filepath, modelClass=Transformer3DModel)
+        # model_filepath = "c:/temp/ltxd/ltxv-13b-0.9.7-distilled.safetensors"
+        transformer = offload.fast_load_transformers_model(model_filepath, modelClass=Transformer3DModel, forcedConfigPath= "c:/temp/ltxd/config.json") 
+        # offload.save_model(transformer, "ckpts/ltxv_0.9.7_13B_distilled_bf16.safetensors", config_file_path= "c:/temp/ltxd/config.json")
+        # offload.save_model(transformer, "ckpts/ltxv_0.9.7_13B_distilled_quanto_bf16_int8.safetensors", do_quantize= True, config_file_path="c:/temp/ltxd/config.json")
+        # transformer = offload.fast_load_transformers_model(model_filepath, modelClass=Transformer3DModel) 
         transformer._model_dtype = dtype
         if mixed_precision_transformer:
             transformer._lock_dtype = torch.float
@@ -295,7 +298,10 @@ class LTXV:
             conditioning_media_paths = None
             conditioning_start_frames = None
 
-        pipeline_config = "ltx_video/configs/ltxv-13b-0.9.7-dev.yaml"
+        if self.distilled :
+            pipeline_config = "ltx_video/configs/ltxv-13b-0.9.7-distilled.yaml"
+        else:
+            pipeline_config = "ltx_video/configs/ltxv-13b-0.9.7-dev.yaml"
         # check if pipeline_config is a file
         if not os.path.isfile(pipeline_config):
             raise ValueError(f"Pipeline config file {pipeline_config} does not exist")

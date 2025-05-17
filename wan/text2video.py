@@ -80,9 +80,9 @@ class WanT2V:
         
         logging.info(f"Creating WanModel from {model_filename[-1]}")
         from mmgp import offload
-        # model_filename = "c:/temp/vace/diffusion_pytorch_model-00001-of-00007.safetensors"
+        # model_filename = "c:/temp/vace1.3/diffusion_pytorch_model.safetensors"
         # model_filename = "vace14B_quanto_bf16_int8.safetensors"
-        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer, writable_tensors= False) # , forcedConfigPath= "c:/temp/vace/vace_config.json")
+        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer, writable_tensors= False , forcedConfigPath= "c:/temp/vace1.3/config.json")
         # offload.load_model_data(self.model, "e:/vace.safetensors")
         # offload.load_model_data(self.model, "c:/temp/Phantom-Wan-1.3B.pth")
         # self.model.to(torch.bfloat16)
@@ -90,7 +90,7 @@ class WanT2V:
         self.model.lock_layers_dtypes(torch.float32 if mixed_precision_transformer else dtype)
         # dtype = torch.bfloat16
         offload.change_dtype(self.model, dtype, True)
-        # offload.save_model(self.model, "vace14B_bf16.safetensors", config_file_path="c:/temp/vace/vace_config.json")
+        # offload.save_model(self.model, "wan2.1_Vace1.3B_mbf16.safetensors", config_file_path="c:/temp/vace1.3/config.json")
         # offload.save_model(self.model, "vace14B_quanto_fp16_int8.safetensors", do_quantize= True, config_file_path="c:/temp/vace/vace_config.json")
         self.model.eval().requires_grad_(False)
 

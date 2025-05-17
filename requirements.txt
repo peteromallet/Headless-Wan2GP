@@ -32,4 +32,5 @@ hydra-core
 librosa
 loguru
 sentencepiece
+av
 # rembg==2.0.65

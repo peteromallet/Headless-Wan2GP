@@ -189,9 +189,9 @@ class TextEncoder(nn.Module):
         if "llm" in text_encoder_type:
             from mmgp import offload
             forcedConfigPath=  None if "i2v" in text_encoder_type  else "ckpts/llava-llama-3-8b/config.json"
-            self.model= offload.fast_load_transformers_model(self.model_path, forcedConfigPath=forcedConfigPath, modelPrefix= "model" if forcedConfigPath !=None else None) 
+            self.model= offload.fast_load_transformers_model(self.model_path, forcedConfigPath=forcedConfigPath) 
             if forcedConfigPath != None:
-                self.model.final_layer_norm = self.model.norm
+                self.model.final_layer_norm = self.model.model.norm
         
         else:
             self.model, self.model_path = load_text_encoder(
