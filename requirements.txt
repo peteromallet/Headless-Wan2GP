@@ -31,4 +31,5 @@ omegaconf
 hydra-core
 librosa
 loguru
+sentencepiece
 # rembg==2.0.65
