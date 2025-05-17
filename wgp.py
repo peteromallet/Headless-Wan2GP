@@ -1930,7 +1930,7 @@ def download_models(transformer_filename):
         model_def = {  
             "repoId" : "DeepBeepMeep/HunyuanVideo", 
             "sourceFolderList" :  [ "llava-llama-3-8b", "clip_vit_large_patch14", ""  ],
-            "fileList" :[ ["config.json", "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json", "preprocessor_config.json"] + computeList(text_encoder_filename) , ["config.json", "model.safetensors", "preprocessor_config.json", "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json", "vocab.json"],  [ "hunyuan_video_720_quanto_int8_map.json", "hunyuan_video_custom_VAE_fp32.safetensors", "hunyuan_video_custom_VAE_config.json", "hunyuan_video_VAE_fp32.safetensors", "hunyuan_video_VAE_config.json" , "hunyuan_video_720_quanto_int8_map.json"   ] + computeList(transformer_filename)  ]
+            "fileList" :[ ["config.json", "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json", "preprocessor_config.json"] + computeList(text_encoder_filename) , ["config.json", "merges.txt", "model.safetensors", "preprocessor_config.json", "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json", "vocab.json"],  [ "hunyuan_video_720_quanto_int8_map.json", "hunyuan_video_custom_VAE_fp32.safetensors", "hunyuan_video_custom_VAE_config.json", "hunyuan_video_VAE_fp32.safetensors", "hunyuan_video_VAE_config.json" , "hunyuan_video_720_quanto_int8_map.json"   ] + computeList(transformer_filename)  ]
         } 
 
     else:
@@ -2307,7 +2307,7 @@ def apply_changes(  state,
         reload_needed = True
         model_choice = generate_dropdown_model_list()
 
-    header = generate_header(transformer_filename, compile=compile, attention_mode= attention_mode)
+    header = generate_header(state["model_filename"], compile=compile, attention_mode= attention_mode)
     return "<DIV ALIGN=CENTER>The new configuration has been succesfully applied</DIV>", header, model_choice, gr.update(visible= server_config["enhancer_enabled"] == 1)
 
 
