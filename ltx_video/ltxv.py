@@ -154,8 +154,8 @@ class LTXV:
         mixed_precision_transformer = False
     ):
 
-        if dtype == torch.float16:
-            dtype  = torch.bfloat16
+        # if dtype == torch.float16:
+        dtype  = torch.bfloat16
         self.mixed_precision_transformer = mixed_precision_transformer
         self.distilled = any("lora" in name for name in model_filepath)
         model_filepath = [name for name in model_filepath if not "lora" in name ]
@@ -169,8 +169,8 @@ class LTXV:
 
         # vae = CausalVideoAutoencoder.from_pretrained(ckpt_path)
         vae = offload.fast_load_transformers_model("ckpts/ltxv_0.9.7_VAE.safetensors", modelClass=CausalVideoAutoencoder)
-        if VAE_dtype == torch.float16:
-            VAE_dtype = torch.bfloat16
+        # if VAE_dtype == torch.float16:
+        VAE_dtype = torch.bfloat16
 
         vae = vae.to(VAE_dtype)
         vae._model_dtype = VAE_dtype

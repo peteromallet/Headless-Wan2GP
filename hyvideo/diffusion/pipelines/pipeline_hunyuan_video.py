@@ -1305,7 +1305,7 @@ class HunyuanVideoPipeline(DiffusionPipeline):
                 # perform guidance
                 if self.do_classifier_free_guidance:
                     if cfg_star_rescale:
-                        batch_size = noise_pred_text.shape[0]
+                        batch_size = 1 
                         positive_flat = noise_pred_text.view(batch_size, -1)
                         negative_flat = noise_pred_uncond.view(batch_size, -1)
                         dot_product = torch.sum(

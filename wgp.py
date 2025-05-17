@@ -1483,7 +1483,10 @@ src_move = [ "ckpts/models_clip_open-clip-xlm-roberta-large-vit-huge-14-bf16.saf
 tgt_move = [ "ckpts/xlm-roberta-large/", "ckpts/umt5-xxl/", "ckpts/umt5-xxl/"]
 for src,tgt in zip(src_move,tgt_move):
     if os.path.isfile(src):
-        shutil.move(src, tgt)
+        try:
+            shutil.move(src, tgt)
+        except:
+            pass
 
     
 
@@ -2772,7 +2775,7 @@ def generate_video(
         if len(list_mult_choices_nums ) < len(activated_loras):
             list_mult_choices_nums  += [1.0] * ( len(activated_loras) - len(list_mult_choices_nums ) )        
         loras_selected = [ lora for lora in loras if os.path.basename(lora) in activated_loras]
-        pinnedLora = profile !=5 #False # # # 
+        pinnedLora = profile !=5 and transformer_loras_filenames == None #False # # # 
         split_linear_modules_map = getattr(trans,"split_linear_modules_map", None)
         if transformer_loras_filenames != None:
             loras_selected += transformer_loras_filenames
@@ -3985,6 +3988,7 @@ def prepare_inputs_dict(target, inputs ):
         for k in unsaved_params:
             inputs.pop(k)
 
+
     if not "Vace" in model_filename or "diffusion_forcing" in model_filename or "ltxv" in model_filename:
         unsaved_params = [ "sliding_window_size", "sliding_window_overlap", "sliding_window_overlap_noise", "sliding_window_discard_last_frames"]
         for k in unsaved_params:
@@ -4643,31 +4647,31 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                         )
 
                 with gr.Tab("Quality", visible = not ltxv) as quality_tab:
-                        with gr.Row():
+                        with gr.Column(visible = not (hunyuan_i2v or hunyuan_t2v or hunyuan_video_custom) ) as skip_layer_guidance_row:
                             gr.Markdown("<B>Skip Layer Guidance (improves video quality)</B>")
-                        with gr.Row():
-                            slg_switch = gr.Dropdown(
-                                choices=[
-                                    ("OFF", 0),
-                                    ("ON", 1), 
-                                ],
-                                value=ui_defaults.get("slg_switch",0),
-                                visible=True,
-                                scale = 1,
-                                label="Skip Layer guidance"
-                            )
-                            slg_layers = gr.Dropdown(
-                                choices=[
-                                    (str(i), i ) for i in range(40)
-                                ],
-                                value=ui_defaults.get("slg_layers", ["9"]),
-                                multiselect= True,
-                                label="Skip Layers",
-                                scale= 3
-                            )
-                        with gr.Row():
-                            slg_start_perc = gr.Slider(0, 100, value=ui_defaults.get("slg_start_perc",10), step=1, label="Denoising Steps % start") 
-                            slg_end_perc = gr.Slider(0, 100, value=ui_defaults.get("slg_end_perc",90), step=1, label="Denoising Steps % end") 
+                            with gr.Row():
+                                slg_switch = gr.Dropdown(
+                                    choices=[
+                                        ("OFF", 0),
+                                        ("ON", 1), 
+                                    ],
+                                    value=ui_defaults.get("slg_switch",0),
+                                    visible=True,
+                                    scale = 1,
+                                    label="Skip Layer guidance"
+                                )
+                                slg_layers = gr.Dropdown(
+                                    choices=[
+                                        (str(i), i ) for i in range(40)
+                                    ],
+                                    value=ui_defaults.get("slg_layers", ["9"]),
+                                    multiselect= True,
+                                    label="Skip Layers",
+                                    scale= 3
+                                )
+                            with gr.Row():
+                                slg_start_perc = gr.Slider(0, 100, value=ui_defaults.get("slg_start_perc",10), step=1, label="Denoising Steps % start") 
+                                slg_end_perc = gr.Slider(0, 100, value=ui_defaults.get("slg_end_perc",90), step=1, label="Denoising Steps % end") 
 
                         with gr.Row():
                             gr.Markdown("<B>Experimental: Classifier-Free Guidance Zero Star, better adherence to Text Prompt")
@@ -4772,7 +4776,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
 
         extra_inputs = prompt_vars + [wizard_prompt, wizard_variables_var, wizard_prompt_activated_var, video_prompt_column, image_prompt_column,
                                       prompt_column_advanced, prompt_column_wizard_vars, prompt_column_wizard, lset_name, advanced_row, speed_tab, quality_tab,
-                                      sliding_window_tab, misc_tab, prompt_enhancer_row, inference_steps_row,
+                                      sliding_window_tab, misc_tab, prompt_enhancer_row, inference_steps_row, skip_layer_guidance_row,
                                       video_prompt_type_video_guide, video_prompt_type_image_refs] # show_advanced presets_column,
         if update_form:
             locals_dict = locals()
