@@ -125,14 +125,15 @@ def _generate_t2v_prompt(
         )
         for m in messages
     ]
-    model_inputs = prompt_enhancer_tokenizer(texts, return_tensors="pt").to(
-        prompt_enhancer_model.device
-    )
 
-    return _generate_and_decode_prompts(
-        prompt_enhancer_model, prompt_enhancer_tokenizer, model_inputs, max_new_tokens
-    )
+    out_prompts = []
+    for text in texts:
+        model_inputs = prompt_enhancer_tokenizer(text, return_tensors="pt").to(
+            prompt_enhancer_model.device
+        )
+        out_prompts.append(_generate_and_decode_prompts(prompt_enhancer_model, prompt_enhancer_tokenizer, model_inputs, max_new_tokens)[0])
 
+    return out_prompts
 
 def _generate_i2v_prompt(
     image_caption_model,
@@ -201,7 +202,7 @@ def _generate_and_decode_prompts(
 ) -> List[str]:
     with torch.inference_mode():
         outputs = prompt_enhancer_model.generate(
-            **model_inputs, max_new_tokens=max_new_tokens
+            **model_inputs,  max_new_tokens=max_new_tokens
         )
         generated_ids = [
             output_ids[len(input_ids) :]

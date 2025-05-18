@@ -20,6 +20,7 @@ from PIL import Image
 import numpy as np
 import torchvision.transforms as transforms
 import cv2
+from wan.utils.utils import resize_lanczos, calculate_new_dimensions
 
 def pad_image(crop_img, size, color=(255, 255, 255), resize_ratio=1):
     crop_h, crop_w = crop_img.shape[:2]
@@ -606,6 +607,7 @@ class HunyuanVideoSampler(Inference):
         VAE_tile_size = None,
         joint_pass = False,
         cfg_star_switch = False,
+        fit_into_canvas = True,
         **kwargs,
     ):
 
@@ -737,12 +739,13 @@ class HunyuanVideoSampler(Inference):
 
             # semantic_images = [Image.open(i2v_image_path).convert('RGB')]
             semantic_images = [image_start.convert('RGB')] #
-
             origin_size = semantic_images[0].size
-
-            crop_size_list = generate_crop_size_list(bucket_hw_base_size, 32)
-            aspect_ratios = np.array([round(float(h)/float(w), 5) for h, w in crop_size_list])
-            closest_size, closest_ratio = get_closest_ratio(origin_size[1], origin_size[0], aspect_ratios, crop_size_list)
+            h, w = origin_size
+            h, w = calculate_new_dimensions(height, width, h, w, fit_into_canvas)
+            closest_size = (w, h)
+            # crop_size_list = generate_crop_size_list(bucket_hw_base_size, 32)
+            # aspect_ratios = np.array([round(float(h)/float(w), 5) for h, w in crop_size_list])
+            # closest_size, closest_ratio = get_closest_ratio(origin_size[1], origin_size[0], aspect_ratios, crop_size_list)
             ref_image_transform = transforms.Compose([
                 transforms.Resize(closest_size),
                 transforms.CenterCrop(closest_size),
