@@ -492,8 +492,7 @@ class MMSingleStreamBlock(nn.Module):
         return img, txt
 
 class HYVideoDiffusionTransformer(ModelMixin, ConfigMixin):
-    @staticmethod
-    def preprocess_loras(model_filename, sd):
+    def preprocess_loras(self, model_filename, sd):
         if not "i2v" in model_filename:
             return sd
         new_sd = {}

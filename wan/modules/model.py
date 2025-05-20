@@ -589,8 +589,7 @@ class MLPProj(torch.nn.Module):
 
 
 class WanModel(ModelMixin, ConfigMixin):
-    @staticmethod
-    def preprocess_loras(model_filename, sd):
+    def preprocess_loras(self, model_filename, sd):
 
         first = next(iter(sd), None)
         if first == None:
@@ -634,8 +633,8 @@ class WanModel(ModelMixin, ConfigMixin):
                     print(f"Lora alpha'{alpha_key}' is missing")
             new_sd.update(new_alphas)
             sd = new_sd
-
-        if "text2video" in model_filename:
+        from wgp import test_class_i2v 
+        if not test_class_i2v(model_filename):
             new_sd = {}
             # convert loras for i2v to t2v
             for k,v in sd.items():
