@@ -26,7 +26,7 @@ from .utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
 from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
 from wan.modules.posemb_layers import get_rotary_pos_embed
 from .utils.vace_preprocessor import VaceVideoProcessor
-
+from wan.utils.basic_flowmatch import FlowMatchScheduler
 
 def optimized_scale(positive_flat, negative_flat):
 
@@ -82,7 +82,9 @@ class WanT2V:
         from mmgp import offload
         # model_filename = "c:/temp/vace1.3/diffusion_pytorch_model.safetensors"
         # model_filename = "vace14B_quanto_bf16_int8.safetensors"
-        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer, writable_tensors= False) # , forcedConfigPath= "c:/temp/vace1.3/config.json")
+        # model_filename = "c:/temp/movii/diffusion_pytorch_model-00001-of-00007.safetensors"
+        # config_filename= "c:/temp/movii/config.json"
+        self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer, writable_tensors= False) # , forcedConfigPath= config_filename)
         # offload.load_model_data(self.model, "e:/vace.safetensors")
         # offload.load_model_data(self.model, "c:/temp/Phantom-Wan-1.3B.pth")
         # self.model.to(torch.bfloat16)
@@ -90,8 +92,8 @@ class WanT2V:
         self.model.lock_layers_dtypes(torch.float32 if mixed_precision_transformer else dtype)
         # dtype = torch.bfloat16
         offload.change_dtype(self.model, dtype, True)
-        # offload.save_model(self.model, "wan2.1_Vace1.3B_mbf16.safetensors", config_file_path="c:/temp/vace1.3/config.json")
-        # offload.save_model(self.model, "vace14B_quanto_fp16_int8.safetensors", do_quantize= True, config_file_path="c:/temp/vace/vace_config.json")
+        # offload.save_model(self.model, "wan2.1_moviigen_14B_mbf16.safetensors", config_file_path=config_filename)
+        # offload.save_model(self.model, "wan2.1_moviigen_14B_quanto_fp16_int8.safetensors", do_quantize= True, config_file_path=config_filename)
         self.model.eval().requires_grad_(False)
 
 
@@ -399,13 +401,14 @@ class WanT2V:
 
         # evaluation mode
 
-        if sample_solver == 'unipc':
-            sample_scheduler = FlowUniPCMultistepScheduler(
-                num_train_timesteps=self.num_train_timesteps,
-                shift=1,
-                use_dynamic_shifting=False)
-            sample_scheduler.set_timesteps(
-                sampling_steps, device=self.device, shift=shift)
+        if False:
+            sample_scheduler = FlowMatchScheduler(num_inference_steps=sampling_steps, shift=shift, sigma_min=0, extra_one_step=True)
+            timesteps = torch.tensor([1000, 934, 862, 756, 603, 410, 250, 140, 74, 0])[:sampling_steps].to(self.device)
+            sample_scheduler.timesteps =timesteps
+        elif sample_solver == 'unipc':
+            sample_scheduler = FlowUniPCMultistepScheduler( num_train_timesteps=self.num_train_timesteps, shift=1, use_dynamic_shifting=False)
+            sample_scheduler.set_timesteps( sampling_steps, device=self.device, shift=shift)
+            
             timesteps = sample_scheduler.timesteps
         elif sample_solver == 'dpm++':
             sample_scheduler = FlowDPMSolverMultistepScheduler(
@@ -468,7 +471,11 @@ class WanT2V:
             timestep = torch.stack(timestep)
             kwargs["current_step"] = i 
             kwargs["t"] = timestep 
-            if joint_pass:
+            if guide_scale == 1:
+                noise_pred = self.model( [latent_model_input], x_id = 0, context = [context], **kwargs)[0]
+                if self._interrupt:
+                    return None
+            elif joint_pass:
                 if phantom:
                     pos_it, pos_i, neg = self.model(
                          [ torch.cat([latent_model_input[:,:-input_ref_images.shape[1]], input_ref_images], dim=1) ] * 2 +
@@ -509,7 +516,9 @@ class WanT2V:
             # del latent_model_input
 
             # CFG Zero *. Thanks to https://github.com/WeichenFan/CFG-Zero-star/
-            if phantom:
+            if guide_scale == 1:
+                pass
+            elif phantom:
                 guide_scale_img= 5.0
                 guide_scale_text= guide_scale #7.5                
                 noise_pred = neg + guide_scale_img * (pos_i - neg) + guide_scale_text * (pos_it - pos_i)
@@ -528,13 +537,13 @@ class WanT2V:
                         noise_pred_uncond *= alpha
                 noise_pred = noise_pred_uncond + guide_scale * (noise_pred_text - noise_pred_uncond)            
             noise_pred_uncond, noise_pred_cond, noise_pred_text, pos_it, pos_i, neg  = None, None, None, None, None, None
-
+            scheduler_kwargs = {} if isinstance(sample_scheduler, FlowMatchScheduler) else {"generator": seed_g}
             temp_x0 = sample_scheduler.step(
                 noise_pred[:, :target_shape[1]].unsqueeze(0),
                 t,
                 latents.unsqueeze(0),
-                return_dict=False,
-                generator=seed_g)[0]
+                # return_dict=False,
+                **scheduler_kwargs)[0]
             latents = temp_x0.squeeze(0)
             del temp_x0
 

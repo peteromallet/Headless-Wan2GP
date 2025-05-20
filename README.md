@@ -21,11 +21,15 @@ WanGP supports the Wan (and derived models), Hunyuan Video and LTV Video models 
 
 
 ## 🔥 Latest News!!
-* May 18 2025: 👋 Wan 2.1GP v5.1 : Bonus Day, added LTX Video 13B Distilled: generate in less than one minute, very high quality Videos !\
+* May 20 2025: 👋 Wan 2.1GP v5.2 : Added support for Wan CausVid which is a distilled Wan model that can generate nice looking videos in only 4 to 12 steps.
+ The great thing is that Kijai (Kudos to him !) has created a CausVid Lora that can be combined with any existing Wan t2v model 14B like Wan Vace 14B.
+ See instructions below on how to use CausVid.\
+ Also as an experiment I have added support for the MoviiGen, the first model that claims to capable to generate 1080p videos (if you have enough VRAM (20GB...) and be ready to wait for a long time...). Don't hesitate to share your impressions on the Discord server.
+* May 18 2025: 👋 Wan 2.1GP v5.1 : Bonus Day, added LTX Video 13B Distilled: generate in less than one minute, very high quality Videos !
 * May 17 2025: 👋 Wan 2.1GP v5.0 : One App to Rule Them All !\
     Added support for the other great open source architectures:
     - Hunyuan Video : text 2 video (one of the best, if not the best t2v) ,image 2 video and the recently released Hunyuan Custom (very good identify preservation when injecting a person into a video)
-    - LTX Video 13B (released last week): very long video support and fast 720p generation.Wan GP version has been greatly optimzed and reduced VRAM requirements by 4 !
+    - LTX Video 13B (released last week): very long video support and fast 720p generation.Wan GP version has been greatly optimzed and reduced LTX Video VRAM requirements by 4 !
 
     Also:
     - Added supported for the best Control Video Model, released 2 days ago : Vace 14B
@@ -267,6 +271,23 @@ python wgp.py --lora-preset  mylorapreset.lset # where 'mylorapreset.lset' is a 
 ```
 
 You will find prebuilt Loras on https://civitai.com/ or you will be able to build them with tools such as kohya or onetrainer.
+
+### CausVid Lora
+
+Wan CausVid is a distilled Wan model that can generate nice looking videos in only 4 to 12 steps. Also as a distilled model it doesnt require CFG and is two times faster for the same number of steps. 
+The great thing is that Kijai (Kudos to him !) has created a CausVid Lora that can be combined with any existing Wan t2v model 14B like Wan Vace 14B to accelerate other models too. It is possible it works also with Wan i2v models. 
+
+Instructions:
+1) Download first the Lora: https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan21_CausVid_14B_T2V_lora_rank32.safetensors
+2) Choose a Wan t2v model (for instance Wan 2.1 text2video 13B or Vace 13B ) 
+3) Turn on the Advanced Mode by checking the corresponding checkbox
+4) In the Advanced Generation Tab: select Guidance Scale =1, Shift Scale = 7
+5) In the Advanced Lora Tab : Select the CausVid Lora (click the Refresh button at the top if you dont see it), and enter 0.3 as Lora multiplier
+6) Now select a 12 steps generation and Click Generate
+
+You can reduce the number of steps to as low as 4 but you will need to increase progressively at the same time the Lora muliplier up to 1. Please note the lower the number of steps the lower the quality (especially the motion).
+
+You can combine the CausVid Lora and other Loras (just follow the instructions above)
 
 ### Macros (basic)
 In *Advanced Mode*, you can starts prompt lines with a "!" , for instance:\ 

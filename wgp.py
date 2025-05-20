@@ -42,7 +42,7 @@ global_queue_ref = []
 AUTOSAVE_FILENAME = "queue.zip"
 PROMPT_VARS_MAX = 10
 
-target_mmgp_version = "3.4.5"
+target_mmgp_version = "3.4.6"
 prompt_enhancer_image_caption_model, prompt_enhancer_image_caption_processor, prompt_enhancer_llm_model, prompt_enhancer_llm_tokenizer = None, None, None, None
 
 from importlib.metadata import version
@@ -1529,7 +1529,9 @@ for path in  ["wan2.1_Vace_1.3B_preview_bf16.safetensors", "sky_reels2_diffusion
 wan_choices_t2v=["ckpts/wan2.1_text2video_1.3B_bf16.safetensors", "ckpts/wan2.1_text2video_14B_bf16.safetensors", "ckpts/wan2.1_text2video_14B_quanto_int8.safetensors", "ckpts/wan2.1_Vace_1.3B_mbf16.safetensors", 
                          "ckpts/wan2.1_recammaster_1.3B_bf16.safetensors", "ckpts/sky_reels2_diffusion_forcing_1.3B_mbf16.safetensors", "ckpts/sky_reels2_diffusion_forcing_14B_bf16.safetensors",
                         "ckpts/sky_reels2_diffusion_forcing_14B_quanto_int8.safetensors",  "ckpts/sky_reels2_diffusion_forcing_720p_14B_mbf16.safetensors","ckpts/sky_reels2_diffusion_forcing_720p_14B_quanto_mbf16_int8.safetensors", 
-                        "ckpts/wan2_1_phantom_1.3B_mbf16.safetensors", "ckpts/wan2.1_Vace_14B_mbf16.safetensors", "ckpts/wan2.1_Vace_14B_quanto_mbf16_int8.safetensors"]   
+                        "ckpts/wan2_1_phantom_1.3B_mbf16.safetensors", "ckpts/wan2.1_Vace_14B_mbf16.safetensors", "ckpts/wan2.1_Vace_14B_quanto_mbf16_int8.safetensors",
+                        "ckpts/wan2.1_moviigen1.1_14B_mbf16.safetensors", "ckpts/wan2.1_moviigen1.1_14B_quanto_mbf16_int8.safetensors",
+                        ]    
 wan_choices_i2v=["ckpts/wan2.1_image2video_480p_14B_mbf16.safetensors", "ckpts/wan2.1_image2video_480p_14B_quanto_mbf16_int8.safetensors", "ckpts/wan2.1_image2video_720p_14B_mbf16.safetensors",
                         "ckpts/wan2.1_image2video_720p_14B_quanto_mbf16_int8.safetensors", "ckpts/wan2.1_Fun_InP_1.3B_bf16.safetensors", "ckpts/wan2.1_Fun_InP_14B_bf16.safetensors",
                         "ckpts/wan2.1_Fun_InP_14B_quanto_int8.safetensors", "ckpts/wan2.1_FLF2V_720p_14B_bf16.safetensors", "ckpts/wan2.1_FLF2V_720p_14B_quanto_int8.safetensors",
@@ -1547,11 +1549,11 @@ def get_dependent_models(model_filename, quantization, dtype_policy ):
         return [get_model_filename("ltxv_13B", quantization, dtype_policy)]
     else:
         return []
-model_types = [ "t2v_1.3B", "t2v", "i2v", "i2v_720p", "flf2v_720p", "vace_1.3B","vace_14B", "phantom_1.3B", "fantasy",  "fun_inp_1.3B", "fun_inp", "recam_1.3B",  "sky_df_1.3B", "sky_df_14B", "sky_df_720p_14B", "ltxv_13B", "ltxv_13B_distilled", "hunyuan", "hunyuan_i2v", "hunyuan_custom"]
+model_types = [ "t2v_1.3B", "t2v", "i2v", "i2v_720p", "flf2v_720p", "vace_1.3B","vace_14B","moviigen", "phantom_1.3B", "fantasy",  "fun_inp_1.3B", "fun_inp", "recam_1.3B",  "sky_df_1.3B", "sky_df_14B", "sky_df_720p_14B", "ltxv_13B", "ltxv_13B_distilled", "hunyuan", "hunyuan_i2v", "hunyuan_custom"]
 model_signatures = {"t2v": "text2video_14B", "t2v_1.3B" : "text2video_1.3B",   "fun_inp_1.3B" : "Fun_InP_1.3B",  "fun_inp" :  "Fun_InP_14B", 
                     "i2v" : "image2video_480p", "i2v_720p" : "image2video_720p" , "vace_1.3B" : "Vace_1.3B", "vace_14B" : "Vace_14B","recam_1.3B": "recammaster_1.3B", 
                     "flf2v_720p" : "FLF2V_720p", "sky_df_1.3B" : "sky_reels2_diffusion_forcing_1.3B", "sky_df_14B" : "sky_reels2_diffusion_forcing_14B", 
-                    "sky_df_720p_14B" : "sky_reels2_diffusion_forcing_720p_14B",
+                    "sky_df_720p_14B" : "sky_reels2_diffusion_forcing_720p_14B",  "moviigen" :"moviigen",
                      "phantom_1.3B" : "phantom_1.3B", "fantasy" : "fantasy", "ltxv_13B" : "ltxv_0.9.7_13B_dev", "ltxv_13B_distilled" : "ltxv_0.9.7_13B_distilled",  "hunyuan" : "hunyuan_video_720", "hunyuan_i2v" : "hunyuan_video_i2v_720", "hunyuan_custom" : "hunyuan_video_custom" }
 
 
@@ -1616,6 +1618,9 @@ def get_model_name(model_filename, description_container = [""]):
         model_name = "Wan2.1 Fantasy Speaking 720p"
         model_name += " 14B" if "14B" in model_filename else " 1.3B"
         description = "The Fantasy Speaking model corresponds to the original Wan image 2 video model combined with the Fantasy Speaking extension to process an audio Input."
+    elif "movii" in model_filename:
+        model_name = "Wan2.1 MoviiGen 1080p 14B"
+        description = "MoviiGen 1.1, a cutting-edge video generation model that excels in cinematic aesthetics and visual quality. Use it to generate videos in 720p or 1080p in the 21:9 ratio."
     elif "ltxv_0.9.7_13B_dev" in model_filename:
         model_name = "LTX Video 0.9.7 13B"
         description = "LTX Video is a fast model that can be used to generate long videos (up to 260 frames).It is recommended to keep the number of steps to 30 or you will need to update the file 'ltxv_video/configs/ltxv-13b-0.9.7-dev.yaml'.The LTX Video model expects very long prompts, so don't hesitate to use the Prompt Enhancer."
@@ -4541,12 +4546,17 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                     label = "Max Resolution (as it maybe less depending on video width / height ratio)" 
                 resolution = gr.Dropdown(
                     choices=[
+                        # 1080p
+                        ("1920x832 (21:9, 1080p)", "1920x832"),
+                        ("832x1920 (9:21, 1080p)", "832x1920"),
                         # 720p
                         ("1280x720 (16:9, 720p)", "1280x720"),
                         ("720x1280 (9:16, 720p)", "720x1280"), 
                         ("1024x1024 (1:1, 720p)", "1024x024"),
-                        ("832x1104 (3:4, 720p)", "832x1104"),
+                        ("1280x544 (21:9, 720p)", "1280x544"),
+                        ("544x1280 (9:21, 720p)", "544x1280"),
                         ("1104x832 (4:3, 720p)", "1104x832"),
+                        ("832x1104 (3:4, 720p)", "832x1104"),
                         ("960x960 (1:1, 720p)", "960x960"),
                         # 480p
                         ("960x544 (16:9, 540p)", "960x544"),
@@ -5651,7 +5661,7 @@ def create_demo():
         theme = gr.themes.Soft(font=["Verdana"], primary_hue="sky", neutral_hue="slate", text_size="md")
 
     with gr.Blocks(css=css, theme=theme, title= "WanGP") as main:
-        gr.Markdown("<div align=center><H1>Wan<SUP>GP</SUP> v5.1 <FONT SIZE=4>by <I>DeepBeepMeep</I></FONT> <FONT SIZE=3>") # (<A HREF='https://github.com/deepbeepmeep/Wan2GP'>Updates</A>)</FONT SIZE=3></H1></div>")
+        gr.Markdown("<div align=center><H1>Wan<SUP>GP</SUP> v5.2 <FONT SIZE=4>by <I>DeepBeepMeep</I></FONT> <FONT SIZE=3>") # (<A HREF='https://github.com/deepbeepmeep/Wan2GP'>Updates</A>)</FONT SIZE=3></H1></div>")
         global model_list
 
         tab_state = gr.State({ "tab_no":0 }) 
