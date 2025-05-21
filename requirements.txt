@@ -33,4 +33,5 @@ librosa
 loguru
 sentencepiece
 av
+psycopg2-binary
 # rembg==2.0.65
