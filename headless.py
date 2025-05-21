@@ -167,7 +167,7 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
     if causvid_active:
         print(f"[Task ID: {task_params_dict.get('task_id')}] Applying CausVid LoRA settings.")
         
-        # If steps are specified in the task JSON for a CausVid task, use them; otherwise, default to 12.
+        # If steps are specified in the task JSON for a CausVid task, use them; otherwise, default to 9.
         if "steps" in task_params_dict:
             ui_defaults["num_inference_steps"] = task_params_dict["steps"]
             print(f"[Task ID: {task_params_dict.get('task_id')}] CausVid task using specified steps: {ui_defaults['num_inference_steps']}")
@@ -175,11 +175,11 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
             ui_defaults["num_inference_steps"] = task_params_dict["num_inference_steps"]
             print(f"[Task ID: {task_params_dict.get('task_id')}] CausVid task using specified num_inference_steps: {ui_defaults['num_inference_steps']}")
         else:
-            ui_defaults["num_inference_steps"] = 12 # Default for CausVid if not specified in task
+            ui_defaults["num_inference_steps"] = 9 # Default for CausVid if not specified in task
             print(f"[Task ID: {task_params_dict.get('task_id')}] CausVid task defaulting to steps: {ui_defaults['num_inference_steps']}")
 
         ui_defaults["guidance_scale"] = 1.0 # Still overridden
-        ui_defaults["flow_shift"] = 7.0     # Still overridden
+        ui_defaults["flow_shift"] = 1.0     # Still overridden
         
         causvid_lora_basename = "Wan21_CausVid_14B_T2V_lora_rank32.safetensors"
         current_activated = ui_defaults.get("activated_loras", [])
@@ -205,7 +205,7 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
 
             # Add CausVid first
             final_loras.append(causvid_lora_basename)
-            final_multipliers.append("0.3")
+            final_multipliers.append("0.7")
 
             # Add existing, ensuring no duplicate multiplier for already present CausVid (though it shouldn't be)
             processed_other_loras = set()
@@ -222,7 +222,7 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
             ui_defaults["activated_loras"] = final_loras # ensure order matches multipliers
             ui_defaults["loras_multipliers"] = " ".join(final_multipliers)
         else:
-            ui_defaults["loras_multipliers"] = "0.3"
+            ui_defaults["loras_multipliers"] = "0.7"
             ui_defaults["activated_loras"] = [causvid_lora_basename] # ensure only causvid if no others
 
     state[model_type_key] = ui_defaults
