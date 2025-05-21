@@ -1,12 +1,27 @@
 # WanGP Headless Processing
 
-This document describes the headless processing feature for WanGP, enabling automated video generation by monitoring a `tasks.json` file.
+This document describes the headless processing feature for WanGP, enabling automated video generation by monitoring a `tasks.json` file. Credit for the original Wan2GP repository to [deepbeepmeep](https://github.com/deepbeepmeep) - I'm just making it headless.
 
 ## Overview
 
 The `headless.py` script allows users to run WanGP without the Gradio web interface. It continuously polls a specified JSON file (e.g., `tasks.json`) for video generation tasks. When a new task is found, it processes it using the `wgp.py` engine and saves the output to a designated directory. After processing, the task is removed from the JSON file.
 
-This is useful for batch processing, automated workflows, or running WanGP on servers without a graphical interface.
+This is useful for batch processing, automated workflows, or running WanGP on servers without a graphical interface. Lots of improvements incoming!
+
+## Setup
+
+Run this command to install all dependencies, download all the models, and start processing tasks from tasks.json. Once running, you can add new tasks to the file for automated processing.
+
+```bash
+git clone https://github.com/deepbeepmeep/Wan2GP /workspace/Wan2GP && \
+cd /workspace/Wan2GP && \
+apt-get update && apt-get install -y python3.10-venv && \
+python3.10 -m venv venv && \
+source venv/bin/activate && \
+pip install --no-cache-dir torch==2.6.0 torchvision torchaudio -f https://download.pytorch.org/whl/cu124 && \
+pip install --no-cache-dir -r requirements.txt && \
+python headless.py --tasks-file tasks.json
+```
 
 ## How it Works
 
