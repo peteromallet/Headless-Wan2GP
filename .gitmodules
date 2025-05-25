@@ -1,0 +1,3 @@
+[submodule "Wan2GP"]
+	path = Wan2GP
+	url = https://github.com/deepbeepmeep/Wan2GP.git
