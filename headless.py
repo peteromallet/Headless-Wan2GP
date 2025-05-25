@@ -1092,8 +1092,6 @@ def main():
     patch_gradio()
     
     # Add Wan2GP directory to Python path and import wgp directly
-    import sys
-    from pathlib import Path
     wan2gp_path = Path(__file__).parent / "Wan2GP"
     if str(wan2gp_path) not in sys.path:
         sys.path.insert(0, str(wan2gp_path))
