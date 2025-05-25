@@ -40,3 +40,4 @@ gradio_outputs/
 ckpts/
 loras/
 loras_i2v/
+.env
