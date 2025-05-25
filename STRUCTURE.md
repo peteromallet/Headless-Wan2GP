@@ -30,8 +30,9 @@ A light-weight, testable wrapper around the bulky `steerable_motion.py` logic.  
 
 ## Wan2GP/
 
-Vendor directory containing the upstream video-generation engine (`wgp.py`) together with model checkpoints, inference helpers, preprocessing code, and assorted assets.
-Only the entry module `wgp.py` is imported directly; everything else stays encapsulated here.
+**Git Submodule** pointing to the upstream [deepbeepmeep/Wan2GP](https://github.com/deepbeepmeep/Wan2GP) repository. This contains the video-generation engine (`wgp.py`) together with model checkpoints, inference helpers, preprocessing code, and assorted assets.
+
+The submodule is currently pinned to commit `4cc1420` and can be updated periodically using standard git submodule commands. Only the entry module `wgp.py` is imported directly; everything else stays encapsulated within the submodule.
 
 ## Runtime artefacts
 
