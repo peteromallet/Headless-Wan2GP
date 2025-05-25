@@ -1479,20 +1479,6 @@ if os.path.isfile("t2v_settings.json"):
         target_file = os.path.join("settings",  Path(f).parts[-1] )
         shutil.move(f, target_file) 
 
-if not os.path.isfile(server_config_filename) and os.path.isfile("gradio_config.json"):
-    shutil.move("gradio_config.json", server_config_filename) 
-
-src_move = [ "ckpts/models_clip_open-clip-xlm-roberta-large-vit-huge-14-bf16.safetensors", "ckpts/models_t5_umt5-xxl-enc-bf16.safetensors", "ckpts/models_t5_umt5-xxl-enc-quanto_int8.safetensors" ]
-tgt_move = [ "ckpts/xlm-roberta-large/", "ckpts/umt5-xxl/", "ckpts/umt5-xxl/"]
-for src,tgt in zip(src_move,tgt_move):
-    if os.path.isfile(src):
-        try:
-            shutil.move(src, tgt)
-        except:
-            pass
-
-    
-
 if not Path(server_config_filename).is_file():
     server_config = {"attention_mode" : "auto",  
                      "transformer_types": [], 
@@ -2600,6 +2586,48 @@ def preprocess_video(process_type, height, width, video_in, max_frames, start_fr
 
     return torch.stack(torch_frames) 
 
+def parse_ltxv_conditioning_spec(spec_string: str, total_source_frames: int) -> tuple[list[tuple[int] | tuple[int, int]], str]:
+    if not spec_string:
+        return [], ""
+
+    parsed_specs = []
+    error_msg = ""
+    parts = spec_string.split(',')
+
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        
+        if ':' in part:
+            try:
+                start_str, end_str = part.split(':')
+                start = int(start_str.strip())
+                end = int(end_str.strip())
+                if not (0 <= start < total_source_frames and 0 <= end < total_source_frames and start <= end):
+                    error_msg = f"Invalid range '{part}'. Frames out of bounds (0-{total_source_frames-1}) or start > end."
+                    break
+                parsed_specs.append(tuple(sorted((start, end))))
+            except ValueError:
+                error_msg = f"Invalid range format '{part}'. Expected 'start:end'."
+                break
+        else:
+            try:
+                frame_idx = int(part)
+                if not (0 <= frame_idx < total_source_frames):
+                    error_msg = f"Invalid frame index '{part}'. Frame out of bounds (0-{total_source_frames-1})."
+                    break
+                parsed_specs.append((frame_idx,))
+            except ValueError:
+                error_msg = f"Invalid frame number '{part}'. Expected an integer."
+                break
+    
+    if error_msg:
+        return [], error_msg
+    
+    # Sort by start frame to process in order
+    parsed_specs.sort(key=lambda x: x[0])
+    return parsed_specs, ""
 
 def parse_keep_frames_video_guide(keep_frames, video_length):
         
@@ -2670,6 +2698,7 @@ def generate_video(
     model_mode,
     video_source,
     keep_frames_video_source,
+    ltxv_conditioning_frames_spec,
     video_prompt_type,
     image_refs,
     video_guide,
@@ -2699,7 +2728,28 @@ def generate_video(
     gen = get_gen_info(state)
     torch.set_grad_enabled(False) 
 
-    file_list = gen["file_list"]
+    # Conditional imports for LTXV custom conditioning
+    ConditioningItem = None
+    load_image_to_tensor_with_resize_and_crop_ltxv = None
+    imageio_ltxv = None
+    cv2_ltxv = None # if load_image_to_tensor_with_resize_and_crop uses it
+    decord_ltxv = None
+
+    if "ltxv" in model_filename:
+        try:
+            from ltx_video.pipelines.pipeline_ltx_video import ConditioningItem
+            from ltx_video.utils.media_utils import load_image_to_tensor_with_resize_and_crop as load_image_to_tensor_with_resize_and_crop_ltxv
+            import imageio as imageio_ltxv
+            import cv2 as cv2_ltxv 
+            import decord as decord_ltxv
+            decord_ltxv.bridge.set_bridge('torch') # Ensure decord is set up if used
+        except ImportError as e:
+            send_cmd("warning", f"Could not import LTXV specific modules for custom conditioning: {e}")
+            # Proceeding without custom LTXV conditioning if imports fail
+
+    file_list = gen["file_list"]    
+    torch.set_grad_enabled(False) 
+    
     prompt_no = gen["prompt_no"]
 
     fit_canvas = server_config.get("fit_canvas", 0)
@@ -2905,7 +2955,7 @@ def generate_video(
         total_generation = repeat_generation + extra_generation
         gen["total_generation"] = total_generation         
         if repeat_no >= total_generation:
-            break
+                break
         repeat_no +=1
         gen["repeat_no"] = repeat_no
         src_video, src_mask, src_ref_images = None, None, None
@@ -2921,36 +2971,66 @@ def generate_video(
         gen["total_windows"] = 1
         gen["window_no"] = 1
         start_time = time.time()
-        if prompt_enhancer_image_caption_model != None and prompt_enhancer !=None and len(prompt_enhancer)>0:
+        if prompt_enhancer_image_caption_model != None and prompt_enhancer !=None and len(prompt_enhancer)>0: # Main IF for enhancer
             text_encoder_max_tokens = 256
             send_cmd("progress", [0, get_latest_status(state, "Enhancing Prompt")])
             from ltx_video.utils.prompt_enhance_utils import generate_cinematic_prompt
+            
             prompt_images = []
-            if "I" in prompt_enhancer:
+            if "I" in prompt_enhancer: # Prepare images if "I" is in enhancer spec
                 if image_start != None:
                     prompt_images.append(image_start)
                 if original_image_refs != None:
                     prompt_images +=  original_image_refs[:1]
-            if len(original_prompts) == 0 and not "T" in prompt_enhancer:
-                pass
-            else:
-                from wan.utils.utils import seed_everything
+
+            # Determine if we should actually call the enhancer
+            should_call_enhancer = False
+            prompts_to_feed_enhancer = original_prompts
+
+            if "T" in prompt_enhancer and original_prompts: # Text enhancement requested and text exists
+                should_call_enhancer = True
+            
+            if "I" in prompt_enhancer and prompt_images: # Image enhancement requested and images exist
+                should_call_enhancer = True
+                if not original_prompts and "T" not in prompt_enhancer: # If only "I" and no text, give placeholder
+                    prompts_to_feed_enhancer = ["an image"] 
+            
+            if not original_prompts and "T" in prompt_enhancer and not ("I" in prompt_enhancer and prompt_images):
+                 # "T" requested, but no original_prompts and no image part to take over
+                 # This case might lead to an empty call or error, or you might want to provide a dummy like " "
+                 prompts_to_feed_enhancer = [" "] # Provide some minimal text
+                 should_call_enhancer = True
+
+
+            if should_call_enhancer and prompts_to_feed_enhancer:
+                from wan.utils.utils import seed_everything # Keep import local to usage
                 seed_everything(seed)
-                # for i, original_prompt in enumerate(original_prompts):
+                
                 prompts = generate_cinematic_prompt(
                     prompt_enhancer_image_caption_model,
                     prompt_enhancer_image_caption_processor,
                     prompt_enhancer_llm_model,
                     prompt_enhancer_llm_tokenizer,
-                    original_prompts if "T" in prompt_enhancer else ["an image"],
-                    prompt_images if len(prompt_images) > 0 else None,
+                    prompts_to_feed_enhancer, 
+                    prompt_images if prompt_images else None, # Pass None if empty
                     max_new_tokens=text_encoder_max_tokens,
                 )
-                print(f"Enhanced prompts: {prompts}" )
-                task["prompt"] = "\n".join(["!enhanced!"] + prompts)
+                print(f"Enhanced prompts: {prompts}")
+                task["prompt"] = "\n".join(["!enhanced!"] + prompts) # Update task with all enhanced
                 send_cmd("output")
-                prompt = prompts[0]
-                abort = gen.get("abort", False)
+                # `prompt` (singular) will be selected from `prompts` (plural) in the window loop
+            # else:
+                # print("DEBUG WGP: Skipping prompt enhancement call as conditions not fully met or no prompts to feed.")
+
+            abort = gen.get("abort", False) # Check abort after potential processing
+
+        # If the main 'if' for enhancer was false, the above block is skipped.
+        # Ensure `abort` is checked even if the enhancer block is skipped.
+        # `abort = gen.get("abort", False)` could also be placed here if it's only relevant after this section.
+        # However, `send_cmd("output")` could trigger an abort, so checking inside is also fine.
+
+        # `prompts` (plural) at this point is either original_prompts.copy() or the enhanced ones.
+        # `prompt` (singular) will be derived from `prompts` (plural) inside the window loop.
 
         while not abort:
             if sliding_window:
@@ -2964,8 +3044,141 @@ def generate_video(
             if window_no >= total_windows:
                 break
             window_no += 1
+    # ...            
             gen["window_no"] = window_no
-            
+
+            # Determine the global start frame of the current window for LTXV conditioning
+            current_window_start_frame_global = 0
+            if sliding_window:
+                if window_no == 1:
+                    current_window_start_frame_global = 0
+                else:
+                    # This calculation should accurately reflect how wgp.py advances through a long video
+                    # It depends on first_window_video_length, reuse_frames, discard_last_frames, sliding_window_size
+                    # For simplicity, let's use a placeholder or refine this specific calculation later if issues arise.
+                    # A common pattern:
+                    prev_windows_frames_generated = (first_window_video_length - discard_last_frames) + \
+                                                    ((window_no - 2) * (sliding_window_size - reuse_frames - discard_last_frames))
+                    current_window_start_frame_global = prev_windows_frames_generated - reuse_frames # Tentative
+                    if window_no == 1 : current_window_start_frame_global = 0
+
+
+            kwargs_for_model_generate = {} # Initialize for each window
+            current_custom_conditioning_items = []
+
+            if ltxv and video_source and ltxv_conditioning_frames_spec and ConditioningItem and load_image_to_tensor_with_resize_and_crop_ltxv and imageio_ltxv and decord_ltxv:
+                
+                try:
+                    if isinstance(video_source, str) and os.path.isfile(video_source):
+                        # Use imageio to get frame count as it's safer for various video files
+                        with imageio_ltxv.get_reader(video_source, 'ffmpeg') as reader:
+                            total_source_frames = reader.count_frames()
+                        
+                        parsed_spec, error_msg = parse_ltxv_conditioning_spec(ltxv_conditioning_frames_spec, total_source_frames)
+                        if error_msg:
+                            send_cmd("error", f"LTXV Conditioning Spec Error: {error_msg}")
+                            # Decide how to handle: skip this task, or just this conditioning? For now, log and continue without it.
+                            print(f"LTXV Conditioning Spec Error: {error_msg}")
+                        else:
+                            # Use decord for frame extraction as it's already in use and efficient
+                            # Note: LTXV might expect specific width/height for conditioning frames
+                            # For now, assume they are to be resized to the target output width/height
+                            source_videoreader = decord_ltxv.VideoReader(video_source) # no resize here, do it per frame
+
+                            for spec_item in parsed_spec:
+                                item_original_start_frame_in_source = spec_item[0] # This is the frame number from original video spec
+                                
+                                # Determine frame numbers in source video to fetch
+                                source_frames_to_fetch_indices = []
+                                if len(spec_item) == 1: # Single frame
+                                    source_frames_to_fetch_indices = [item_original_start_frame_in_source]
+                                else: # Range
+                                    source_frames_to_fetch_indices = list(range(item_original_start_frame_in_source, spec_item[1] + 1))
+
+                                # Filter indices that are out of bounds for the source video
+                                source_frames_to_fetch_indices = [idx for idx in source_frames_to_fetch_indices if idx < total_source_frames]
+                                if not source_frames_to_fetch_indices:
+                                    continue
+
+                                # Determine the target start frame for this conditioning item *within the current output window*
+                                # And how many frames from the spec are relevant for this window
+                                num_frames_for_this_item_in_window = 0
+                                target_start_frame_in_window = -1
+
+                                if not sliding_window:
+                                    target_start_frame_in_window = item_original_start_frame_in_source
+                                    num_frames_for_this_item_in_window = len(source_frames_to_fetch_indices)
+                                    # Clip if it extends beyond current video_length (which is window_length if sliding)
+                                    if target_start_frame_in_window + num_frames_for_this_item_in_window > video_length:
+                                        num_frames_for_this_item_in_window = video_length - target_start_frame_in_window
+                                else: # Sliding window active
+                                    # Calculate overlap of the spec item with the current global window
+                                    spec_global_start = item_original_start_frame_in_source
+                                    spec_global_end = source_frames_to_fetch_indices[-1]
+                                    
+                                    window_global_start = current_window_start_frame_global
+                                    window_global_end = current_window_start_frame_global + video_length -1 # video_length is current window's length
+
+                                    overlap_start_global = max(spec_global_start, window_global_start)
+                                    overlap_end_global = min(spec_global_end, window_global_end)
+
+                                    if overlap_start_global <= overlap_end_global:
+                                        target_start_frame_in_window = overlap_start_global - window_global_start
+                                        num_frames_for_this_item_in_window = overlap_end_global - overlap_start_global + 1
+                                        
+                                        # Adjust source_frames_to_fetch_indices to only grab the overlapping part
+                                        offset_into_spec = overlap_start_global - spec_global_start
+                                        source_frames_to_fetch_indices = source_frames_to_fetch_indices[offset_into_spec : offset_into_spec + num_frames_for_this_item_in_window]
+                                    else: # No overlap with current window
+                                        continue
+                                
+                                if num_frames_for_this_item_in_window <= 0 or not source_frames_to_fetch_indices:
+                                    continue
+
+                                # Fetch and preprocess frames
+                                raw_frames_numpy = source_videoreader.get_batch(source_frames_to_fetch_indices).asnumpy()
+                                processed_frame_tensors_list = []
+                                for frame_np in raw_frames_numpy:
+                                    pil_img = Image.fromarray(frame_np)
+                                    # load_image_to_tensor_with_resize_and_crop_ltxv returns (C, H, W) normalized to [-1,1]
+                                    frame_tensor_chw = load_image_to_tensor_with_resize_and_crop_ltxv(pil_img, target_height=height, target_width=width)
+                                    processed_frame_tensors_list.append(frame_tensor_chw)
+                                
+                                if not processed_frame_tensors_list:
+                                    continue
+                                
+                                # Stack along frame dimension (new dim 1), add batch dim -> (1, C, F, H, W)
+                                media_tensor_for_item = torch.stack(processed_frame_tensors_list, dim=1).unsqueeze(0) 
+                                                            
+                                ci = ConditioningItem(
+                                    media_item=media_tensor_for_item.to(processing_device, dtype=trans.dtype), # Use transformer's dtype
+                                    media_frame_number=target_start_frame_in_window,
+                                    conditioning_strength=1.0 # Make configurable later
+                                )
+                                current_custom_conditioning_items.append(ci)
+                    else:
+                        send_cmd("info", "LTXV: Video source for conditioning spec is not a valid file path or spec is empty.")
+                except Exception as e_cond:
+                    send_cmd("error", f"Error preparing LTXV conditioning items: {str(e_cond)}")
+                    traceback.print_exc() # Print to server console
+                    # Potentially skip this task or continue without custom conditioning
+                
+                if current_custom_conditioning_items:
+                    kwargs_for_model_generate["conditioning_items"] = current_custom_conditioning_items
+                    # If custom items are provided, we might not want the default `pre_video_guide` 
+                    # from sliding window to also act as a frame 0 condition for LTXV.
+                    # LTXV.generate turns its `input_video` (our `pre_video_guide`) into a conditioning_item.
+                    # To avoid potential conflicts or double conditioning at frame 0 of a window,
+                    # if our spec provides frame 0, we should nullify `pre_video_guide` for this call.
+                    # This is a complex interaction. For now, let's assume LTXV pipeline handles multiple items well.
+                    # If spec includes frame 0 for a window, it might override/conflict with pre_video_guide.
+                    # Simplest: if custom_conditioning_items_for_ltxv is non-empty, we tell LTXV.generate not to use its internal input_video logic for prefix.
+                    # This can be done by ensuring `input_video` (which is `pre_video_guide` for `wan_model.generate`) is None.
+                    if ltxv_conditioning_frames_spec and video_source: # if the spec is active
+                         pre_video_guide = None # Nullify the default sliding window prefix if custom spec is used for LTXV.
+                                               # This prioritizes the spec over the auto-generated window transition prefix.
+
+
             if hunyuan_custom:
                 src_ref_images  = image_refs
             elif phantom:
@@ -3047,7 +3260,7 @@ def generate_video(
                     input_frames = src_video,
                     input_ref_images=  src_ref_images,
                     input_masks = src_mask,
-                    input_video= pre_video_guide  if diffusion_forcing or ltxv else source_video,
+                    input_video= pre_video_guide  if (diffusion_forcing or ltxv) and not (ltxv and video_source and ltxv_conditioning_frames_spec and current_custom_conditioning_items) else source_video, # Modified input_video
                     target_camera= target_camera,
                     frame_num=(video_length // 4)* 4 + 1,
                     height =  height,
@@ -3098,7 +3311,7 @@ def generate_video(
                 for keyword, tp  in keyword_list.items():
                     if keyword in s:
                         crash_type = tp 
-                        break
+                    break
                 state["prompt"] = ""
                 if crash_type == "VRAM":
                     new_error = "The generation of the video has encountered an error: it is likely that you have unsufficient VRAM and you should therefore reduce the video resolution or its number of frames."
@@ -3979,47 +4192,58 @@ def prepare_inputs_dict(target, inputs ):
 
     if target == "state":
         return inputs
-    unsaved_params = ["image_start", "image_end", "image_refs", "video_guide", "video_source", "video_mask", "audio_guide", "embedded_guidance_scale"]
-    for k in unsaved_params:
-        inputs.pop(k)
+    
+    # Parameters not saved to settings/metadata or specific to certain conditions
+    # This initial list is for parameters generally not saved unless for 'state'
+    base_unsaved_params = ["image_start", "image_end", "image_refs", "video_guide", "video_source", "video_mask", "audio_guide", "embedded_guidance_scale"]
+    for k in base_unsaved_params:
+        inputs.pop(k, None)
 
     model_filename = state["model_filename"]
     inputs["type"] = "WanGP by DeepBeepMeep - " +  get_model_name(model_filename)
 
     if target == "settings":
-        return inputs
-    
+        # For settings, we might want to save more, but the current logic pops many things.
+        # We'll adhere to current logic but ensure safe pops.
+        pass # Most will be popped by subsequent conditional logic if not for this model type
+
     if not test_class_i2v(model_filename):
-        inputs.pop("image_prompt_type")
+        inputs.pop("image_prompt_type", None)
+        inputs.pop("multi_images_gen_type", None) # Often tied to i2v
 
     if not server_config.get("enhancer_enabled", 0) == 1:
-        inputs.pop("prompt_enhancer")
+        inputs.pop("prompt_enhancer", None)
 
-    if not "recam" in model_filename or not "diffusion_forcing" in model_filename:
-        inputs.pop("model_mode")
+    if "recam" not in model_filename and "diffusion_forcing" not in model_filename: # Corrected logic
+        inputs.pop("model_mode", None)
 
-    if not "Vace" in model_filename or not "phantom" in model_filename or not "hunyuan_video_custom" in model_filename:
-        unsaved_params = ["keep_frames_video_guide", "video_prompt_type",  "remove_background_image_ref"]
-        for k in unsaved_params:
-            inputs.pop(k)
+    if not ("Vace" in model_filename or "phantom" in model_filename or "hunyuan_video_custom" in model_filename):
+        params_to_pop = ["keep_frames_video_guide", "video_prompt_type",  "remove_background_image_ref"]
+        for k in params_to_pop:
+            inputs.pop(k, None)
 
     if not ("diffusion_forcing" in model_filename or "ltxv" in model_filename):
-        unsaved_params = ["keep_frames_video_source"]
-        for k in unsaved_params:
-            inputs.pop(k)
+        params_to_pop = ["keep_frames_video_source", "ltxv_conditioning_frames_spec"] # Added new param here
+        for k in params_to_pop:
+            inputs.pop(k, None)
 
+    if not ("Vace" in model_filename or "diffusion_forcing" in model_filename or "ltxv" in model_filename):
+        params_to_pop = [ "sliding_window_size", "sliding_window_overlap", "sliding_window_overlap_noise", "sliding_window_discard_last_frames"]
+        for k in params_to_pop:
+            inputs.pop(k, None)
 
-    if not "Vace" in model_filename or "diffusion_forcing" in model_filename or "ltxv" in model_filename:
-        unsaved_params = [ "sliding_window_size", "sliding_window_overlap", "sliding_window_overlap_noise", "sliding_window_discard_last_frames"]
-        for k in unsaved_params:
-            inputs.pop(k)
+    if "fantasy" not in model_filename:
+        inputs.pop("audio_guidance_scale", None)
+        inputs.pop("audio_guide", None) # audio_guide was in base_unsaved_params, but good to be explicit if fantasy-specific
 
-    if not "fantasy" in model_filename:
-        inputs.pop("audio_guidance_scale")
+    # If not LTXV specifically, ensure LTXV spec is removed if it wasn't caught by other conditions
+    if "ltxv" not in model_filename:
+        inputs.pop("ltxv_conditioning_frames_spec", None)
 
 
     if target == "metadata":
-        inputs = {k: v for k,v in inputs.items() if v != None  }
+        # For metadata, ensure all None values are removed after specific conditional pops
+        inputs = {k: v for k,v in inputs.items() if v is not None }
 
     return inputs
 
@@ -4034,50 +4258,51 @@ def get_function_arguments(func, locals):
 def save_inputs(
             target,
             lset_name,
-            prompt,
-            negative_prompt,
-            resolution,
-            video_length,
-            seed,
-            num_inference_steps,
-            guidance_scale,
-            audio_guidance_scale,
-            flow_shift,
-            embedded_guidance_scale,
-            repeat_generation,
-            multi_images_gen_type,
-            tea_cache_setting,
-            tea_cache_start_step_perc,
+    prompt,
+    negative_prompt,    
+    resolution,
+    video_length,
+    seed,
+    num_inference_steps,
+    guidance_scale,
+    audio_guidance_scale,
+    flow_shift,
+    embedded_guidance_scale,
+    repeat_generation,
+    multi_images_gen_type,
+    tea_cache_setting,
+    tea_cache_start_step_perc,    
             loras_choices,
-            loras_multipliers,
-            image_prompt_type,
-            image_start,
-            image_end,
-            model_mode,
-            video_source,
-            keep_frames_video_source,
-            video_prompt_type,
-            image_refs,
-            video_guide,
-            keep_frames_video_guide,
-            video_mask,
-            audio_guide,
-            sliding_window_size,
-            sliding_window_overlap,
-            sliding_window_overlap_noise,
-            sliding_window_discard_last_frames,            
-            remove_background_image_ref,
-            temporal_upsampling,
-            spatial_upsampling,
-            RIFLEx_setting,
-            slg_switch, 
-            slg_layers,
-            slg_start_perc,
-            slg_end_perc,
-            cfg_star_switch,
-            cfg_zero_step,
-            prompt_enhancer,
-            state,
+    loras_multipliers,
+    image_prompt_type,
+    image_start,
+    image_end,
+    model_mode,
+    video_source,
+    keep_frames_video_source,
+    ltxv_conditioning_frames_spec,
+    video_prompt_type,
+    image_refs,
+    video_guide,
+    keep_frames_video_guide,
+    video_mask,
+    audio_guide,
+    sliding_window_size,
+    sliding_window_overlap,
+    sliding_window_overlap_noise,
+    sliding_window_discard_last_frames,
+    remove_background_image_ref,
+    temporal_upsampling,
+    spatial_upsampling,
+    RIFLEx_setting,
+    slg_switch,
+    slg_layers,    
+    slg_start_perc,
+    slg_end_perc,
+    cfg_star_switch,
+    cfg_zero_step,
+    prompt_enhancer,
+    state,
 ):
 
   
@@ -4125,8 +4350,19 @@ def download_loras():
     return
 
 def refresh_image_prompt_type(state, image_prompt_type):
-    return gr.update(visible = "S" in image_prompt_type ), gr.update(visible = "E" in image_prompt_type ), gr.update(visible = "V" in image_prompt_type) , gr.update(visible = "V" in image_prompt_type ) 
+    # Determine if LTXV model is active based on model_filename in state
+    model_filename = state.get("model_filename", "") # Get model_filename from state
+    is_ltxv_active = "ltxv" in model_filename.lower()
+    
+    show_ltxv_spec_field = "V" in image_prompt_type and is_ltxv_active
+    # Only show keep_frames_video_source if LTXV spec field is not shown (i.e., not LTXV or not V type for LTXV)
+    show_keep_frames_field = "V" in image_prompt_type and not show_ltxv_spec_field
 
+    return gr.update(visible = "S" in image_prompt_type ), \
+            gr.update(visible = "E" in image_prompt_type ), \
+            gr.update(visible = "V" in image_prompt_type ), \
+            gr.update(visible = show_keep_frames_field ), \
+            gr.update(visible = show_ltxv_spec_field)
 def refresh_video_prompt_type(state, video_prompt_type):
     return gr.Gallery(visible = "I" in video_prompt_type), gr.Video(visible= "V" in video_prompt_type),gr.Video(visible= "M" in video_prompt_type ), gr.Text(visible= "V" in video_prompt_type) , gr.Checkbox(visible= "I" in video_prompt_type)
 
@@ -4243,7 +4479,7 @@ def del_in_sequence(source_str, letters):
 
 def refresh_video_prompt_type_image_refs(video_prompt_type, video_prompt_type_image_refs):
     # video_prompt_type = add_to_sequence(video_prompt_type, "I") if video_prompt_type_image_refs else  del_in_sequence(video_prompt_type, "I")
-    video_prompt_type_image_refs = "I" in video_prompt_type_image_refs
+    video_prompt_type_image_refs = "I" in video_prompt_type
     video_prompt_type = add_to_sequence(video_prompt_type, "I") if video_prompt_type_image_refs else  del_in_sequence(video_prompt_type, "I")
     return video_prompt_type, gr.update(visible = video_prompt_type_image_refs),gr.update(visible = video_prompt_type_image_refs)
                 
@@ -4397,6 +4633,14 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                             ],
                             visible= False
                         )
+                        # Conditional visibility for LTXV spec and keep_frames
+                        ltxv_model_active_for_ui = "ltxv" in model_filename.lower() # Check if LTXV
+                        show_ltxv_spec_ui = "V" in ui_defaults.get("image_prompt_type","S") and ltxv_model_active_for_ui
+                        show_keep_frames_ui = "V" in ui_defaults.get("image_prompt_type","S") and not show_ltxv_spec_ui
+
+                        keep_frames_video_source = gr.Text(value=ui_defaults.get("keep_frames_video_source","") , visible= show_keep_frames_ui, scale = 2, label= "Truncate Video beyond this number of Frames of Video (empty=Keep All)" ) 
+                        ltxv_conditioning_frames_spec = gr.Text(value=ui_defaults.get("ltxv_conditioning_frames_spec", ""), visible=show_ltxv_spec_ui, label="LTXV: Specific conditioning frames/ranges (e.g., '0, 54:60, 81'). Overrides 'Truncate Video'.", lines=1)
+
                     else:
                         model_mode = gr.Dropdown(
                             choices=[
@@ -4431,6 +4675,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                         visible= True
                     )
                     keep_frames_video_source = gr.Text(visible=False)
+                    ltxv_conditioning_frames_spec = gr.Text(visible=False) # Hide for recammaster
                 else:
                     image_prompt_type_value= ui_defaults.get("image_prompt_type","S")
                     image_prompt_type = gr.Radio( [("Use only a Start Image", "S"),("Use both a Start and an End Image", "SE")], value =image_prompt_type_value, label="Location", show_label= False, visible= not hunyuan_i2v, scale= 3)
@@ -4446,6 +4691,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                     video_source = gr.Video(visible=False)
                     model_mode = gr.Dropdown(visible=False)
                     keep_frames_video_source = gr.Text(visible=False)
+                    ltxv_conditioning_frames_spec = gr.Text(visible=False) # Hide for non-DF/LTXV i2v
 
             with gr.Column(visible= vace or phantom or hunyuan_video_custom) as video_prompt_column: 
                 video_prompt_type_value= ui_defaults.get("video_prompt_type","")
@@ -4468,8 +4714,6 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                     else:
                         video_prompt_type_video_guide = gr.Dropdown(visible= False)
 
-                    video_prompt_video_guide_trigger = gr.Text(visible=False, value="")
-
                     video_prompt_type_image_refs = gr.Dropdown(
                         choices=[
                             ("None", ""),
@@ -4479,7 +4723,6 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                         label="Reference Images", scale = 2
                     )
 
-                # video_prompt_type_image_refs = gr.Checkbox(value="I" in video_prompt_type_value , label= "Use References Images (Faces, Objects) to customize New Video",  scale =1 ) 
                 video_guide = gr.Video(label= "Control Video", visible= "V" in video_prompt_type_value, value= ui_defaults.get("video_guide", None),)
                 keep_frames_video_guide = gr.Text(value=ui_defaults.get("keep_frames_video_guide","") , visible= "V" in video_prompt_type_value, scale = 2, label= "Frames to keep in Control Video (empty=All, 1=first, a:b for a range, space to separate values)" ) #, -1=last
                 image_refs = gr.Gallery( label ="Reference Images",
@@ -4488,9 +4731,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                         value= ui_defaults.get("image_refs", None),
                  )
 
-                # with gr.Row():
                 remove_background_image_ref = gr.Checkbox(value=ui_defaults.get("remove_background_image_ref",1), label= "Remove Background of Images References", visible= "I" in video_prompt_type_value, scale =1 ) 
-
 
                 video_mask = gr.Video(label= "Video Mask (for Inpainting or Outpaing, white pixels = Mask)", visible= "M" in video_prompt_type_value, value= ui_defaults.get("video_mask", None)) 
             audio_guide = gr.Audio(value= ui_defaults.get("audio_guide", None), type="filepath", label="Voice to follow", show_download_button= True, visible= fantasy )
@@ -4520,7 +4761,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                             wizard_variables = "\n".join(variables)
                     for _ in range( PROMPT_VARS_MAX - len(prompt_vars)):
                         prompt_vars.append(gr.Textbox(visible= False, min_width=80, show_label= False))
-            with gr.Column(not advanced_prompt) as prompt_column_wizard:
+            with gr.Column(visible=not advanced_prompt) as prompt_column_wizard:
                 wizard_prompt = gr.Textbox(visible = not advanced_prompt, label="Prompts (" + new_line_text + ", # lines = comments)", value=default_wizard_prompt, lines=3)
                 wizard_prompt_activated_var = gr.Text(wizard_prompt_activated, visible= False)
                 wizard_variables_var = gr.Text(wizard_variables, visible = False)
@@ -4589,11 +4830,8 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
             with gr.Row(visible = not ltxv_distilled) as inference_steps_row:                                       
                 num_inference_steps = gr.Slider(1, 100, value=ui_defaults.get("num_inference_steps",30), step=1, label="Number of Inference Steps")
 
-
-
             show_advanced = gr.Checkbox(label="Advanced Mode", value=advanced_ui)
             with gr.Tabs(visible=advanced_ui) as advanced_row:
-                # with gr.Row(visible=advanced_ui) as advanced_row:
                 with gr.Tab("Generation"):
                     with gr.Column():
                         seed = gr.Slider(-1, 999999999, value=ui_defaults["seed"], step=1, label="Seed (-1 for random)") 
@@ -4733,7 +4971,6 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                             sliding_window_overlap_noise = gr.Slider(0, 100, value=ui_defaults.get("sliding_window_overlap_noise",20), step=1, label="Noise to be added to overlapped frames to reduce blur effect")
                             sliding_window_discard_last_frames = gr.Slider(0, 20, value=ui_defaults.get("sliding_window_discard_last_frames", 8), step=4, label="Discard Last Frames of a Window (that may have bad quality)", visible = True)
 
-
                 with gr.Tab("Miscellaneous", visible= not (recammaster or ltxv or diffusion_forcing)) as misc_tab:
                     gr.Markdown("<B>With Riflex you can generate videos longer than 5s which is the default duration of videos used to train the model</B>")
                     RIFLEx_setting = gr.Dropdown(
@@ -4800,7 +5037,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
         extra_inputs = prompt_vars + [wizard_prompt, wizard_variables_var, wizard_prompt_activated_var, video_prompt_column, image_prompt_column,
                                       prompt_column_advanced, prompt_column_wizard_vars, prompt_column_wizard, lset_name, advanced_row, speed_tab, quality_tab,
                                       sliding_window_tab, misc_tab, prompt_enhancer_row, inference_steps_row, skip_layer_guidance_row,
-                                      video_prompt_type_video_guide, video_prompt_type_image_refs] # show_advanced presets_column,
+                                      video_prompt_type_video_guide, video_prompt_type_image_refs,ltxv_conditioning_frames_spec] # show_advanced presets_column,
         if update_form:
             locals_dict = locals()
             gen_inputs = [state_dict if k=="state" else locals_dict[k]  for k in inputs_names] + [state_dict] + extra_inputs
@@ -4809,7 +5046,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
             target_state = gr.Text(value = "state", interactive= False, visible= False)
             target_settings = gr.Text(value = "settings", interactive= False, visible= False)
 
-            image_prompt_type.change(fn=refresh_image_prompt_type, inputs=[state, image_prompt_type], outputs=[image_start, image_end, video_source, keep_frames_video_source] ) 
+            image_prompt_type.change(fn=refresh_image_prompt_type, inputs=[state, image_prompt_type], outputs=[image_start, image_end, video_source, keep_frames_video_source, ltxv_conditioning_frames_spec] ) 
             video_prompt_video_guide_trigger.change(fn=refresh_video_prompt_video_guide_trigger, inputs=[video_prompt_type, video_prompt_video_guide_trigger], outputs=[video_prompt_type, video_prompt_type_video_guide, video_guide, video_mask, keep_frames_video_guide])
             video_prompt_type_image_refs.input(fn=refresh_video_prompt_type_image_refs, inputs = [video_prompt_type, video_prompt_type_image_refs], outputs = [video_prompt_type, image_refs, remove_background_image_ref ])
             video_prompt_type_video_guide.input(fn=refresh_video_prompt_type_video_guide, inputs = [video_prompt_type, video_prompt_type_video_guide], outputs = [video_prompt_type, video_guide, keep_frames_video_guide, video_mask])
