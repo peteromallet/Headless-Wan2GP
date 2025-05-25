@@ -32,7 +32,7 @@ A light-weight, testable wrapper around the bulky `steerable_motion.py` logic.  
 
 **Git Submodule** pointing to the upstream [deepbeepmeep/Wan2GP](https://github.com/deepbeepmeep/Wan2GP) repository. This contains the video-generation engine (`wgp.py`) together with model checkpoints, inference helpers, preprocessing code, and assorted assets.
 
-The submodule is currently pinned to commit `65386b2` (the original "init upload" commit from when the repository was first forked) and can be updated periodically using standard git submodule commands. Only the entry module `wgp.py` is imported directly; everything else stays encapsulated within the submodule.
+The submodule is currently pinned to commit `6706709` ("optimization for i2v with CausVid") and can be updated periodically using standard git submodule commands. Only the entry module `wgp.py` is imported directly; everything else stays encapsulated within the submodule.
 
 ## Runtime artefacts
 
