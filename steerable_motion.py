@@ -55,21 +55,21 @@ def _ensure_db_initialized(db_path_str: str, table_name: str = DEFAULT_DB_TABLE_
     """Creates the tasks table (and helpful index) in the SQLite DB if it doesn't exist."""
     conn = sqlite3.connect(db_path_str)
     cursor = conn.cursor()
-        cursor.execute(
+    cursor.execute(
         f"""
-            CREATE TABLE IF NOT EXISTS {table_name} (
-                    task_id TEXT PRIMARY KEY,
-                    params TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            task_id TEXT PRIMARY KEY,
+            params TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'Queued',
-                    output_location TEXT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """
+            output_location TEXT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
     )
-            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_status_created_at ON {table_name} (status, created_at)")
-            conn.commit()
-            conn.close()
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_status_created_at ON {table_name} (status, created_at)")
+    conn.commit()
+    conn.close()
 
 # ----------------------------------------------------
 
