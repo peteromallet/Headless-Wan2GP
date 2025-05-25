@@ -33,6 +33,12 @@ import urllib.parse # Added for URL encoding
 # --- Add imports for OpenPose generation ---
 import numpy as np
 try:
+    # Import from Wan2GP submodule
+    import sys
+    from pathlib import Path
+    wan2gp_path = Path(__file__).parent / "Wan2GP"
+    if str(wan2gp_path) not in sys.path:
+        sys.path.insert(0, str(wan2gp_path))
     from preprocessing.dwpose.pose import PoseBodyFaceVideoAnnotator
 except ImportError:
     PoseBodyFaceVideoAnnotator = None # Allow script to load if module not found, error out at runtime
