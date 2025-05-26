@@ -198,7 +198,6 @@ def extract_video_segment_ffmpeg(
         '-ss', str(start_time_seconds),
         '-i', str(input_video_path.resolve()),
         '-vframes', str(num_frames_to_keep),
-        '-c:v', 'copy', 
         '-an', 
         str(output_video_path.resolve())
     ]
@@ -311,6 +310,159 @@ def save_frame_from_video(video_path: Path, frame_index: int, output_image_path:
         print(f"Error saving frame to {output_image_path}: {e}")
         traceback.print_exc()
         return False
+
+# --- FFMPEG-based specific frame extraction ---
+def extract_specific_frame_ffmpeg(
+    input_video_path: str | Path,
+    frame_number: int, # 0-indexed
+    output_image_path: str | Path,
+    input_fps: float # Passed by caller, though not strictly needed for ffmpeg frame index selection using 'eq(n,frame_number)'
+):
+    """Extracts a specific frame from a video using FFmpeg and saves it as an image."""
+    dprint(f"EXTRACT_SPECIFIC_FRAME_FFMPEG: Input='{input_video_path}', Frame={frame_number}, Output='{output_image_path}'")
+    input_video_p = Path(input_video_path)
+    output_image_p = Path(output_image_path)
+    output_image_p.parent.mkdir(parents=True, exist_ok=True)
+
+    if not input_video_p.exists() or input_video_p.stat().st_size == 0:
+        print(f"Error: Input video for frame extraction not found or empty: {input_video_p}")
+        dprint(f"EXTRACT_SPECIFIC_FRAME_FFMPEG: Input video {input_video_p} not found or empty. Returning False.")
+        return False
+
+    cmd = [
+        'ffmpeg',
+        '-y',  # Overwrite output without asking
+        '-i', str(input_video_p.resolve()),
+        '-vf', f"select=eq(n\,{frame_number})", # Escaped comma for ffmpeg filter syntax
+        '-vframes', '1',
+        str(output_image_p.resolve())
+    ]
+
+    dprint(f"EXTRACT_SPECIFIC_FRAME_FFMPEG: Running command: {' '.join(cmd)}")
+    try:
+        process = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
+        dprint(f"EXTRACT_SPECIFIC_FRAME_FFMPEG: Successfully extracted frame {frame_number} to {output_image_p}")
+        if process.stderr:
+            dprint(f"FFmpeg stderr (for frame extraction to {output_image_p}):\n{process.stderr}")
+        if not output_image_p.exists() or output_image_p.stat().st_size == 0:
+            print(f"Error: FFmpeg command for frame extraction to {output_image_p} apparently succeeded but output file is missing or empty.")
+            dprint(f"FFmpeg command for {output_image_p} (frame extraction) produced no output. stdout:\n{process.stdout}\nstderr:\n{process.stderr}")
+            return False
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Error during FFmpeg frame extraction for {output_image_p}:")
+        print("FFmpeg command:", ' '.join(e.cmd))
+        if e.stdout: print("FFmpeg stdout:\n", e.stdout)
+        if e.stderr: print("FFmpeg stderr:\n", e.stderr)
+        dprint(f"FFmpeg frame extraction failed for {output_image_p}. Error: {e}")
+        if output_image_p.exists(): output_image_p.unlink(missing_ok=True)
+        return False
+    except FileNotFoundError:
+        print("Error: ffmpeg command not found. Please ensure ffmpeg is installed and in your PATH.")
+        dprint("FFmpeg command not found during frame extraction.")
+        raise
+
+# --- FFMPEG-based video concatenation (alternative to stitch_videos_ffmpeg if caller manages temp dir) ---
+def concatenate_videos_ffmpeg(
+    video_paths: list[str | Path],
+    output_path: str | Path,
+    temp_dir_for_list: str | Path # Directory where the list file will be created
+):
+    """Concatenates multiple video files into one using FFmpeg, using a provided temp directory for the list file."""
+    output_p = Path(output_path)
+    output_p.parent.mkdir(parents=True, exist_ok=True)
+    temp_dir_p = Path(temp_dir_for_list)
+    temp_dir_p.mkdir(parents=True, exist_ok=True)
+
+    if not video_paths:
+        print("No videos to concatenate.")
+        dprint("CONCATENATE_VIDEOS_FFMPEG: No video paths provided. Returning.")
+        if output_p.exists(): output_p.unlink(missing_ok=True)
+        return
+
+    valid_video_paths = []
+    for p_item in video_paths:
+        resolved_p_item = Path(p_item).resolve()
+        if resolved_p_item.exists() and resolved_p_item.stat().st_size > 0:
+            valid_video_paths.append(resolved_p_item)
+        else:
+            print(f"Warning: Video segment {resolved_p_item} for concatenation is missing or empty. Skipping.")
+            dprint(f"CONCATENATE_VIDEOS_FFMPEG: Skipping invalid video segment {resolved_p_item}")
+    
+    if not valid_video_paths:
+        print("No valid video segments found to concatenate after checks.")
+        dprint("CONCATENATE_VIDEOS_FFMPEG: No valid video segments. Returning.")
+        if output_p.exists(): output_p.unlink(missing_ok=True)
+        return
+
+    filelist_path = temp_dir_p / "ffmpeg_concat_filelist.txt"
+    with open(filelist_path, 'w', encoding='utf-8') as f:
+        for video_path_item in valid_video_paths:
+            f.write(f"file '{video_path_item.as_posix()}'\n") # Use as_posix() for ffmpeg list file
+    
+    cmd = [
+        'ffmpeg', '-y', 
+        '-f', 'concat', 
+        '-safe', '0', 
+        '-i', str(filelist_path.resolve()),
+        '-c', 'copy', 
+        str(output_p.resolve())
+    ]
+    
+    dprint(f"CONCATENATE_VIDEOS_FFMPEG: Running command: {' '.join(cmd)} with list file {filelist_path}")
+    try:
+        process = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
+        print(f"Successfully concatenated videos into: {output_p}")
+        dprint(f"CONCATENATE_VIDEOS_FFMPEG: Success. Output: {output_p}")
+        if process.stderr:
+            dprint(f"FFmpeg stderr (for concatenation to {output_p}):\n{process.stderr}")
+        if not output_p.exists() or output_p.stat().st_size == 0:
+             print(f"Warning: FFmpeg concatenation to {output_p} apparently succeeded but output file is missing or empty.")
+             dprint(f"FFmpeg command for {output_p} (concatenation) produced no output. stdout:\n{process.stdout}\nstderr:\n{process.stderr}")
+    except subprocess.CalledProcessError as e:
+        print(f"Error during FFmpeg concatenation for {output_p}:")
+        print("FFmpeg command:", ' '.join(e.cmd))
+        if e.stdout: print("FFmpeg stdout:\n", e.stdout)
+        if e.stderr: print("FFmpeg stderr:\n", e.stderr)
+        dprint(f"FFmpeg concatenation failed for {output_p}. Error: {e}")
+        if output_p.exists(): output_p.unlink(missing_ok=True)
+        raise 
+    except FileNotFoundError:
+        print("Error: ffmpeg command not found. Please ensure ffmpeg is installed and in your PATH.")
+        dprint("CONCATENATE_VIDEOS_FFMPEG: ffmpeg command not found.")
+        raise
+
+# --- OpenCV-based video properties extraction ---
+def get_video_frame_count_and_fps(video_path: str | Path) -> tuple[int | None, float | None]:
+    """Gets frame count and FPS of a video using OpenCV. Returns (None, None) on failure."""
+    video_path_str = str(Path(video_path).resolve())
+    cap = None
+    try:
+        cap = cv2.VideoCapture(video_path_str)
+        if not cap.isOpened():
+            dprint(f"GET_VIDEO_FRAME_COUNT_FPS: Could not open video: {video_path_str}")
+            return None, None
+        
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        
+        # Validate frame_count and fps as they can sometimes be 0 or negative for problematic files/streams
+        valid_frame_count = frame_count if frame_count > 0 else None
+        valid_fps = fps if fps > 0 else None
+
+        if valid_frame_count is None:
+             dprint(f"GET_VIDEO_FRAME_COUNT_FPS: Video {video_path_str} reported non-positive frame count: {frame_count}. Treating as unknown.")
+        if valid_fps is None:
+             dprint(f"GET_VIDEO_FRAME_COUNT_FPS: Video {video_path_str} reported non-positive FPS: {fps}. Treating as unknown.")
+
+        dprint(f"GET_VIDEO_FRAME_COUNT_FPS: Video {video_path_str} - Frames: {valid_frame_count}, FPS: {valid_fps}")
+        return valid_frame_count, valid_fps
+    except Exception as e:
+        dprint(f"GET_VIDEO_FRAME_COUNT_FPS: Exception processing {video_path_str}: {e}")
+        return None, None
+    finally:
+        if cap:
+            cap.release()
 
 # --- Pose Processing Constants and Helpers (from ComfyUI example) ---
 body_colors = [

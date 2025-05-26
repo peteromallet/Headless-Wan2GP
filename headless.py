@@ -600,7 +600,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path):
             model_mode=ui_params.get("model_mode", 0),
             video_source=ui_params.get("video_source", None),
             keep_frames_video_source=ui_params.get("keep_frames_video_source", ""),
-            ltxv_conditioning_frames_spec=ui_params.get("ltxv_conditioning_frames_spec", ""),
+            
             video_prompt_type=ui_params.get("video_prompt_type", ""),
             image_refs=ui_params.get("image_refs", None),
             video_guide=ui_params.get("video_guide", None),
