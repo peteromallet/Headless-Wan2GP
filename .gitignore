@@ -41,3 +41,5 @@ ckpts/
 loras/
 loras_i2v/
 .env
+
+_test*
