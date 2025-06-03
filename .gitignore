@@ -25,7 +25,6 @@
 cache
 __pycache__/
 storage/
-samples/
 !.gitignore
 !requirements.txt
 .DS_Store
