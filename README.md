@@ -391,7 +391,7 @@ Once `headless.py` is running, execute the following in another terminal:
 python steerable_motion.py travel_between_images \\
     --input_images samples/image_1.png samples/image_2.png samples/image_3.png \\
     --base_prompts "Transitioning from red" "Moving to green" \\
-    --resolution "320x240" \\
+    --resolution "700x460" \\
     --segment_frames 30 \\
     --frame_overlap 10 \\
     --model_name "vace_14B" \\
@@ -406,7 +406,7 @@ python steerable_motion.py travel_between_images \\
 python steerable_motion.py different_pose \\
     --input_image samples/image_1.png \\
     --prompt "A red square, now animated and waving" \\
-    --resolution "320x240" \\
+    --resolution "700x460" \\
     --output_video_frames 30 \\
     --model_name "vace_14B" \\
     --seed 101 \\
