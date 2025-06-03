@@ -386,57 +386,6 @@ python Wan2GP/headless.py --main-output-dir ./my_video_outputs --poll-interval 5
 
 ### 2. Queue Tasks using `steerable_motion.py`:
 
-Open another terminal. Ensure your virtual environment is active and you are in the root `Headless-Wan2GP` directory.
-
-**Example 1: `travel_between_images`**
-
-First, create some dummy anchor images if you don't have any:
-```bash
-# Create dummy images (replace with your actual images)
-convert -size 320x240 xc:red anchor1.png
-convert -size 320x240 xc:green anchor2.png
-convert -size 320x240 xc:blue anchor3.png
-```
-
-Then, run the command:
-```bash
-python steerable_motion.py travel_between_images \\
-    --input_images anchor1.png anchor2.png anchor3.png \\
-    --base_prompts "A majestic red landscape" "A vibrant green forest" \\
-    --resolution "640x480" \\
-    --segment_frames 60 \\
-    --frame_overlap 15 \\
-    --model_name "vace_14B" \\
-    --seed 123 \\
-    --output_dir ./my_video_outputs \\
-    --debug 
-    # Add --execution_engine "comfyui" if you have a ComfyUI workflow for travel segments
-    # Add --continue_from_video "path/to/previous.mp4" to extend an existing video
-```
-This command will:
-1.  Validate your arguments.
-2.  Create an `orchestrator_payload` containing all the instructions.
-3.  Add a single task of `task_type="travel_orchestrator"` to the database (`tasks.db` by default).
-4.  `headless.py` will pick up this orchestrator task, then sequentially queue and process `travel_segment` tasks, and finally a `travel_stitch` task.
-
-**Example 2: `different_pose`**
-
-```bash
-# Assume you have an input image: input_character.png
-python steerable_motion.py different_pose \\
-    --input_image input_character.png \\
-    --prompt "Character waving hello, cinematic lighting" \\
-    --resolution "512x512" \\
-    --output_video_frames 40 \\
-    --model_name "vace_14B" \\
-    --seed 456 \\
-    --output_dir ./my_video_outputs \\
-    --debug
-```
-This command will queue tasks for OpenPose extraction and the main video generation, managed by `headless.py`.
-
-### 3. Running with Sample Images (New Section)
-
 Once `headless.py` is running, execute the following in another terminal:
 
 **A. Example `travel_between_images` with Sample Images:**
@@ -482,7 +431,79 @@ Remember to have `headless.py` running in a separate terminal to process these q
     (List of `--wgp-*` arguments from previous README is still valid)
 
 ## Advanced: Video-Guided Generation (VACE)
-(Content from previous README is still valid here)
+
+The `params` field for each task in the database can include `video_prompt_type`, `video_guide_path`, `video_mask_path`, and `keep_frames_video_guide` as described below to control VACE features. The pose, depth or greyscale information is always extracted **from the `video_guide_path` file**; the optional `video_mask_path` is only for in/out-painting control.
+
+**Key JSON fields in task `params` for VACE:**
+```json
+{
+  // ... other parameters ...
+  "video_prompt_type": "PV", // String of capital letters described below
+  "video_guide_path": "path/to/your/control_video.mp4", // Path to the control video, accessible by the server
+  "video_mask_path": "path/to/your/mask_video.mp4",   // (Optional) Path to a mask video, accessible by the server
+  "keep_frames_video_guide": "1:10 -1", // (Optional) List of whole frames to preserve from the guide
+  "image_refs_paths": ["path/to/ref_image1.png"], // (Optional) For 'I' in video_prompt_type
+  // ... other parameters ...
+}
+```
+
+### 1.  `video_prompt_type` letters
+You can concatenate several letters (order does not matter).  The most common combinations are shown in the table below:
+
+| Letter | Meaning in the UI        | What the code does                                                                 |
+| :----- | :----------------------- | :--------------------------------------------------------------------------------- |
+| `V`    | Use the guide video as is | Feeds the RGB frames directly                                                      |
+| `P`    | Pose guidance            | Extracts DW-Pose skeletons from the guide video and feeds those instead of RGB     |
+| `D`    | Depth guidance           | Extracts MiDaS depth maps and feeds them                                           |
+| `G`    | Greyscale guidance       | Converts the guide video to grey before feeding                                    |
+| `C`    | Colour-transfer          | Alias for `G`, lets the model recolourise the B&W guide                            |
+| `M`    | External mask video      | Expect `video_mask_path`; white = in/out-paint, black = keep                       |
+| `I`    | Image references         | Supply `image_refs_paths`; those images are encoded and prepended to the latent    |
+| `O`    | Original pixels on black | When present the pixels under the **black** part of the mask are copied through untouched (classic in-painting) |
+
+Examples:
+* `"PV"` – feed **P**ose extracted from the guide **V**ideo.
+* `"DMV"` – **D**epth maps + mask **M** + original video **V**.
+* `"VMO"` – video + mask + keep pixels under black mask.
+
+### 2.  How the mask works
+A mask frame is converted to a single channel in range [0, 1].
+
+| Value     | Effect                                                              |
+| :-------- | :------------------------------------------------------------------ |
+| 0 (black) | Keep original RGB pixels (or copy the guide when `O` is active)     |
+| 1 (white) | Pixels are blanked and the model is free to generate new content    |
+
+If you do **not** supply `video_mask_path`, the pipeline internally builds an all-white mask for every frame that is *not* listed in `keep_frames_video_guide` (see next section).
+
+### 3.  `keep_frames_video_guide`
+Optional string that lists *whole frames* to keep.  Syntax:
+
+* single index – positive (1 = first frame) or negative (-1 = last frame)
+* range        – `a:b` is inclusive and uses the same indexing rules
+* separate items with a space.
+
+Examples for an 81-frame clip:
+
+```
+""             // empty ⇒ keep every frame (default)
+"1:20"         // keep frames 0-19, generate the rest
+"1:20 -1"      // keep frames 0-19 and the last frame
+"-10:-1"       // keep the last 10 frames
+```
+
+Frames not listed are zeroed and their mask set to white, so the network repaints them completely.
+
+If you only need per-pixel control you can omit `keep_frames_video_guide` and drive everything with the mask video alone.
+
+### 4.  Quick recipes
+
+| Goal                                                 | Fields to set (`params` in database task)                                                                  |
+| :--------------------------------------------------- | :--------------------------------------------------------------------------------------------------------- |
+| Transfer only motion from a control video            | `"video_prompt_type": "PV"`, `"video_guide_path": "path/to/control.mp4"`                                   |
+| Depth-guided generation                            | `"video_prompt_type": "DV"`, `"video_guide_path": "path/to/control.mp4"`                                   |
+| Classic in-painting with explicit mask             | `"video_prompt_type": "MV"`, `"video_guide_path": "path/to/guide.mp4"`, `"video_mask_path": "path/to/mask.mp4"` |
+| Freeze first 20 & last frame, generate the rest    | `"video_prompt_type": "VM"`, `"keep_frames_video_guide": "1:20 -1"`, `"video_guide_path": "path/to/guide.mp4"` (mask video can be all-white or omitted if guide is sufficient) |
 
 This section should give you enough vocabulary to combine mask videos, depth/pose guidance and frame-freezing without modifying the code.
 

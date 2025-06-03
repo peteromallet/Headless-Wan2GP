@@ -15,7 +15,7 @@ from .common_utils import (
     generate_different_pose_debug_video_summary # For debug mode
 )
 
-def run_different_pose_task(task_args, common_args, parsed_resolution, main_output_dir, db_file_path):
+def run_different_pose_task(task_args, common_args, parsed_resolution, main_output_dir, db_file_path, executed_command_str: str | None = None):
     print("--- Running Task: Different Pose (Modified Workflow: User Input + OpenPose T2I) ---") 
     dprint(f"Task Args: {task_args}")
     dprint(f"Common Args: {common_args}")
@@ -34,6 +34,15 @@ def run_different_pose_task(task_args, common_args, parsed_resolution, main_outp
     task_work_dir = main_output_dir / f"different_pose_run_{task_run_id}"
     task_work_dir.mkdir(parents=True, exist_ok=True)
     print(f"Working directory for this 'different_pose' run: {task_work_dir.resolve()}")
+
+    if DEBUG_MODE and executed_command_str:
+        try:
+            command_file_path = task_work_dir / "executed_command.txt"
+            with open(command_file_path, "w") as f:
+                f.write(executed_command_str)
+            dprint(f"Saved executed command to {command_file_path}")
+        except Exception as e_cmd_save:
+            dprint(f"Warning: Could not save executed command: {e_cmd_save}")
 
     debug_video_stages_data = [] 
     default_image_display_frames = common_args.fps_helpers * 2 
@@ -58,9 +67,12 @@ def run_different_pose_task(task_args, common_args, parsed_resolution, main_outp
         "input_image_path": str(user_input_image_path.resolve()),
         "output_path": str(openpose_user_input_output_path.resolve())
     }
-    dprint(f"OpenPose (from user input) generation payload: {json.dumps(openpose_user_input_payload, indent=2)}")
-    add_task_to_db(openpose_user_input_payload, db_file_path)
-    openpose_user_input_path_str = poll_task_status(openpose_user_input_task_id, db_file_path, common_args.poll_interval, common_args.poll_timeout)
+    dprint(f"OpenPose task payload for user input: {json.dumps(openpose_user_input_payload, indent=2)}")
+    try:
+        add_task_to_db(openpose_user_input_payload, db_file_path, "generate_openpose")
+        openpose_user_input_path_str = poll_task_status(openpose_user_input_task_id, db_file_path, common_args.poll_interval, common_args.poll_timeout)
+    except Exception as e_cmd_save:
+        dprint(f"Warning: Could not save executed command: {e_cmd_save}")
 
     if not openpose_user_input_path_str:
         print("Failed to generate OpenPose from user input image.")
@@ -116,9 +128,12 @@ def run_different_pose_task(task_args, common_args, parsed_resolution, main_outp
     }
     if common_args.use_causvid_lora: t2i_target_payload["use_causvid_lora"] = True    
     dprint(f"Added lora_name: 'jump' to T2I target payload.") 
-    dprint(f"T2I for target pose payload: {json.dumps(t2i_target_payload, indent=2)}")
-    add_task_to_db(t2i_target_payload, db_file_path)
-    raw_video_from_headless_s2 = poll_task_status(t2i_target_task_id, db_file_path, common_args.poll_interval, common_args.poll_timeout)
+    dprint(f"Target T2I/I2I task payload: {json.dumps(t2i_target_payload, indent=2)}")
+    try:
+        add_task_to_db(t2i_target_payload, db_file_path, task_args.task)
+        raw_video_from_headless_s2 = poll_task_status(t2i_target_task_id, db_file_path, common_args.poll_interval, common_args.poll_timeout)
+    except Exception as e_cmd_save:
+        dprint(f"Warning: Could not save executed command: {e_cmd_save}")
 
     if not raw_video_from_headless_s2:
         print("Failed to generate target image from prompt.")
@@ -148,9 +163,12 @@ def run_different_pose_task(task_args, common_args, parsed_resolution, main_outp
         "input_image_path": str(generated_image_for_target_pose_path.resolve()), 
         "output_path": str(openpose_t2i_output_path.resolve())
     }
-    dprint(f"OpenPose (from T2I) generation payload: {json.dumps(openpose_t2i_payload, indent=2)}")
-    add_task_to_db(openpose_t2i_payload, db_file_path)
-    openpose_t2i_path_str = poll_task_status(openpose_t2i_task_id, db_file_path, common_args.poll_interval, common_args.poll_timeout)
+    dprint(f"OpenPose T2I/I2I task payload: {json.dumps(openpose_t2i_payload, indent=2)}")
+    try:
+        add_task_to_db(openpose_t2i_payload, db_file_path, "generate_openpose")
+        openpose_t2i_path_str = poll_task_status(openpose_t2i_task_id, db_file_path, common_args.poll_interval, common_args.poll_timeout)
+    except Exception as e_cmd_save:
+        dprint(f"Warning: Could not save executed command: {e_cmd_save}")
 
     if not openpose_t2i_path_str:
         print("Failed to generate OpenPose from T2I image.")
@@ -221,9 +239,12 @@ def run_different_pose_task(task_args, common_args, parsed_resolution, main_outp
 
     if common_args.use_causvid_lora: final_video_payload["use_causvid_lora"] = True    
     dprint(f"Added lora_name: 'jump' to final video payload.") 
-    dprint(f"Final video generation payload (with OpenPose T2I only guide and user input reference): {json.dumps(final_video_payload, indent=2)}")
-    add_task_to_db(final_video_payload, db_file_path)
-    raw_final_video_from_headless = poll_task_status(final_video_task_id, db_file_path, common_args.poll_interval, common_args.poll_timeout)
+    dprint(f"Final video generation task payload: {json.dumps(final_video_payload, indent=2)}")
+    try:
+        add_task_to_db(final_video_payload, db_file_path, task_args.task)
+        raw_final_video_from_headless = poll_task_status(final_video_task_id, db_file_path, common_args.poll_interval, common_args.poll_timeout)
+    except Exception as e_cmd_save:
+        dprint(f"Warning: Could not save executed command: {e_cmd_save}")
 
     if not raw_final_video_from_headless:
         print("Failed to generate final video using custom guide and reference.")

@@ -3,3 +3,5 @@ python-dotenv  # For .env file management
 supabase        # For Supabase DB (via RPC) and Storage
 requests        # For downloading LoRAs
 Pillow          # For image processing in headless tasks
+mediapipe
+requests        # For downloading videos from URLs in travel_between_images
