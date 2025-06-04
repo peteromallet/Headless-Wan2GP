@@ -39,15 +39,15 @@ See `python steerable_motion.py --help` for the full argument list.
 For a quick setup and to run the server (defaults to SQLite mode):
 
 ```bash
-git clone https://github.com/peteromallet/Headless-Wan2GP /workspace/Wan2GP && \\
-cd /workspace/Wan2GP && \\
+git clone https://github.com/peteromallet/Headless-Wan2GP  && \\
+cd /workspace/Headless-Wan2GP && \\
 apt-get update && apt-get install -y python3.10-venv ffmpeg && \\
 python3.10 -m venv venv && \\
 source venv/bin/activate && \\
 pip install --no-cache-dir torch==2.6.0 torchvision torchaudio -f https://download.pytorch.org/whl/cu124 && \\
 pip install --no-cache-dir -r Wan2GP/requirements.txt && \\
 pip install --no-cache-dir -r requirements.txt 
-python Wan2GP/headless.py
+python headless.py
 ```
 
 Once `headless.py` is running, you can open another terminal to queue tasks using `steerable_motion.py` (see examples below) or by adding tasks directly to the database.

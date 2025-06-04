@@ -5,3 +5,7 @@ requests        # For downloading LoRAs
 Pillow          # For image processing in headless tasks
 mediapipe
 requests        # For downloading videos from URLs in travel_between_images
+gradio          # For the web UI
+dotenv
+supabase
+mediapipe

@@ -191,7 +191,7 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
             print("Error: --input_images must be provided with --continue_from_video.")
             return 1  # Should not happen due to prior validation
         num_segments_to_generate = len(task_args.input_images)
-        else:
+    else:
         if len(task_args.input_images) < 2:  # Already validated
             print("Error: At least two input images are required without --continue_from_video.")
             return 1  # Should not happen
@@ -247,7 +247,7 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
                 detail["processed_path"] = str(processed_path.resolve())
                 dprint(f"VACE Ref ({ref_type} for seg {segment_idx_for_naming}): Processed with strength {clamped_strength}: {processed_path}")
                 return detail
-                else:
+            else:
                 dprint(f"VACE Ref ({ref_type} for seg {segment_idx_for_naming}): Failed to process with strength {clamped_strength}. Skipping.")
                 return None
     
@@ -297,7 +297,7 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
             dprint(f"Orchestrator: Continue video prepared at: {initial_video_path_for_headless}")
             # Optionally, re-encode here if needed, though headless could also do this.
             # For now, assume headless can handle it or will re-encode if necessary.
-                            else:
+        else:
             print(f"Error: Could not load or download video from {task_args.continue_from_video}. Cannot proceed with orchestrator task.")
             return 1
 
@@ -361,12 +361,10 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
         print(f"Successfully enqueued 'travel_orchestrator' task (ID: {orchestrator_task_id}).")
         print(f"Headless.py will now process this sequence.")
         dprint(f"Orchestrator payload submitted: {json.dumps(orchestrator_payload, indent=2, default=str)}")
-        except Exception as e_db_add:
+    except Exception as e_db_add:
         print(f"Failed to add travel_orchestrator task {orchestrator_task_id} to DB: {e_db_add}")
-                    traceback.print_exc()
-        return 1
-
-    return 0 # Success (orchestrator task queued)
+        traceback.print_exc()
+    return 1
 
 # Note: The main loop, polling, segment processing, guide video creation,
 # VACE ref application (if moved to headless), stitching, and cleanup

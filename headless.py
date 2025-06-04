@@ -32,6 +32,9 @@ import urllib.parse # Added for URL encoding
 import threading
 import uuid # Added import for UUID
 
+# Add the current directory to Python path so Wan2GP can be imported as a module
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 # --- Add imports for OpenPose generation ---
 import numpy as np
 try:
@@ -55,7 +58,7 @@ import shutil # For file operations
 import cv2 # Added for RIFE interpolation
 
 # --- SM_RESTRUCTURE: Import moved/new utilities ---
-from Wan2GP.sm_functions.common_utils import (
+from sm_functions.common_utils import (
     # dprint is already defined locally in headless.py
     generate_unique_task_id as sm_generate_unique_task_id, # Alias to avoid conflict if headless has its own
     add_task_to_db as sm_add_task_to_db,
@@ -69,14 +72,14 @@ from Wan2GP.sm_functions.common_utils import (
     _apply_strength_to_image as sm_apply_strength_to_image,
     parse_resolution as sm_parse_resolution # For parsing resolution string from orchestrator
 )
-from Wan2GP.sm_functions.video_utils import (
+from sm_functions.video_utils import (
     extract_frames_from_video as sm_extract_frames_from_video,
     create_video_from_frames_list as sm_create_video_from_frames_list,
     cross_fade_overlap_frames as sm_cross_fade_overlap_frames,
     _apply_saturation_to_video_ffmpeg as sm_apply_saturation_to_video_ffmpeg,
     # color_match_video_to_reference # If needed by stitch/segment tasks
 )
-from Wan2GP.sm_functions.travel_between_images import (
+from sm_functions.travel_between_images import (
     get_easing_function as sm_get_easing_function # For guide video fades
 )
 # --- End SM_RESTRUCTURE imports ---
@@ -2298,12 +2301,8 @@ def main():
     sys.argv = ["Wan2GP/wgp.py"]
     patch_gradio()
     
-    # Add Wan2GP directory to Python path and import wgp directly
-    wan2gp_path = Path(__file__).parent / "Wan2GP"
-    if str(wan2gp_path) not in sys.path:
-        sys.path.insert(0, str(wan2gp_path))
-    
-    import wgp as wgp_mod
+    # Import wgp from the Wan2GP sub-package
+    from Wan2GP import wgp as wgp_mod
     
     sys.argv = original_argv
 

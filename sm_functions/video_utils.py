@@ -9,9 +9,11 @@ import numpy as np
 # Import dprint from common_utils (assuming it's discoverable)
 from .common_utils import dprint, get_video_frame_count_and_fps # Added get_video_frame_count_and_fps
 
-# --- Easing function for cross-fading ---
-def ease(alpha_lin: float) -> float:
-    """cosine ease-in-out  (0..1 -> 0..1)"""
+# --- Easing function for cross-fading (cosine ease-in-out) ---
+def crossfade_ease(alpha_lin: float) -> float:
+    """Cosine ease-in-out function (maps 0..1 to 0..1).
+    Used to determine the blending alpha for crossfades.
+    """
     return (1 - math.cos(alpha_lin * math.pi)) / 2.0
 
 def _blend_linear(a: np.ndarray, b: np.ndarray, t: float) -> np.ndarray:
@@ -53,7 +55,7 @@ def cross_fade_overlap_frames(
     out_frames = []
     for i in range(n):
         t_linear = (i + 1) / float(n)
-        alpha = ease(t_linear)
+        alpha = crossfade_ease(t_linear)
 
         frame_a_np = segment1_frames[-n+i].astype(np.float32)
         frame_b_np = segment2_frames[i].astype(np.float32)
