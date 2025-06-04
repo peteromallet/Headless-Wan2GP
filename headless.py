@@ -1822,8 +1822,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
 
         print(f"Seg {segment_idx}: Waiting for WGP sub-task {wgp_sub_task_id} to complete...")
         output_from_wgp_sub = sm_poll_status_direct(
-            task_id_to_poll=wgp_sub_task_id,
-            db_path_str=SQLITE_DB_PATH if DB_TYPE == "sqlite" else SQLITE_DB_PATH,
+            task_id=wgp_sub_task_id,
+            db_path=SQLITE_DB_PATH if DB_TYPE == "sqlite" else SQLITE_DB_PATH,
             poll_interval_seconds=poll_interval_seg,
             timeout_seconds=poll_timeout_seg
         )
@@ -2062,6 +2062,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
 
 
         if DB_TYPE == "sqlite":
+            dprint(f"Stitch Task {stitch_task_id_str}: Querying for travel_segment tasks with orchestrator_run_id='{orchestrator_run_id}' and status='{STATUS_COMPLETE}'") # ADDED DPRINT
             def _get_sqlite_generated_segments_for_stitch(conn):
                 cursor = conn.cursor()
                 sql_query = f"""
@@ -2077,6 +2078,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 rows = cursor.fetchall()
                 return rows
             completed_segment_outputs_from_db = execute_sqlite_with_retry(SQLITE_DB_PATH, _get_sqlite_generated_segments_for_stitch)
+            dprint(f"Stitch Task {stitch_task_id_str}: Raw completed_segment_outputs_from_db (SQLite): {completed_segment_outputs_from_db}") # ADDED DPRINT
         
         elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
             try:
@@ -2248,8 +2250,8 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             poll_timeout_ups = full_orchestrator_payload.get("poll_timeout_upscale", full_orchestrator_payload.get("poll_timeout", 30 * 60) * 2) # Longer timeout for upscale
             
             upscaled_video_location_from_db = sm_poll_status_direct(
-                task_id_to_poll=upscale_sub_task_id, 
-                db_path_str=db_path_for_upscale_add, 
+                task_id=upscale_sub_task_id, 
+                db_path=db_path_for_upscale_add, 
                 poll_interval_seconds=poll_interval_ups, 
                 timeout_seconds=poll_timeout_ups
             )

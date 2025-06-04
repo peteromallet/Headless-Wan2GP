@@ -1,0 +1,1 @@
+python steerable_motion.py travel_between_images --input_images samples/image_1.png samples/image_2.png samples/image_3.png --base_prompts 'Transitioning from red' 'Moving to green' --resolution 700x460 --segment_frames 30 --frame_overlap 10 --model_name vace_14B --seed 789 --output_dir ./my_video_outputs --debug
