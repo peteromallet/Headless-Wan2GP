@@ -70,7 +70,8 @@ from sm_functions.common_utils import (
     _adjust_frame_brightness as sm_adjust_frame_brightness,
     _copy_to_folder_with_unique_name as sm_copy_to_folder_with_unique_name,
     _apply_strength_to_image as sm_apply_strength_to_image,
-    parse_resolution as sm_parse_resolution # For parsing resolution string from orchestrator
+    parse_resolution as sm_parse_resolution, # For parsing resolution string from orchestrator
+    download_image_if_url as sm_download_image_if_url # Added import
 )
 from sm_functions.video_utils import (
     extract_frames_from_video as sm_extract_frames_from_video,
@@ -394,7 +395,7 @@ def get_oldest_queued_task(db_path_str: str):
             SELECT t.id, t.params, t.task_type
             FROM   tasks AS t
             LEFT JOIN tasks AS d             ON d.id = t.dependant_on
-            WHERE  t.status = 'Queued'
+            WHERE  t.status = 'Pending'
               AND (t.dependant_on IS NULL OR d.status = 'Complete')
             ORDER BY t.created_at ASC
             LIMIT  1
@@ -453,7 +454,7 @@ def make_send_cmd(task_id):
 # -----------------------------------------------------------------------------
 # 4. State builder for a single task (same as before)
 # -----------------------------------------------------------------------------
-def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model):
+def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model, image_download_dir: Path | str | None = None):
     state = {
         "model_filename": model_filename,
         "validate_success": 1,
@@ -492,9 +493,14 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         if paths_list_or_str is None: return None
         paths_list = paths_list_or_str if isinstance(paths_list_or_str, list) else [paths_list_or_str]
         images = []
+        current_task_id_for_log = task_params_dict.get('task_id', 'build_task_state_unknown') # For logging in download
         for p_str in paths_list:
-            p = Path(p_str.strip())
-            if not p.is_file(): print(f"[WARNING] Image file not found: {p}"); continue
+            # Attempt to download if p_str is a URL and image_download_dir is provided
+            local_p_str = sm_download_image_if_url(p_str, image_download_dir, current_task_id_for_log)
+            p = Path(local_p_str.strip())
+            if not p.is_file(): 
+                dprint(f"[Task {current_task_id_for_log}] load_pil_images: Image file not found after potential download: {p} (original: {p_str})")
+                continue
             try:
                 img = Image.open(p)
                 images.append(wgp_convert_func(img))
@@ -667,7 +673,7 @@ def download_file(url, dest_folder, filename):
 # 6. Process a single task dictionary from the tasks.json list
 # -----------------------------------------------------------------------------
 
-def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, task_type: str):
+def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, task_type: str, image_download_dir: Path | str | None = None):
     dprint(f"PROCESS_SINGLE_TASK received task_params_dict: {json.dumps(task_params_dict)}") # DEBUG ADDED
     task_id = task_params_dict.get("task_id", "unknown_task_" + str(time.time()))
     print(f"--- Processing task ID: {task_id} of type: {task_type} ---")
@@ -706,6 +712,24 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                                                          wgp_mod.transformer_quantization,
                                                          wgp_mod.transformer_dtype_policy)
     
+    effective_image_download_dir = image_download_dir # Use passed-in dir if available
+
+    if effective_image_download_dir is None: # Not passed, so determine for this standard/individual task
+        if DB_TYPE == "sqlite" and SQLITE_DB_PATH: # SQLITE_DB_PATH is global
+            try:
+                sqlite_db_path_obj = Path(SQLITE_DB_PATH).resolve()
+                if sqlite_db_path_obj.is_file():
+                    sqlite_db_parent_dir = sqlite_db_path_obj.parent
+                    candidate_download_dir = sqlite_db_parent_dir / "public" / "data" / "image_downloads" / task_id
+                    candidate_download_dir.mkdir(parents=True, exist_ok=True)
+                    effective_image_download_dir = str(candidate_download_dir.resolve())
+                    dprint(f"Task {task_id}: Determined SQLite-based image_download_dir for standard task: {effective_image_download_dir}")
+                else:
+                    dprint(f"Task {task_id}: SQLITE_DB_PATH '{SQLITE_DB_PATH}' is not a file. Cannot determine parent for image_download_dir.")        
+            except Exception as e_idir_sqlite:
+                dprint(f"Task {task_id}: Could not create SQLite-based image_download_dir for standard task: {e_idir_sqlite}.")
+        # Add similar logic for Supabase if a writable shared path convention exists.
+
     use_causvid = task_params_dict.get("use_causvid_lora", False)
     causvid_lora_basename = "Wan21_CausVid_14B_T2V_lora_rank32.safetensors"
     causvid_lora_url = "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_CausVid_14B_T2V_lora_rank32.safetensors"
@@ -744,7 +768,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         model_filename_for_task, None, lora_dir_for_active_model, "", None
     )
 
-    state, ui_params = build_task_state(wgp_mod, model_filename_for_task, task_params_dict, all_loras_for_active_model)
+    state, ui_params = build_task_state(wgp_mod, model_filename_for_task, task_params_dict, all_loras_for_active_model, image_download_dir)
     
     gen_task_placeholder = {"id": 1, "prompt": ui_params.get("prompt"), "params": {}}
     send_cmd = make_send_cmd(task_id)
@@ -926,7 +950,8 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         chain_success, chain_message, final_path_from_chaining = _handle_travel_chaining_after_wgp(
             wgp_task_params=task_params_dict, 
             actual_wgp_output_video_path=output_location_to_db, # This is the raw WGP output path
-            wgp_mod=wgp_mod 
+            wgp_mod=wgp_mod,
+            image_download_dir = image_download_dir # Pass down for potential use in re-processing if needed
         )
         
         if chain_success:
@@ -1288,6 +1313,24 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         db_path_for_add = SQLITE_DB_PATH if DB_TYPE == "sqlite" else None
         previous_segment_task_id = None
 
+        # --- Determine image download directory for this orchestrated run ---
+        segment_image_download_dir_str : str | None = None
+        if DB_TYPE == "sqlite" and SQLITE_DB_PATH: # SQLITE_DB_PATH is global
+            try:
+                sqlite_db_path_obj = Path(SQLITE_DB_PATH).resolve()
+                if sqlite_db_path_obj.is_file():
+                    sqlite_db_parent_dir = sqlite_db_path_obj.parent
+                    # Orchestrated downloads go into a subfolder named after the run_id
+                    candidate_download_dir = sqlite_db_parent_dir / "public" / "data" / "image_downloads_orchestrated" / run_id
+                    candidate_download_dir.mkdir(parents=True, exist_ok=True)
+                    segment_image_download_dir_str = str(candidate_download_dir.resolve())
+                    dprint(f"Orchestrator {orchestrator_task_id_str}: Determined segment_image_download_dir for run {run_id}: {segment_image_download_dir_str}")
+                else:
+                    dprint(f"Orchestrator {orchestrator_task_id_str}: SQLITE_DB_PATH '{SQLITE_DB_PATH}' is not a file. Cannot determine parent for image_download_dir.")
+            except Exception as e_idir_orch:
+                dprint(f"Orchestrator {orchestrator_task_id_str}: Could not create image_download_dir for run {run_id}: {e_idir_orch}. Segments may not download URL images to specific dir.")
+        # Add similar logic for Supabase if a writable shared path convention exists.
+
         # Expanded arrays from orchestrator payload
         expanded_base_prompts = orchestrator_payload["base_prompts_expanded"]
         expanded_negative_prompts = orchestrator_payload["negative_prompts_expanded"]
@@ -1351,6 +1394,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "desaturate_subsequent_starting_frames": orchestrator_payload.get("desaturate_subsequent_starting_frames", 0.0),
                 "adjust_brightness_subsequent_starting_frames": orchestrator_payload.get("adjust_brightness_subsequent_starting_frames", 0.0),
                 "after_first_post_generation_saturation": orchestrator_payload.get("after_first_post_generation_saturation"),
+                
+                "segment_image_download_dir": segment_image_download_dir_str, # Add the download dir path string
                 
                 "debug_mode_enabled": orchestrator_payload.get("debug_mode_enabled", False),
                 "skip_cleanup_enabled": orchestrator_payload.get("skip_cleanup_enabled", False),
@@ -1434,6 +1479,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         orchestrator_task_id_ref = segment_params.get("orchestrator_task_id_ref")
         orchestrator_run_id = segment_params.get("orchestrator_run_id")
         segment_idx = segment_params.get("segment_index")
+        segment_image_download_dir_str = segment_params.get("segment_image_download_dir") # Get the passed dir
+        segment_image_download_dir = Path(segment_image_download_dir_str) if segment_image_download_dir_str else None
 
         if orchestrator_task_id_ref is None or orchestrator_run_id is None or segment_idx is None:
             msg = f"Segment task {segment_task_id_str} missing critical orchestrator refs or segment_index."
@@ -1503,11 +1550,14 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 dprint(f"[WARNING] Segment {segment_idx}: parsed_resolution_wh not found in full_orchestrator_payload. VACE refs might not be resized correctly.")
 
             for ref_instr in relevant_vace_instructions:
+                # Pass segment_image_download_dir to _prepare_vace_ref_for_segment_headless
                 dprint(f"Segment {segment_idx}: Preparing VACE ref from instruction: {ref_instr}")
                 processed_ref_path = _prepare_vace_ref_for_segment_headless(
                     ref_instruction=ref_instr,
                     segment_processing_dir=segment_processing_dir,
-                    target_resolution_wh=current_parsed_res_wh 
+                    target_resolution_wh=current_parsed_res_wh,
+                    image_download_dir=segment_image_download_dir, # Pass it here
+                    task_id_for_logging=segment_task_id_str
                 )
                 if processed_ref_path:
                     actual_vace_image_ref_paths_for_wgp.append(processed_ref_path)
@@ -1607,27 +1657,36 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 dprint(f"Task {segment_task_id_str}: Guide video frames after quantization {guide_video_total_frames}. No guide will be created."); actual_guide_video_path_for_wgp = None
             else:
                 frames_for_guide_list = [sm_create_color_frame(parsed_res_wh, (128,128,128)).copy() for _ in range(guide_video_total_frames)]
-                input_images_resolved = full_orchestrator_payload["input_image_paths_resolved"]
+                input_images_resolved_original = full_orchestrator_payload["input_image_paths_resolved"]
+                
+                # Download anchor images if they are URLs before using them for guide video
+                input_images_resolved_for_guide = [
+                    sm_download_image_if_url(img_path, segment_image_download_dir, segment_task_id_str) 
+                    for img_path in input_images_resolved_original
+                ]
+
                 end_anchor_img_path_str: str
                 if full_orchestrator_payload.get("continue_from_video_resolved_path"): # Number of input images matches number of new segments
-                    if segment_idx < len(input_images_resolved):
-                        end_anchor_img_path_str = input_images_resolved[segment_idx]
+                    if segment_idx < len(input_images_resolved_for_guide):
+                        end_anchor_img_path_str = input_images_resolved_for_guide[segment_idx]
                     else:
-                        raise ValueError(f"Seg {segment_idx}: End anchor index {segment_idx} out of bounds for input_images ({len(input_images_resolved)}) with continue_from_video.")
+                        raise ValueError(f"Seg {segment_idx}: End anchor index {segment_idx} out of bounds for input_images ({len(input_images_resolved_for_guide)}) with continue_from_video.")
                 else: # Not continuing from video, so number of input images is num_segments + 1
-                    if (segment_idx + 1) < len(input_images_resolved):
-                        end_anchor_img_path_str = input_images_resolved[segment_idx + 1]
+                    if (segment_idx + 1) < len(input_images_resolved_for_guide):
+                        end_anchor_img_path_str = input_images_resolved_for_guide[segment_idx + 1]
                     else:
-                        raise ValueError(f"Seg {segment_idx}: End anchor index {segment_idx+1} out of bounds for input_images ({len(input_images_resolved)}) when not continuing from video.")
+                        raise ValueError(f"Seg {segment_idx}: End anchor index {segment_idx+1} out of bounds for input_images ({len(input_images_resolved_for_guide)}) when not continuing from video.")
                 
-                end_anchor_frame_np = sm_image_to_frame(end_anchor_img_path_str, parsed_res_wh)
+                # Pass segment_image_download_dir to sm_image_to_frame
+                end_anchor_frame_np = sm_image_to_frame(end_anchor_img_path_str, parsed_res_wh, task_id_for_logging=segment_task_id_str, image_download_dir=segment_image_download_dir)
                 if end_anchor_frame_np is None: raise ValueError(f"Failed to load end anchor image: {end_anchor_img_path_str}")
                 num_end_anchor_duplicates = 1
                 start_anchor_frame_np = None
 
                 if is_first_segment_from_scratch:
-                    start_anchor_img_path_str = input_images_resolved[0]
-                    start_anchor_frame_np = sm_image_to_frame(start_anchor_img_path_str, parsed_res_wh)
+                    start_anchor_img_path_str = input_images_resolved_for_guide[0]
+                    # Pass segment_image_download_dir to sm_image_to_frame
+                    start_anchor_frame_np = sm_image_to_frame(start_anchor_img_path_str, parsed_res_wh, task_id_for_logging=segment_task_id_str, image_download_dir=segment_image_download_dir)
                     if start_anchor_frame_np is None: raise ValueError(f"Failed to load start anchor: {start_anchor_img_path_str}")
                     if frames_for_guide_list: frames_for_guide_list[0] = start_anchor_frame_np.copy()
                     # ... (Ported fade logic for start_anchor_frame_np from original file, using fo_low, fo_high, fo_curve, fo_factor) ...
@@ -1845,7 +1904,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             wgp_mod,
             wgp_payload,                # The parameters for the WGP generation itself
             main_output_dir_base,       # Server's main output directory (context for process_single_task)
-            current_wgp_engine          # Task type for process_single_task (e.g., "wgp")
+            current_wgp_engine,         # Task type for process_single_task (e.g., "wgp")
+            image_download_dir=segment_image_download_dir # Pass the determined download dir
         )
 
         if generation_success:
@@ -1876,7 +1936,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         return False, f"Segment {segment_idx} failed: {str(e)[:200]}"
 
 # --- SM_RESTRUCTURE: New function to handle chaining after WGP/Comfy sub-task ---
-def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_video_path: str | None, wgp_mod) -> tuple[bool, str, str | None]:
+def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_video_path: str | None, wgp_mod, image_download_dir: Path | str | None = None) -> tuple[bool, str, str | None]:
     """
     Handles the chaining logic after a WGP  sub-task for a travel segment completes.
     This includes post-generation saturation and enqueuing the next segment or stitch task.
@@ -2712,41 +2772,64 @@ def _apply_strength_to_image_for_headless(image_path: Path, strength: float, out
 def _prepare_vace_ref_for_segment_headless(
     ref_instruction: dict,
     segment_processing_dir: Path,
-    target_resolution_wh: tuple[int, int] | None
+    target_resolution_wh: tuple[int, int] | None,
+    image_download_dir: Path | str | None = None, # Added for downloading URLs
+    task_id_for_logging: str | None = "generic_headless_task" # Added for logging
 ) -> Path | None:
     '''
     Prepares a VACE reference image for a segment based on the given instruction.
-    The function applies a strength adjustment to the image at the given path,
-    optionally resizes it to the target resolution, and saves the result to a new file.
-    Returns the path to the processed image if successful, or None if the image is not found.
+    Downloads the image if 'original_path' is a URL and image_download_dir is provided.
+    Applies strength adjustment and resizes, saving the result to segment_processing_dir.
+    Returns the path to the processed image if successful, or None otherwise.
     '''
-    try:
-        # Extract the image path and strength from the instruction
-        image_path_str = ref_instruction.get("original_path") # Corrected key
-        strength = ref_instruction.get("strength_to_apply")   # Corrected key
+    dprint(f"Task {task_id_for_logging} (_prepare_vace_ref): VACE Ref instruction: {ref_instruction}, download_dir: {image_download_dir}")
 
-        if not image_path_str:
-            dprint(f"Segment {segment_processing_dir.name}: No image path provided for VACE ref. Skipping.")
-            return None
+    original_image_path_str = ref_instruction.get("original_path")
+    strength_to_apply = ref_instruction.get("strength_to_apply")
 
-        image_path = Path(image_path_str)
-        if not image_path.exists():
-            dprint(f"Segment {segment_processing_dir.name}: Image file not found: {image_path}")
-            return None
+    if not original_image_path_str:
+        dprint(f"Task {task_id_for_logging}, Segment {segment_processing_dir.name}: No original_path in VACE ref instruction. Skipping.")
+        return None
+    
+    # Download the original_path if it's a URL, using the passed image_download_dir
+    local_original_image_path_str = sm_download_image_if_url(original_image_path_str, image_download_dir, task_id_for_logging)
+    local_original_image_path = Path(local_original_image_path_str)
 
-        # Apply strength adjustment
-        # Adjust target resolution to be multiples of 16 (floored) for compatibility with downstream model requirements
-        if target_resolution_wh:
-            target_resolution_wh = ((target_resolution_wh[0] // 16) * 16, (target_resolution_wh[1] // 16) * 16)
-        processed_image_path = _apply_strength_to_image_for_headless(image_path, strength, segment_processing_dir / "vace_ref.png", target_resolution_wh)
-        if processed_image_path:
-            return processed_image_path
-        else:
-            dprint(f"Segment {segment_processing_dir.name}: Failed to apply strength to VACE ref image. Skipping.")
-            return None
-    except Exception as e:
-        dprint(f"Segment {segment_processing_dir.name}: Error preparing VACE ref: {e}")
-        traceback.print_exc()
+    if not local_original_image_path.exists():
+        dprint(f"Task {task_id_for_logging}, Segment {segment_processing_dir.name}: VACE ref original image not found (after potential download): {local_original_image_path} (original input: {original_image_path_str})")
+        return None
+
+    vace_ref_type = ref_instruction.get("type", "generic")
+    segment_idx_for_naming = ref_instruction.get("segment_idx_for_naming", "unknown_idx")
+    processed_vace_base_name = f"vace_ref_s{segment_idx_for_naming}_{vace_ref_type}_str{strength_to_apply:.2f}"
+    original_suffix = local_original_image_path.suffix if local_original_image_path.suffix else ".png"
+    
+    # _get_unique_target_path is from common_utils (sm_get_unique_target_path)
+    output_path_for_processed_vace = sm_get_unique_target_path(segment_processing_dir, processed_vace_base_name, original_suffix)
+
+    effective_target_resolution_wh = None
+    if target_resolution_wh:
+        effective_target_resolution_wh = ((target_resolution_wh[0] // 16) * 16, (target_resolution_wh[1] // 16) * 16)
+        if effective_target_resolution_wh != target_resolution_wh:
+            dprint(f"Task {task_id_for_logging}, Segment {segment_processing_dir.name}: Adjusted VACE ref target resolution from {target_resolution_wh} to {effective_target_resolution_wh}")
+
+    # Call the common_utils version of sm_apply_strength_to_image.
+    # image_download_dir is passed as None because local_original_image_path is guaranteed to be local by this point.
+    final_processed_path = sm_apply_strength_to_image( # This is from common_utils
+        image_path_input=local_original_image_path, 
+        strength=strength_to_apply,
+        output_path=output_path_for_processed_vace,
+        target_resolution_wh=effective_target_resolution_wh,
+        task_id_for_logging=task_id_for_logging,
+        image_download_dir=None # Input path is already local here
+    )
+
+    if final_processed_path and final_processed_path.exists():
+        dprint(f"Task {task_id_for_logging}, Segment {segment_processing_dir.name}: Prepared VACE ref: {final_processed_path}")
+        return final_processed_path
+    else:
+        dprint(f"Task {task_id_for_logging}, Segment {segment_processing_dir.name}: Failed to apply strength/save VACE ref from {local_original_image_path}. Skipping.")
+        traceback.print_exc() # Add traceback for detail on failure
         return None
 
 if __name__ == "__main__":
