@@ -2212,30 +2212,51 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
     
     finally:
         # --- 6. Cleanup --- 
-        # Cleanup logic depends on debug_mode_enabled and skip_cleanup_enabled from full_orchestrator_payload
         debug_mode = False # Default
         skip_cleanup = False # Default
         if full_orchestrator_payload: # Check if it's not None
             debug_mode = full_orchestrator_payload.get("debug_mode_enabled", False)
             skip_cleanup = full_orchestrator_payload.get("skip_cleanup_enabled", False)
         
-        do_cleanup_processing_dir = not debug_mode and not skip_cleanup
-        do_cleanup_run_dir = do_cleanup_processing_dir and stitch_success # Only clean run_dir if stitch fully succeeded and processing dir is cleaned
+        # Condition for cleaning the stitch_processing_dir (the sub-workspace)
+        # Cleaned if stitch was successful and skip_cleanup is not set.
+        # debug_mode does not prevent cleanup of this specific intermediate directory.
+        cleanup_stitch_sub_workspace = stitch_success and not skip_cleanup
 
-        if do_cleanup_processing_dir and stitch_processing_dir.exists():
-            dprint(f"Stitch: Cleaning up stitch processing directory: {stitch_processing_dir}")
+        if cleanup_stitch_sub_workspace and stitch_processing_dir.exists():
+            dprint(f"Stitch: Cleaning up stitch processing sub-workspace: {stitch_processing_dir}")
             try: shutil.rmtree(stitch_processing_dir)
             except Exception as e_c1: dprint(f"Stitch: Error cleaning up {stitch_processing_dir}: {e_c1}")
-        else:
-            dprint(f"Stitch: Skipping cleanup of stitch processing directory: {stitch_processing_dir} (debug:{debug_mode}, skip_cleanup:{skip_cleanup})")
+        elif stitch_processing_dir.exists(): # Not cleaning it up, state why
+            dprint(f"Stitch: Skipping cleanup of stitch processing sub-workspace: {stitch_processing_dir} (stitch_success:{stitch_success}, skip_cleanup:{skip_cleanup})")
 
-        # Cleanup the entire run directory (containing all segment folders) only if stitch was successful AND not in debug/skip_cleanup mode.
-        if do_cleanup_run_dir and current_run_base_output_dir.exists():
-            dprint(f"Stitch: Full run successful. Cleaning up run directory: {current_run_base_output_dir}")
+        # Condition for cleaning the main run directory (current_run_base_output_dir)
+        # Cleaned if stitch was successful, skip_cleanup is not set, AND debug_mode is not set.
+        cleanup_main_run_dir = stitch_success and not skip_cleanup and not debug_mode
+
+        if cleanup_main_run_dir and current_run_base_output_dir.exists():
+            dprint(f"Stitch: Full run successful, not in debug, and cleanup not skipped. Cleaning up main run directory: {current_run_base_output_dir}")
             try: shutil.rmtree(current_run_base_output_dir)
-            except Exception as e_c2: dprint(f"Stitch: Error cleaning up run directory {current_run_base_output_dir}: {e_c2}")
-        elif current_run_base_output_dir.exists(): # current_run_base_output_dir exists but conditions for cleanup not met
-            dprint(f"Stitch: Skipping cleanup of run directory: {current_run_base_output_dir} (stitch_success:{stitch_success}, debug:{debug_mode}, skip_cleanup:{skip_cleanup})")
+            except Exception as e_c2: dprint(f"Stitch: Error cleaning up main run directory {current_run_base_output_dir}: {e_c2}")
+        elif current_run_base_output_dir.exists(): # Not cleaning main run dir, state why
+            reasons_for_keeping_main_run_dir = []
+            if not stitch_success: reasons_for_keeping_main_run_dir.append("stitch_failed")
+            if skip_cleanup: reasons_for_keeping_main_run_dir.append("skip_cleanup_enabled")
+            if debug_mode: reasons_for_keeping_main_run_dir.append("debug_mode_enabled")
+            # Add a more specific reason if stitch_sub_workspace was kept due to skip_cleanup, which then prevents main dir cleanup
+            if not cleanup_stitch_sub_workspace and stitch_success and skip_cleanup: 
+                reasons_for_keeping_main_run_dir.append("stitch_sub_workspace_kept_due_to_skip_cleanup")
+            
+            # Filter out redundant "debug_mode_enabled" if it's already implied by other conditions not met for cleanup_main_run_dir
+            if not (stitch_success and not skip_cleanup) and "debug_mode_enabled" in reasons_for_keeping_main_run_dir:
+                 if not debug_mode: # if debug_mode is false, but it's listed as a reason, it's because other primary conditions failed
+                     pass # Let it be listed if debug_mode is true
+                 elif not (stitch_success and not skip_cleanup): # if other conditions failed, debug is secondary
+                     # This part of logic for dprint is getting complex, simplify the message:
+                     pass # Handled by the general list.
+
+            final_reason_text = ", ".join(reasons_for_keeping_main_run_dir) if reasons_for_keeping_main_run_dir else "(e.g. stitch failed or conditions not met for cleanup)"
+            dprint(f"Stitch: Skipping cleanup of main run directory: {current_run_base_output_dir} (Reasons: {final_reason_text})")
             
     return stitch_success, final_video_location_for_db
 
