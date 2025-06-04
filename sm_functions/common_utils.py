@@ -16,7 +16,9 @@ from typing import Any, Generator
 import cv2 # pip install opencv-python
 import mediapipe as mp # pip install mediapipe
 import numpy as np # pip install numpy
-from PIL import Image, ImageDraw, ImageFont # pip install Pillow
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance # pip install Pillow, ensure ImageEnhance is imported
+import requests # Added for downloads
+from urllib.parse import urlparse # Added for URL parsing
 
 # --- Global Debug Mode ---
 # This will be set by the main script (steerable_motion.py)
@@ -1122,64 +1124,157 @@ def generate_different_pose_debug_video_summary(
 
 # Added to provide a unique target path generator for files.
 def _get_unique_target_path(target_dir: Path, base_name: str, extension: str) -> Path:
-    """Generates a unique target Path in the given directory by appending an incrementing counter if needed."""
+    """Generates a unique target Path in the given directory by appending a timestamp and random string."""
     target_dir = Path(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
-    candidate = target_dir / f"{base_name}{extension}"
-    counter = 1
-    while candidate.exists():
-        candidate = target_dir / f"{base_name}_{counter}{extension}"
-        counter += 1
-    return candidate 
-
-# Added to adjust the brightness of an image/frame.
-def _adjust_frame_brightness(frame: np.ndarray, factor: float) -> np.ndarray:
-    """Adjusts the brightness of a given frame.
-    The 'factor' is interpreted as a delta from the CLI argument:
-    - Positive factor (e.g., 0.1) makes it darker (target_alpha = 1.0 - 0.1 = 0.9).
-    - Negative factor (e.g., -0.1) makes it brighter (target_alpha = 1.0 - (-0.1) = 1.1).
-    - Zero factor means no change (target_alpha = 1.0).
-    """
-    # Convert the CLI-style factor to an alpha for cv2.convertScaleAbs
-    # CLI factor: positive = darker, negative = brighter
-    # cv2 alpha: >1 = brighter, <1 = darker
-    cv2_alpha = 1.0 - factor 
-    return cv2.convertScaleAbs(frame, alpha=cv2_alpha, beta=0) 
-
-# Added to apply a strength factor to an image by blending it with a reference.
-def _apply_strength_to_image(image_to_modify: np.ndarray, strength: float, reference_image_to_blend_with: np.ndarray) -> np.ndarray:
-    """Applies a strength factor to an image by blending it with a reference image.
+    timestamp_short = datetime.now().strftime("%H%M%S")
+    # Use a short UUID/random string to significantly reduce collision probability with just timestamp
+    unique_suffix = uuid.uuid4().hex[:6]
     
-    Args:
-        image_to_modify: The primary image (np.ndarray, BGR).
-        strength: The weight for image_to_modify (float, 0.0 to 1.0).
-                  A strength of 1.0 means only image_to_modify is visible.
-                  A strength of 0.0 means only reference_image_to_blend_with is visible.
-        reference_image_to_blend_with: The image to blend with (np.ndarray, BGR),
-                                       e.g., a gray frame.
-
-    Returns:
-        The blended image (np.ndarray, BGR).
-    """
-    if image_to_modify.shape != reference_image_to_blend_with.shape:
-        # Attempt to resize reference if shapes don't match, log warning
-        dprint(f"_apply_strength_to_image: Warning - Shapes mismatch. Image: {image_to_modify.shape}, Reference: {reference_image_to_blend_with.shape}. Resizing reference.")
-        reference_image_to_blend_with = cv2.resize(reference_image_to_blend_with, (image_to_modify.shape[1], image_to_modify.shape[0]))
-
-    strength = np.clip(strength, 0.0, 1.0) # Ensure strength is within [0, 1]
+    # Construct the filename
+    # Ensure extension has a leading dot
+    if extension and not extension.startswith('.'):
+        extension = '.' + extension
     
-    # Blend: (reference_image * (1-strength)) + (image_to_modify * strength)
-    return cv2.addWeighted(
-        reference_image_to_blend_with.astype(np.float32), 
-        1.0 - strength, 
-        image_to_modify.astype(np.float32), 
-        strength, 
-        0.0 # gamma
-    ).astype(np.uint8)
+    filename = f"{base_name}_{timestamp_short}_{unique_suffix}{extension}"
+    return target_dir / filename
 
+def download_image_if_url(image_url_or_path: str, download_target_dir: Path | str | None, task_id_for_logging: str | None = "generic_task") -> str:
+    """
+    Checks if the given string is an HTTP/HTTPS URL. If so, and if download_target_dir is provided,
+    downloads the image to a unique path within download_target_dir.
+    Returns the local file path string if downloaded, otherwise returns the original string.
+    """
+    if not image_url_or_path:
+        return image_url_or_path
 
-def _copy_to_folder_with_unique_name(source_path: Path | str | None, target_dir: Path, base_name: str, extension: str) -> Path | None:
-    """Copies source_path to target_dir with a unique name, returns the destination Path or None."""
+    parsed_url = urlparse(image_url_or_path)
+    if parsed_url.scheme in ['http', 'https'] and download_target_dir:
+        target_dir_path = Path(download_target_dir)
+        try:
+            target_dir_path.mkdir(parents=True, exist_ok=True)
+            dprint(f"Task {task_id_for_logging}: Downloading image from URL: {image_url_or_path} to {target_dir_path.resolve()}")
+            
+            # Use a session for potential keep-alive and connection pooling
+            with requests.Session() as s:
+                response = s.get(image_url_or_path, stream=True, timeout=300) # 5 min timeout
+                response.raise_for_status() # Raises HTTPError for bad responses (4XX or 5XX)
+
+            original_filename = Path(parsed_url.path).name
+            original_suffix = Path(original_filename).suffix if Path(original_filename).suffix else ".jpg" # Default to .jpg if no suffix
+            if not original_suffix.startswith('.'):
+                original_suffix = '.' + original_suffix
+            
+            base_name_for_download = f"downloaded_{Path(original_filename).stem[:50]}" # Limit stem length
+            
+            # _get_unique_target_path expects a Path object for target_dir
+            local_image_path = _get_unique_target_path(target_dir_path, base_name_for_download, original_suffix)
+            
+            with open(local_image_path, 'wb') as f:
+                # Re-fetch without stream=True if response was already consumed by raise_for_status check,
+                # or ensure streaming works correctly if the initial response object can be re-used.
+                # For simplicity, re-requesting after status check if necessary, or ensure stream is not prematurely closed.
+                # A simple way for non-huge files and to avoid stream issues with one-off downloads:
+                if response.raw.closed: # If stream was closed by raise_for_status or other means
+                    with requests.Session() as s_final:
+                        final_response = s_final.get(image_url_or_path, stream=False, timeout=300) # Not streaming for direct content write
+                        final_response.raise_for_status()
+                        f.write(final_response.content)
+                else: # Stream is still open
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+            
+            dprint(f"Task {task_id_for_logging}: Image downloaded successfully to {local_image_path.resolve()}")
+            return str(local_image_path.resolve())
+
+        except requests.exceptions.RequestException as e_req:
+            dprint(f"Task {task_id_for_logging}: Error downloading image {image_url_or_path}: {e_req}. Returning original path.")
+            return image_url_or_path
+        except IOError as e_io:
+            dprint(f"Task {task_id_for_logging}: IO error saving image from {image_url_or_path}: {e_io}. Returning original path.")
+            return image_url_or_path
+        except Exception as e_gen:
+            dprint(f"Task {task_id_for_logging}: General error processing image URL {image_url_or_path}: {e_gen}. Returning original path.")
+            return image_url_or_path
+    else:
+        # Not a downloadable URL or no target directory specified
+        if parsed_url.scheme in ['http', 'https'] and not download_target_dir:
+             dprint(f"Task {task_id_for_logging}: Image path {image_url_or_path} is a URL, but no download_target_dir provided. Using original path.")
+        return image_url_or_path
+
+def image_to_frame(image_path_str: str | Path, target_resolution_wh: tuple[int, int] | None = None, task_id_for_logging: str | None = "generic_task", image_download_dir: Path | str | None = None) -> np.ndarray | None:
+    """
+    Load an image, optionally resize, and convert to BGR NumPy array.
+    If image_path_str is a URL and image_download_dir is provided, it attempts to download it first.
+    """
+    resolved_image_path_str = image_path_str # Default to original path
+
+    if isinstance(image_path_str, str): # Only attempt download if it's a string (potentially a URL)
+        resolved_image_path_str = download_image_if_url(image_path_str, image_download_dir, task_id_for_logging)
+    
+    image_path = Path(resolved_image_path_str)
+
+    if not image_path.exists():
+        dprint(f"Task {task_id_for_logging}: Image file not found at {image_path} (original input: {image_path_str}).")
+        return None
+    try:
+        img = Image.open(image_path).convert("RGB") # Ensure RGB for consistent processing
+        if target_resolution_wh:
+            img = img.resize(target_resolution_wh, Image.Resampling.LANCZOS)
+        return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+    except Exception as e:
+        dprint(f"Error loading image {image_path} (original input {image_path_str}): {e}")
+        return None
+
+def _apply_strength_to_image(
+    image_path_input: Path | str, # Changed name to avoid confusion
+    strength: float,
+    output_path: Path,
+    target_resolution_wh: tuple[int, int] | None,
+    task_id_for_logging: str | None = "generic_task",
+    image_download_dir: Path | str | None = None
+) -> Path | None:
+    """
+    Applies a brightness adjustment (strength) to an image, optionally resizes, and saves it.
+    If image_path_input is a URL string and image_download_dir is provided, it attempts to download it first.
+    """
+    resolved_image_path_str = str(image_path_input) 
+
+    if isinstance(image_path_input, str):
+         resolved_image_path_str = download_image_if_url(image_path_input, image_download_dir, task_id_for_logging)
+    # Check if image_path_input was a Path object representing a URL (less common for this function)
+    elif isinstance(image_path_input, Path) and image_path_input.as_posix().startswith(('http://', 'https://')):
+         resolved_image_path_str = download_image_if_url(image_path_input.as_posix(), image_download_dir, task_id_for_logging)
+
+    actual_image_path = Path(resolved_image_path_str)
+
+    if not actual_image_path.exists():
+        dprint(f"Task {task_id_for_logging}: Source image not found at {actual_image_path} (original input: {image_path_input}) for strength application.")
+        return None
+    try:
+        # Open the potentially downloaded or original local image
+        img = Image.open(actual_image_path).convert("RGB") # Ensure RGB
+        
+        if target_resolution_wh:
+            img = img.resize(target_resolution_wh, Image.Resampling.LANCZOS)
+        
+        # Apply the strength factor using PIL.ImageEnhance for brightness
+        enhancer = ImageEnhance.Brightness(img)
+        processed_img = enhancer.enhance(strength) # 'strength' is the factor for brightness
+        
+        # Save the adjusted image
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        processed_img.save(output_path) # Save PIL image directly
+
+        dprint(f"Task {task_id_for_logging}: Applied strength {strength} to {actual_image_path.name}, saved to {output_path.name} with resolution {target_resolution_wh if target_resolution_wh else 'original'}")
+        return output_path
+    except Exception as e:
+        dprint(f"Task {task_id_for_logging}: Error in _apply_strength_to_image for {actual_image_path}: {e}")
+        traceback.print_exc()
+        return None
+
+def _copy_to_folder_with_unique_name(source_path: Path, target_dir: Path, base_name: str, extension: str) -> Path | None:
+    """Copies a file to a target directory with a unique name based on timestamp and random string."""
     if not source_path:
         dprint(f"COPY: Source path is None for {base_name}{extension}. Skipping copy.")
         return None
