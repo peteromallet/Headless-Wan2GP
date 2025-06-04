@@ -917,17 +917,29 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
     if generation_success and task_params_dict.get("travel_chain_details"):
         dprint(f"WGP Task {task_id} is part of a travel sequence. Attempting to chain.")
         # output_location_to_db at this point is the path to the successfully generated WGP video
-        chain_success, chain_message = _handle_travel_chaining_after_wgp(
+        
+        chain_success, chain_message, final_path_from_chaining = _handle_travel_chaining_after_wgp(
             wgp_task_params=task_params_dict, 
-            actual_wgp_output_video_path=output_location_to_db,
-            wgp_mod=wgp_mod # Pass wgp_mod if needed for any operations in chaining (e.g. new sub-tasks)
+            actual_wgp_output_video_path=output_location_to_db, # This is the raw WGP output path
+            wgp_mod=wgp_mod 
         )
-        if not chain_success:
-            # If chaining itself fails, we might want to log this. 
-            # The WGP task is still "Complete", but the sequence is broken.
-            print(f"[ERROR Task ID: {task_id}] Travel sequence chaining failed after WGP completion: {chain_message}")
-            # Optionally, update the WGP task's output_location or a custom field to note this
-            # For now, the original WGP output is still valid.
+        
+        if chain_success:
+            # If chaining was successful, the final_path_from_chaining is the one that should be stored
+            # for THIS WGP task, as it might be the saturated version.
+            if final_path_from_chaining and Path(final_path_from_chaining).exists():
+                if final_path_from_chaining != output_location_to_db:
+                    dprint(f"Task {task_id}: Chaining modified output path for DB. Original: {output_location_to_db}, New: {final_path_from_chaining}")
+                output_location_to_db = final_path_from_chaining # Update to potentially saturated path
+            else:
+                # This case should ideally not happen if chain_success is True and saturation was attempted/skipped.
+                # It might mean sm_apply_saturation_to_video_ffmpeg returned False and original path also became invalid.
+                print(f"[WARNING Task ID: {task_id}] Chaining reported success, but final path '{final_path_from_chaining}' is invalid. Using original WGP output '{output_location_to_db}' for DB.")
+        else:
+            # If chaining itself fails, the WGP task is still "Complete" with its original raw output.
+            # The sequence is broken, but the WGP part did its job.
+            print(f"[ERROR Task ID: {task_id}] Travel sequence chaining failed after WGP completion: {chain_message}. The raw WGP output '{output_location_to_db}' will be used for this task's DB record.")
+            # output_location_to_db remains the raw WGP output in this case.
     # --- End SM_RESTRUCTURE ---
 
     print(f"--- Finished task ID: {task_id} (Success: {generation_success}) ---")
@@ -1837,20 +1849,23 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         return False, f"Segment {segment_idx} failed: {str(e)[:200]}"
 
 # --- SM_RESTRUCTURE: New function to handle chaining after WGP/Comfy sub-task ---
-def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_video_path: str | None, wgp_mod) -> tuple[bool, str]:
+def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_video_path: str | None, wgp_mod) -> tuple[bool, str, str | None]:
     """
     Handles the chaining logic after a WGP/ComfyUI sub-task for a travel segment completes.
     This includes post-generation saturation and enqueuing the next segment or stitch task.
+    Returns: (success_bool, message_str, final_video_path_for_db_str_or_none)
+    The third element is the path that should be considered the definitive output of the WGP task
+    (e.g., path to saturated video if saturation was applied).
     """
     chain_details = wgp_task_params.get("travel_chain_details")
     wgp_task_id = wgp_task_params.get("task_id", "unknown_wgp_task")
 
     if not chain_details:
-        return False, f"Task {wgp_task_id}: Missing travel_chain_details. Cannot proceed with chaining."
+        return False, f"Task {wgp_task_id}: Missing travel_chain_details. Cannot proceed with chaining.", None
     if not actual_wgp_output_video_path or not Path(actual_wgp_output_video_path).exists():
-        return False, f"Task {wgp_task_id}: WGP output video path '{actual_wgp_output_video_path}' is invalid or missing. Cannot chain."
+        return False, f"Task {wgp_task_id}: WGP output video path '{actual_wgp_output_video_path}' is invalid or missing. Cannot chain.", None
 
-    final_video_path_for_next_step = actual_wgp_output_video_path # Start with the direct output
+    final_video_path_for_db_and_next_step = Path(actual_wgp_output_video_path) # Start with the direct output
 
     try:
         orchestrator_task_id_ref = chain_details["orchestrator_task_id_ref"]
@@ -1870,19 +1885,31 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
         segment_processing_dir = Path(segment_processing_dir_for_saturation_str)
 
         # --- Post-generation Saturation (moved here) ---
-        if final_video_path_for_next_step and (is_subsequent_segment_val or is_first_new_segment_after_continue):
+        # Condition for applying saturation (matches old logic based on when generated_segments_for_stitching > 0)
+        if is_subsequent_segment_val or is_first_new_segment_after_continue:
             sat_level = full_orchestrator_payload.get("after_first_post_generation_saturation")
             if sat_level is not None:
-                dprint(f"Chain (Seg {segment_idx_completed}): Applying post-gen saturation {sat_level} to {final_video_path_for_next_step}")
+                dprint(f"Chain (Seg {segment_idx_completed}): Applying post-gen saturation {sat_level} to {final_video_path_for_db_and_next_step}")
                 sat_out_base = f"s{segment_idx_completed}_final_sat_{sat_level:.2f}"
                 # Ensure sat_out_path is unique within the segment_processing_dir
-                sat_out_path = sm_get_unique_target_path(segment_processing_dir, sat_out_base, Path(final_video_path_for_next_step).suffix)
+                source_video_for_saturation = final_video_path_for_db_and_next_step # This is currently the raw WGP output
+                sat_out_path = sm_get_unique_target_path(segment_processing_dir, sat_out_base, source_video_for_saturation.suffix)
                 
-                if sm_apply_saturation_to_video_ffmpeg(final_video_path_for_next_step, sat_out_path, sat_level):
-                    final_video_path_for_next_step = str(sat_out_path.resolve())
-                    dprint(f"Chain (Seg {segment_idx_completed}): Saturation successful. New path: {final_video_path_for_next_step}")
+                if sm_apply_saturation_to_video_ffmpeg(str(source_video_for_saturation), sat_out_path, sat_level):
+                    final_video_path_for_db_and_next_step = sat_out_path.resolve() # Update to saturated path
+                    dprint(f"Chain (Seg {segment_idx_completed}): Saturation successful. New path for DB & next step: {final_video_path_for_db_and_next_step}")
+                    
+                    # Cleanup original raw WGP output if saturation was successful, paths are different, and cleanup is enabled
+                    if not full_orchestrator_payload.get("skip_cleanup_enabled", False) and \
+                       not full_orchestrator_payload.get("debug_mode_enabled", False) and \
+                       source_video_for_saturation.exists() and source_video_for_saturation != final_video_path_for_db_and_next_step:
+                        try:
+                            source_video_for_saturation.unlink()
+                            dprint(f"Chain (Seg {segment_idx_completed}): Removed original raw WGP output {source_video_for_saturation} after saturation.")
+                        except Exception as e_del_raw:
+                            dprint(f"Chain (Seg {segment_idx_completed}): Warning - could not remove original raw WGP output {source_video_for_saturation}: {e_del_raw}")
                 else:
-                    dprint(f"Chain (Seg {segment_idx_completed}): Failed post-gen saturation. Using original WGP output for next step.")
+                    dprint(f"Chain (Seg {segment_idx_completed}): Failed post-gen saturation. Using original WGP output {final_video_path_for_db_and_next_step} for DB & next step.")
         
         # --- Enqueue Next Segment OR Stitch Task (logic from _handle_travel_segment_task) ---
         db_path_next_add = SQLITE_DB_PATH if DB_TYPE == "sqlite" else None
@@ -1918,7 +1945,7 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                     "segment_index": next_seg_idx,
                     "is_first_segment": False, 
                     "is_last_segment": (next_seg_idx == full_orchestrator_payload["num_new_segments_to_generate"] - 1),
-                    "path_to_previous_segment_output": final_video_path_for_next_step, # Crucial: output of the completed WGP task
+                    "path_to_previous_segment_output": str(final_video_path_for_db_and_next_step), # Crucial: output of the completed WGP task (now potentially saturated)
                     "full_orchestrator_payload": full_orchestrator_payload,
                     
                     "segment_frames_target": full_orchestrator_payload["segment_frames_expanded"][next_seg_idx],
@@ -1946,10 +1973,10 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                     "debug_mode_enabled": full_orchestrator_payload.get("debug_mode_enabled", False)
                     # vace_image_refs_for_segment will be handled by the next segment task itself using full_orchestrator_payload
                 }
-                sm_add_task_to_db(next_seg_payload, db_path_next_add, "travel_segment")
+                sm_add_task_to_db(next_seg_payload, db_path_next_add, "travel_segment", dependant_on=wgp_task_id) # Depend on the WGP task
                 msg = f"Chain (Seg {segment_idx_completed}): Enqueued next segment ({next_seg_idx}) task {next_seg_task_id}."
                 dprint(msg)
-                return True, msg
+                return True, msg, str(final_video_path_for_db_and_next_step)
         
         # This will now be checked after the next_seg_idx boundary check or if original is_last_segment_completed was true
         if is_last_segment_completed:
@@ -1973,19 +2000,19 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                 "initial_continued_video_path": full_orchestrator_payload.get("continue_from_video_resolved_path"),
                 "full_orchestrator_payload": full_orchestrator_payload # Pass for stitcher to access original args if needed
             }
-            sm_add_task_to_db(stitch_payload, db_path_next_add, "travel_stitch")
+            sm_add_task_to_db(stitch_payload, db_path_next_add, "travel_stitch", dependant_on=wgp_task_id) # Depend on the WGP task
             msg = f"Chain (Seg {segment_idx_completed}): This was the last segment. Enqueued stitch task {stitch_task_id}."
             dprint(msg)
-            return True, msg
+            return True, msg, str(final_video_path_for_db_and_next_step)
         
         # Should not be reached if logic is correct (either next segment or stitch is enqueued)
-        return False, f"Chain (Seg {segment_idx_completed}): Logic error - did not enqueue next segment or stitch task."
+        return False, f"Chain (Seg {segment_idx_completed}): Logic error - did not enqueue next segment or stitch task.", str(final_video_path_for_db_and_next_step)
 
     except Exception as e_chain:
         error_msg = f"Chain (Seg {chain_details.get('segment_index_completed', 'N/A')} for WGP {wgp_task_id}): Failed during chaining: {e_chain}"
         print(f"[ERROR] {error_msg}")
         traceback.print_exc()
-        return False, error_msg
+        return False, error_msg, str(final_video_path_for_db_and_next_step) # Return original path if error during chaining
 
 def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: Path, stitch_task_id_str: str):
     """Handles the final 'travel_stitch' task."""
