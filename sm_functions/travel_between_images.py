@@ -91,17 +91,14 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     run_id = timestamp # Unique ID for this entire travel operation
 
-    # The orchestrator task itself might not need a deep processing folder,
-    # as headless will manage folders for its child segment/stitch tasks.
-    # However, a shallow folder for the orchestrator's own log/command might be useful.
-    orchestrator_log_folder_name = f"travel_orchestrator_log_{run_id}"
-    orchestrator_log_folder = main_output_dir / orchestrator_log_folder_name
-    orchestrator_log_folder.mkdir(parents=True, exist_ok=True)
-    dprint(f"Orchestrator logs/info for this run will be in: {orchestrator_log_folder}")
+    # Define the main directory for this run's artifacts
+    current_run_artifacts_dir = main_output_dir / f"travel_run_{run_id}"
+    current_run_artifacts_dir.mkdir(parents=True, exist_ok=True)
+    dprint(f"Artifacts for this run (logs, initial videos, final output) will be in: {current_run_artifacts_dir.resolve()}")
 
     if DEBUG_MODE and executed_command_str:
         try:
-            command_file_path = orchestrator_log_folder / "executed_command.txt"
+            command_file_path = current_run_artifacts_dir / "executed_command.txt"
             with open(command_file_path, "w") as f:
                 f.write(executed_command_str)
             dprint(f"Saved executed command to {command_file_path}")
@@ -229,7 +226,7 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
         dprint(f"Orchestrator: continue_from_video specified: {task_args.continue_from_video}")
         downloaded_continued_video_path = _download_video_if_url(
             task_args.continue_from_video,
-            orchestrator_log_folder, 
+            current_run_artifacts_dir, # Save to the main run artifacts directory
             "continued_video_input"
         )
         if downloaded_continued_video_path and downloaded_continued_video_path.exists():
@@ -243,10 +240,10 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
         "orchestrator_task_id": orchestrator_task_id,
         "run_id": run_id, # For grouping segment task outputs later in headless if needed
         "original_task_args": vars(task_args), # Store original CLI args for this travel task
-        "original_common_args": vars(common_args), # Store original common args
+        "original_common_args": vars(common_args), # Store original common_args
         "parsed_resolution_wh": final_parsed_resolution_wh, # (width, height) tuple, adjusted to be multiple of 16
         "main_output_dir_for_run": str(main_output_dir.resolve()), # Base output dir for headless to use
-        "orchestrator_log_folder": str(orchestrator_log_folder.resolve()), # For headless to potentially write logs or find assets
+        # The "orchestrator_log_folder" key is removed as headless constructs paths from main_output_dir_for_run and run_id.
 
         "input_image_paths_resolved": [str(Path(p).resolve()) for p in task_args.input_images],
         "continue_from_video_resolved_path": initial_video_path_for_headless, # Path to downloaded/copied video if used
