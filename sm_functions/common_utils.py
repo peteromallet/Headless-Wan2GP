@@ -10,6 +10,8 @@ import time
 import traceback
 import uuid
 from pathlib import Path
+from datetime import datetime
+from typing import Any, Generator
 
 import cv2 # pip install opencv-python
 import mediapipe as mp # pip install mediapipe
@@ -100,7 +102,7 @@ def create_video_from_frames_list(
         if out:
             out.release()
 
-def add_task_to_db(task_payload: dict, db_path: str | Path, task_type_str: str):
+def add_task_to_db(task_payload: dict, db_path: str | Path, task_type_str: str, dependant_on: str | None = None):
     conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
     try:
@@ -140,10 +142,12 @@ def add_task_to_db(task_payload: dict, db_path: str | Path, task_type_str: str):
         # The `task_payload` argument to this function is what gets stored in the `params` column.
 
         params_json_for_db = json.dumps(headless_params_dict)
+        current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        project_id = task_payload.get("project_id", "default_project_id") # Get project_id or use default
 
         cursor.execute(
-            f"INSERT INTO {DEFAULT_DB_TABLE_NAME} (task_id, params, task_type, status) VALUES (?, ?, ?, ?)",
-            (current_task_id, params_json_for_db, task_type_str, STATUS_QUEUED)
+            f"INSERT INTO {DEFAULT_DB_TABLE_NAME} (id, params, task_type, status, created_at, project_id, dependant_on) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (current_task_id, params_json_for_db, task_type_str, STATUS_QUEUED, current_timestamp, project_id, dependant_on)
         )
         conn.commit()
         print(f"Task {current_task_id} (Type: {task_type_str}) added to database {db_path}.")
@@ -171,7 +175,7 @@ def poll_task_status(task_id: str, db_path: str | Path, poll_interval_seconds: i
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         try:
-            cursor.execute(f"SELECT status, output_location FROM {DEFAULT_DB_TABLE_NAME} WHERE task_id = ?", (task_id,))
+            cursor.execute(f"SELECT status, output_location FROM {DEFAULT_DB_TABLE_NAME} WHERE id = ?", (task_id,))
             row = cursor.fetchone()
         except sqlite3.Error as e:
             print(f"SQLite error while polling task {task_id}: {e}. Retrying...")

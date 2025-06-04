@@ -46,7 +46,7 @@ DEBUG_MODE = SM_DEBUG_MODE # Initialize with the value from common_utils
 # These were NOT moved to common_utils as they are tied to CLI parsing here.
 DEFAULT_MODEL_NAME = "vace_14B"
 DEFAULT_SEGMENT_FRAMES = 81 
-DEFAULT_FPS_HELPERS = 25 
+DEFAULT_FPS_HELPERS = 16 
 DEFAULT_SEED = 12345
 
 # ----------------------------------------------------
@@ -60,17 +60,19 @@ def _ensure_db_initialized(db_path_str: str, table_name: str = DEFAULT_DB_TABLE_
     cursor.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
-            task_id TEXT PRIMARY KEY,
+            id TEXT PRIMARY KEY,
             params TEXT NOT NULL,
             task_type TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'Queued',
             output_location TEXT NULL,
+            dependant_on TEXT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
     cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_status_created_at ON {table_name} (status, created_at)")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_dependant_on ON {table_name}(dependant_on)")
     conn.commit()
     conn.close()
 
@@ -94,12 +96,11 @@ def main():
     common_parser.add_argument("--output_video_frames", type=int, default=30, help="Number of frames for the final generated video output (e.g., in different_pose). Default 30.")
     common_parser.add_argument("--poll_interval", type=int, default=15, help="Polling interval (seconds) for task status.")
     common_parser.add_argument("--poll_timeout", type=int, default=30 * 60, help="Timeout (seconds) for polling a single task.")
-    common_parser.add_argument("--skip_cleanup", action="store_true", help="Skip cleanup of intermediate segment/task directories.")
+    common_parser.add_argument("--skip_cleanup", action="store_true", help="Skip cleanup of intermediate files and folders (useful for debugging). This applies to orchestrator-based tasks like travel_between_images.")
     common_parser.add_argument("--debug", action="store_true", help="Enable verbose debug logging and prevent cleanup of intermediate files.")
     common_parser.add_argument("--use_causvid_lora", action="store_true", help="Enable CausVid LoRA for video generation tasks.")
     common_parser.add_argument("--upscale_model_name", type=str, default="ltxv_13B", help="Model name for headless.py to use for upscaling tasks (default: ltxv_13B).")
-    common_parser.add_argument("--last_frame_duplication", type=int, default=0, help="Number of additional times the last anchor frame is repeated at the end of the guide video. 0 means the last anchor is only the very last frame; 4 means the last anchor frame becomes the last 5 frames of the guide.")
-    common_parser.add_argument("--final_image_strength", type=float, default=1.0, help="Strength of the final anchor image when used as a VACE reference (0.0 to 1.0). 1.0 is full strength (opaque), 0.0 is fully transparent. Using this implicitly makes the end anchor a VACE ref. Values outside [0,1] will be clamped.")
+    common_parser.add_argument("--final_image_strength", type=float, default=0.0, help="Strength of the final anchor image when used as a VACE reference (0.0 to 1.0). 1.0 is full strength (opaque), 0.0 is fully transparent. Using this implicitly makes the end anchor a VACE ref. Values outside [0,1] will be clamped.")
     common_parser.add_argument("--initial_image_strength", type=float, default=0.0, help="Strength of the initial anchor image when used as a VACE reference (0.0 to 1.0). 1.0 is full strength (opaque), 0.0 is fully transparent. Similar to --final_image_strength but for the start anchor. Values outside [0,1] will be clamped.")
     common_parser.add_argument(
         "--fade_in_duration", 
@@ -131,7 +132,6 @@ def main():
         default=0.0,
         help="Float value to adjust brightness of initial frames of subsequent/overlapped segments. Positive values make it darker (e.g., 0.1 for 10% darker), negative values make it brighter (e.g., -0.1 for 10% brighter). 0.0 means no change. Applied after strength and desaturation."
     )
-    common_parser.add_argument("--execution_engine", type=str, default="wgp", choices=["wgp", "comfyui"], help="The execution engine to use for generation tasks (wgp or comfyui).")
     common_parser.add_argument(
         "--cfg_star_switch",
         type=int,
@@ -149,7 +149,7 @@ def main():
         "--params_json_str",
         type=str, 
         default=None, 
-        help="JSON string of additional parameters to be merged into the task payload for headless.py. E.g., '{\"guidance_scale\": 7.5, \"num_inference_steps\": 20}'"
+        help="JSON string with additional wgp.py parameters to override (use with caution). Example: --params_json_str '{\"flow_shift\": 2.0, \"steps\": 25}'"
     )
     common_parser.add_argument(
         "--after_first_post_generation_saturation",
