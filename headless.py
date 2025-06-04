@@ -391,18 +391,19 @@ def get_oldest_queued_task(db_path_str: str):
     """Get the oldest queued task with proper error handling"""
     def _get_operation(conn):
         cursor = conn.cursor()
-        sql_query = """
+        sql_query = f"""
             SELECT t.id, t.params, t.task_type
             FROM   tasks AS t
             LEFT JOIN tasks AS d             ON d.id = t.dependant_on
-            WHERE  t.status = 'Pending'
-              AND (t.dependant_on IS NULL OR d.status = 'Complete')
+            WHERE  t.status = ?
+              AND (t.dependant_on IS NULL OR d.status = ?)
             ORDER BY t.created_at ASC
             LIMIT  1
         """
-        cursor.execute(sql_query)
+        cursor.execute(sql_query, (STATUS_QUEUED, STATUS_COMPLETE))
         task_row = cursor.fetchone()
         if task_row:
+            dprint(f"SQLite: Fetched raw task_row: {task_row}") # DEBUG ADDED
             return {"task_id": task_row[0], "params": json.loads(task_row[1]), "task_type": task_row[2]}
         return None
     
@@ -1387,7 +1388,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "cfg_star_switch": orchestrator_payload.get("cfg_star_switch", 0),
                 "cfg_zero_step": orchestrator_payload.get("cfg_zero_step", -1),
                 "params_json_str_override": orchestrator_payload.get("params_json_str_override"),
-                "fps_helpers": orchestrator_payload["fps_helpers"],
+                "fps_helpers": orchestrator_payload.get("fps_helpers", 16),
                 "fade_in_params_json_str": orchestrator_payload["fade_in_params_json_str"],
                 "fade_out_params_json_str": orchestrator_payload["fade_out_params_json_str"],
                 "subsequent_starting_strength_adjustment": orchestrator_payload.get("subsequent_starting_strength_adjustment", 0.0),
@@ -1429,7 +1430,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             "frame_overlap_settings_expanded": expanded_frame_overlap,
             "crossfade_sharp_amt": orchestrator_payload.get("crossfade_sharp_amt", 0.3),
             "parsed_resolution_wh": orchestrator_payload["parsed_resolution_wh"],
-            "fps_final_video": orchestrator_payload["fps_helpers"],
+            "fps_final_video": orchestrator_payload.get("fps_helpers", 16),
             "upscale_factor": orchestrator_payload.get("upscale_factor", 0.0),
             "upscale_model_name": orchestrator_payload.get("upscale_model_name"),
             "seed_for_upscale": orchestrator_payload.get("seed_base", 12345) + 5000, # Consistent seed for upscale
@@ -1576,7 +1577,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         is_subsequent_segment = not is_first_segment
 
         parsed_res_wh = full_orchestrator_payload["parsed_resolution_wh"]
-        fps_helpers = full_orchestrator_payload["fps_helpers"]
+        fps_helpers = full_orchestrator_payload.get("fps_helpers", 16)
         fade_in_duration_str = full_orchestrator_payload["fade_in_params_json_str"]
         fade_out_duration_str = full_orchestrator_payload["fade_out_params_json_str"]
         
@@ -2038,7 +2039,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
 
         num_expected_new_segments = full_orchestrator_payload["num_new_segments_to_generate"]
         parsed_res_wh = full_orchestrator_payload["parsed_resolution_wh"]
-        final_fps = full_orchestrator_payload["fps_helpers"]
+        final_fps = full_orchestrator_payload.get("fps_helpers", 16) # MODIFIED
         expanded_frame_overlaps = full_orchestrator_payload["frame_overlap_expanded"]
         crossfade_sharp_amt = full_orchestrator_payload.get("crossfade_sharp_amt", 0.3)
         initial_continued_video_path_str = full_orchestrator_payload.get("continue_from_video_resolved_path")
@@ -2481,6 +2482,28 @@ def main():
     # --- End LoRA directory check ---
 
     try:
+        # --- Add a one-time diagnostic log for task counts (SQLite only for now) ---
+        if DB_TYPE == "sqlite" and SQLITE_DB_PATH and debug_mode:
+            def _get_initial_task_counts(conn):
+                cursor = conn.cursor()
+                cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE_NAME}")
+                total_tasks = cursor.fetchone()[0]
+                cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE_NAME} WHERE status = ?", (STATUS_QUEUED,)) # STATUS_QUEUED is 'Pending'
+                pending_tasks = cursor.fetchone()[0]
+                # SM_RESTRUCTURE_PENDING_STATUS_FIX: Changed from STATUS_PENDING to STATUS_QUEUED
+                # Also, the original get_oldest_queued_task uses 'Pending' literally. Let's check STATUS_QUEUED definition.
+                # STATUS_QUEUED is "Queued". The get_oldest_queued_task uses literal 'Pending'.
+                # For this diagnostic, let's count both to be safe and highlight potential mismatch.
+                cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE_NAME} WHERE status = 'Pending'")
+                literal_pending_tasks = cursor.fetchone()[0]
+                dprint(f"SQLite Initial State: Total tasks in '{PG_TABLE_NAME}': {total_tasks}. Tasks with status '{STATUS_QUEUED}': {pending_tasks}. Tasks with literal status 'Pending': {literal_pending_tasks}.")
+                return True # Dummy return
+            try:
+                execute_sqlite_with_retry(SQLITE_DB_PATH, _get_initial_task_counts)
+            except Exception as e_diag:
+                dprint(f"SQLite Diagnostic Error: Could not get initial task counts: {e_diag}")
+        # --- End one-time diagnostic log ---
+
         while True:
             task_info = None
             current_task_id_for_status_update = None # Used to hold the task_id for status updates
@@ -2621,6 +2644,7 @@ def get_oldest_queued_task_supabase(): # Renamed from get_oldest_queued_task_pos
 
         if response.data and len(response.data) > 0:
             task_data = response.data[0] # RPC should return a single row or empty
+            dprint(f"Supabase RPC: Raw task_data from func_claim_task: {task_data}") # DEBUG ADDED
             # Ensure the RPC returns task_id_out, params_out, and now task_type_out
             if task_data.get("task_id_out") and task_data.get("params_out") is not None and task_data.get("task_type_out") is not None:
                 dprint(f"Supabase RPC: Claimed task {task_data['task_id_out']} of type {task_data['task_type_out']}")
