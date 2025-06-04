@@ -50,33 +50,6 @@ DEFAULT_FPS_HELPERS = 16
 DEFAULT_SEED = 12345
 
 # ----------------------------------------------------
-# Helper: Ensure the SQLite DB and tasks table exist
-# ----------------------------------------------------
-
-def _ensure_db_initialized(db_path_str: str, table_name: str = DEFAULT_DB_TABLE_NAME):
-    """Creates the tasks table (and helpful index) in the SQLite DB if it doesn't exist."""
-    conn = sqlite3.connect(db_path_str)
-    cursor = conn.cursor()
-    cursor.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {table_name} (
-            id TEXT PRIMARY KEY,
-            params TEXT NOT NULL,
-            task_type TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'Queued',
-            output_location TEXT NULL,
-            dependant_on TEXT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_status_created_at ON {table_name} (status, created_at)")
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_dependant_on ON {table_name}(dependant_on)")
-    conn.commit()
-    conn.close()
-
-# ----------------------------------------------------
 
 def main():
     # --- Load .env file for potential SQLITE_DB_PATH_ENV ---
@@ -281,13 +254,14 @@ def main():
     # Determine the database path: .env variable, then CLI arg, then default.
     # args.db_path already holds the CLI value or its default ("tasks.db").
     db_file_path_str = env_sqlite_db_path if env_sqlite_db_path else args.db_path
+    
+    # --- Check if DB exists ---
+    if not Path(db_file_path_str).exists():
+        print(f"Database not found at '{Path(db_file_path_str).resolve()}'.")
+        print("Please run headless.py first to initialize the database (e.g., 'python headless.py').")
+        sys.exit(1) # Exit if DB not found
+        
     dprint(f"Using database path: {Path(db_file_path_str).resolve()}")
-
-    try:
-        _ensure_db_initialized(db_file_path_str, DEFAULT_DB_TABLE_NAME)
-    except Exception as e_db_init:
-        print(f"Fatal: Could not initialize database: {e_db_init}")
-        return 1
 
     # Propagate the debug flag to task modules so their local DEBUG_MODE copies stay in sync
     import sm_functions.travel_between_images as _travel_mod
