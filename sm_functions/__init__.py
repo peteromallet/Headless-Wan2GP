@@ -53,7 +53,7 @@ from .common_utils import (
 
 # --- Make video_utils directly importable --- 
 from .video_utils import (
-    ease as crossfade_ease, # Renamed to avoid conflict if other eases are added
+    crossfade_ease, # Renamed to avoid conflict if other eases are added
     _blend_linear,
     _blend_linear_sharp,
     cross_fade_overlap_frames,

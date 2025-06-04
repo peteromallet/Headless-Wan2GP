@@ -1115,3 +1115,87 @@ def generate_different_pose_debug_video_summary(
     print(f"[Debug Video] Creating final video with {len(all_output_frames)} frames.")
     create_video_from_frames_list(all_output_frames, output_path, fps, target_resolution)
     print(f"Debug video summary for 'different_pose' saved to: {output_path.resolve()}") 
+
+# Added to provide a unique target path generator for files.
+def _get_unique_target_path(target_dir: Path, base_name: str, extension: str) -> Path:
+    """Generates a unique target Path in the given directory by appending an incrementing counter if needed."""
+    target_dir = Path(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    candidate = target_dir / f"{base_name}{extension}"
+    counter = 1
+    while candidate.exists():
+        candidate = target_dir / f"{base_name}_{counter}{extension}"
+        counter += 1
+    return candidate 
+
+# Added to adjust the brightness of an image/frame.
+def _adjust_frame_brightness(frame: np.ndarray, factor: float) -> np.ndarray:
+    """Adjusts the brightness of a given frame by scaling its pixel values.
+    A factor > 1 increases brightness, while a factor < 1 decreases it."""
+    return cv2.convertScaleAbs(frame, alpha=factor, beta=0) 
+
+# Added to apply a strength factor to an image by blending it with a reference.
+def _apply_strength_to_image(image_to_modify: np.ndarray, strength: float, reference_image_to_blend_with: np.ndarray) -> np.ndarray:
+    """Applies a strength factor to an image by blending it with a reference image.
+    
+    Args:
+        image_to_modify: The primary image (np.ndarray, BGR).
+        strength: The weight for image_to_modify (float, 0.0 to 1.0).
+                  A strength of 1.0 means only image_to_modify is visible.
+                  A strength of 0.0 means only reference_image_to_blend_with is visible.
+        reference_image_to_blend_with: The image to blend with (np.ndarray, BGR),
+                                       e.g., a gray frame.
+
+    Returns:
+        The blended image (np.ndarray, BGR).
+    """
+    if image_to_modify.shape != reference_image_to_blend_with.shape:
+        # Attempt to resize reference if shapes don't match, log warning
+        dprint(f"_apply_strength_to_image: Warning - Shapes mismatch. Image: {image_to_modify.shape}, Reference: {reference_image_to_blend_with.shape}. Resizing reference.")
+        reference_image_to_blend_with = cv2.resize(reference_image_to_blend_with, (image_to_modify.shape[1], image_to_modify.shape[0]))
+
+    strength = np.clip(strength, 0.0, 1.0) # Ensure strength is within [0, 1]
+    
+    # Blend: (reference_image * (1-strength)) + (image_to_modify * strength)
+    return cv2.addWeighted(
+        reference_image_to_blend_with.astype(np.float32), 
+        1.0 - strength, 
+        image_to_modify.astype(np.float32), 
+        strength, 
+        0.0 # gamma
+    ).astype(np.uint8)
+
+
+def _copy_to_folder_with_unique_name(source_path: Path | str | None, target_dir: Path, base_name: str, extension: str) -> Path | None:
+    """Copies source_path to target_dir with a unique name, returns the destination Path or None."""
+    if not source_path:
+        dprint(f"COPY: Source path is None for {base_name}{extension}. Skipping copy.")
+        return None
+    
+    source_path_obj = Path(source_path)
+    if not source_path_obj.exists():
+        dprint(f"COPY: Source file {source_path_obj} does not exist. Skipping copy.")
+        return None
+
+    # Sanitize extension for _get_unique_target_path
+    actual_extension = source_path_obj.suffix if source_path_obj.suffix else extension
+    if not actual_extension.startswith('.'):
+        actual_extension = '.' + actual_extension
+
+    # Determine unique target path using the new helper
+    target_file = _get_unique_target_path(target_dir, base_name, actual_extension)
+    
+    try:
+        # target_dir.mkdir(parents=True, exist_ok=True) # _get_unique_target_path handles this
+        shutil.copy2(str(source_path_obj), str(target_file))
+        dprint(f"COPY: Copied {source_path_obj.name} to {target_file}")
+        return target_file # Return the path of the copied file
+    except Exception as e_copy:
+        dprint(f"COPY: Failed to copy {source_path_obj} to {target_file}: {e_copy}")
+        return None
+    
+
+def get_image_dimensions_pil(image_path: str | Path) -> tuple[int, int]:
+    """Returns the dimensions of an image file as (width, height)."""
+    with Image.open(image_path) as img:
+        return img.size
