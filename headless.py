@@ -2202,15 +2202,6 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         final_video_location_for_db = str(final_output_destination_path.resolve())
         print(f"Stitch Task {stitch_task_id_str}: Final Video produced at: {final_video_location_for_db}")
 
-        # --- Copy final output back to stitch_processing_dir ---
-        if final_output_destination_path.exists() and stitch_processing_dir.exists():
-            try:
-                shutil.copy2(str(final_output_destination_path), str(stitch_processing_dir / final_output_destination_path.name))
-                dprint(f"Stitch Task {stitch_task_id_str}: Copied final video to {stitch_processing_dir / final_output_destination_path.name}")
-            except Exception as e_copy_back:
-                dprint(f"Stitch Task {stitch_task_id_str}: Warning - Could not copy final video back to stitch_processing_dir: {e_copy_back}")
-        # --- End copy back ---
-
         stitch_success = True
 
     except Exception as e_stitch_main:
