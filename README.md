@@ -4,7 +4,7 @@ This document describes the headless processing feature for WanGP, enabling auto
 
 ## Overview
 
-The `headless.py` script is the core worker process that allows users to run WanGP without the Gradio web interface. It continuously polls a task queue for video generation jobs. When a new task is found, it processes it using the `wgp.py` engine or other configured handlers (like ComfyUI).
+The `headless.py` script is the core worker process that allows users to run WanGP without the Gradio web interface. It continuously polls a task queue for video generation jobs. When a new task is found, it processes it using the `wgp.py` engine.
 
 ### Orchestrating multi-step workflows with `steerable_motion.py`
 
@@ -17,7 +17,7 @@ It currently provides two main sub-commands:
 | `travel_between_images` | Generates a video that smoothly "travels" between a list of anchor images. It enqueues an orchestrator task, which `headless.py` then uses to manage individual segment generations and final stitching. | Timelapse-like transitions between concept art frames, architectural visualizations.  |
 | `different_pose`        | Takes a single reference image plus a target prompt and produces a new video of that character in a *different pose*. Internally, it queues tasks for OpenPose extraction and guided video generation. | Turning a static portrait into an animated motion, gesture, or expression change. |
 
-All common flags such as `--resolution`, `--seed`, `--debug`, `--use_causvid_lora`, `--execution_engine` (to choose between `wgp` or `comfyui` for generation steps) are accepted by `steerable_motion.py` and forwarded appropriately within the task payloads it creates. The script also ensures the local SQLite database (default: `tasks.db`) and the necessary `tasks` table exist before queuing work.
+All common flags such as `--resolution`, `--seed`, `--debug`, `--use_causvid_lora` are accepted by `steerable_motion.py` and forwarded appropriately within the task payloads it creates. The script also ensures the local SQLite database (default: `tasks.db`) and the necessary `tasks` table exist before queuing work.
 
 See `python steerable_motion.py --help` for the full argument list.
 
@@ -105,9 +105,7 @@ Once `headless.py` is running, you can open another terminal to queue tasks usin
     SUPABASE_SERVICE_KEY="your_supabase_service_role_key" # Keep this secret!
     SUPABASE_VIDEO_BUCKET="videos" # Your Supabase storage bucket name
 
-    # --- ComfyUI Configuration (Optional) ---
-    # If using the "comfyui" execution_engine, headless.py needs to know where ComfyUI saves outputs.
-    # COMFYUI_OUTPUT_PATH="/path/to/your/ComfyUI/output" 
+
     ```
     *   `headless.py` and `steerable_motion.py` will load these variables.
     *   If `DB_TYPE=supabase` is set but `SUPABASE_URL` or `SUPABASE_SERVICE_KEY` are missing, scripts will warn and may fall back to SQLite or fail.
@@ -330,7 +328,7 @@ Once `headless.py` is running, you can open another terminal to queue tasks usin
     Tasks are stored as rows in the database. Key columns:
     *   `task_id` (TEXT, UNIQUE)
     *   `params` (JSON string/object): Contains all parameters for the task. For `steerable_motion.py` tasks, this will include a nested `orchestrator_details` payload for `travel_orchestrator` tasks, which is then passed to subsequent `travel_segment` and `travel_stitch` tasks.
-    *   `task_type` (TEXT, NOT NULL): Specifies the handler in `headless.py` (e.g., "standard_wgp_task", "generate_openpose", "travel_orchestrator", "travel_segment", "travel_stitch", "comfyui_workflow").
+    *   `task_type` (TEXT, NOT NULL): Specifies the handler in `headless.py` (e.g., "standard_wgp_task", "generate_openpose", "travel_orchestrator", "travel_segment", "travel_stitch").
     *   `status` (TEXT): "Queued", "In Progress", "Complete", "Failed".
     *   `output_location` (TEXT): Local path (SQLite) or public URL (Supabase) of the final primary artifact.
 
@@ -364,7 +362,7 @@ Once `headless.py` is running, you can open another terminal to queue tasks usin
     *   `headless.py` claims a task, updates status to 'In Progress'.
     *   It calls the appropriate handler based on `task_type`.
         *   For `travel_orchestrator`: Enqueues the first `travel_segment` task.
-        *   For `travel_segment`: Creates guide videos, runs WGP/ComfyUI generation (as a sub-task), and then enqueues the next segment or the `travel_stitch` task.
+        *   For `travel_segment`: Creates guide videos, runs WGP generation (as a sub-task), and then enqueues the next segment or the `travel_stitch` task.
         *   For `travel_stitch`: Collects all segment videos, stitches them (with crossfades), optionally upscales (as a sub-task), and saves the final video.
     *   Outputs are handled (local save or Supabase upload).
 

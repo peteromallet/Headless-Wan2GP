@@ -507,7 +507,7 @@ def get_video_frame_count_and_fps(video_path: str | Path) -> tuple[int | None, f
         if cap:
             cap.release()
 
-# --- Pose Processing Constants and Helpers (from ComfyUI example) ---
+
 body_colors = [
     [255, 0, 0], [255, 85, 0], [255, 170, 0], [255, 255, 0], [170, 255, 0], [85, 255, 0], [0, 255, 0],
     [0, 255, 85], [0, 255, 170], [0, 255, 255], [0, 170, 255], [0, 85, 255], [0, 0, 255], [85, 0, 255],
