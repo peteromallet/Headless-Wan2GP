@@ -1590,10 +1590,21 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             # segment_frames_target and frame_overlap_from_previous should be in segment_params, passed by orchestrator/prev segment
             base_duration_new_content_for_guide = segment_params.get("segment_frames_target", full_orchestrator_payload["segment_frames_expanded"][segment_idx])
             overlap_connecting_to_previous_for_guide = segment_params.get("frame_overlap_from_previous", 0) # Default to 0 if not set
-            guide_video_total_frames = base_duration_new_content_for_guide + overlap_connecting_to_previous_for_guide
+            unquantized_guide_video_total_frames = base_duration_new_content_for_guide + overlap_connecting_to_previous_for_guide
 
+            # Apply the same quantization as used for WGP generation later in this function
+            is_ltxv_m_for_guide_quant = "ltxv" in full_orchestrator_payload["model_name"].lower()
+            latent_s_for_guide_quant = 8 if is_ltxv_m_for_guide_quant else 4
+
+            if unquantized_guide_video_total_frames <= 0:
+                guide_video_total_frames = 0
+            else:
+                guide_video_total_frames = ((unquantized_guide_video_total_frames - 1) // latent_s_for_guide_quant) * latent_s_for_guide_quant + 1
+            
+            dprint(f"Task {segment_task_id_str}: Guide video frames unquantized: {unquantized_guide_video_total_frames}, quantized: {guide_video_total_frames} (latent_s: {latent_s_for_guide_quant})")
+            
             if guide_video_total_frames <= 0:
-                dprint(f"Task {segment_task_id_str}: Guide video frames {guide_video_total_frames}. No guide will be created."); actual_guide_video_path_for_wgp = None
+                dprint(f"Task {segment_task_id_str}: Guide video frames after quantization {guide_video_total_frames}. No guide will be created."); actual_guide_video_path_for_wgp = None
             else:
                 frames_for_guide_list = [sm_create_color_frame(parsed_res_wh, (128,128,128)).copy() for _ in range(guide_video_total_frames)]
                 input_images_resolved = full_orchestrator_payload["input_image_paths_resolved"]
