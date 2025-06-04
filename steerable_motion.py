@@ -25,6 +25,7 @@ import sys
 import traceback
 import shlex # Add shlex import
 from dotenv import load_dotenv
+import datetime
 
 # --- Import from our new sm_functions package --- 
 from sm_functions import (
@@ -271,6 +272,37 @@ def main():
 
     exit_code = 0
     if args.task == "travel_between_images":
+        dprint(f"Common Args: {args}")
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        run_id = timestamp # Unique ID for this entire travel operation
+
+        # Define the main directory for this run's artifacts
+        current_run_artifacts_dir = main_output_dir / f"travel_run_{run_id}"
+        current_run_artifacts_dir.mkdir(parents=True, exist_ok=True)
+        dprint(f"Artifacts for this run (logs, initial videos, final output) will be in: {current_run_artifacts_dir.resolve()}")
+
+        if DEBUG_MODE and executed_command_str:
+            try:
+                command_file_path = current_run_artifacts_dir / "executed_command.txt"
+                with open(command_file_path, "w") as f:
+                    f.write(executed_command_str)
+                dprint(f"Saved executed command to {command_file_path}")
+            except Exception as e_cmd_save:
+                dprint(f"Warning: Could not save executed command: {e_cmd_save}")
+
+        # --- Helper function to download video if URL (used for continue_from_video) ---
+        # This needs to run here to get the initial video path for the orchestrator payload.
+        if args.continue_from_video:
+            dprint(f"Orchestrator: continue_from_video specified: {args.continue_from_video}")
+            downloaded_continued_video_path = _download_video_if_url(
+                args.continue_from_video,
+                current_run_artifacts_dir, # Save to the main run artifacts directory
+                "continued_video_input"
+            )
+            if downloaded_continued_video_path and downloaded_continued_video_path.exists():
+                initial_video_path_for_headless = str(downloaded_continued_video_path.resolve())
+
         exit_code = run_travel_between_images_task(args, args, parsed_resolution_val, main_output_dir, db_file_path_str, executed_command_str)
     elif args.task == "different_pose":
         exit_code = run_different_pose_task(args, args, parsed_resolution_val, main_output_dir, db_file_path_str, executed_command_str)
