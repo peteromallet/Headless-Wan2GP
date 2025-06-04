@@ -82,61 +82,6 @@ def get_easing_function(curve_type: str):
         return ease_in_out_quad
 
 
-# --- Helper: Re-encode a video to H.264 using FFmpeg (ensures consistent codec) ---
-# This might be used by headless if a continued video needs re-encoding.
-def _reencode_to_h264_ffmpeg(
-    input_video_path: str | Path,
-    output_video_path: str | Path,
-    fps: float | None = None,
-    resolution: tuple[int, int] | None = None,
-    crf: int = 23,
-    preset: str = "veryfast"
-):
-    """Re-encodes the entire input video to H.264 using libx264."""
-    inp = Path(input_video_path)
-    outp = Path(output_video_path)
-    outp.parent.mkdir(parents=True, exist_ok=True)
-
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", str(inp.resolve()),
-        "-an",
-        "-c:v", "libx264",
-        "-pix_fmt", "yuv420p",
-        "-crf", str(crf),
-        "-preset", preset,
-    ]
-    if fps is not None and fps > 0:
-        cmd.extend(["-r", str(fps)])
-    if resolution is not None:
-        w, h = resolution
-        cmd.extend(["-vf", f"scale={w}:{h}"])
-    cmd.append(str(outp.resolve()))
-
-    dprint(f"REENCODE_TO_H264_FFMPEG: Running command: {' '.join(cmd)}")
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, encoding="utf-8")
-        return outp.exists() and outp.stat().st_size > 0
-    except subprocess.CalledProcessError as e:
-        print(f"Error during FFmpeg re-encode of {inp} -> {outp}:\nstdout:\n{e.stdout}\nstderr:\n{e.stderr}")
-        return False
-
-def _apply_strength_to_image_from_file(image_path: Path, strength: float, output_path: Path, target_resolution: tuple[int, int]) -> Path | None:
-    '''
-    Applies a brightness adjustment to the image at image_path using the given strength,
-    resizes it to target_resolution, saves the result to output_path, and returns output_path.
-    '''
-    try:
-        img = Image.open(image_path)
-        if target_resolution:
-            img = img.resize(target_resolution, Image.LANCZOS)
-        enhancer = ImageEnhance.Brightness(img)
-        processed_img = enhancer.enhance(strength)
-        processed_img.save(output_path)
-        return output_path
-    except Exception as e:
-        dprint(f"Error applying strength to image {image_path}: {e}")
-        return None
 
 def run_travel_between_images_task(task_args, common_args, parsed_resolution, main_output_dir, db_file_path, executed_command_str: str | None = None):
     print("--- Queuing Task: Travel Between Images (Orchestrator) ---")
@@ -220,6 +165,15 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
         print(f"Error: Based on input_images ({len(task_args.input_images)}) and continue_from_video flag, no new segments would be generated.")
         return 1
 
+    # Adjust parsed_resolution to be multiples of 16 for consistency downstream
+    original_width, original_height = parsed_resolution
+    adjusted_width = (original_width // 16) * 16
+    adjusted_height = (original_height // 16) * 16
+    final_parsed_resolution_wh = (adjusted_width, adjusted_height)
+
+    if final_parsed_resolution_wh != parsed_resolution:
+        dprint(f"Orchestrator: Adjusted parsed_resolution from {parsed_resolution} to {final_parsed_resolution_wh} (multiples of 16).")
+
     expanded_base_prompts = task_args.base_prompts * num_segments_to_generate if len(task_args.base_prompts) == 1 else task_args.base_prompts
     expanded_negative_prompts = task_args.negative_prompts * num_segments_to_generate if len(task_args.negative_prompts) == 1 else task_args.negative_prompts
     expanded_segment_frames = task_args.segment_frames * num_segments_to_generate if len(task_args.segment_frames) == 1 else task_args.segment_frames
@@ -290,7 +244,7 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
         "run_id": run_id, # For grouping segment task outputs later in headless if needed
         "original_task_args": vars(task_args), # Store original CLI args for this travel task
         "original_common_args": vars(common_args), # Store original common args
-        "parsed_resolution_wh": parsed_resolution, # (width, height) tuple
+        "parsed_resolution_wh": final_parsed_resolution_wh, # (width, height) tuple, adjusted to be multiple of 16
         "main_output_dir_for_run": str(main_output_dir.resolve()), # Base output dir for headless to use
         "orchestrator_log_folder": str(orchestrator_log_folder.resolve()), # For headless to potentially write logs or find assets
 
@@ -312,13 +266,11 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
         # Other common args that headless might need for segment tasks or final stitch/upscale
         "model_name": common_args.model_name,
         "seed_base": common_args.seed,
-        "execution_engine": common_args.execution_engine,
         "use_causvid_lora": common_args.use_causvid_lora,
         "cfg_star_switch": common_args.cfg_star_switch,
         "cfg_zero_step": common_args.cfg_zero_step,
         "params_json_str_override": common_args.params_json_str, # For headless to merge into segment tasks
         "fps_helpers": common_args.fps_helpers, # For guide/stitch tasks in headless
-        "last_frame_duplication": common_args.last_frame_duplication,
         "subsequent_starting_strength_adjustment": common_args.subsequent_starting_strength_adjustment,
         "desaturate_subsequent_starting_frames": common_args.desaturate_subsequent_starting_frames,
         "adjust_brightness_subsequent_starting_frames": common_args.adjust_brightness_subsequent_starting_frames,
@@ -340,23 +292,18 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
                 "task_id": orchestrator_task_id
             },
             db_path=db_file_path,
-            task_type_str="travel_orchestrator"
+            task_type_str="travel_orchestrator",
+            depends_on=None # Orchestrator task itself has no dependency
         )
         print(f"Successfully enqueued 'travel_orchestrator' task (ID: {orchestrator_task_id}).")
-        print(f"Headless.py will now process this sequence.")
+        # Section 4.3: Report final stitch task ID
+        final_stitch_task_id = f"travel_stitch_{run_id}" # run_id is the timestamp for the orchestrator run
+        print(f"Orchestrator task ID: {orchestrator_task_id}")
+        print(f"Final stitch task ID to monitor: {final_stitch_task_id}")
+
         dprint(f"Orchestrator payload submitted: {json.dumps(orchestrator_payload, indent=2, default=str)}")
         return 0 # Successful queuing
     except Exception as e_db_add:
         print(f"Failed to add travel_orchestrator task {orchestrator_task_id} to DB: {e_db_add}")
         traceback.print_exc()
         return 1 # Error during DB add
-
-# Note: The main loop, polling, segment processing, guide video creation,
-# VACE ref application (if moved to headless), stitching, and cleanup
-# are now expected to be handled by headless.py based on the orchestrator task.
-# Functions like _get_unique_target_path, image_to_frame, create_color_frame,
-# _adjust_frame_brightness etc. are now imported from common_utils.
-# Video processing functions like extract_frames_from_video, create_video_from_frames_list,
-# cross_fade_overlap_frames etc. are imported from video_utils.
-# They will be called by headless.py.
-

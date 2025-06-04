@@ -3,13 +3,14 @@ import subprocess
 from pathlib import Path
 import traceback
 
-import cv2 # pip install opencv-python
-import numpy as np
+try:
+    import cv2 # pip install opencv-python
+    import numpy as np
+    from .common_utils import dprint, get_video_frame_count_and_fps
+except ImportError as e_import:
+    print(f"Critical import error in video_utils.py: {e_import}")
+    traceback.print_exc()
 
-# Import dprint from common_utils (assuming it's discoverable)
-from .common_utils import dprint, get_video_frame_count_and_fps # Added get_video_frame_count_and_fps
-
-# --- Easing function for cross-fading (cosine ease-in-out) ---
 def crossfade_ease(alpha_lin: float) -> float:
     """Cosine ease-in-out function (maps 0..1 to 0..1).
     Used to determine the blending alpha for crossfades.
@@ -139,35 +140,28 @@ def create_video_from_frames_list(
         str(output_path_mp4.resolve())
     ]
 
-    dprint(f"Attempting to write video to: {output_path_mp4} using FFmpeg: {' '.join(ffmpeg_cmd)}")
-
     processed_frames = []
     for frame_idx, frame_np in enumerate(frames_list):
-        if frame_np is None:
-            dprint(f"Warning: Frame {frame_idx} is None. Skipping.")
-            continue
-        if not isinstance(frame_np, np.ndarray):
-            dprint(f"Warning: Frame {frame_idx} is not a numpy array ({type(frame_np)}). Skipping.")
+        if frame_np is None or not isinstance(frame_np, np.ndarray):
             continue
         if frame_np.dtype != np.uint8:
             frame_np = frame_np.astype(np.uint8)
         if frame_np.shape[0] != resolution[1] or frame_np.shape[1] != resolution[0] or frame_np.shape[2] != 3:
-            dprint(f"Warning: Frame {frame_idx} has incorrect shape {frame_np.shape}, expected ({resolution[1]}, {resolution[0]}, 3). Resizing.")
             try:
                 frame_np = cv2.resize(frame_np, resolution, interpolation=cv2.INTER_AREA)
-            except Exception as e_resize:
-                dprint(f"Error resizing frame {frame_idx}: {e_resize}. Skipping.")
+            except Exception:
                 continue
         processed_frames.append(frame_np)
 
     if not processed_frames:
-        dprint("Error: No valid frames to write to video.")
         return None
 
     try:
         raw_video_data = b''.join(frame.tobytes() for frame in processed_frames)
-    except Exception as e_data:
-        dprint(f"Error creating raw video data: {e_data}")
+    except Exception:
+        return None
+
+    if not raw_video_data:
         return None
 
     try:
@@ -177,33 +171,24 @@ def create_video_from_frames_list(
             capture_output=True,
             timeout=60
         )
-        
+
         if proc.returncode == 0:
             if output_path_mp4.exists() and output_path_mp4.stat().st_size > 0:
-                dprint(f"Generated video (FFmpeg/libx264): {output_path_mp4} ({len(processed_frames)} frames)")
                 return output_path_mp4
-            else:
-                dprint(f"FFmpeg process completed (rc=0) but output file {output_path_mp4} is missing or empty.")
-                dprint(f"FFmpeg stdout: {proc.stdout.decode(errors='ignore')}")
-                dprint(f"FFmpeg stderr: {proc.stderr.decode(errors='ignore')}")
-                return None
+            return None
         else:
-            dprint(f"FFmpeg failed for {output_path_mp4}. Return code: {proc.returncode}")
-            dprint(f"FFmpeg stdout: {proc.stdout.decode(errors='ignore')}")
-            dprint(f"FFmpeg stderr: {proc.stderr.decode(errors='ignore')}")
             if output_path_mp4.exists():
-                try: output_path_mp4.unlink()
-                except Exception as e_unlink: dprint(f"Could not remove partially written/failed MP4 file {output_path_mp4}: {e_unlink}")
+                try:
+                    output_path_mp4.unlink()
+                except Exception:
+                    pass
             return None
             
     except subprocess.TimeoutExpired:
-        dprint(f"FFmpeg process timed out after 60 seconds for {output_path_mp4}")
         return None
     except FileNotFoundError:
-        dprint("Error: ffmpeg command not found. Please ensure FFmpeg is installed and in your PATH.")
         return None
-    except Exception as e_proc:
-        dprint(f"Error running FFmpeg subprocess: {e_proc}")
+    except Exception:
         return None
 
 def _apply_saturation_to_video_ffmpeg(
@@ -230,16 +215,12 @@ def _apply_saturation_to_video_ffmpeg(
         str(outp.resolve())
     ]
 
-    dprint(f"SATURATION_ADJUST: Running command: {' '.join(cmd)}")
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, encoding="utf-8")
         if outp.exists() and outp.stat().st_size > 0:
             return True
-        else:
-            dprint(f"SATURATION_ADJUST: Output file {outp} missing or empty after ffmpeg run.")
-            return False
-    except subprocess.CalledProcessError as e:
-        print(f"Error during FFmpeg saturation adjust of {inp} -> {outp}:\nstdout:\n{e.stdout}\nstderr:\n{e.stderr}")
+        return False
+    except subprocess.CalledProcessError:
         return False
 
 def color_match_video_to_reference(source_video_path: str | Path, reference_video_path: str | Path, 
@@ -252,18 +233,16 @@ def color_match_video_to_reference(source_video_path: str | Path, reference_vide
     try:
         ref_cap = cv2.VideoCapture(str(reference_video_path))
         if not ref_cap.isOpened():
-            print(f"Error: Could not open reference video {reference_video_path}")
             return False
         
-        ref_frame_count_from_cap, _ = get_video_frame_count_and_fps(str(reference_video_path)) # Use helper
-        if ref_frame_count_from_cap is None: ref_frame_count_from_cap = int(ref_cap.get(cv2.CAP_PROP_FRAME_COUNT)) # Fallback
+        ref_frame_count_from_cap, _ = get_video_frame_count_and_fps(str(reference_video_path))
+        if ref_frame_count_from_cap is None: ref_frame_count_from_cap = int(ref_cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
         ref_cap.set(cv2.CAP_PROP_POS_FRAMES, float(max(0, ref_frame_count_from_cap - 1)))
         ret, ref_frame = ref_cap.read()
         ref_cap.release()
         
         if not ret or ref_frame is None:
-            print(f"Error: Could not read reference frame from {reference_video_path}")
             return False
         
         if ref_frame.shape[1] != parsed_resolution[0] or ref_frame.shape[0] != parsed_resolution[1]:
@@ -271,15 +250,12 @@ def color_match_video_to_reference(source_video_path: str | Path, reference_vide
         
         src_cap = cv2.VideoCapture(str(source_video_path))
         if not src_cap.isOpened():
-            print(f"Error: Could not open source video {source_video_path}")
             return False
         
         src_fps_from_cap = src_cap.get(cv2.CAP_PROP_FPS)
-        # src_frame_count_from_cap = int(src_cap.get(cv2.CAP_PROP_FRAME_COUNT)) # Not strictly needed here
 
         ret, src_first_frame = src_cap.read()
         if not ret or src_first_frame is None:
-            print(f"Error: Could not read first frame from {source_video_path}")
             src_cap.release()
             return False
         
@@ -310,12 +286,10 @@ def color_match_video_to_reference(source_video_path: str | Path, reference_vide
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(str(output_path_obj), fourcc, float(src_fps_from_cap), parsed_resolution)
         if not out.isOpened():
-            print(f"Error: Could not create output video writer for {output_path_obj}")
             src_cap.release()
             return False
         
         src_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-        frames_processed = 0
         while True:
             ret, frame = src_cap.read()
             if not ret: break
@@ -325,15 +299,11 @@ def color_match_video_to_reference(source_video_path: str | Path, reference_vide
             for channel in range(3):
                 matched_frame[:, :, channel] = cv2.LUT(frame[:, :, channel], lookup_tables[channel])
             out.write(matched_frame)
-            frames_processed += 1
         
         src_cap.release()
         out.release()
         
-        dprint(f"Color matching complete: {frames_processed} frames processed from {source_video_path} to {output_video_path}")
         return True
         
-    except Exception as e:
-        print(f"Error during color matching: {e}")
-        traceback.print_exc()
-        return False 
+    except Exception:
+        return False
