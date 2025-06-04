@@ -103,8 +103,7 @@ sqlite_lock = threading.Lock()
 SQLITE_MAX_RETRIES = 5
 SQLITE_RETRY_DELAY = 0.5  # seconds
 
-# Global variable for ComfyUI Output Path
-COMFYUI_OUTPUT_PATH_CONFIG: Path | None = None
+
 
 # -----------------------------------------------------------------------------
 # Status Constants
@@ -235,7 +234,13 @@ def _migrate_sqlite_schema(db_path_str: str):
     try:
         def migration_operations(conn):
             cursor = conn.cursor()
-            
+
+            # --- Check if 'tasks' table exists before attempting migrations ---
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'")
+            if cursor.fetchone() is None:
+                dprint("SQLite Migration: 'tasks' table does not exist. Skipping schema migration steps. init_db will create it.")
+                return True # Indicate success as there's nothing to migrate on a non-existent table
+
             # Check if task_type column exists
             cursor.execute(f"PRAGMA table_info(tasks)")
             columns = [row[1] for row in cursor.fetchall()]
@@ -411,6 +416,9 @@ def update_task_status(db_path_str: str, task_id: str, status: str, output_locat
     def _update_operation(conn, task_id, status, output_location_val):
         cursor = conn.cursor()
         if status == STATUS_COMPLETE and output_location_val is not None:
+            cursor.execute("UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP, output_location = ? WHERE id = ?", 
+                           (status, output_location_val, task_id))
+        elif status == STATUS_FAILED and output_location_val is not None: # ADDED THIS CONDITION
             cursor.execute("UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP, output_location = ? WHERE id = ?", 
                            (status, output_location_val, task_id))
         else:
@@ -677,9 +685,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
     elif task_type == "rife_interpolate_images":
         print(f"[Task ID: {task_id}] Identified as 'rife_interpolate_images' task.")
         return _handle_rife_interpolate_task(wgp_mod, task_params_dict, main_output_dir_base, task_id)
-    elif task_type == "comfyui_workflow": # New task type for ComfyUI
-        print(f"[Task ID: {task_id}] Identified as 'comfyui_workflow' task.")
-        return _handle_comfyui_workflow_task(task_params_dict, main_output_dir_base, task_id)
+
     # --- SM_RESTRUCTURE: Add new travel task handlers ---
     elif task_type == "travel_orchestrator":
         print(f"[Task ID: {task_id}] Identified as 'travel_orchestrator' task.")
@@ -1779,9 +1785,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
             "image_refs_paths": safe_vace_image_ref_paths_for_wgp, # Use stringified paths
-            # ComfyUI specific keys removed as engine for travel segments is now hardcoded to wgp
-            # "comfyui_workflow_path": full_orchestrator_payload.get("comfyui_workflow_path_override", "placeholder_comfy_workflow_for_travel.json"),
-            # "comfyui_server_address": full_orchestrator_payload.get("comfyui_server_address_override", "http://127.0.0.1:8188"),
+
         }
         if full_orchestrator_payload.get("params_json_str_override"):
             try:
@@ -1851,7 +1855,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
 # --- SM_RESTRUCTURE: New function to handle chaining after WGP/Comfy sub-task ---
 def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_video_path: str | None, wgp_mod) -> tuple[bool, str, str | None]:
     """
-    Handles the chaining logic after a WGP/ComfyUI sub-task for a travel segment completes.
+    Handles the chaining logic after a WGP  sub-task for a travel segment completes.
     This includes post-generation saturation and enqueuing the next segment or stitch task.
     Returns: (success_bool, message_str, final_video_path_for_db_str_or_none)
     The third element is the path that should be considered the definitive output of the WGP task
@@ -1957,8 +1961,7 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                     "current_run_base_output_dir": str(current_run_base_output_dir.resolve()),
                     "parsed_resolution_wh": full_orchestrator_payload["parsed_resolution_wh"],
                     "model_name": full_orchestrator_payload["model_name"],                    
-                    "comfyui_workflow_path_override": full_orchestrator_payload.get("original_task_args", {}).get("comfyui_workflow_path_for_travel"),
-                    "comfyui_server_address_override": full_orchestrator_payload.get("original_task_args", {}).get("comfyui_server_address_for_travel"),
+
                     "use_causvid_lora": full_orchestrator_payload.get("use_causvid_lora", False),
                     "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
                     "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
@@ -2324,8 +2327,7 @@ def main():
     env_pg_table_name = os.getenv("POSTGRES_TABLE_NAME", "tasks")
     env_supabase_url = os.getenv("SUPABASE_URL")
     env_supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
-    env_supabase_bucket = os.getenv("SUPABASE_VIDEO_BUCKET", "videos")
-    env_comfyui_output_path = os.getenv("COMFYUI_OUTPUT_PATH") # Load ComfyUI output path
+    env_supabase_bucket = os.getenv("SUPABASE_VIDEO_BUCKET", "videos")    
     env_sqlite_db_path = os.getenv("SQLITE_DB_PATH_ENV") # Read SQLite DB path from .env
 
     cli_args = parse_args()
@@ -2373,16 +2375,6 @@ def main():
         sys.exit(0)
     # --- End --migrate-only handler ---
 
-    global COMFYUI_OUTPUT_PATH_CONFIG 
-    if env_comfyui_output_path:
-        COMFYUI_OUTPUT_PATH_CONFIG = Path(env_comfyui_output_path)
-        if not COMFYUI_OUTPUT_PATH_CONFIG.is_dir():
-            print(f"[WARNING] COMFYUI_OUTPUT_PATH '{COMFYUI_OUTPUT_PATH_CONFIG}' from .env is not a valid directory. ComfyUI tasks may fail to retrieve outputs.")
-            # COMFYUI_OUTPUT_PATH_CONFIG = None # Or let it proceed and fail in the handler
-        else:
-            print(f"ComfyUI output path configured: {COMFYUI_OUTPUT_PATH_CONFIG}")
-    else:
-        print("[INFO] COMFYUI_OUTPUT_PATH not set in .env. ComfyUI tasks will require this to retrieve outputs.")
 
     main_output_dir = Path(cli_args.main_output_dir)
     main_output_dir.mkdir(parents=True, exist_ok=True)
