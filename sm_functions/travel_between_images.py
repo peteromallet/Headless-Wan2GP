@@ -293,7 +293,7 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
             },
             db_path=db_file_path,
             task_type_str="travel_orchestrator",
-            depends_on=None # Orchestrator task itself has no dependency
+            dependant_on=None # Orchestrator task itself has no dependency
         )
         print(f"Successfully enqueued 'travel_orchestrator' task (ID: {orchestrator_task_id}).")
         # Section 4.3: Report final stitch task ID

@@ -1134,40 +1134,33 @@ def _get_unique_target_path(target_dir: Path, base_name: str, extension: str) ->
 
 # Added to adjust the brightness of an image/frame.
 def _adjust_frame_brightness(frame: np.ndarray, factor: float) -> np.ndarray:
-    """Adjusts the brightness of a given frame by scaling its pixel values.
-    A factor > 1 increases brightness, while a factor < 1 decreases it."""
-    return cv2.convertScaleAbs(frame, alpha=factor, beta=0) 
+    """Adjusts brightness consistent with original CLI description.
 
-# Added to apply a strength factor to an image by blending it with a reference.
-def _apply_strength_to_image(image_to_modify: np.ndarray, strength: float, reference_image_to_blend_with: np.ndarray) -> np.ndarray:
-    """Applies a strength factor to an image by blending it with a reference image.
-    
     Args:
-        image_to_modify: The primary image (np.ndarray, BGR).
-        strength: The weight for image_to_modify (float, 0.0 to 1.0).
-                  A strength of 1.0 means only image_to_modify is visible.
-                  A strength of 0.0 means only reference_image_to_blend_with is visible.
-        reference_image_to_blend_with: The image to blend with (np.ndarray, BGR),
-                                       e.g., a gray frame.
+        frame: Input BGR frame (uint8).
+        factor: Brightness adjustment value from CLI.
+                * Positive  value  (e.g. 0.1)  -> darken by that percentage (10 % darker).
+                * Negative  value  (e.g. -0.1) -> brighten by that percentage (10 % brighter).
+                * Zero (0.0)                     -> no change.
 
     Returns:
-        The blended image (np.ndarray, BGR).
+        Brightness-adjusted frame (uint8, same size as input).
     """
-    if image_to_modify.shape != reference_image_to_blend_with.shape:
-        # Attempt to resize reference if shapes don't match, log warning
-        dprint(f"_apply_strength_to_image: Warning - Shapes mismatch. Image: {image_to_modify.shape}, Reference: {reference_image_to_blend_with.shape}. Resizing reference.")
-        reference_image_to_blend_with = cv2.resize(reference_image_to_blend_with, (image_to_modify.shape[1], image_to_modify.shape[0]))
+    # Early exit for no-op
+    if abs(factor) < 1e-6:
+        return frame.copy()
 
-    strength = np.clip(strength, 0.0, 1.0) # Ensure strength is within [0, 1]
-    
-    # Blend: (reference_image * (1-strength)) + (image_to_modify * strength)
-    return cv2.addWeighted(
-        reference_image_to_blend_with.astype(np.float32), 
-        1.0 - strength, 
-        image_to_modify.astype(np.float32), 
-        strength, 
-        0.0 # gamma
-    ).astype(np.uint8)
+    # Clamp extreme values to keep alpha within a sane 0-2 range
+    factor = max(-0.95, min(0.95, factor))  # prevents alpha from hitting 0 or going huge
+
+    if factor > 0:
+        # Darken: scale down by (1 - factor)
+        alpha = 1.0 - factor
+    else:
+        # Brighten: scale up by (1 - factor) where factor is negative
+        alpha = 1.0 - factor  # e.g. factor = -0.1 -> alpha = 1.1
+
+    return cv2.convertScaleAbs(frame, alpha=alpha, beta=0)
 
 
 def _copy_to_folder_with_unique_name(source_path: Path | str | None, target_dir: Path, base_name: str, extension: str) -> Path | None:
