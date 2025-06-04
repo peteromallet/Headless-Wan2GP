@@ -1530,6 +1530,40 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         segment_processing_dir.mkdir(parents=True, exist_ok=True)
         dprint(f"Segment {segment_idx} (Task {segment_task_id_str}): Processing in {segment_processing_dir.resolve()}")
 
+        # --- Prepare VACE Refs for this Segment (moved to headless) ---
+        actual_vace_image_ref_paths_for_wgp = []
+        # Get the list of VACE ref instructions from the full orchestrator payload
+        vace_ref_instructions_from_orchestrator = full_orchestrator_payload.get("vace_image_refs_to_prepare_by_headless", [])
+        
+        # Filter instructions for the current segment_idx
+        # The segment_idx_for_naming in the instruction should match the current segment_idx
+        relevant_vace_instructions = [
+            instr for instr in vace_ref_instructions_from_orchestrator
+            if instr.get("segment_idx_for_naming") == segment_idx
+        ]
+        dprint(f"Segment {segment_idx}: Found {len(relevant_vace_instructions)} VACE ref instructions relevant to this segment.")
+
+        if relevant_vace_instructions:
+            # Ensure parsed_res_wh is available
+            current_parsed_res_wh = full_orchestrator_payload.get("parsed_resolution_wh")
+            if not current_parsed_res_wh:
+                # Fallback or error if resolution not found; for now, dprint and proceed (helper might handle None resolution)
+                dprint(f"[WARNING] Segment {segment_idx}: parsed_resolution_wh not found in full_orchestrator_payload. VACE refs might not be resized correctly.")
+
+            for ref_instr in relevant_vace_instructions:
+                dprint(f"Segment {segment_idx}: Preparing VACE ref from instruction: {ref_instr}")
+                processed_ref_path = _prepare_vace_ref_for_segment_headless(
+                    ref_instruction=ref_instr,
+                    segment_processing_dir=segment_processing_dir,
+                    target_resolution_wh=current_parsed_res_wh 
+                )
+                if processed_ref_path:
+                    actual_vace_image_ref_paths_for_wgp.append(processed_ref_path)
+                    dprint(f"Segment {segment_idx}: Successfully prepared VACE ref: {processed_ref_path}")
+                else:
+                    dprint(f"Segment {segment_idx}: Failed to prepare VACE ref from instruction: {ref_instr}. It will be omitted.")
+        # --- End VACE Ref Preparation ---
+
         # --- 2. Guide Video Preparation ---
         actual_guide_video_path_for_wgp: Path | None = None
         path_to_previous_segment_video_output_for_guide: str | None = None
@@ -1757,7 +1791,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             "use_causvid_lora": full_orchestrator_payload.get("use_causvid_lora", False),
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
-            "image_refs_paths": [ref["processed_path"] for ref in segment_params.get("vace_image_refs_for_segment", []) if ref.get("processed_path")],
+            "image_refs_paths": actual_vace_image_ref_paths_for_wgp, # Use newly prepared paths
             # ComfyUI specific if engine is comfyui
             "comfyui_workflow_path": full_orchestrator_payload.get("comfyui_workflow_path_override", "placeholder_comfy_workflow_for_travel.json"),
             "comfyui_server_address": full_orchestrator_payload.get("comfyui_server_address_override", "http://127.0.0.1:8188"),
@@ -1849,7 +1883,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     "full_orchestrator_payload": full_orchestrator_payload, # CRITICAL: Pass full orchestrator payload
                      # Fields specific to this segment, derived from full_orchestrator_payload by next segment handler
                     "segment_frames_target": full_orchestrator_payload["segment_frames_expanded"][next_seg_idx],
-                    "frame_overlap_from_previous": full_orchestrator_payload["frame_overlap_expanded"][segment_idx],
+                    "frame_overlap_from_previous": full_orchestrator_payload["frame_overlap_expanded"][next_seg_idx -1] if next_seg_idx > 0 and len(full_orchestrator_payload["frame_overlap_expanded"]) > (next_seg_idx -1) else 0,
                     "frame_overlap_with_next": full_orchestrator_payload["frame_overlap_expanded"][next_seg_idx],
                     "base_prompt": full_orchestrator_payload["base_prompts_expanded"][next_seg_idx],
                     "negative_prompt": full_orchestrator_payload["negative_prompts_expanded"][next_seg_idx],
@@ -2667,6 +2701,69 @@ def get_previous_segment_task_id(orchestrator_run_id: str, target_segment_index:
             print(f"Error querying Supabase for previous segment task_id: {e}")
             return None
     return None
+
+# Helper function for VACE Ref preparation, to be used by _handle_travel_segment_task
+# This function is similar to what was previously in travel_between_images.py
+def _apply_strength_to_image_for_headless(image_path: Path, strength: float, output_path: Path, target_resolution: tuple[int, int] | None) -> Path | None:
+    '''
+    Applies a brightness adjustment to the image at image_path using the given strength,
+    optionally resizes it to target_resolution, saves the result to output_path, and returns output_path.
+    '''
+    try:
+        # Ensure PIL and ImageEnhance are available (already imported globally but good practice for helper)
+        from PIL import Image, ImageEnhance
+        img = Image.open(image_path)
+        if target_resolution: # target_resolution is (width, height)
+            img = img.resize(target_resolution, Image.Resampling.LANCZOS)
+        
+        enhancer = ImageEnhance.Brightness(img)
+        processed_img = enhancer.enhance(strength)
+        
+        output_path.parent.mkdir(parents=True, exist_ok=True) # Ensure output directory exists
+        processed_img.save(output_path)
+        dprint(f"Headless VACE Ref: Applied strength {strength} to {image_path}, saved to {output_path}")
+        return output_path
+    except Exception as e:
+        dprint(f"[ERROR] Headless VACE Ref: Error applying strength to image {image_path}: {e}")
+        traceback.print_exc()
+        return None
+
+def _prepare_vace_ref_for_segment_headless(
+    ref_instruction: dict,
+    segment_processing_dir: Path,
+    target_resolution_wh: tuple[int, int] | None
+) -> Path | None:
+    '''
+    Prepares a VACE reference image for a segment based on the given instruction.
+    The function applies a strength adjustment to the image at the given path,
+    optionally resizes it to the target resolution, and saves the result to a new file.
+    Returns the path to the processed image if successful, or None if the image is not found.
+    '''
+    try:
+        # Extract the image path and strength from the instruction
+        image_path_str = ref_instruction.get("image_path")
+        strength = ref_instruction.get("strength")
+
+        if not image_path_str:
+            dprint(f"Segment {segment_processing_dir.name}: No image path provided for VACE ref. Skipping.")
+            return None
+
+        image_path = Path(image_path_str)
+        if not image_path.exists():
+            dprint(f"Segment {segment_processing_dir.name}: Image file not found: {image_path}")
+            return None
+
+        # Apply strength adjustment
+        processed_image_path = _apply_strength_to_image_for_headless(image_path, strength, segment_processing_dir / "vace_ref.png", target_resolution_wh)
+        if processed_image_path:
+            return processed_image_path
+        else:
+            dprint(f"Segment {segment_processing_dir.name}: Failed to apply strength to VACE ref image. Skipping.")
+            return None
+    except Exception as e:
+        dprint(f"Segment {segment_processing_dir.name}: Error preparing VACE ref: {e}")
+        traceback.print_exc()
+        return None
 
 if __name__ == "__main__":
     main() 

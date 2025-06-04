@@ -17,7 +17,7 @@ from PIL import Image, ImageEnhance
 
 # Import from the common_utils module
 from .common_utils import (
-    DEBUG_MODE, dprint, generate_unique_task_id, add_task_to_db, poll_task_status, # poll_task_status will be removed from usage here
+    DEBUG_MODE, dprint, generate_unique_task_id, add_task_to_db, # poll_task_status will be removed from usage here
     # extract_video_segment_ffmpeg, # Not used directly by orchestrator
     stitch_videos_ffmpeg, # Will be used by a stitcher task in headless
     # create_pose_interpolated_guide_video, # Guide creation moves to headless
@@ -30,7 +30,8 @@ from .common_utils import (
     create_color_frame,
     _adjust_frame_brightness,
     _copy_to_folder_with_unique_name, # For downloading initial video
-    _apply_strength_to_image # For preparing VACE refs if done by orchestrator
+    # _apply_strength_to_image # This was the common_utils version, not the file one.
+    # We are removing the file-based strength application from orchestrator.
 )
 
 # Import from the video_utils module (some might be used by headless now)
@@ -120,6 +121,23 @@ def _reencode_to_h264_ffmpeg(
         print(f"Error during FFmpeg re-encode of {inp} -> {outp}:\nstdout:\n{e.stdout}\nstderr:\n{e.stderr}")
         return False
 
+def _apply_strength_to_image_from_file(image_path: Path, strength: float, output_path: Path, target_resolution: tuple[int, int]) -> Path | None:
+    '''
+    Applies a brightness adjustment to the image at image_path using the given strength,
+    resizes it to target_resolution, saves the result to output_path, and returns output_path.
+    '''
+    try:
+        img = Image.open(image_path)
+        if target_resolution:
+            img = img.resize(target_resolution, Image.LANCZOS)
+        enhancer = ImageEnhance.Brightness(img)
+        processed_img = enhancer.enhance(strength)
+        processed_img.save(output_path)
+        return output_path
+    except Exception as e:
+        dprint(f"Error applying strength to image {image_path}: {e}")
+        return None
+
 def run_travel_between_images_task(task_args, common_args, parsed_resolution, main_output_dir, db_file_path, executed_command_str: str | None = None):
     print("--- Queuing Task: Travel Between Images (Orchestrator) ---")
     dprint(f"Task Args: {task_args}")
@@ -207,99 +225,65 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
     expanded_segment_frames = task_args.segment_frames * num_segments_to_generate if len(task_args.segment_frames) == 1 else task_args.segment_frames
     expanded_frame_overlap = task_args.frame_overlap * num_segments_to_generate if len(task_args.frame_overlap) == 1 else task_args.frame_overlap
     
-    # --- Prepare VACE Image Refs (if strength > 0) ---
-    # This logic might still live in the orchestrator if it needs to prepare these files upfront
-    # and pass their paths to headless. Or, headless could do it. For now, keeping it here.
-    # Paths will be absolute, resolved here.
-    vace_image_refs_details = [] # List of dicts: {"type": "initial" or "final", "original_path": str, "processed_path": str, "strength": float}
+    # --- VACE Image Refs Preparation (Simplified for Orchestrator) ---
+    # Orchestrator now only records original paths and strengths.
+    # Headless.py will handle the actual image processing for each segment.
+    vace_image_refs_to_prepare_by_headless = [] 
 
-    # Helper to prepare a VACE ref image
-    def _prepare_vace_ref_image(original_path_str: str, strength: float, ref_type: str, segment_idx_for_naming: int, target_dir: Path) -> dict | None:
-        original_path = Path(original_path_str).resolve()
-        clamped_strength = max(0.0, min(1.0, strength))
-        if not original_path.exists() or clamped_strength == 0.0:
-            dprint(f"VACE Ref ({ref_type} for seg {segment_idx_for_naming}): Original path {original_path} not found or strength {clamped_strength} is 0. Skipping.")
-            return None
-
-        detail = {"type": ref_type, "original_path": str(original_path), "strength": clamped_strength}
-        
-        processed_name_base = f"s{segment_idx_for_naming}_{ref_type}_anchor_strength_{clamped_strength:.2f}"
-        original_suffix = original_path.suffix if original_path.suffix else ".png"
-        
-        # Use common_utils
-        path_for_processed_ref = _get_unique_target_path(target_dir, processed_name_base, original_suffix)
-
-        if abs(clamped_strength - 1.0) < 1e-5:  # Strength is 1.0
-            try:
-                shutil.copy2(str(original_path), str(path_for_processed_ref))
-                detail["processed_path"] = str(path_for_processed_ref.resolve())
-                dprint(f"VACE Ref ({ref_type} for seg {segment_idx_for_naming}): Copied original due to strength 1.0: {path_for_processed_ref}")
-                return detail
-            except Exception as e_copy:
-                dprint(f"VACE Ref ({ref_type} for seg {segment_idx_for_naming}): Failed to copy original: {e_copy}. Skipping.")
-                return None
-        else:  # Strength < 1.0
-            processed_path = _apply_strength_to_image(
-                image_path=original_path, strength=clamped_strength,
-                output_path=path_for_processed_ref, target_resolution=parsed_resolution
-            )
-            if processed_path and processed_path.exists():
-                detail["processed_path"] = str(processed_path.resolve())
-                dprint(f"VACE Ref ({ref_type} for seg {segment_idx_for_naming}): Processed with strength {clamped_strength}: {processed_path}")
-                return detail
-            else:
-                dprint(f"VACE Ref ({ref_type} for seg {segment_idx_for_naming}): Failed to process with strength {clamped_strength}. Skipping.")
-                return None
-    
-    # Collect VACE refs per *newly generated* segment
-    # The orchestrator_log_folder is a good temporary place for these processed VACE refs
-    # if they are generated by the orchestrator itself.
     for i in range(num_segments_to_generate):
         # Initial Anchor for VACE
         initial_anchor_path_str_for_vace: str | None = None
         if i == 0 and not task_args.continue_from_video: # Very first segment from scratch
             initial_anchor_path_str_for_vace = task_args.input_images[0]
         elif i > 0 : # Subsequent new segment, initial anchor is previous new segment's end
-             # If continue_from_video, input_images[i-1] is the end of (i-1)th *new* segment
-             # If not continue_from_video, input_images[i] is the end of (i-1)th *new* segment (since input_images[0] was start of 0th new)
             initial_anchor_path_str_for_vace = task_args.input_images[i] if not task_args.continue_from_video else task_args.input_images[i-1]
 
-
         if initial_anchor_path_str_for_vace and common_args.initial_image_strength > 0.0:
-            ref_detail = _prepare_vace_ref_image(initial_anchor_path_str_for_vace, common_args.initial_image_strength, "initial", i, orchestrator_log_folder)
-            if ref_detail: vace_image_refs_details.append(ref_detail)
+            original_path = Path(initial_anchor_path_str_for_vace)
+            if original_path.exists():
+                vace_image_refs_to_prepare_by_headless.append({
+                    "type": "initial",
+                    "original_path": str(original_path.resolve()),
+                    "strength_to_apply": common_args.initial_image_strength,
+                    "segment_idx_for_naming": i 
+                })
+                dprint(f"Orchestrator: Queued VACE Ref (initial for seg {i}): original {original_path}, strength {common_args.initial_image_strength}")
+            else:
+                dprint(f"Orchestrator: VACE Ref (initial for seg {i}): Original path {original_path} not found. Skipping.")
         
         # Final Anchor for VACE (end of current new segment i)
-        # If continue_from_video, end anchor is input_images[i]
-        # If not, end anchor is input_images[i+1]
         final_anchor_path_str_for_vace = task_args.input_images[i] if task_args.continue_from_video else task_args.input_images[i+1]
         if common_args.final_image_strength > 0.0:
-            ref_detail = _prepare_vace_ref_image(final_anchor_path_str_for_vace, common_args.final_image_strength, "final", i, orchestrator_log_folder)
-            if ref_detail: vace_image_refs_details.append(ref_detail)
+            original_path = Path(final_anchor_path_str_for_vace)
+            if original_path.exists():
+                vace_image_refs_to_prepare_by_headless.append({
+                    "type": "final",
+                    "original_path": str(original_path.resolve()),
+                    "strength_to_apply": common_args.final_image_strength,
+                    "segment_idx_for_naming": i 
+                })
+                dprint(f"Orchestrator: Queued VACE Ref (final for seg {i}): original {original_path}, strength {common_args.final_image_strength}")
+            else:
+                dprint(f"Orchestrator: VACE Ref (final for seg {i}): Original path {original_path} not found. Skipping.")
     # --- End VACE Image Refs ---
 
-    orchestrator_task_id = generate_unique_task_id(f"sm_travel_orchestrator_{run_id[:8]}_" )
+    orchestrator_task_id = generate_unique_task_id(f"sm_travel_orchestrator_{run_id[:8]}_")
     
     # Handle continue_from_video: download it now if it's a URL, get its path
     initial_video_path_for_headless: str | None = None
     if task_args.continue_from_video:
         dprint(f"Orchestrator: continue_from_video specified: {task_args.continue_from_video}")
-        # Download to orchestrator_log_folder, headless will copy/use it from there or orchestrator will specify absolute path.
-        # For simplicity, let orchestrator download it to a known sub-folder that headless can expect or is told about.
-        # A sub-folder within orchestrator_log_folder is fine.
         downloaded_continued_video_path = _download_video_if_url(
             task_args.continue_from_video,
-            orchestrator_log_folder, # Store it within the orchestrator's own log/asset folder
+            orchestrator_log_folder, 
             "continued_video_input"
         )
         if downloaded_continued_video_path and downloaded_continued_video_path.exists():
             initial_video_path_for_headless = str(downloaded_continued_video_path.resolve())
             dprint(f"Orchestrator: Continue video prepared at: {initial_video_path_for_headless}")
-            # Optionally, re-encode here if needed, though headless could also do this.
-            # For now, assume headless can handle it or will re-encode if necessary.
         else:
             print(f"Error: Could not load or download video from {task_args.continue_from_video}. Cannot proceed with orchestrator task.")
-            return 1
+            return 1 # Error case
 
     orchestrator_payload = {
         "orchestrator_task_id": orchestrator_task_id,
@@ -319,7 +303,7 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
         "segment_frames_expanded": expanded_segment_frames,
         "frame_overlap_expanded": expanded_frame_overlap,
         
-        "vace_image_refs_prepared": vace_image_refs_details, # List of dicts with paths to strength-adjusted images
+        "vace_image_refs_to_prepare_by_headless": vace_image_refs_to_prepare_by_headless, # New structure
 
         # Pass fade params directly for headless to use when creating guides
         "fade_in_params_json_str": common_args.fade_in_duration,
@@ -352,19 +336,20 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
         # Add the single orchestrator task to the DB
         add_task_to_db(
             task_payload={  # This is the `params` field in the DB
-                "orchestrator_details": orchestrator_payload 
+                "orchestrator_details": orchestrator_payload,
+                "task_id": orchestrator_task_id
             },
-            db_path_str=db_file_path,
-            task_type="travel_orchestrator",  # New task type
-            task_id_override=orchestrator_task_id  # Use the generated ID
+            db_path=db_file_path,
+            task_type_str="travel_orchestrator"
         )
         print(f"Successfully enqueued 'travel_orchestrator' task (ID: {orchestrator_task_id}).")
         print(f"Headless.py will now process this sequence.")
         dprint(f"Orchestrator payload submitted: {json.dumps(orchestrator_payload, indent=2, default=str)}")
+        return 0 # Successful queuing
     except Exception as e_db_add:
         print(f"Failed to add travel_orchestrator task {orchestrator_task_id} to DB: {e_db_add}")
         traceback.print_exc()
-    return 1
+        return 1 # Error during DB add
 
 # Note: The main loop, polling, segment processing, guide video creation,
 # VACE ref application (if moved to headless), stitching, and cleanup
