@@ -110,7 +110,7 @@ SQLITE_RETRY_DELAY = 0.5  # seconds
 # -----------------------------------------------------------------------------
 # Status Constants
 # -----------------------------------------------------------------------------
-STATUS_QUEUED = "Pending" # Changed from "Queued" to "Pending" to match DB default
+STATUS_QUEUED = "Queued" # Changed from "Pending" to "Queued" to match DB default
 STATUS_IN_PROGRESS = "In Progress"
 STATUS_COMPLETE = "Complete"
 STATUS_FAILED = "Failed"
@@ -368,7 +368,7 @@ def init_db(db_path_str: str):
                 id TEXT PRIMARY KEY,
                 task_type TEXT NOT NULL,
                 params TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'Pending',
+                status TEXT NOT NULL DEFAULT 'Queued',
                 dependant_on TEXT NULL,
                 output_location TEXT NULL,
                 created_at TEXT NOT NULL,
@@ -392,19 +392,19 @@ def get_oldest_queued_task(db_path_str: str):
     """Get the oldest queued task with proper error handling"""
     def _get_operation(conn):
         cursor = conn.cursor()
-        # Modified to select tasks with status 'Pending' OR 'Queued'
+        # Modified to select tasks with status 'Queued' only
         # Also fetch project_id
         sql_query = f"""
             SELECT t.id, t.params, t.task_type, t.project_id
             FROM   tasks AS t
             LEFT JOIN tasks AS d             ON d.id = t.dependant_on
-            WHERE  t.status IN ('Pending', 'Queued')
+            WHERE  t.status = ? 
               AND (t.dependant_on IS NULL OR d.status = ?)
             ORDER BY t.created_at ASC
             LIMIT  1
         """
-        query_params = (STATUS_COMPLETE,) # Only one param needed now for dependant_on status
-        dprint(f"SQLite: Executing get_oldest_queued_task with query: {sql_query.strip()} AND params for dependant_on: {query_params}")
+        query_params = (STATUS_QUEUED, STATUS_COMPLETE)
+        dprint(f"SQLite: Executing get_oldest_queued_task with query: {sql_query.strip()} AND params: {query_params}")
         cursor.execute(sql_query, query_params)
         task_row = cursor.fetchone()
         if task_row:
@@ -2536,15 +2536,9 @@ def main():
                 cursor = conn.cursor()
                 cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE_NAME}")
                 total_tasks = cursor.fetchone()[0]
-                cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE_NAME} WHERE status = ?", (STATUS_QUEUED,)) # STATUS_QUEUED is 'Pending'
-                pending_tasks = cursor.fetchone()[0]
-                # SM_RESTRUCTURE_PENDING_STATUS_FIX: Changed from STATUS_PENDING to STATUS_QUEUED
-                # Also, the original get_oldest_queued_task uses 'Pending' literally. Let's check STATUS_QUEUED definition.
-                # STATUS_QUEUED is "Queued". The get_oldest_queued_task uses literal 'Pending'.
-                # For this diagnostic, let's count both to be safe and highlight potential mismatch.
-                cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE_NAME} WHERE status = 'Pending'")
-                literal_pending_tasks = cursor.fetchone()[0]
-                dprint(f"SQLite Initial State: Total tasks in '{PG_TABLE_NAME}': {total_tasks}. Tasks with status '{STATUS_QUEUED}': {pending_tasks}. Tasks with literal status 'Pending': {literal_pending_tasks}.")
+                cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE_NAME} WHERE status = ?", (STATUS_QUEUED,))
+                queued_tasks = cursor.fetchone()[0]
+                dprint(f"SQLite Initial State: Total tasks in '{PG_TABLE_NAME}': {total_tasks}. Tasks with status '{STATUS_QUEUED}': {queued_tasks}.")
                 return True # Dummy return
             try:
                 execute_sqlite_with_retry(SQLITE_DB_PATH, _get_initial_task_counts)
