@@ -145,6 +145,8 @@ def parse_args():
                                help="Enable verbose debug logging (prints additional diagnostics)")
     pgroup_server.add_argument("--migrate-only", action="store_true",
                                help="Run database migrations and then exit.")
+    pgroup_server.add_argument("--booster_loras", action="store_true",
+                               help="Apply a predefined set of 'booster' LoRAs for general quality improvement.")
 
     # Advanced wgp.py Global Config Overrides (Optional) - Applied once at server start
     pgroup_wgp_globals = parser.add_argument_group("WGP Global Config Overrides (Applied at Server Start)")
@@ -489,7 +491,7 @@ def make_send_cmd(task_id):
 # -----------------------------------------------------------------------------
 # 4. State builder for a single task (same as before)
 # -----------------------------------------------------------------------------
-def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model, image_download_dir: Path | str | None = None):
+def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model, image_download_dir: Path | str | None = None, apply_booster_loras: bool = False):
     state = {
         "model_filename": model_filename,
         "validate_success": 1,
@@ -676,6 +678,57 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
             ui_defaults["loras_multipliers"] = "0.7"
             ui_defaults["activated_loras"] = [causvid_lora_basename] # ensure only causvid if no others
 
+    if apply_booster_loras:
+        print(f"[Task ID: {task_params_dict.get('task_id')}] Applying Booster LoRA settings.")
+        
+        # Default to 9 steps unless overridden
+        if "steps" not in task_params_dict and "num_inference_steps" not in task_params_dict:
+            ui_defaults["num_inference_steps"] = 9
+            print(f"[Task ID: {task_params_dict.get('task_id')}] Booster LoRAs active, defaulting to steps: 9")
+
+        # Set CFG-like settings
+        ui_defaults["guidance_scale"] = 1.0
+        ui_defaults["flow_shift"] = 1.0
+
+        booster_loras = [
+            {"filename": "Wan2_1-AccVideo-T2V-14B_fp8_e4m3fn.safetensors", "strength": "0.5"},
+            {"filename": "Wan21_T2V_14B_MoviiGen_lora_rank32_fp16.safetensors", "strength": "0.5"},
+            {"filename": "Wan2.1-Fun-14B-InP-MPS_reward_lora_comfy.safetensors", "strength": "0.7"},
+            {"filename": "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors", "strength": "1.0"},
+        ]
+
+        # Get current activated LoRAs
+        current_activated = ui_defaults.get("activated_loras", [])
+        if not isinstance(current_activated, list):
+            try: 
+                current_activated = [str(item).strip() for item in str(current_activated).split(',') if item.strip()]
+            except: 
+                current_activated = []
+
+        # Get current multipliers
+        current_multipliers_str = ui_defaults.get("loras_multipliers", "")
+        if isinstance(current_multipliers_str, (list, tuple)):
+            current_multipliers_list = [str(m).strip() for m in current_multipliers_str if str(m).strip()]
+        elif isinstance(current_multipliers_str, str):
+            current_multipliers_list = [m.strip() for m in current_multipliers_str.split(" ") if m.strip()]
+        else:
+            current_multipliers_list = []
+        
+        # Pad multipliers to match activated LoRAs before creating map
+        while len(current_multipliers_list) < len(current_activated):
+            current_multipliers_list.append("1.0")
+            
+        # Create a dictionary to map lora to multiplier for easy update (preserves order in Python 3.7+)
+        lora_mult_map = dict(zip(current_activated, current_multipliers_list))
+        
+        # Add/update booster loras
+        for lora in booster_loras:
+            lora_mult_map[lora['filename']] = lora['strength']
+
+        ui_defaults["activated_loras"] = list(lora_mult_map.keys())
+        ui_defaults["loras_multipliers"] = " ".join(list(lora_mult_map.values()))
+        dprint(f"Booster LoRAs applied. Activated: {ui_defaults['activated_loras']}, Multipliers: {ui_defaults['loras_multipliers']}")
+
     state[model_type_key] = ui_defaults
     return state, ui_defaults
 
@@ -708,7 +761,7 @@ def download_file(url, dest_folder, filename):
 # 6. Process a single task dictionary from the tasks.json list
 # -----------------------------------------------------------------------------
 
-def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None):
+def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None, apply_booster_loras: bool = False):
     dprint(f"--- Entering process_single_task ---")
     dprint(f"Task Type: {task_type}")
     dprint(f"Project ID for task: {project_id_for_task}") # Added dprint for project_id
@@ -751,6 +804,19 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                                                          wgp_mod.transformer_quantization,
                                                          wgp_mod.transformer_dtype_policy)
     
+    if apply_booster_loras:
+        print(f"[Task ID: {task_id}] --booster_loras flag is active. Checking and downloading booster LoRAs.")
+        booster_loras_data = [
+            {"url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1-AccVideo-T2V-14B_fp8_e4m3fn.safetensors", "filename": "Wan2_1-AccVideo-T2V-14B_fp8_e4m3fn.safetensors"},
+            {"url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_T2V_14B_MoviiGen_lora_rank32_fp16.safetensors", "filename": "Wan21_T2V_14B_MoviiGen_lora_rank32_fp16.safetensors"},
+            {"url": "https://huggingface.co/Kijai/Wan2.1-Fun-Reward-LoRAs-comfy/resolve/931844f165657e216d71c5a4f3ce4b78c3abe02e/Wan2.1-Fun-14B-InP-MPS_reward_lora_comfy.safetensors", "filename": "Wan2.1-Fun-14B-InP-MPS_reward_lora_comfy.safetensors"},
+            {"url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors", "filename": "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"},
+        ]
+        
+        base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
+        for lora in booster_loras_data:
+            download_file(lora['url'], base_lora_dir_for_model, lora['filename'])
+
     effective_image_download_dir = image_download_dir # Use passed-in dir if available
 
     if effective_image_download_dir is None: # Not passed, so determine for this standard/individual task
@@ -807,7 +873,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         model_filename_for_task, None, lora_dir_for_active_model, "", None
     )
 
-    state, ui_params = build_task_state(wgp_mod, model_filename_for_task, task_params_dict, all_loras_for_active_model, image_download_dir)
+    state, ui_params = build_task_state(wgp_mod, model_filename_for_task, task_params_dict, all_loras_for_active_model, image_download_dir, apply_booster_loras=apply_booster_loras)
     
     gen_task_placeholder = {"id": 1, "prompt": ui_params.get("prompt"), "params": {}}
     send_cmd = make_send_cmd(task_id)
@@ -1491,6 +1557,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "model_name": orchestrator_payload["model_name"],
                 "seed_to_use": orchestrator_payload.get("seed_base", 12345) + idx,
                 "use_causvid_lora": orchestrator_payload.get("use_causvid_lora", False),
+                "booster_loras": orchestrator_payload.get("booster_loras", False),
                 "cfg_star_switch": orchestrator_payload.get("cfg_star_switch", 0),
                 "cfg_zero_step": orchestrator_payload.get("cfg_zero_step", -1),
                 "params_json_str_override": orchestrator_payload.get("params_json_str_override"),
@@ -2031,6 +2098,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             "output_path": str(wgp_final_output_path_for_this_segment.resolve()), 
             "video_guide_path": str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
             "use_causvid_lora": full_orchestrator_payload.get("use_causvid_lora", False),
+            "booster_loras": full_orchestrator_payload.get("booster_loras", False),
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
             "image_refs_paths": safe_vace_image_ref_paths_for_wgp,
@@ -2068,7 +2136,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             main_output_dir_base,       # Server's main output directory (context for process_single_task)
             current_wgp_engine,         # Task type for process_single_task (e.g., "wgp")
             project_id_for_task=segment_params.get("project_id"), # Added project_id
-            image_download_dir=segment_image_download_dir # Pass the determined download dir
+            image_download_dir=segment_image_download_dir, # Pass the determined download dir
+            apply_booster_loras=apply_booster_loras
         )
 
         if generation_success:
@@ -2888,7 +2957,9 @@ def main():
             print(f"Found task: {current_task_id_for_status_update} of type: {current_task_type}, Project ID: {current_project_id}")
             # Status already set to IN_PROGRESS if task_info is not None
 
-            task_succeeded, output_location = process_single_task(wgp_mod, current_task_params, main_output_dir, current_task_type, current_project_id)
+            task_succeeded, output_location = process_single_task(
+                wgp_mod, current_task_params, main_output_dir, current_task_type, current_project_id
+            )
 
             if task_succeeded:
                 if DB_TYPE == "supabase":
