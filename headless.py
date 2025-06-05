@@ -891,16 +891,19 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                     # `output_path` is expected to be a full path (absolute or relative). If relative, resolve against cwd.
                     final_video_path = Path(custom_output_path_str).expanduser().resolve()
                     final_video_path.parent.mkdir(parents=True, exist_ok=True)
-                else:
-                    output_sub_dir_val = task_params_dict.get("output_sub_dir", task_id)
-                    output_sub_dir_path = Path(output_sub_dir_val)
-                    # If the provided sub-dir is absolute, use it directly; otherwise nest it under the main output dir.
-                    if output_sub_dir_path.is_absolute():
-                        final_output_dir = output_sub_dir_path
+                else: # No custom_output_path_str provided, use DB-relative path
+                    if SQLITE_DB_PATH: # Ensure SQLITE_DB_PATH is set (it's global)
+                        sqlite_db_file_path = Path(SQLITE_DB_PATH).resolve()
+                        # Target directory: <db_parent_dir>/public/files
+                        target_files_dir = sqlite_db_file_path.parent / "public" / "files"
+                        target_files_dir.mkdir(parents=True, exist_ok=True)
+                        final_video_path = target_files_dir / f"{task_id}.mp4"
                     else:
-                        final_output_dir = main_output_dir_base / output_sub_dir_path
-                    final_output_dir.mkdir(parents=True, exist_ok=True)
-                    final_video_path = final_output_dir / f"{task_id}.mp4"
+                        # Fallback if SQLITE_DB_PATH is somehow not set (should be rare if DB_TYPE is "sqlite")
+                        print(f"[WARNING Task ID: {task_id}] SQLITE_DB_PATH not available, falling back to default output dir for SQLite task relative to main_output_dir_base.")
+                        fallback_output_dir = main_output_dir_base / task_id # Original fallback logic using main_output_dir_base
+                        fallback_output_dir.mkdir(parents=True, exist_ok=True)
+                        final_video_path = fallback_output_dir / f"{task_id}.mp4"
                 try:
                     shutil.move(str(generated_video_file), str(final_video_path))
                     output_location_to_db = str(final_video_path.resolve())
