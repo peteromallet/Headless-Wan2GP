@@ -887,27 +887,53 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
             if DB_TYPE == "sqlite":
                 dprint(f"HEADLESS SQLITE SAVE: task_params_dict contains output_path? Key: 'output_path', Value: {task_params_dict.get('output_path')}") # DEBUG ADDED
                 custom_output_path_str = task_params_dict.get("output_path")
+                
                 if custom_output_path_str:
-                    # `output_path` is expected to be a full path (absolute or relative). If relative, resolve against cwd.
+                    # `output_path` is expected to be a full path (absolute or relative).
+                    # User handles uniqueness if providing a custom path, or it might overwrite.
                     final_video_path = Path(custom_output_path_str).expanduser().resolve()
                     final_video_path.parent.mkdir(parents=True, exist_ok=True)
-                else: # No custom_output_path_str provided, use DB-relative path
+                    # For custom paths, output_location_to_db will be the absolute path.
+                else: # No custom_output_path_str provided, use DB-relative path logic
                     if SQLITE_DB_PATH: # Ensure SQLITE_DB_PATH is set (it's global)
                         sqlite_db_file_path = Path(SQLITE_DB_PATH).resolve()
                         # Target directory: <db_parent_dir>/public/files
                         target_files_dir = sqlite_db_file_path.parent / "public" / "files"
                         target_files_dir.mkdir(parents=True, exist_ok=True)
-                        final_video_path = target_files_dir / f"{task_id}.mp4"
+                        
+                        # Use sm_get_unique_target_path for unique naming in the target_files_dir
+                        final_video_path = sm_get_unique_target_path(
+                            target_files_dir, 
+                            task_id, # name_stem
+                            generated_video_file.suffix # suffix (e.g., ".mp4")
+                        )
+                        # For this path, output_location_to_db will be "files/filename.ext"
                     else:
                         # Fallback if SQLITE_DB_PATH is somehow not set (should be rare if DB_TYPE is "sqlite")
                         print(f"[WARNING Task ID: {task_id}] SQLITE_DB_PATH not available, falling back to default output dir for SQLite task relative to main_output_dir_base.")
-                        fallback_output_dir = main_output_dir_base / task_id # Original fallback logic using main_output_dir_base
+                        fallback_output_dir = main_output_dir_base / task_id # Original fallback logic
                         fallback_output_dir.mkdir(parents=True, exist_ok=True)
-                        final_video_path = fallback_output_dir / f"{task_id}.mp4"
+                        
+                        # Use sm_get_unique_target_path for unique naming in fallback directory too
+                        final_video_path = sm_get_unique_target_path(
+                            fallback_output_dir,
+                            task_id,
+                            generated_video_file.suffix
+                        )
+                        # For fallback, output_location_to_db will be the absolute path.
+                
                 try:
                     shutil.move(str(generated_video_file), str(final_video_path))
-                    output_location_to_db = str(final_video_path.resolve())
-                    print(f"[Task ID: {task_id}] Output video saved to: {output_location_to_db}")
+                    
+                    # Determine output_location_to_db based on which path was taken
+                    if custom_output_path_str:
+                        output_location_to_db = str(final_video_path.resolve())
+                    elif SQLITE_DB_PATH and not custom_output_path_str: # This means it was saved to .../public/files
+                        output_location_to_db = f"files/{final_video_path.name}"
+                    else: # Fallback case (SQLITE_DB_PATH missing and not custom_output_path_str)
+                        output_location_to_db = str(final_video_path.resolve())
+                        
+                    print(f"[Task ID: {task_id}] Output video saved to: {final_video_path.resolve()} (DB location: {output_location_to_db})")
 
                     # If a custom output_path was used, there might still be a default
                     # directory (e.g., <main_output_dir_base>/<task_id>) that was created
