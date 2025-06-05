@@ -73,6 +73,7 @@ def main():
     common_parser.add_argument("--skip_cleanup", action="store_true", help="Skip cleanup of intermediate files and folders (useful for debugging). This applies to orchestrator-based tasks like travel_between_images.")
     common_parser.add_argument("--debug", action="store_true", help="Enable verbose debug logging and prevent cleanup of intermediate files.")
     common_parser.add_argument("--use_causvid_lora", action="store_true", help="Enable CausVid LoRA for video generation tasks.")
+    common_parser.add_argument("--booster_loras", action="store_true", help="Apply a predefined set of 'booster' LoRAs for general quality improvement.")
     common_parser.add_argument("--upscale_model_name", type=str, default="ltxv_13B", help="Model name for headless.py to use for upscaling tasks (default: ltxv_13B).")
     common_parser.add_argument("--final_image_strength", type=float, default=0.0, help="Strength of the final anchor image when used as a VACE reference (0.0 to 1.0). 1.0 is full strength (opaque), 0.0 is fully transparent. Using this implicitly makes the end anchor a VACE ref. Values outside [0,1] will be clamped.")
     common_parser.add_argument("--initial_image_strength", type=float, default=0.0, help="Strength of the initial anchor image when used as a VACE reference (0.0 to 1.0). 1.0 is full strength (opaque), 0.0 is fully transparent. Similar to --final_image_strength but for the start anchor. Values outside [0,1] will be clamped.")

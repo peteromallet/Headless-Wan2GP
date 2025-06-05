@@ -264,6 +264,7 @@ def run_travel_between_images_task(task_args, common_args, parsed_resolution, ma
         "model_name": common_args.model_name,
         "seed_base": common_args.seed,
         "use_causvid_lora": common_args.use_causvid_lora,
+        "booster_loras": common_args.booster_loras,
         "cfg_star_switch": common_args.cfg_star_switch,
         "cfg_zero_step": common_args.cfg_zero_step,
         "params_json_str_override": common_args.params_json_str, # For headless to merge into segment tasks
