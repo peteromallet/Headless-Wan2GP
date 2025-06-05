@@ -634,7 +634,7 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         ui_defaults["guidance_scale"] = 1.0 # Still overridden
         ui_defaults["flow_shift"] = 1.0     # Still overridden
         
-        causvid_lora_basename = "Wan21_CausVid_14B_T2V_lora_rank32.safetensors"
+        causvid_lora_basename = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
         current_activated = ui_defaults.get("activated_loras", [])
         if not isinstance(current_activated, list):
              try: current_activated = [str(item).strip() for item in str(current_activated).split(',') if item.strip()] 
@@ -658,7 +658,7 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
 
             # Add CausVid first
             final_loras.append(causvid_lora_basename)
-            final_multipliers.append("0.7")
+            final_multipliers.append("1.0")
 
             # Add existing, ensuring no duplicate multiplier for already present CausVid (though it shouldn't be)
             processed_other_loras = set()
@@ -675,7 +675,7 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
             ui_defaults["activated_loras"] = final_loras # ensure order matches multipliers
             ui_defaults["loras_multipliers"] = " ".join(final_multipliers)
         else:
-            ui_defaults["loras_multipliers"] = "0.7"
+            ui_defaults["loras_multipliers"] = "1.0"
             ui_defaults["activated_loras"] = [causvid_lora_basename] # ensure only causvid if no others
 
     if apply_booster_loras:
@@ -691,9 +691,9 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         ui_defaults["flow_shift"] = 1.0
 
         booster_loras = [
-            {"filename": "Wan2_1-AccVideo-T2V-14B_fp8_e4m3fn.safetensors", "strength": "0.5"},
-            {"filename": "Wan21_T2V_14B_MoviiGen_lora_rank32_fp16.safetensors", "strength": "0.5"},
-            {"filename": "Wan2.1-Fun-14B-InP-MPS_reward_lora_comfy.safetensors", "strength": "0.7"},
+            # {"filename": "Wan21_AccVid_T2V_14B_lora_rank32_fp16_wgp.safetensors", "strength": "0.5"},
+            # {"filename": "Wan21_T2V_14B_MoviiGen_lora_rank32_fp16_wgp.safetensors", "strength": "0.5"},
+            {"filename": "Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors", "strength": "0.5"},
             {"filename": "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors", "strength": "1.0"},
         ]
 
@@ -791,7 +791,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         print(f"[Task ID: {task_id}] Identified as 'travel_segment' task.")
         # This will call wgp_mod like a standard task but might have pre/post processing
         # based on orchestrator details passed in its params.
-        return _handle_travel_segment_task(wgp_mod, task_params_dict, main_output_dir_base, task_id)
+        return _handle_travel_segment_task(wgp_mod, task_params_dict, main_output_dir_base, task_id, apply_booster_loras)
     elif task_type == "travel_stitch":
         print(f"[Task ID: {task_id}] Identified as 'travel_stitch' task.")
         return _handle_travel_stitch_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, stitch_task_id_str=task_id)
@@ -807,10 +807,10 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
     if apply_booster_loras:
         print(f"[Task ID: {task_id}] --booster_loras flag is active. Checking and downloading booster LoRAs.")
         booster_loras_data = [
-            {"url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1-AccVideo-T2V-14B_fp8_e4m3fn.safetensors", "filename": "Wan2_1-AccVideo-T2V-14B_fp8_e4m3fn.safetensors"},
+            {"url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_AccVid_T2V_14B_lora_rank32_fp16.safetensors", "filename": "Wan21_AccVid_T2V_14B_lora_rank32_fp16.safetensors"},
             {"url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_T2V_14B_MoviiGen_lora_rank32_fp16.safetensors", "filename": "Wan21_T2V_14B_MoviiGen_lora_rank32_fp16.safetensors"},
-            {"url": "https://huggingface.co/Kijai/Wan2.1-Fun-Reward-LoRAs-comfy/resolve/931844f165657e216d71c5a4f3ce4b78c3abe02e/Wan2.1-Fun-14B-InP-MPS_reward_lora_comfy.safetensors", "filename": "Wan2.1-Fun-14B-InP-MPS_reward_lora_comfy.safetensors"},
-            {"url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors", "filename": "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"},
+            {"url": "https://huggingface.co/alibaba-pai/Wan2.1-Fun-Reward-LoRAs/resolve/main/Wan2.1-Fun-14B-InP-MPS.safetensors", "filename": "Wan2.1-Fun-14B-InP-MPS.safetensors"},
+            {"url": "https://huggingface.co/peteromallet/Wan2.1-Fun-14B-InP-MPS_reward_lora_diffusers/resolve/main/Wan2.1-Fun-14B-InP-MPS_reward_lora_diffusers.safetensors", "filename": "Wan2.1-Fun-14B-InP-MPS_reward_lora_diffusers.safetensors"},
         ]
         
         base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
@@ -836,8 +836,8 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         # Add similar logic for Supabase if a writable shared path convention exists.
 
     use_causvid = task_params_dict.get("use_causvid_lora", False)
-    causvid_lora_basename = "Wan21_CausVid_14B_T2V_lora_rank32.safetensors"
-    causvid_lora_url = "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_CausVid_14B_T2V_lora_rank32.safetensors"
+    causvid_lora_basename = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
+    causvid_lora_url = "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
 
     if use_causvid:
         base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
@@ -1568,6 +1568,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "desaturate_subsequent_starting_frames": orchestrator_payload.get("desaturate_subsequent_starting_frames", 0.0),
                 "adjust_brightness_subsequent_starting_frames": orchestrator_payload.get("adjust_brightness_subsequent_starting_frames", 0.0),
                 "after_first_post_generation_saturation": orchestrator_payload.get("after_first_post_generation_saturation"),
+                "after_first_post_generation_brightness": orchestrator_payload.get("after_first_post_generation_brightness"),
                 
                 "segment_image_download_dir": segment_image_download_dir_str, # Add the download dir path string
                 
@@ -1642,7 +1643,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
     
     return generation_success, output_message_for_orchestrator_db
 
-def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str):
+def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str, apply_booster_loras: bool = False):
     dprint(f"_handle_travel_segment_task: Starting for {segment_task_id_str}")
     dprint(f"Segment task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
     # task_params_from_db contains what was enqueued for this specific segment,
@@ -1652,6 +1653,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
     final_segment_video_output_path_str = None # Output of the WGP sub-task
     output_message_for_segment_task = "Segment task initiated."
 
+    # Ensure the flag is defined: if not set via parameter, try to derive it from task_params_from_db
+    if not apply_booster_loras:
+        apply_booster_loras = task_params_from_db.get("booster_loras", False)
 
     try:
         # --- 1. Initialization & Parameter Extraction ---
@@ -2188,100 +2192,108 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
     if not actual_wgp_output_video_path: # Check if it's None or empty string
         return False, f"Task {wgp_task_id}: WGP output video path is None or empty. Cannot chain.", None
 
-    # Convert to Path object for easier manipulation, but remember original might be relative for DB.
-    # The actual_wgp_output_video_path is what's in DB or would be if this were the end.
-    # final_video_path_for_db_and_next_step will track the path to be stored in the DB after this function.
-    final_video_path_for_db_and_next_step = actual_wgp_output_video_path 
+    # This variable will track the absolute path of the video as it gets processed.
+    video_to_process_abs_path: Path
+    # This will hold the path to be stored in the DB (can be relative for SQLite).
+    final_video_path_for_db = actual_wgp_output_video_path
+
+    # Resolve initial absolute path
+    if DB_TYPE == "sqlite" and SQLITE_DB_PATH and isinstance(actual_wgp_output_video_path, str) and actual_wgp_output_video_path.startswith("files/"):
+        sqlite_db_parent = Path(SQLITE_DB_PATH).resolve().parent
+        video_to_process_abs_path = sqlite_db_parent / "public" / actual_wgp_output_video_path
+    else:
+        video_to_process_abs_path = Path(actual_wgp_output_video_path)
+
+    if not video_to_process_abs_path.exists():
+        return False, f"Task {wgp_task_id}: Source video for chaining '{video_to_process_abs_path}' (from '{actual_wgp_output_video_path}') does not exist.", actual_wgp_output_video_path
 
     try:
         orchestrator_task_id_ref = chain_details["orchestrator_task_id_ref"]
         orchestrator_run_id = chain_details["orchestrator_run_id"]
         segment_idx_completed = chain_details["segment_index_completed"]
-        # is_last_segment_completed = chain_details["is_last_segment_in_sequence"] # No longer needed here
         full_orchestrator_payload = chain_details["full_orchestrator_payload"]
         segment_processing_dir_for_saturation_str = chain_details["segment_processing_dir_for_saturation"]
         
         is_first_new_segment_after_continue = chain_details.get("is_first_new_segment_after_continue", False)
         is_subsequent_segment_val = chain_details.get("is_subsequent_segment", False)
 
-        dprint(f"Chaining for WGP task {wgp_task_id} (segment {segment_idx_completed} of run {orchestrator_run_id}). Output: {actual_wgp_output_video_path}")
-        segment_processing_dir = Path(segment_processing_dir_for_saturation_str)
+        dprint(f"Chaining for WGP task {wgp_task_id} (segment {segment_idx_completed} of run {orchestrator_run_id}). Initial video: {video_to_process_abs_path}")
 
-        # --- Post-generation Saturation --- 
+        # --- Post-generation Processing Chain ---
         if is_subsequent_segment_val or is_first_new_segment_after_continue:
+
+            # --- 1. Saturation ---
             sat_level = full_orchestrator_payload.get("after_first_post_generation_saturation")
-            if sat_level is not None and isinstance(sat_level, (float, int)) and sat_level >= 0.0: # Ensure sat_level is valid
-                
-                source_video_abs_path_for_saturation_op: Path
-                target_dir_for_saturated_video: Path
-                new_db_path_prefix_if_sqlite = "" # Will be "files/" if target is public/files
+            if sat_level is not None and isinstance(sat_level, (float, int)) and sat_level >= 0.0:
+                dprint(f"Chain (Seg {segment_idx_completed}): Applying post-gen saturation {sat_level} to {video_to_process_abs_path}")
 
-                is_sqlite_files_path_input = False
-                if DB_TYPE == "sqlite" and SQLITE_DB_PATH and isinstance(actual_wgp_output_video_path, str) and actual_wgp_output_video_path.startswith("files/"):
-                    is_sqlite_files_path_input = True
-                    sqlite_db_parent = Path(SQLITE_DB_PATH).resolve().parent
-                    source_video_abs_path_for_saturation_op = sqlite_db_parent / "public" / actual_wgp_output_video_path
-                    target_dir_for_saturated_video = sqlite_db_parent / "public" / "files"
-                    target_dir_for_saturated_video.mkdir(parents=True, exist_ok=True) # Ensure it exists
-                    new_db_path_prefix_if_sqlite = "files/"
-                    dprint(f"Chain (Seg {segment_idx_completed}): SQLite mode. Source for sat: {source_video_abs_path_for_saturation_op}, Target dir for sat: {target_dir_for_saturated_video}")
-                else:
-                    # Input is absolute, or not SQLite with files/ prefix. Use segment_processing_dir for output.
-                    source_video_abs_path_for_saturation_op = Path(actual_wgp_output_video_path)
-                    target_dir_for_saturated_video = Path(segment_processing_dir_for_saturation_str) # segment_processing_dir
-                    # new_db_path_prefix_if_sqlite remains ""
-                    dprint(f"Chain (Seg {segment_idx_completed}): Non-SQLite/Absolute mode. Source for sat: {source_video_abs_path_for_saturation_op}, Target dir for sat: {target_dir_for_saturated_video}")
-
-                if not source_video_abs_path_for_saturation_op.exists():
-                    return False, f"Task {wgp_task_id}: Source video for saturation '{source_video_abs_path_for_saturation_op}' (derived from '{actual_wgp_output_video_path}') does not exist. Cannot chain.", actual_wgp_output_video_path
-
-                dprint(f"Chain (Seg {segment_idx_completed}): Applying post-gen saturation {sat_level} to {source_video_abs_path_for_saturation_op}")
-                sat_out_base = f"s{segment_idx_completed}_final_sat_{sat_level:.2f}"
+                target_dir_for_sat, db_prefix_for_sat = _get_post_processing_target_dir(DB_TYPE, SQLITE_DB_PATH, segment_processing_dir_for_saturation_str)
+                sat_out_base = f"s{segment_idx_completed}_sat_{sat_level:.2f}"
+                saturated_video_output_abs_path = sm_get_unique_target_path(target_dir_for_sat, sat_out_base, video_to_process_abs_path.suffix)
                 
-                # Use the determined target_dir_for_saturated_video
-                saturated_video_output_abs_path = sm_get_unique_target_path(
-                    target_dir_for_saturated_video, 
-                    sat_out_base, 
-                    source_video_abs_path_for_saturation_op.suffix
-                )
-                
-                if sm_apply_saturation_to_video_ffmpeg(str(source_video_abs_path_for_saturation_op), saturated_video_output_abs_path, sat_level):
-                    if new_db_path_prefix_if_sqlite: # Means it was saved to public/files
-                        final_video_path_for_db_and_next_step = f"{new_db_path_prefix_if_sqlite}{saturated_video_output_abs_path.name}"
-                    else: # Saved to segment_processing_dir, so DB path is absolute
-                        final_video_path_for_db_and_next_step = str(saturated_video_output_abs_path.resolve())
+                if sm_apply_saturation_to_video_ffmpeg(str(video_to_process_abs_path), saturated_video_output_abs_path, sat_level):
+                    new_db_path = f"{db_prefix_for_sat}{saturated_video_output_abs_path.name}"
+                    dprint(f"Chain (Seg {segment_idx_completed}): Saturation successful. New path: {new_db_path}")
+                    _cleanup_intermediate_video(full_orchestrator_payload, video_to_process_abs_path, segment_idx_completed, "raw")
                     
-                    dprint(f"Chain (Seg {segment_idx_completed}): Saturation successful. New path for DB record: {final_video_path_for_db_and_next_step} (Actual file: {saturated_video_output_abs_path})")
-                    
-                    # Cleanup original (unsaturated) video
-                    if not full_orchestrator_payload.get("skip_cleanup_enabled", False) and \
-                       not full_orchestrator_payload.get("debug_mode_enabled", False) and \
-                       source_video_abs_path_for_saturation_op.exists() and \
-                       source_video_abs_path_for_saturation_op != saturated_video_output_abs_path: # Don't delete if it's the same file (shouldn't happen with unique naming)
-                        try:
-                            source_video_abs_path_for_saturation_op.unlink()
-                            dprint(f"Chain (Seg {segment_idx_completed}): Removed original unsaturated video {source_video_abs_path_for_saturation_op} after saturation.")
-                        except Exception as e_del_raw:
-                            dprint(f"Chain (Seg {segment_idx_completed}): Warning - could not remove original unsaturated video {source_video_abs_path_for_saturation_op}: {e_del_raw}")
+                    video_to_process_abs_path = saturated_video_output_abs_path
+                    final_video_path_for_db = new_db_path
                 else:
-                    dprint(f"Chain (Seg {segment_idx_completed}): Failed post-gen saturation. Using original WGP output ({actual_wgp_output_video_path}) for DB record.")
-                    # final_video_path_for_db_and_next_step remains actual_wgp_output_video_path
-            elif sat_level is not None: # sat_level was present but invalid (e.g., negative)
-                 dprint(f"Chain (Seg {segment_idx_completed}): Invalid saturation level {sat_level}. Skipping saturation.")
-                 # final_video_path_for_db_and_next_step remains actual_wgp_output_video_path
+                    dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Saturation failed. Continuing with unsaturated video.")
+            
+            # --- 2. Brightness ---
+            brightness_adjust = full_orchestrator_payload.get("after_first_post_generation_brightness", 0.0)
+            if isinstance(brightness_adjust, (float, int)) and abs(brightness_adjust) > 1e-6:
+                dprint(f"Chain (Seg {segment_idx_completed}): Applying post-gen brightness {brightness_adjust} to {video_to_process_abs_path}")
+                
+                target_dir_for_bright, db_prefix_for_bright = _get_post_processing_target_dir(DB_TYPE, SQLITE_DB_PATH, segment_processing_dir_for_saturation_str)
+                bright_out_base = f"s{segment_idx_completed}_bright_{brightness_adjust:+.2f}"
+                brightened_video_output_abs_path = sm_get_unique_target_path(target_dir_for_bright, bright_out_base, video_to_process_abs_path.suffix)
+                
+                processed_video = _apply_brightness_to_video_frames_headless(str(video_to_process_abs_path), brightened_video_output_abs_path, brightness_adjust, wgp_task_id)
+
+                if processed_video and processed_video.exists():
+                    new_db_path = f"{db_prefix_for_bright}{brightened_video_output_abs_path.name}"
+                    dprint(f"Chain (Seg {segment_idx_completed}): Brightness adjustment successful. New path: {new_db_path}")
+                    _cleanup_intermediate_video(full_orchestrator_payload, video_to_process_abs_path, segment_idx_completed, "saturated")
+
+                    video_to_process_abs_path = brightened_video_output_abs_path
+                    final_video_path_for_db = new_db_path
+                else:
+                    dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Brightness adjustment failed. Continuing with previous video version.")
+
 
         # The orchestrator has already enqueued all segment and stitch tasks.
-        # This function's responsibility is now only to perform post-processing (like saturation)
-        # and return the final path of the processed segment video for the DB record of the WGP task.
-        msg = f"Chain (Seg {segment_idx_completed}): Post-WGP processing (e.g., saturation) complete. Final path for this WGP task's output: {final_video_path_for_db_and_next_step}"
+        msg = f"Chain (Seg {segment_idx_completed}): Post-WGP processing complete. Final path for this WGP task's output: {final_video_path_for_db}"
         dprint(msg)
-        return True, msg, str(final_video_path_for_db_and_next_step)
+        return True, msg, str(final_video_path_for_db)
 
     except Exception as e_chain:
         error_msg = f"Chain (Seg {chain_details.get('segment_index_completed', 'N/A')} for WGP {wgp_task_id}): Failed during chaining: {e_chain}"
         print(f"[ERROR] {error_msg}")
         traceback.print_exc()
-        return False, error_msg, str(final_video_path_for_db_and_next_step) # Return original path if error during chaining
+        return False, error_msg, str(final_video_path_for_db) # Return path as it was before error
+
+def _get_post_processing_target_dir(db_type, sqlite_db_path, default_dir_str):
+    """Helper to determine the correct output directory for post-processing steps."""
+    if db_type == "sqlite" and sqlite_db_path:
+        sqlite_db_parent = Path(sqlite_db_path).resolve().parent
+        target_dir = sqlite_db_parent / "public" / "files"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        return target_dir, "files/"
+    else:
+        return Path(default_dir_str), ""
+
+def _cleanup_intermediate_video(orchestrator_payload, video_path: Path, segment_idx: int, stage: str):
+    """Helper to cleanup intermediate video files during chaining."""
+    if not orchestrator_payload.get("skip_cleanup_enabled", False) and \
+       not orchestrator_payload.get("debug_mode_enabled", False) and \
+       video_path.exists():
+        try:
+            video_path.unlink()
+            dprint(f"Chain (Seg {segment_idx}): Removed intermediate '{stage}' video {video_path}")
+        except Exception as e_del:
+            dprint(f"Chain (Seg {segment_idx}): Warning - could not remove intermediate video {video_path}: {e_del}")
 
 def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: Path, stitch_task_id_str: str):
     dprint(f"_handle_travel_stitch_task: Starting for {stitch_task_id_str}")
@@ -2957,8 +2969,13 @@ def main():
             print(f"Found task: {current_task_id_for_status_update} of type: {current_task_type}, Project ID: {current_project_id}")
             # Status already set to IN_PROGRESS if task_info is not None
 
+            # Inserted: define segment_image_download_dir from task params if available
+            segment_image_download_dir = current_task_params.get("segment_image_download_dir")
+            
             task_succeeded, output_location = process_single_task(
-                wgp_mod, current_task_params, main_output_dir, current_task_type, current_project_id
+                wgp_mod, current_task_params, main_output_dir, current_task_type, current_project_id,
+                image_download_dir=segment_image_download_dir
+                # Removed apply_booster_loras parameter because it's now determined within process_single_task
             )
 
             if task_succeeded:
@@ -3324,6 +3341,58 @@ def _wait_for_sqlite_change(db_path_str: str, timeout_seconds: int):
                 pass
     # Timed out – return control to caller
     return
+
+def _apply_brightness_to_video_frames_headless(input_video_path: str, output_video_path: Path, brightness_adjust: float, task_id_for_logging: str) -> Path | None:
+    """
+    Applies brightness adjustment to a video by processing its frames.
+    A brightness_adjust of 0 means no change. Negative values darken, positive values brighten.
+    """
+    try:
+        dprint(f"Task {task_id_for_logging}: Applying brightness adjustment {brightness_adjust} to {input_video_path}")
+        
+        # We need video properties to re-encode
+        total_frames, fps = sm_get_video_frame_count_and_fps(input_video_path)
+        if total_frames is None or fps is None or total_frames == 0:
+            print(f"[ERROR] Task {task_id_for_logging}: Could not get frame count or fps for {input_video_path}, or video has 0 frames.")
+            return None
+
+        # Extract frames
+        frames_iterator = sm_extract_frames_from_video(input_video_path)
+        if frames_iterator is None:
+            print(f"[ERROR] Task {task_id_for_logging}: Could not extract frames from {input_video_path}")
+            return None
+
+        adjusted_frames = []
+        first_frame = None
+        for frame_np in frames_iterator:
+            if first_frame is None:
+                first_frame = frame_np
+            # sm_adjust_frame_brightness is already imported from common_utils
+            adjusted_frame = sm_adjust_frame_brightness(frame_np, brightness_adjust)
+            adjusted_frames.append(adjusted_frame)
+        
+        if not adjusted_frames or first_frame is None:
+            print(f"[ERROR] Task {task_id_for_logging}: No frames to write for brightness-adjusted video.")
+            return None
+
+        # Get resolution from the first frame
+        h, w, _ = first_frame.shape
+        resolution_wh = (w, h)
+        
+        # Create new video from adjusted frames
+        created_video_path = sm_create_video_from_frames_list(adjusted_frames, output_video_path, fps, resolution_wh)
+        
+        if created_video_path and created_video_path.exists():
+            dprint(f"Task {task_id_for_logging}: Successfully created brightness-adjusted video at {created_video_path}")
+            return created_video_path
+        else:
+            print(f"[ERROR] Task {task_id_for_logging}: Failed to create brightness-adjusted video.")
+            return None
+
+    except Exception as e:
+        print(f"[ERROR] Task {task_id_for_logging}: Exception in _apply_brightness_to_video_frames_headless: {e}")
+        traceback.print_exc()
+        return None
 
 if __name__ == "__main__":
     main() 
