@@ -1942,6 +1942,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             wgp_payload,                # The parameters for the WGP generation itself
             main_output_dir_base,       # Server's main output directory (context for process_single_task)
             current_wgp_engine,         # Task type for process_single_task (e.g., "wgp")
+            project_id_for_task=segment_params.get("project_id"), # Added project_id
             image_download_dir=segment_image_download_dir # Pass the determined download dir
         )
 
@@ -2568,7 +2569,13 @@ def main():
 
             if not task_info:
                 dprint("No queued tasks found. Sleeping...")
-                time.sleep(cli_args.poll_interval)
+                if DB_TYPE == "sqlite":
+                    # Wait until either the WAL/db file changes or the normal
+                    # poll interval elapses.  This reduces perceived latency
+                    # without hammering the database.
+                    _wait_for_sqlite_change(SQLITE_DB_PATH, cli_args.poll_interval)
+                else:
+                    time.sleep(cli_args.poll_interval)
                 continue
 
             # current_task_data = task_info["params"] # Params are already a dict
@@ -2948,6 +2955,49 @@ def _prepare_vace_ref_for_segment_headless(
         dprint(f"Task {task_id_for_logging}, Segment {segment_processing_dir.name}: Failed to apply strength/save VACE ref from {local_original_image_path}. Skipping.")
         traceback.print_exc() # Add traceback for detail on failure
         return None
+
+# -----------------------------------------------------------------------------
+# Helper – wait for SQLite WAL changes to wake the poll loop early
+# -----------------------------------------------------------------------------
+
+def _wait_for_sqlite_change(db_path_str: str, timeout_seconds: int):
+    """Block up to timeout_seconds waiting for mtime change on db / -wal / -shm.
+
+    This lets the headless server react almost immediately when another process
+    commits a transaction that only touches the WAL file.  We fall back to a
+    normal sleep when the auxiliary files do not exist (e.g. before first
+    write).
+    """
+    related_paths = [
+        Path(db_path_str),
+        Path(f"{db_path_str}-wal"),
+        Path(f"{db_path_str}-shm"),
+    ]
+
+    # Snapshot the most-recent modification time we can observe now.
+    last_mtime = 0.0
+    for p in related_paths:
+        try:
+            last_mtime = max(last_mtime, p.stat().st_mtime)
+        except FileNotFoundError:
+            # Aux file not created yet – ignore.
+            pass
+
+    # Poll in small increments until something changes or timeout expires.
+    poll_step = 0.25  # seconds
+    waited = 0.0
+    while waited < timeout_seconds:
+        time.sleep(poll_step)
+        waited += poll_step
+        for p in related_paths:
+            try:
+                if p.stat().st_mtime > last_mtime:
+                    return  # Change detected – return immediately
+            except FileNotFoundError:
+                # File still missing – keep waiting
+                pass
+    # Timed out – return control to caller
+    return
 
 if __name__ == "__main__":
     main() 
