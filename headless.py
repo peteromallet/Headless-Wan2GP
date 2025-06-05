@@ -27,6 +27,7 @@ import time
 import traceback
 import requests # For downloading the LoRA
 import inspect # Added import
+import datetime # Added import for datetime
 import sqlite3 # Added for SQLite database
 import urllib.parse # Added for URL encoding
 import threading
@@ -109,7 +110,7 @@ SQLITE_RETRY_DELAY = 0.5  # seconds
 # -----------------------------------------------------------------------------
 # Status Constants
 # -----------------------------------------------------------------------------
-STATUS_QUEUED = "Queued"
+STATUS_QUEUED = "Pending" # Changed from "Queued" to "Pending" to match DB default
 STATUS_IN_PROGRESS = "In Progress"
 STATUS_COMPLETE = "Complete"
 STATUS_FAILED = "Failed"
@@ -370,8 +371,8 @@ def init_db(db_path_str: str):
                 status TEXT NOT NULL DEFAULT 'Pending',
                 dependant_on TEXT NULL,
                 output_location TEXT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NULL,
                 project_id TEXT NOT NULL,
                 FOREIGN KEY (project_id) REFERENCES projects(id)
             )
@@ -391,20 +392,24 @@ def get_oldest_queued_task(db_path_str: str):
     """Get the oldest queued task with proper error handling"""
     def _get_operation(conn):
         cursor = conn.cursor()
+        # Modified to select tasks with status 'Pending' OR 'Queued'
+        # Also fetch project_id
         sql_query = f"""
-            SELECT t.id, t.params, t.task_type
+            SELECT t.id, t.params, t.task_type, t.project_id
             FROM   tasks AS t
             LEFT JOIN tasks AS d             ON d.id = t.dependant_on
-            WHERE  t.status = ?
+            WHERE  t.status IN ('Pending', 'Queued')
               AND (t.dependant_on IS NULL OR d.status = ?)
             ORDER BY t.created_at ASC
             LIMIT  1
         """
-        cursor.execute(sql_query, (STATUS_QUEUED, STATUS_COMPLETE))
+        query_params = (STATUS_COMPLETE,) # Only one param needed now for dependant_on status
+        dprint(f"SQLite: Executing get_oldest_queued_task with query: {sql_query.strip()} AND params for dependant_on: {query_params}")
+        cursor.execute(sql_query, query_params)
         task_row = cursor.fetchone()
         if task_row:
-            dprint(f"SQLite: Fetched raw task_row: {task_row}") # DEBUG ADDED
-            return {"task_id": task_row[0], "params": json.loads(task_row[1]), "task_type": task_row[2]}
+            dprint(f"SQLite: Fetched raw task_row: {task_row}")
+            return {"task_id": task_row[0], "params": json.loads(task_row[1]), "task_type": task_row[2], "project_id": task_row[3]}
         return None
     
     try:
@@ -417,14 +422,15 @@ def update_task_status(db_path_str: str, task_id: str, status: str, output_locat
     """Updates a task's status and updated_at timestamp with proper error handling"""
     def _update_operation(conn, task_id, status, output_location_val):
         cursor = conn.cursor()
+        current_utc_iso_ts = datetime.datetime.utcnow().isoformat() + "Z"
         if status == STATUS_COMPLETE and output_location_val is not None:
-            cursor.execute("UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP, output_location = ? WHERE id = ?", 
-                           (status, output_location_val, task_id))
+            cursor.execute("UPDATE tasks SET status = ?, updated_at = ?, output_location = ? WHERE id = ?",
+                           (status, current_utc_iso_ts, output_location_val, task_id))
         elif status == STATUS_FAILED and output_location_val is not None: # ADDED THIS CONDITION
-            cursor.execute("UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP, output_location = ? WHERE id = ?", 
-                           (status, output_location_val, task_id))
+            cursor.execute("UPDATE tasks SET status = ?, updated_at = ?, output_location = ? WHERE id = ?",
+                           (status, current_utc_iso_ts, output_location_val, task_id))
         else:
-            cursor.execute("UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (status, task_id))
+            cursor.execute("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?", (status, current_utc_iso_ts, task_id))
         return True
     
     try:
@@ -674,8 +680,12 @@ def download_file(url, dest_folder, filename):
 # 6. Process a single task dictionary from the tasks.json list
 # -----------------------------------------------------------------------------
 
-def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, task_type: str, image_download_dir: Path | str | None = None):
-    dprint(f"PROCESS_SINGLE_TASK received task_params_dict: {json.dumps(task_params_dict)}") # DEBUG ADDED
+def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None):
+    dprint(f"--- Entering process_single_task ---")
+    dprint(f"Task Type: {task_type}")
+    dprint(f"Project ID for task: {project_id_for_task}") # Added dprint for project_id
+    dprint(f"Task Params (first 1000 chars): {json.dumps(task_params_dict, default=str, indent=2)[:1000]}...")
+    # dprint(f"PROCESS_SINGLE_TASK received task_params_dict: {json.dumps(task_params_dict)}") # DEBUG ADDED - Now covered by above
     task_id = task_params_dict.get("task_id", "unknown_task_" + str(time.time()))
     print(f"--- Processing task ID: {task_id} of type: {task_type} ---")
     output_location_to_db = None # Will store the final path/URL for the DB
@@ -695,7 +705,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
     # --- SM_RESTRUCTURE: Add new travel task handlers ---
     elif task_type == "travel_orchestrator":
         print(f"[Task ID: {task_id}] Identified as 'travel_orchestrator' task.")
-        return _handle_travel_orchestrator_task(task_params_dict, main_output_dir_base, task_id)
+        return _handle_travel_orchestrator_task(task_params_dict, main_output_dir_base, task_id, project_id_for_task)
     elif task_type == "travel_segment":
         print(f"[Task ID: {task_id}] Identified as 'travel_segment' task.")
         # This will call wgp_mod like a standard task but might have pre/post processing
@@ -805,6 +815,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
     ui_params["video_length"] = frame_num_for_wgp
 
     try:
+        dprint(f"[Task ID: {task_id}] Calling wgp_mod.generate_video with effective ui_params (first 1000 chars): {json.dumps(ui_params, default=lambda o: 'Unserializable' if isinstance(o, Image.Image) else o.__dict__ if hasattr(o, '__dict__') else str(o), indent=2)[:1000]}...")
         wgp_mod.generate_video(
             task=gen_task_placeholder, send_cmd=send_cmd,
             prompt=ui_params["prompt"],
@@ -1282,11 +1293,10 @@ def _handle_rife_interpolate_task(wgp_mod, task_params_dict: dict, main_output_d
 
 
 # --- SM_RESTRUCTURE: New Handler Functions for Travel Tasks ---
-def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_base: Path, orchestrator_task_id_str: str):
-    """Handles the main 'travel_orchestrator' task.
-    Its role is to parse orchestration details and enqueue ALL segment and stitch tasks upfront with dependencies.
-    """
+def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_base: Path, orchestrator_task_id_str: str, orchestrator_project_id: str | None):
     dprint(f"_handle_travel_orchestrator_task: Starting for {orchestrator_task_id_str}")
+    dprint(f"Orchestrator Project ID: {orchestrator_project_id}") # Added dprint
+    dprint(f"Orchestrator task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
     generation_success = False # Represents success of orchestration step
     output_message_for_orchestrator_db = f"Orchestration for {orchestrator_task_id_str} initiated."
 
@@ -1354,6 +1364,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             if idx == 0 and orchestrator_payload.get("continue_from_video_resolved_path"):
                 current_frame_overlap_from_previous = expanded_frame_overlap[0] if expanded_frame_overlap else 0
             elif idx > 0:
+                # SM_RESTRUCTURE_FIX_OVERLAP_IDX: Use idx-1 for subsequent segments
                 current_frame_overlap_from_previous = expanded_frame_overlap[idx-1] if len(expanded_frame_overlap) > (idx-1) else 0
             
             # VACE refs for this specific segment
@@ -1366,6 +1377,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "task_id": current_segment_task_id,
                 "orchestrator_task_id_ref": orchestrator_task_id_str,
                 "orchestrator_run_id": run_id,
+                "project_id": orchestrator_project_id, # Added project_id
                 "segment_index": idx,
                 "is_first_segment": (idx == 0),
                 "is_last_segment": (idx == num_segments - 1),
@@ -1401,6 +1413,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "debug_mode_enabled": orchestrator_payload.get("debug_mode_enabled", False),
                 "skip_cleanup_enabled": orchestrator_payload.get("skip_cleanup_enabled", False),
                 "continue_from_video_resolved_path_for_guide": orchestrator_payload.get("continue_from_video_resolved_path") if idx == 0 else None,
+                "full_orchestrator_payload": orchestrator_payload, # Ensure full payload is passed to segment
             }
 
             dprint(f"Orchestrator: Enqueuing travel_segment {idx} (ID: {current_segment_task_id}) depends_on={previous_segment_task_id}")
@@ -1411,6 +1424,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 dependant_on=previous_segment_task_id
             )
             previous_segment_task_id = current_segment_task_id
+            dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_segment {idx} (ID: {current_segment_task_id}) with payload (first 500 chars): {json.dumps(segment_payload, default=str)[:500]}... Depends on: {segment_payload.get('dependant_on')}")
         
         # After loop, enqueue the stitch task
         stitch_task_id = f"travel_stitch_{run_id}" # Deterministic ID
@@ -1419,12 +1433,13 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         # NOT under current_run_output_dir (which is .../travel_run_XYZ/)
         # The main_output_dir_base is the one passed to headless.py (e.g. server's ./outputs or steerable_motion's ./steerable_motion_output)
         # The orchestrator_payload["main_output_dir_for_run"] is this main_output_dir_base.
-        final_stitched_output_path = Path(orchestrator_payload["main_output_dir_for_run"]) / final_stitched_video_name
+        final_stitched_output_path = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))) / final_stitched_video_name
 
         stitch_payload = {
             "task_id": stitch_task_id,
             "orchestrator_task_id_ref": orchestrator_task_id_str,
             "orchestrator_run_id": run_id,
+            "project_id": orchestrator_project_id, # Added project_id
             "num_total_segments_generated": num_segments,
             "current_run_base_output_dir": str(current_run_output_dir.resolve()), # Stitcher needs this to find segment outputs
             "frame_overlap_settings_expanded": expanded_frame_overlap,
@@ -1451,6 +1466,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             task_type_str="travel_stitch",
             dependant_on=previous_segment_task_id
         )
+        dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_stitch task (ID: {stitch_task_id}) with payload (first 500 chars): {json.dumps(stitch_payload, default=str)[:500]}... Depends on: {stitch_payload.get('dependant_on')}")
 
         generation_success = True
         output_message_for_orchestrator_db = f"Successfully enqueued all {num_segments} segment tasks and 1 stitch task for run {run_id}."
@@ -1467,7 +1483,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
 def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str):
     dprint(f"_handle_travel_segment_task: Starting for {segment_task_id_str}")
-    # task_params_from_db contains what was enqueued for this specific segment, 
+    dprint(f"Segment task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
+    # task_params_from_db contains what was enqueued for this specific segment,
     # including potentially 'full_orchestrator_payload'.
     segment_params = task_params_from_db 
     generation_success = False # Success of the WGP/Comfy sub-task for this segment
@@ -1576,7 +1593,17 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         is_first_new_segment_after_continue = is_first_segment and full_orchestrator_payload.get("continue_from_video_resolved_path")
         is_subsequent_segment = not is_first_segment
 
-        parsed_res_wh = full_orchestrator_payload["parsed_resolution_wh"]
+        # Ensure parsed_res_wh is a tuple of integers
+        parsed_res_wh_str = full_orchestrator_payload["parsed_resolution_wh"]
+        try:
+            parsed_res_wh = sm_parse_resolution(parsed_res_wh_str)
+            if parsed_res_wh is None:
+                raise ValueError(f"sm_parse_resolution returned None for input: {parsed_res_wh_str}")
+        except Exception as e_parse_res:
+            msg = f"Seg {segment_idx}: Invalid format or error parsing parsed_resolution_wh '{parsed_res_wh_str}': {e_parse_res}"
+            print(f"[ERROR Task {segment_task_id_str}]: {msg}"); return False, msg
+        dprint(f"Segment {segment_idx}: Parsed resolution (w,h): {parsed_res_wh}")
+
         fps_helpers = full_orchestrator_payload.get("fps_helpers", 16)
         fade_in_duration_str = full_orchestrator_payload["fade_in_params_json_str"]
         fade_out_duration_str = full_orchestrator_payload["fade_out_params_json_str"]
@@ -1859,12 +1886,21 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         safe_vace_image_ref_paths_for_wgp = [str(p.resolve()) if p else None for p in actual_vace_image_ref_paths_for_wgp]
         safe_vace_image_ref_paths_for_wgp = [p for p in safe_vace_image_ref_paths_for_wgp if p is not None]
 
+        current_segment_base_prompt = segment_params.get("base_prompt", "") # Default to empty string if key is missing
+        
+        prompt_for_wgp = current_segment_base_prompt
+        if not current_segment_base_prompt or current_segment_base_prompt.strip() == "":
+            dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Original base_prompt was '{current_segment_base_prompt}'. It is empty or whitespace. Using a default prompt for WGP: 'A beautiful landscape.'")
+            prompt_for_wgp = "A beautiful landscape."
+        
+        dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Effective prompt for WGP payload will be: '{prompt_for_wgp}'")
+
         wgp_payload = {
             "task_id": wgp_inline_task_id, # ID for this specific WGP generation operation
             "model": full_orchestrator_payload["model_name"],
-            "prompt": segment_params["base_prompt"],
+            "prompt": prompt_for_wgp, # Use the processed prompt_for_wgp
             "negative_prompt": segment_params["negative_prompt"],
-            "resolution": f"{parsed_res_wh[0]}x{parsed_res_wh[1]}",
+            "resolution": f"{parsed_res_wh[0]}x{parsed_res_wh[1]}", # Use parsed tuple here
             "frames": final_frames_for_wgp_generation,
             "seed": segment_params["seed_to_use"],
             "output_path": str(wgp_final_output_path_for_this_segment.resolve()), # Key for process_single_task
@@ -2009,8 +2045,8 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
         return False, error_msg, str(final_video_path_for_db_and_next_step) # Return original path if error during chaining
 
 def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: Path, stitch_task_id_str: str):
-    """Handles the final 'travel_stitch' task."""
     dprint(f"_handle_travel_stitch_task: Starting for {stitch_task_id_str}")
+    dprint(f"Stitch task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
     stitch_params = task_params_from_db # This now contains full_orchestrator_payload
     stitch_success = False
     final_video_location_for_db = None
@@ -2038,8 +2074,19 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         dprint(f"Stitch Task {stitch_task_id_str}: Processing in {stitch_processing_dir.resolve()}")
 
         num_expected_new_segments = full_orchestrator_payload["num_new_segments_to_generate"]
-        parsed_res_wh = full_orchestrator_payload["parsed_resolution_wh"]
-        final_fps = full_orchestrator_payload.get("fps_helpers", 16) # MODIFIED
+        
+        # Ensure parsed_res_wh is a tuple of integers for stitch task
+        parsed_res_wh_str = full_orchestrator_payload["parsed_resolution_wh"]
+        try:
+            parsed_res_wh = sm_parse_resolution(parsed_res_wh_str)
+            if parsed_res_wh is None:
+                raise ValueError(f"sm_parse_resolution returned None for input: {parsed_res_wh_str}")
+        except Exception as e_parse_res_stitch:
+            msg = f"Stitch Task {stitch_task_id_str}: Invalid format or error parsing parsed_resolution_wh '{parsed_res_wh_str}': {e_parse_res_stitch}"
+            print(f"[ERROR Task {stitch_task_id_str}]: {msg}"); return False, msg
+        dprint(f"Stitch Task {stitch_task_id_str}: Parsed resolution (w,h): {parsed_res_wh}")
+
+        final_fps = full_orchestrator_payload.get("fps_helpers", 16)
         expanded_frame_overlaps = full_orchestrator_payload["frame_overlap_expanded"]
         crossfade_sharp_amt = full_orchestrator_payload.get("crossfade_sharp_amt", 0.3)
         initial_continued_video_path_str = full_orchestrator_payload.get("continue_from_video_resolved_path")
@@ -2249,7 +2296,8 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 poll_interval_seconds=poll_interval_ups, 
                 timeout_seconds=poll_timeout_ups
             )
-            
+            dprint(f"Stitch Task {stitch_task_id_str}: Upscale sub-task {upscale_sub_task_id} poll result: {upscaled_video_location_from_db}")
+
             if upscaled_video_location_from_db and Path(upscaled_video_location_from_db).exists():
                 dprint(f"Stitch: Upscale sub-task {upscale_sub_task_id} completed. Output: {upscaled_video_location_from_db}")
                 # Copy the upscaled video from its sub-task output dir to the temp_upscaled_video_path in stitch_processing_dir
@@ -2416,14 +2464,14 @@ def main():
     debug_mode = cli_args.debug
     dprint("Verbose debug logging enabled.")
 
-    original_argv = sys.argv.copy()
-    sys.argv = ["Wan2GP/wgp.py"]
+    # original_argv = sys.argv.copy() # No longer needed to copy if not restoring fully
+    sys.argv = ["Wan2GP/wgp.py"] # Set for wgp.py import and its potential internal arg parsing
     patch_gradio()
     
     # Import wgp from the Wan2GP sub-package
     from Wan2GP import wgp as wgp_mod
     
-    sys.argv = original_argv
+    # sys.argv = original_argv # DO NOT RESTORE: This was causing wgp.py to parse headless.py args
 
     # Apply wgp.py global config overrides
     if cli_args.wgp_attention_mode is not None: wgp_mod.attention_mode = cli_args.wgp_attention_mode
@@ -2507,16 +2555,19 @@ def main():
         while True:
             task_info = None
             current_task_id_for_status_update = None # Used to hold the task_id for status updates
+            current_project_id = None # To hold the project_id for the current task
 
             if DB_TYPE == "supabase":
                 dprint(f"Checking for queued tasks in Supabase (PostgreSQL backend) table {PG_TABLE_NAME} via Supabase RPC...")
                 task_info = get_oldest_queued_task_supabase()
+                dprint(f"Supabase task_info: {task_info}") # ADDED DPRINT
                 if task_info:
                     current_task_id_for_status_update = task_info["task_id"]
                     # Status is already set to IN_PROGRESS by func_claim_task RPC
             else: # SQLite
                 dprint(f"Checking for queued tasks in SQLite {SQLITE_DB_PATH}...")
                 task_info = get_oldest_queued_task(SQLITE_DB_PATH)
+                dprint(f"SQLite task_info: {task_info}") # ADDED DPRINT
                 if task_info:
                     current_task_id_for_status_update = task_info["task_id"]
                     update_task_status(SQLITE_DB_PATH, current_task_id_for_status_update, STATUS_IN_PROGRESS)
@@ -2529,11 +2580,59 @@ def main():
             # current_task_data = task_info["params"] # Params are already a dict
             current_task_params = task_info["params"]
             current_task_type = task_info["task_type"] # Retrieve task_type
+            current_project_id = task_info.get("project_id") # Get project_id, might be None if not returned (e.g. Supabase old RPC)
+            
+            # If project_id wasn't part of task_info (e.g. from Supabase if RPC func_claim_task doesn't return it yet)
+            # or if it was somehow None from SQLite (shouldn't happen with the fix), try to fetch it.
+            if current_project_id is None and current_task_id_for_status_update:
+                dprint(f"Project ID not directly available for task {current_task_id_for_status_update}. Attempting to fetch manually...")
+                if DB_TYPE == "supabase" and SUPABASE_CLIENT:
+                    try:
+                        # Using 'id' as the column name for task_id based on Supabase schema conventions seen elsewhere (e.g. init_db)
+                        response = SUPABASE_CLIENT.table(PG_TABLE_NAME)\
+                            .select("project_id")\
+                            .eq("id", current_task_id_for_status_update)\
+                            .single()\
+                            .execute()
+                        if response.data and response.data.get("project_id"):
+                            current_project_id = response.data["project_id"]
+                            dprint(f"Successfully fetched project_id '{current_project_id}' for task {current_task_id_for_status_update} from Supabase.")
+                        else:
+                            dprint(f"Could not fetch project_id for task {current_task_id_for_status_update} from Supabase. Response data: {response.data}, error: {response.error}")
+                    except Exception as e_fetch_proj_id:
+                        dprint(f"Exception while fetching project_id for {current_task_id_for_status_update} from Supabase: {e_fetch_proj_id}")
+                elif DB_TYPE == "sqlite": # Should have been fetched by get_oldest_queued_task, but as a fallback
+                    def _fetch_project_id_sqlite(conn):
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT project_id FROM tasks WHERE id = ?", (current_task_id_for_status_update,))
+                        row = cursor.fetchone()
+                        return row[0] if row else None
+                    try:
+                        fetched_pid_sqlite = execute_sqlite_with_retry(SQLITE_DB_PATH, _fetch_project_id_sqlite)
+                        if fetched_pid_sqlite:
+                            current_project_id = fetched_pid_sqlite
+                            dprint(f"Successfully fetched project_id '{current_project_id}' for task {current_task_id_for_status_update} from SQLite (fallback).")
+                        else:
+                            dprint(f"Could not fetch project_id for task {current_task_id_for_status_update} from SQLite (fallback).")
+                    except Exception as e_fetch_proj_sqlite:
+                        dprint(f"Exception fetching project_id from SQLite (fallback) for {current_task_id_for_status_update}: {e_fetch_proj_sqlite}")
+            
+            # Critical check: project_id is NOT NULL for sub-tasks created by orchestrator
+            if current_project_id is None and current_task_type == "travel_orchestrator":
+                print(f"[CRITICAL ERROR] Task {current_task_id_for_status_update} (travel_orchestrator) has no project_id. Sub-tasks cannot be created. Skipping task.")
+                # Update status to FAILED to prevent re-processing this broken state
+                error_message_for_db = "Failed: Orchestrator task missing project_id, cannot create sub-tasks."
+                if DB_TYPE == "supabase":
+                    update_task_status_supabase(current_task_id_for_status_update, STATUS_FAILED, error_message_for_db)
+                else:
+                    update_task_status(SQLITE_DB_PATH, current_task_id_for_status_update, STATUS_FAILED, error_message_for_db)
+                time.sleep(1) # Brief pause
+                continue # Skip to next polling cycle
 
-            print(f"Found task: {current_task_id_for_status_update} of type: {current_task_type}")
+            print(f"Found task: {current_task_id_for_status_update} of type: {current_task_type}, Project ID: {current_project_id}")
             # Status already set to IN_PROGRESS if task_info is not None
 
-            task_succeeded, output_location = process_single_task(wgp_mod, current_task_params, main_output_dir, current_task_type)
+            task_succeeded, output_location = process_single_task(wgp_mod, current_task_params, main_output_dir, current_task_type, current_project_id)
 
             if task_succeeded:
                 if DB_TYPE == "supabase":
