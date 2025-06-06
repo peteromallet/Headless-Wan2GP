@@ -1804,6 +1804,13 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             print(f"[ERROR Task {segment_task_id_str}]: {msg}"); return False, msg
         dprint(f"Segment {segment_idx}: Parsed resolution (w,h): {parsed_res_wh}")
 
+        # Calculate total frames for this segment once and reuse
+        base_duration = segment_params.get("segment_frames_target", full_orchestrator_payload["segment_frames_expanded"][segment_idx])
+        frame_overlap_from_previous = segment_params.get("frame_overlap_from_previous", 0)
+        # The user-facing 'segment_frames_target' should represent the total length of the segment,
+        # not just the new content. The overlap is handled internally for transition.
+        total_frames_for_segment = base_duration
+
         fps_helpers = full_orchestrator_payload.get("fps_helpers", 16)
         fade_in_duration_str = full_orchestrator_payload["fade_in_params_json_str"]
         fade_out_duration_str = full_orchestrator_payload["fade_out_params_json_str"]
@@ -1890,10 +1897,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             # actual_guide_video_path_for_wgp will store the absolute path to the guide video where it's saved.
             actual_guide_video_path_for_wgp = sm_get_unique_target_path(guide_video_target_dir, guide_video_base_name, ".mp4")
             
-            # segment_frames_target and frame_overlap_from_previous should be in segment_params, passed by orchestrator/prev segment
-            base_duration_new_content_for_guide = segment_params.get("segment_frames_target", full_orchestrator_payload["segment_frames_expanded"][segment_idx])
-            overlap_connecting_to_previous_for_guide = segment_params.get("frame_overlap_from_previous", 0) # Default to 0 if not set
-            unquantized_guide_video_total_frames = base_duration_new_content_for_guide + overlap_connecting_to_previous_for_guide
+            unquantized_guide_video_total_frames = total_frames_for_segment
 
             # Apply the same quantization as used for WGP generation later in this function
             is_ltxv_m_for_guide_quant = "ltxv" in full_orchestrator_payload["model_name"].lower()
@@ -1976,7 +1980,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 elif path_to_previous_segment_video_output_for_guide: # Continued or Subsequent
                     prev_vid_total_frames, _ = sm_get_video_frame_count_and_fps(path_to_previous_segment_video_output_for_guide)
                     if prev_vid_total_frames is None: raise ValueError("Could not get frame count of previous video for guide.")
-                    actual_overlap_to_use = min(overlap_connecting_to_previous_for_guide, prev_vid_total_frames)
+                    actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
                     start_extraction_idx = max(0, prev_vid_total_frames - actual_overlap_to_use)
                     overlap_frames_raw = sm_extract_frames_from_video(path_to_previous_segment_video_output_for_guide, start_extraction_idx, actual_overlap_to_use)
                     frames_read_for_overlap = 0
@@ -2067,10 +2071,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             print(f"[ERROR] {msg}")
             return False, msg
             
-        base_duration_wgp = segment_params["segment_frames_target"]
-        overlap_from_previous_wgp = segment_params["frame_overlap_from_previous"]
-        current_segment_total_frames_unquantized_wgp = base_duration_wgp + overlap_from_previous_wgp
-        final_frames_for_wgp_generation = current_segment_total_frames_unquantized_wgp
+        final_frames_for_wgp_generation = total_frames_for_segment
         current_wgp_engine = "wgp" # Defaulting to WGP for travel segments
         
         dprint(f"Task {segment_task_id_str}: Using unquantized WGP input frames: {final_frames_for_wgp_generation}")
