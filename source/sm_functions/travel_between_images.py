@@ -342,7 +342,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 dependant_on=previous_segment_task_id
             )
             previous_segment_task_id = current_segment_task_id
-            dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_segment {idx} (ID: {current_segment_task_id}) with payload (first 500 chars): {json.dumps(segment_payload, default=str)[:500]}... Depends on: {segment_payload.get('dependant_on')}")
+            dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_segment {idx} (ID: {current_segment_task_id}) with payload (first 500 chars): {json.dumps(segment_payload, default=str)[:500]}... Depends on: {previous_segment_task_id}")
         
         # After loop, enqueue the stitch task
         stitch_task_id = f"travel_stitch_{run_id}" # Deterministic ID
@@ -383,7 +383,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             task_type_str="travel_stitch",
             dependant_on=previous_segment_task_id
         )
-        dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_stitch task (ID: {stitch_task_id}) with payload (first 500 chars): {json.dumps(stitch_payload, default=str)[:500]}... Depends on: {stitch_payload.get('dependant_on')}")
+        dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_stitch task (ID: {stitch_task_id}) with payload (first 500 chars): {json.dumps(stitch_payload, default=str)[:500]}... Depends on: {previous_segment_task_id}")
 
         generation_success = True
         output_message_for_orchestrator_db = f"Successfully enqueued all {num_segments} segment tasks and 1 stitch task for run {run_id}."
@@ -480,6 +480,12 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 if len(input_images_for_cm) > segment_idx + 1:
                     start_ref_path_for_cm = input_images_for_cm[segment_idx]
                     end_ref_path_for_cm = input_images_for_cm[segment_idx + 1]
+            
+            # Download images if they are URLs so they exist locally for the color matching function.
+            if start_ref_path_for_cm:
+                start_ref_path_for_cm = sm_download_image_if_url(start_ref_path_for_cm, segment_processing_dir, f"s{segment_idx}_cm_start_ref", dprint, segment_task_id_str)
+            if end_ref_path_for_cm:
+                end_ref_path_for_cm = sm_download_image_if_url(end_ref_path_for_cm, segment_processing_dir, f"s{segment_idx}_cm_end_ref", dprint, segment_task_id_str)
 
             dprint(f"Seg {segment_idx} CM Refs: Start='{start_ref_path_for_cm}', End='{end_ref_path_for_cm}'")
         # --- End Color Match Reference Image Determination ---
