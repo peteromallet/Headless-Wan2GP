@@ -895,7 +895,12 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
 
     # --- Determine frame_num for wgp.py --- 
     requested_frames_from_task = ui_params.get("video_length", 81)
-    if requested_frames_from_task == 1:
+    frames_are_prequantized = ui_params.get("frames_are_prequantized", False)
+
+    if frames_are_prequantized:
+        frame_num_for_wgp = requested_frames_from_task
+        dprint(f"[Task ID: {task_id}] Using pre-quantized frame count: {frame_num_for_wgp}")
+    elif requested_frames_from_task == 1:
         frame_num_for_wgp = 1
         dprint(f"[Task ID: {task_id}] Single-frame request detected, passing through (1 frame).")
     elif requested_frames_from_task <= 4:
@@ -2106,6 +2111,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
             "image_refs_paths": safe_vace_image_ref_paths_for_wgp,
+            "frames_are_prequantized": True,
         }
         if full_orchestrator_payload.get("params_json_str_override"):
             try:
