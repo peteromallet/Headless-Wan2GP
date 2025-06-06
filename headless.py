@@ -32,6 +32,10 @@ from supabase import create_client, Client as SupabaseClient
 
 # Add the current directory to Python path so Wan2GP can be imported as a module
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Add the Wan2GP subdirectory to the path for its internal imports
+wan2gp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Wan2GP")
+if wan2gp_path not in sys.path:
+    sys.path.append(wan2gp_path)
 
 # --- SM_RESTRUCTURE: Import moved/new utilities ---
 from source import db_operations as db_ops
