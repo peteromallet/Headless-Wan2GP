@@ -895,20 +895,8 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
 
     # --- Determine frame_num for wgp.py --- 
     requested_frames_from_task = ui_params.get("video_length", 81)
-    frames_are_prequantized = ui_params.get("frames_are_prequantized", False)
-
-    if frames_are_prequantized:
-        frame_num_for_wgp = requested_frames_from_task
-        dprint(f"[Task ID: {task_id}] Using pre-quantized frame count: {frame_num_for_wgp}")
-    elif requested_frames_from_task == 1:
-        frame_num_for_wgp = 1
-        dprint(f"[Task ID: {task_id}] Single-frame request detected, passing through (1 frame).")
-    elif requested_frames_from_task <= 4:
-        frame_num_for_wgp = 5  # wgp.py drops to 1 otherwise; use 5 to preserve motion guidance
-        dprint(f"[Task ID: {task_id}] Small-frame ({requested_frames_from_task}) request adjusted to 5 frames for wgp.py compatibility.")
-    else:
-        frame_num_for_wgp = (requested_frames_from_task // 4) * 4 + 1
-        dprint(f"[Task ID: {task_id}] Calculated frame count for wgp.py: {frame_num_for_wgp} (requested: {requested_frames_from_task})")
+    frame_num_for_wgp = requested_frames_from_task
+    dprint(f"[Task ID: {task_id}] Using requested frame count: {frame_num_for_wgp}")
     # --- End frame_num determination ---
 
     ui_params["video_length"] = frame_num_for_wgp
@@ -1911,16 +1899,12 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             is_ltxv_m_for_guide_quant = "ltxv" in full_orchestrator_payload["model_name"].lower()
             latent_s_for_guide_quant = 8 if is_ltxv_m_for_guide_quant else 4
 
-            if unquantized_guide_video_total_frames <= 0:
-                guide_video_total_frames = 0
-            else:
-                guide_video_total_frames = ((unquantized_guide_video_total_frames - 1) // latent_s_for_guide_quant) * latent_s_for_guide_quant + 1
+            guide_video_total_frames = unquantized_guide_video_total_frames
             
-            dprint(f"Task {segment_task_id_str}: Guide video frames unquantized: {unquantized_guide_video_total_frames}, quantized: {guide_video_total_frames} (latent_s: {latent_s_for_guide_quant})")
+            dprint(f"Task {segment_task_id_str}: Guide video frames (unquantized): {guide_video_total_frames} (latent_s: {latent_s_for_guide_quant})")
             
-            if guide_video_total_frames <= 0:
-                dprint(f"Task {segment_task_id_str}: Guide video frames after quantization {guide_video_total_frames}. No guide will be created."); actual_guide_video_path_for_wgp = None
-            else:
+            if guide_video_total_frames > 0:
+                dprint(f"Task {segment_task_id_str}: Interpolating guide video with {guide_video_total_frames} frames...")
                 frames_for_guide_list = [sm_create_color_frame(parsed_res_wh, (128,128,128)).copy() for _ in range(guide_video_total_frames)]
                 input_images_resolved_original = full_orchestrator_payload["input_image_paths_resolved"]
                 
@@ -2088,25 +2072,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         current_segment_total_frames_unquantized_wgp = base_duration_wgp + overlap_from_previous_wgp
         final_frames_for_wgp_generation = current_segment_total_frames_unquantized_wgp
         current_wgp_engine = "wgp" # Defaulting to WGP for travel segments
-
-        if current_wgp_engine == "wgp": # Quantization specific to wgp engine
-            is_ltxv_m = "ltxv" in full_orchestrator_payload["model_name"].lower()
-            latent_s = 8 if is_ltxv_m else 4
-            # Ensure current_segment_total_frames_unquantized_wgp is at least 1 for quantization logic
-            # The formula (X // latent_s) * latent_s + 1 often implies an extra frame for some models or a specific way latent frames are counted.
-            # If X is 0, (0 // LS)*LS + 1 = 1. If X is 1, (1//LS)*LS + 1 = 1.
-            # If this needs to be strictly <= X, then a different approach for 0 frames might be needed.
-            # Given the context of video frames, 0 frames usually isn't a target for WGP.
-            # Let's adjust to ensure it doesn't generate if 0 frames are truly intended after overlap calculations.
-            if current_segment_total_frames_unquantized_wgp <= 0:
-                 quantized_wgp_f = 0 # Cannot generate 0 or negative frames
-            else:
-                quantized_wgp_f = ((current_segment_total_frames_unquantized_wgp -1) // latent_s) * latent_s + 1
-
-            if quantized_wgp_f != current_segment_total_frames_unquantized_wgp:
-                dprint(f"Quantizing WGP input frames: {current_segment_total_frames_unquantized_wgp} to {quantized_wgp_f}")
-            final_frames_for_wgp_generation = quantized_wgp_f
         
+        dprint(f"Task {segment_task_id_str}: Using unquantized WGP input frames: {final_frames_for_wgp_generation}")
+
         if final_frames_for_wgp_generation <= 0:
             msg = f"Task {segment_task_id_str}: Calculated WGP frames {final_frames_for_wgp_generation}. Cannot generate. Check segment_frames_target and overlap."
             print(f"[ERROR] {msg}")
