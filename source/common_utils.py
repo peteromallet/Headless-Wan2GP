@@ -1,6 +1,7 @@
 """Common utility functions and constants for steerable_motion tasks."""
 
 import json
+import math
 import os
 import shutil
 import sqlite3
@@ -75,6 +76,56 @@ def create_color_frame(size: tuple[int, int], color_bgr: tuple[int, int, int] = 
     height, width = size[1], size[0] # size is (width, height)
     frame = np.full((height, width, 3), color_bgr, dtype=np.uint8)
     return frame
+
+def get_easing_function(name: str):
+    """
+    Returns an easing function by name.
+    """
+    if name == 'linear':
+        return lambda t: t
+    elif name == 'ease_in_quad':
+        return lambda t: t * t
+    elif name == 'ease_out_quad':
+        return lambda t: t * (2 - t)
+    elif name == 'ease_in_out_quad' or name == 'ease_in_out': # Added alias
+        return lambda t: 2 * t * t if t < 0.5 else -1 + (4 - 2 * t) * t
+    elif name == 'ease_in_cubic':
+        return lambda t: t * t * t
+    elif name == 'ease_out_cubic':
+        return lambda t: 1 + ((t - 1) ** 3)
+    elif name == 'ease_in_out_cubic':
+        return lambda t: 4 * t * t * t if t < 0.5 else 1 + ((2 * t - 2) ** 3) / 2
+    elif name == 'ease_in_quart':
+        return lambda t: t * t * t * t
+    elif name == 'ease_out_quart':
+        return lambda t: 1 - ((t - 1) ** 4)
+    elif name == 'ease_in_out_quart':
+        return lambda t: 8 * t * t * t * t if t < 0.5 else 1 - ((-2 * t + 2) ** 4) / 2
+    elif name == 'ease_in_quint':
+        return lambda t: t * t * t * t * t
+    elif name == 'ease_out_quint':
+        return lambda t: 1 + ((t - 1) ** 5)
+    elif name == 'ease_in_out_quint':
+        return lambda t: 16 * t * t * t * t * t if t < 0.5 else 1 + ((-2 * t + 2) ** 5) / 2
+    elif name == 'ease_in_sine':
+        return lambda t: 1 - math.cos(t * math.pi / 2)
+    elif name == 'ease_out_sine':
+        return lambda t: math.sin(t * math.pi / 2)
+    elif name == 'ease_in_out_sine':
+        return lambda t: -(math.cos(math.pi * t) - 1) / 2
+    elif name == 'ease_in_expo':
+        return lambda t: 0 if t == 0 else 2 ** (10 * (t - 1))
+    elif name == 'ease_out_expo':
+        return lambda t: 1 if t == 1 else 1 - 2 ** (-10 * t)
+    elif name == 'ease_in_out_expo':
+        if t == 0: return 0
+        if t == 1: return 1
+        if t < 0.5:
+            return (2 ** (20 * t - 10)) / 2
+        else:
+            return (2 - 2 ** (-20 * t + 10)) / 2
+    else: # Default to ease_in_out
+        return lambda t: 2 * t * t if t < 0.5 else -1 + (4 - 2 * t) * t
 
 def create_video_from_frames_list(
     frames_list: list[np.ndarray],
