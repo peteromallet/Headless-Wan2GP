@@ -894,12 +894,12 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                     dprint
                 )
 
-                if matched_video_path and matched_video_path.exists():
-                    new_db_path = f"{db_prefix_for_cm}{matched_video_path.name}"
+                if matched_video_path and Path(matched_video_path).exists():
+                    new_db_path = f"{db_prefix_for_cm}{Path(matched_video_path).name}"
                     dprint(f"Chain (Seg {segment_idx_completed}): Color matching successful. New path: {new_db_path}")
                     _cleanup_intermediate_video(full_orchestrator_payload, video_to_process_abs_path, segment_idx_completed, "pre-colormatch", dprint)
 
-                    video_to_process_abs_path = matched_video_path
+                    video_to_process_abs_path = Path(matched_video_path)
                     final_video_path_for_db = new_db_path
                 else:
                     dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Color matching failed. Continuing with previous video version.")
