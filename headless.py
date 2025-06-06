@@ -18,102 +18,36 @@ generation work.
 import argparse
 import sys
 import os
-import types
-from pathlib import Path
-from PIL import Image
 import json
 import time
-# import shutil # No longer moving files, tasks are removed from tasks.json
 import traceback
-import requests # For downloading the LoRA
-import inspect # Added import
-import datetime # Added import for datetime
-import sqlite3 # Added for SQLite database
-import urllib.parse # Added for URL encoding
-import threading
-import uuid # Added import for UUID
+import urllib.parse
+import tempfile
+import shutil
+
+from pathlib import Path
+from PIL import Image
+from dotenv import load_dotenv
+from supabase import create_client, Client as SupabaseClient
 
 # Add the current directory to Python path so Wan2GP can be imported as a module
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# --- Add imports for OpenPose generation ---
-import numpy as np
-try:
-    # Import from Wan2GP submodule
-    import sys
-    from pathlib import Path
-    wan2gp_path = Path(__file__).parent / "Wan2GP"
-    if str(wan2gp_path) not in sys.path:
-        sys.path.insert(0, str(wan2gp_path))
-    from preprocessing.dwpose.pose import PoseBodyFaceVideoAnnotator
-except ImportError:
-    PoseBodyFaceVideoAnnotator = None # Allow script to load if module not found, error out at runtime
-# --- End OpenPose imports ---
-
-from dotenv import load_dotenv # For .env file
-# import psycopg2 # For PostgreSQL - REMOVED
-# import psycopg2.extras # For dictionary cursor with PostgreSQL - REMOVED
-from supabase import create_client, Client as SupabaseClient # For Supabase
-import tempfile # For temporary directories
-import shutil # For file operations
-import cv2 # Added for RIFE interpolation
-
 # --- SM_RESTRUCTURE: Import moved/new utilities ---
-from sm_functions.common_utils import (
-    # dprint is already defined locally in headless.py
-    generate_unique_task_id as sm_generate_unique_task_id, # Alias to avoid conflict if headless has its own
-    add_task_to_db as sm_add_task_to_db,
-    # poll_task_status, # headless doesn't poll for sub-tasks this way
-    get_video_frame_count_and_fps as sm_get_video_frame_count_and_fps,
-    _get_unique_target_path as sm_get_unique_target_path,
-    image_to_frame as sm_image_to_frame,
-    create_color_frame as sm_create_color_frame,
-    _adjust_frame_brightness as sm_adjust_frame_brightness,
-    _copy_to_folder_with_unique_name as sm_copy_to_folder_with_unique_name,
-    _apply_strength_to_image as sm_apply_strength_to_image,
-    parse_resolution as sm_parse_resolution, # For parsing resolution string from orchestrator
-    download_image_if_url as sm_download_image_if_url # Added import
+from source.sm_functions import db_operations as db_ops
+from source.sm_functions.specialized_handlers import (
+    handle_generate_openpose_task,
+    handle_rife_interpolate_task
 )
-from sm_functions.video_utils import (
-    extract_frames_from_video as sm_extract_frames_from_video,
-    create_video_from_frames_list as sm_create_video_from_frames_list,
-    cross_fade_overlap_frames as sm_cross_fade_overlap_frames,
-    _apply_saturation_to_video_ffmpeg as sm_apply_saturation_to_video_ffmpeg,
-    # color_match_video_to_reference # If needed by stitch/segment tasks
+from source.sm_functions.common_utils import (
+    sm_get_unique_target_path,
+    sm_download_image_if_url,
+    download_file,
+    sm_load_pil_images
 )
-from sm_functions.travel_between_images import (
-    get_easing_function as sm_get_easing_function # For guide video fades
-)
+from source.sm_functions import travel_between_images as tbi
 # --- End SM_RESTRUCTURE imports ---
 
-# -----------------------------------------------------------------------------
-# Global DB Configuration (will be set in main)
-# -----------------------------------------------------------------------------
-DB_TYPE = "sqlite" # Default to sqlite, will be changed to "supabase" if configured
-# PG_DSN = None # REMOVED - Supabase client handles connection
-PG_TABLE_NAME = "tasks" # Still needed for RPC calls (table name in Supabase/Postgres)
-SQLITE_DB_PATH = "tasks.db"
-SUPABASE_URL = None
-SUPABASE_SERVICE_KEY = None
-SUPABASE_VIDEO_BUCKET = "videos" # Default bucket name, can be overridden by .env
-SUPABASE_CLIENT: SupabaseClient | None = None # Global Supabase client instance
-
-# Add SQLite connection lock for thread safety
-sqlite_lock = threading.Lock()
-
-# SQLite retry configuration
-SQLITE_MAX_RETRIES = 5
-SQLITE_RETRY_DELAY = 0.5  # seconds
-
-
-
-# -----------------------------------------------------------------------------
-# Status Constants
-# -----------------------------------------------------------------------------
-STATUS_QUEUED = "Queued" # Changed from "Pending" to "Queued" to match DB default
-STATUS_IN_PROGRESS = "In Progress"
-STATUS_COMPLETE = "Complete"
-STATUS_FAILED = "Failed"
 
 # -----------------------------------------------------------------------------
 # Debug / Verbose Logging Helpers
@@ -145,8 +79,10 @@ def parse_args():
                                help="Enable verbose debug logging (prints additional diagnostics)")
     pgroup_server.add_argument("--migrate-only", action="store_true",
                                help="Run database migrations and then exit.")
-    pgroup_server.add_argument("--booster_loras", action="store_true",
-                               help="Apply a predefined set of 'booster' LoRAs for general quality improvement.")
+    pgroup_server.add_argument("--apply-reward-lora", action="store_true",
+                               help="Apply the reward LoRA with a fixed strength of 0.5.")
+    pgroup_server.add_argument("--colour-match-videos", action="store_true",
+                               help="Apply colour matching to travel videos.")
 
     # Advanced wgp.py Global Config Overrides (Optional) - Applied once at server start
     pgroup_wgp_globals = parser.add_argument_group("WGP Global Config Overrides (Applied at Server Start)")
@@ -193,286 +129,7 @@ def patch_gradio():
     gr.SelectData = type('SelectData', (), {'index': None, '_data': None})
     gr.EventData = type('EventData', (), {'target':None, '_data':None})
 
-# -----------------------------------------------------------------------------
-# Database Helper Functions with Improved SQLite Handling
-# -----------------------------------------------------------------------------
 
-def execute_sqlite_with_retry(db_path_str: str, operation_func, *args, **kwargs):
-    """Execute SQLite operations with retry logic for handling locks and I/O errors"""
-    for attempt in range(SQLITE_MAX_RETRIES):
-        try:
-            with sqlite_lock:  # Ensure only one thread accesses SQLite at a time
-                conn = sqlite3.connect(db_path_str, timeout=30.0)  # 30 second timeout
-                conn.execute("PRAGMA journal_mode=WAL")  # Enable WAL mode for better concurrency
-                conn.execute("PRAGMA synchronous=NORMAL")  # Balance between safety and performance
-                conn.execute("PRAGMA busy_timeout=30000")  # 30 second busy timeout
-                try:
-                    result = operation_func(conn, *args, **kwargs)
-                    conn.commit()
-                    return result
-                finally:
-                    conn.close()
-        except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
-            error_msg = str(e).lower()
-            if "database is locked" in error_msg or "disk i/o error" in error_msg or "database disk image is malformed" in error_msg:
-                if attempt < SQLITE_MAX_RETRIES - 1:
-                    wait_time = SQLITE_RETRY_DELAY * (2 ** attempt)  # Exponential backoff
-                    print(f"SQLite error on attempt {attempt + 1}: {e}. Retrying in {wait_time:.1f}s...")
-                    time.sleep(wait_time)
-                    continue
-                else:
-                    print(f"SQLite error after {SQLITE_MAX_RETRIES} attempts: {e}")
-                    raise
-            else:
-                # For other SQLite errors, don't retry
-                raise
-        except Exception as e:
-            # For non-SQLite errors, don't retry
-            raise
-    
-    raise sqlite3.OperationalError(f"Failed to execute SQLite operation after {SQLITE_MAX_RETRIES} attempts")
-
-def _migrate_sqlite_schema(db_path_str: str):
-    """Applies necessary schema migrations to an existing SQLite database."""
-    dprint(f"SQLite Migration: Checking schema for {db_path_str}...")
-    try:
-        def migration_operations(conn):
-            cursor = conn.cursor()
-
-            # --- Check if 'tasks' table exists before attempting migrations ---
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'")
-            if cursor.fetchone() is None:
-                dprint("SQLite Migration: 'tasks' table does not exist. Skipping schema migration steps. init_db will create it.")
-                return True # Indicate success as there's nothing to migrate on a non-existent table
-
-            # Check if task_type column exists
-            cursor.execute(f"PRAGMA table_info(tasks)")
-            columns = [row[1] for row in cursor.fetchall()]
-            task_type_column_exists = 'task_type' in columns
-
-            if not task_type_column_exists:
-                dprint("SQLite Migration: 'task_type' column not found. Adding it.")
-                cursor.execute("ALTER TABLE tasks ADD COLUMN task_type TEXT") # Add as nullable first
-                conn.commit() # Commit alter table before data migration
-                dprint("SQLite Migration: 'task_type' column added.")
-            else:
-                dprint("SQLite Migration: 'task_type' column already exists.")
-
-            # --- Add/Rename dependant_on column if not exists --- (Section 2.2)
-            dependant_on_column_exists = 'dependant_on' in columns
-            depends_on_column_exists_old_name = 'depends_on' in columns # Check for the previously incorrect name
-
-            if not dependant_on_column_exists:
-                if depends_on_column_exists_old_name:
-                    dprint("SQLite Migration: Found old 'depends_on' column. Renaming to 'dependant_on'.")
-                    try:
-                        # Ensure no other column is already named 'dependant_on' before renaming
-                        # This scenario is unlikely if migrations are run sequentially but good for robustness
-                        if 'dependant_on' not in columns:
-                            cursor.execute("ALTER TABLE tasks RENAME COLUMN depends_on TO dependant_on")
-                            dprint("SQLite Migration: Renamed 'depends_on' to 'dependant_on'.")
-                            dependant_on_column_exists = True # Mark as existing now
-                        else:
-                             dprint("SQLite Migration: 'dependant_on' column already exists. Skipping rename of 'depends_on'.")
-                    except sqlite3.OperationalError as e_rename:
-                        dprint(f"SQLite Migration: Could not rename 'depends_on' to 'dependant_on' (perhaps 'dependant_on' already exists or other issue): {e_rename}. Will attempt to ADD 'dependant_on' if it truly doesn't exist after this.")
-                        # Re-check columns after attempted rename or if it failed
-                        cursor.execute(f"PRAGMA table_info(tasks)")
-                        rechecked_columns = [row[1] for row in cursor.fetchall()]
-                        if 'dependant_on' not in rechecked_columns:
-                            dprint("SQLite Migration: 'dependant_on' still not found after rename attempt, adding new column.")
-                            cursor.execute("ALTER TABLE tasks ADD COLUMN dependant_on TEXT NULL")
-                            dprint("SQLite Migration: 'dependant_on' column added.")
-                        else:
-                            dprint("SQLite Migration: 'dependant_on' column now exists (possibly due to a concurrent migration or complex rename scenario).")
-                            dependant_on_column_exists = True
-                else:
-                    dprint("SQLite Migration: 'dependant_on' column not found and no 'depends_on' to rename. Adding new 'dependant_on' column.")
-                    cursor.execute("ALTER TABLE tasks ADD COLUMN dependant_on TEXT NULL")
-                    dprint("SQLite Migration: 'dependant_on' column added.")
-            else:
-                dprint("SQLite Migration: 'dependant_on' column already exists.")
-            # --- End add/rename dependant_on column ---
-
-            # Ensure the index for dependant_on exists
-            cursor.execute("PRAGMA index_list(tasks)")
-            indexes = [row[1] for row in cursor.fetchall()]
-            if 'idx_dependant_on' not in indexes:
-                dprint("SQLite Migration: Creating 'idx_dependant_on' index.")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_dependant_on ON tasks(dependant_on)")
-            else:
-                dprint("SQLite Migration: 'idx_dependant_on' index already exists.")
-
-            # Populate task_type from params if it's NULL (for old rows or newly added column)
-            dprint("SQLite Migration: Attempting to populate NULL 'task_type' from 'params' JSON...")
-            cursor.execute("SELECT id, params FROM tasks WHERE task_type IS NULL")
-            rows_to_migrate = cursor.fetchall()
-            
-            migrated_count = 0
-            for task_id, params_json_str in rows_to_migrate:
-                try:
-                    params_dict = json.loads(params_json_str)
-                    # Attempt to get task_type from common old locations within params
-                    # The user might need to adjust these keys if their old storage was different
-                    old_task_type = params_dict.get("task_type") # Most likely if it was in params
-                    
-                    if old_task_type:
-                        dprint(f"SQLite Migration: Found task_type '{old_task_type}' in params for task_id {task_id}. Updating row.")
-                        cursor.execute("UPDATE tasks SET task_type = ? WHERE id = ?", (old_task_type, task_id))
-                        migrated_count += 1
-                    else:
-                        # If task_type is not in params, it might be inferred from 'model' or other fields
-                        # For instance, if 'model' field implied the task type for older tasks.
-                        # This part is highly dependent on previous conventions.
-                        # As a simple default, if not found, it will remain NULL unless a default is set.
-                        # For 'travel_between_images' and 'different_pose', these are typically set by steerable_motion.py
-                        # and wouldn't exist as 'task_type' inside params for headless.py's default processing.
-                        # Headless tasks like 'generate_openpose' *did* use task_type in params.
-                        dprint(f"SQLite Migration: No 'task_type' key in params for task_id {task_id}. It will remain NULL or needs manual/specific migration logic if it was inferred differently.")
-                except json.JSONDecodeError:
-                    dprint(f"SQLite Migration: Could not parse params JSON for task_id {task_id}. Skipping 'task_type' population for this row.")
-                except Exception as e_row:
-                    dprint(f"SQLite Migration: Error processing row for task_id {task_id}: {e_row}")
-            
-            if migrated_count > 0:
-                conn.commit()
-            dprint(f"SQLite Migration: Populated 'task_type' for {migrated_count} rows from params.")
-
-            # Default remaining NULL task_types for old standard tasks
-            # This ensures rows that didn't have an explicit 'task_type' in their params (e.g. old default WGP tasks)
-            # get a value, respecting the NOT NULL constraint if the table is new or fully validated.
-            default_task_type_for_old_rows = "standard_wgp_task" 
-            cursor.execute(
-                f"UPDATE tasks SET task_type = ? WHERE task_type IS NULL", 
-                (default_task_type_for_old_rows,)
-            )
-            updated_to_default_count = cursor.rowcount
-            if updated_to_default_count > 0:
-                conn.commit()
-            dprint(f"SQLite Migration: Updated {updated_to_default_count} older rows with NULL task_type to default '{default_task_type_for_old_rows}'.")
-
-            dprint("SQLite Migration: Schema check and population attempt complete.")
-            return True
-
-        execute_sqlite_with_retry(db_path_str, migration_operations)
-        
-    except Exception as e:
-        print(f"[ERROR] SQLite Migration: Failed to migrate schema for {db_path_str}: {e}")
-        traceback.print_exc()
-        # Depending on severity, you might want to sys.exit(1)
-
-def init_db(db_path_str: str):
-    """Initialize the SQLite database with proper error handling"""
-    def _init_operation(conn):
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id TEXT PRIMARY KEY,
-                task_type TEXT NOT NULL,
-                params TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'Queued',
-                dependant_on TEXT NULL,
-                output_location TEXT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NULL,
-                project_id TEXT NOT NULL,
-                FOREIGN KEY (project_id) REFERENCES projects(id)
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_status_created ON tasks(status, created_at)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_dependant_on ON tasks(dependant_on)")
-        return True
-    
-    try:
-        execute_sqlite_with_retry(db_path_str, _init_operation)
-        print(f"SQLite database initialized: {db_path_str}")
-    except Exception as e:
-        print(f"Failed to initialize SQLite database: {e}")
-        sys.exit(1)
-
-def get_oldest_queued_task(db_path_str: str):
-    """Get the oldest queued task with proper error handling"""
-    def _get_operation(conn):
-        cursor = conn.cursor()
-        # Modified to select tasks with status 'Queued' only
-        # Also fetch project_id
-        sql_query = f"""
-            SELECT t.id, t.params, t.task_type, t.project_id
-            FROM   tasks AS t
-            LEFT JOIN tasks AS d             ON d.id = t.dependant_on
-            WHERE  t.status = ? 
-              AND (t.dependant_on IS NULL OR d.status = ?)
-            ORDER BY t.created_at ASC
-            LIMIT  1
-        """
-        query_params = (STATUS_QUEUED, STATUS_COMPLETE)
-        dprint(f"SQLite: Executing get_oldest_queued_task with query: {sql_query.strip()} AND params: {query_params}")
-        cursor.execute(sql_query, query_params)
-        task_row = cursor.fetchone()
-        if task_row:
-            dprint(f"SQLite: Fetched raw task_row: {task_row}")
-            return {"task_id": task_row[0], "params": json.loads(task_row[1]), "task_type": task_row[2], "project_id": task_row[3]}
-        return None
-    
-    try:
-        return execute_sqlite_with_retry(db_path_str, _get_operation)
-    except Exception as e:
-        print(f"Error getting oldest queued task: {e}")
-        return None
-
-def update_task_status(db_path_str: str, task_id: str, status: str, output_location_val: str | None = None):
-    """Updates a task's status and updated_at timestamp with proper error handling"""
-    def _update_operation(conn, task_id, status, output_location_val):
-        cursor = conn.cursor()
-        
-        if status == STATUS_COMPLETE and output_location_val is not None:
-            # Step 1: Update output_location and updated_at for the location change
-            current_utc_iso_ts_loc_update = datetime.datetime.utcnow().isoformat() + "Z"
-            dprint(f"SQLite Update (Split Step 1): Updating output_location for {task_id} to {output_location_val}")
-            cursor.execute("UPDATE tasks SET output_location = ?, updated_at = ? WHERE id = ?",
-                           (output_location_val, current_utc_iso_ts_loc_update, task_id))
-            conn.commit()  # Explicitly commit the output_location update
-
-            # Step 2: Update status and updated_at for the status change
-            current_utc_iso_ts_status_update = datetime.datetime.utcnow().isoformat() + "Z"
-            dprint(f"SQLite Update (Split Step 2): Updating status for {task_id} to {status}")
-            cursor.execute("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
-                           (status, current_utc_iso_ts_status_update, task_id))
-            # The final commit for this status update will be handled by execute_sqlite_with_retry
-
-        elif status == STATUS_FAILED and output_location_val is not None: # output_location_val is error message here
-            current_utc_iso_ts_fail_update = datetime.datetime.utcnow().isoformat() + "Z"
-            dprint(f"SQLite Update (Single): Updating status to FAILED and output_location (error msg) for {task_id}")
-            cursor.execute("UPDATE tasks SET status = ?, updated_at = ?, output_location = ? WHERE id = ?",
-                           (status, current_utc_iso_ts_fail_update, output_location_val, task_id))
-
-        else: # For "In Progress" or other statuses, or if output_location_val is None
-            current_utc_iso_ts_progress_update = datetime.datetime.utcnow().isoformat() + "Z"
-            dprint(f"SQLite Update (Single): Updating status for {task_id} to {status} (output_location_val: {output_location_val})")
-            # If output_location_val is None even for COMPLETE or FAILED, it won't be set here.
-            # This branch primarily handles IN_PROGRESS or status changes where output_location is not part of the update.
-            # If status is COMPLETE/FAILED and output_location_val is None, only status and updated_at change.
-            if output_location_val is not None and status in [STATUS_COMPLETE, STATUS_FAILED]:
-                 # This case should ideally be caught by the specific branches above,
-                 # but as a safeguard if logic changes:
-                 dprint(f"SQLite Update (Single with output_location): Updating status, output_location for {task_id}")
-                 cursor.execute("UPDATE tasks SET status = ?, updated_at = ?, output_location = ? WHERE id = ?",
-                               (status, current_utc_iso_ts_progress_update, output_location_val, task_id))
-            else:
-                 cursor.execute("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
-                               (status, current_utc_iso_ts_progress_update, task_id))
-        return True
-    
-    try:
-        execute_sqlite_with_retry(db_path_str, _update_operation, task_id, status, output_location_val)
-        dprint(f"SQLite: Updated status of task {task_id} to {status}. Output: {output_location_val if output_location_val else 'N/A'}")
-    except Exception as e:
-        print(f"Error updating task status for {task_id}: {e}")
-        # Don't raise here to avoid crashing the main loop
-
-# -----------------------------------------------------------------------------
-# 3. Minimal send_cmd implementation (task_id instead of task_name)
-# -----------------------------------------------------------------------------
 def make_send_cmd(task_id):
     def _send(cmd, data=None):
         prefix = f"[Task ID: {task_id}]"
@@ -491,7 +148,7 @@ def make_send_cmd(task_id):
 # -----------------------------------------------------------------------------
 # 4. State builder for a single task (same as before)
 # -----------------------------------------------------------------------------
-def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model, image_download_dir: Path | str | None = None, apply_booster_loras: bool = False):
+def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False):
     state = {
         "model_filename": model_filename,
         "validate_success": 1,
@@ -526,33 +183,36 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
     ui_defaults["seed"] = task_params_dict.get("seed", -1)
     ui_defaults["lset_name"] = "" 
 
-    def load_pil_images(paths_list_or_str, wgp_convert_func):
-        if paths_list_or_str is None: return None
-        paths_list = paths_list_or_str if isinstance(paths_list_or_str, list) else [paths_list_or_str]
-        images = []
-        current_task_id_for_log = task_params_dict.get('task_id', 'build_task_state_unknown') # For logging in download
-        for p_str in paths_list:
-            # Attempt to download if p_str is a URL and image_download_dir is provided
-            local_p_str = sm_download_image_if_url(p_str, image_download_dir, current_task_id_for_log)
-            p = Path(local_p_str.strip())
-            if not p.is_file(): 
-                dprint(f"[Task {current_task_id_for_log}] load_pil_images: Image file not found after potential download: {p} (original: {p_str})")
-                continue
-            try:
-                img = Image.open(p)
-                images.append(wgp_convert_func(img))
-            except Exception as e:
-                print(f"[WARNING] Failed to load image {p}: {e}")
-        return images if images else None
+    current_task_id_for_log = task_params_dict.get('task_id', 'build_task_state_unknown')
 
     if task_params_dict.get("image_start_paths"):
-        loaded = load_pil_images(task_params_dict["image_start_paths"], wgp_mod.convert_image)
+        loaded = sm_load_pil_images(
+            task_params_dict["image_start_paths"],
+            wgp_mod.convert_image,
+            image_download_dir,
+            current_task_id_for_log,
+            dprint
+        )
         if loaded: ui_defaults["image_start"] = loaded
+
     if task_params_dict.get("image_end_paths"):
-        loaded = load_pil_images(task_params_dict["image_end_paths"], wgp_mod.convert_image)
+        loaded = sm_load_pil_images(
+            task_params_dict["image_end_paths"],
+            wgp_mod.convert_image,
+            image_download_dir,
+            current_task_id_for_log,
+            dprint
+        )
         if loaded: ui_defaults["image_end"] = loaded
+
     if task_params_dict.get("image_refs_paths"):
-        loaded = load_pil_images(task_params_dict["image_refs_paths"], wgp_mod.convert_image)
+        loaded = sm_load_pil_images(
+            task_params_dict["image_refs_paths"],
+            wgp_mod.convert_image,
+            image_download_dir,
+            current_task_id_for_log,
+            dprint
+        )
         if loaded: ui_defaults["image_refs"] = loaded
     
     for key in ["video_source_path", "video_guide_path", "video_mask_path", "audio_guide_path"]:
@@ -678,31 +338,17 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
             ui_defaults["loras_multipliers"] = "1.0"
             ui_defaults["activated_loras"] = [causvid_lora_basename] # ensure only causvid if no others
 
-    if apply_booster_loras:
-        print(f"[Task ID: {task_params_dict.get('task_id')}] Applying Booster LoRA settings.")
-        
-        # Default to 9 steps unless overridden
-        if "steps" not in task_params_dict and "num_inference_steps" not in task_params_dict:
-            ui_defaults["num_inference_steps"] = 9
-            print(f"[Task ID: {task_params_dict.get('task_id')}] Booster LoRAs active, defaulting to steps: 9")
+    if apply_reward_lora:
+        print(f"[Task ID: {task_params_dict.get('task_id')}] Applying Reward LoRA settings.")
 
-        # Set CFG-like settings
-        ui_defaults["guidance_scale"] = 1.0
-        ui_defaults["flow_shift"] = 1.0
-
-        booster_loras = [
-            # {"filename": "Wan21_AccVid_T2V_14B_lora_rank32_fp16_wgp.safetensors", "strength": "0.5"},
-            # {"filename": "Wan21_T2V_14B_MoviiGen_lora_rank32_fp16_wgp.safetensors", "strength": "0.5"},
-            {"filename": "Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors", "strength": "0.5"},
-            {"filename": "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors", "strength": "1.0"},
-        ]
+        reward_lora = {"filename": "Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors", "strength": "0.5"}
 
         # Get current activated LoRAs
         current_activated = ui_defaults.get("activated_loras", [])
         if not isinstance(current_activated, list):
-            try: 
+            try:
                 current_activated = [str(item).strip() for item in str(current_activated).split(',') if item.strip()]
-            except: 
+            except:
                 current_activated = []
 
         # Get current multipliers
@@ -713,55 +359,30 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
             current_multipliers_list = [m.strip() for m in current_multipliers_str.split(" ") if m.strip()]
         else:
             current_multipliers_list = []
-        
+
         # Pad multipliers to match activated LoRAs before creating map
         while len(current_multipliers_list) < len(current_activated):
             current_multipliers_list.append("1.0")
-            
+
         # Create a dictionary to map lora to multiplier for easy update (preserves order in Python 3.7+)
         lora_mult_map = dict(zip(current_activated, current_multipliers_list))
-        
-        # Add/update booster loras
-        for lora in booster_loras:
-            lora_mult_map[lora['filename']] = lora['strength']
+
+        # Add/update reward lora
+        lora_mult_map[reward_lora['filename']] = reward_lora['strength']
 
         ui_defaults["activated_loras"] = list(lora_mult_map.keys())
         ui_defaults["loras_multipliers"] = " ".join(list(lora_mult_map.values()))
-        dprint(f"Booster LoRAs applied. Activated: {ui_defaults['activated_loras']}, Multipliers: {ui_defaults['loras_multipliers']}")
+        dprint(f"Reward LoRA applied. Activated: {ui_defaults['activated_loras']}, Multipliers: {ui_defaults['loras_multipliers']}")
 
     state[model_type_key] = ui_defaults
     return state, ui_defaults
 
-# -----------------------------------------------------------------------------
-# 5. Download utility
-# -----------------------------------------------------------------------------
-def download_file(url, dest_folder, filename):
-    dest_path = Path(dest_folder) / filename
-    if dest_path.exists():
-        print(f"[INFO] File {filename} already exists in {dest_folder}.")
-        return True
-    try:
-        print(f"Downloading {filename} from {url} to {dest_folder}...")
-        response = requests.get(url, stream=True)
-        response.raise_for_status() # Raise an exception for HTTP errors
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(dest_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        print(f"Successfully downloaded {filename}.")
-        return True
-    except Exception as e:
-        print(f"[ERROR] Failed to download {filename}: {e}")
-        if dest_path.exists(): # Attempt to clean up partial download
-            try: os.remove(dest_path)
-            except: pass
-        return False
 
 # -----------------------------------------------------------------------------
 # 6. Process a single task dictionary from the tasks.json list
 # -----------------------------------------------------------------------------
 
-def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None, apply_booster_loras: bool = False):
+def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False, colour_match_videos: bool = False):
     dprint(f"--- Entering process_single_task ---")
     dprint(f"Task Type: {task_type}")
     dprint(f"Project ID for task: {project_id_for_task}") # Added dprint for project_id
@@ -773,28 +394,24 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
 
     # --- Check for new task type ---
     if task_type == "generate_openpose":
-        if PoseBodyFaceVideoAnnotator is None:
-            print(f"[ERROR Task ID: {task_id}] PoseBodyFaceVideoAnnotator not imported. Cannot process 'generate_openpose' task.")
-            return False, "PoseBodyFaceVideoAnnotator module not available."
-        
         print(f"[Task ID: {task_id}] Identified as 'generate_openpose' task.")
-        return _handle_generate_openpose_task(task_params_dict, main_output_dir_base, task_id)
+        return handle_generate_openpose_task(task_params_dict, main_output_dir_base, task_id, dprint)
     elif task_type == "rife_interpolate_images":
         print(f"[Task ID: {task_id}] Identified as 'rife_interpolate_images' task.")
-        return _handle_rife_interpolate_task(wgp_mod, task_params_dict, main_output_dir_base, task_id)
+        return handle_rife_interpolate_task(wgp_mod, task_params_dict, main_output_dir_base, task_id, dprint)
 
     # --- SM_RESTRUCTURE: Add new travel task handlers ---
     elif task_type == "travel_orchestrator":
         print(f"[Task ID: {task_id}] Identified as 'travel_orchestrator' task.")
-        return _handle_travel_orchestrator_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, orchestrator_task_id_str=task_id, orchestrator_project_id=project_id_for_task)
+        return tbi._handle_travel_orchestrator_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, orchestrator_task_id_str=task_id, orchestrator_project_id=project_id_for_task, dprint=dprint)
     elif task_type == "travel_segment":
         print(f"[Task ID: {task_id}] Identified as 'travel_segment' task.")
         # This will call wgp_mod like a standard task but might have pre/post processing
         # based on orchestrator details passed in its params.
-        return _handle_travel_segment_task(wgp_mod, task_params_dict, main_output_dir_base, task_id, apply_booster_loras)
+        return tbi._handle_travel_segment_task(wgp_mod, task_params_dict, main_output_dir_base, task_id, apply_reward_lora, colour_match_videos, process_single_task=process_single_task, dprint=dprint)
     elif task_type == "travel_stitch":
         print(f"[Task ID: {task_id}] Identified as 'travel_stitch' task.")
-        return _handle_travel_stitch_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, stitch_task_id_str=task_id)
+        return tbi._handle_travel_stitch_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, stitch_task_id_str=task_id, dprint=dprint)
     # --- End SM_RESTRUCTURE ---
     
     # Default handling for standard wgp tasks (original logic)
@@ -804,25 +421,22 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                                                          wgp_mod.transformer_quantization,
                                                          wgp_mod.transformer_dtype_policy)
     
-    if apply_booster_loras:
-        print(f"[Task ID: {task_id}] --booster_loras flag is active. Checking and downloading booster LoRAs.")
-        booster_loras_data = [
-            {"url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_AccVid_T2V_14B_lora_rank32_fp16.safetensors", "filename": "Wan21_AccVid_T2V_14B_lora_rank32_fp16.safetensors"},
-            {"url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_T2V_14B_MoviiGen_lora_rank32_fp16.safetensors", "filename": "Wan21_T2V_14B_MoviiGen_lora_rank32_fp16.safetensors"},
-            {"url": "https://huggingface.co/alibaba-pai/Wan2.1-Fun-Reward-LoRAs/resolve/main/Wan2.1-Fun-14B-InP-MPS.safetensors", "filename": "Wan2.1-Fun-14B-InP-MPS.safetensors"},
-            {"url": "https://huggingface.co/peteromallet/Wan2.1-Fun-14B-InP-MPS_reward_lora_diffusers/resolve/main/Wan2.1-Fun-14B-InP-MPS_reward_lora_diffusers.safetensors", "filename": "Wan2.1-Fun-14B-InP-MPS_reward_lora_diffusers.safetensors"},
-        ]
+    if apply_reward_lora:
+        print(f"[Task ID: {task_id}] --apply-reward-lora flag is active. Checking and downloading reward LoRA.")
+        reward_lora_data = {
+            "url": "https://huggingface.co/peteromallet/Wan2.1-Fun-14B-InP-MPS_reward_lora_diffusers/resolve/main/Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors",
+            "filename": "Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors"
+        }
         
         base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
-        for lora in booster_loras_data:
-            download_file(lora['url'], base_lora_dir_for_model, lora['filename'])
+        download_file(reward_lora_data['url'], base_lora_dir_for_model, reward_lora_data['filename'])
 
     effective_image_download_dir = image_download_dir # Use passed-in dir if available
 
     if effective_image_download_dir is None: # Not passed, so determine for this standard/individual task
-        if DB_TYPE == "sqlite" and SQLITE_DB_PATH: # SQLITE_DB_PATH is global
+        if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH: # SQLITE_DB_PATH is global
             try:
-                sqlite_db_path_obj = Path(SQLITE_DB_PATH).resolve()
+                sqlite_db_path_obj = Path(db_ops.SQLITE_DB_PATH).resolve()
                 if sqlite_db_path_obj.is_file():
                     sqlite_db_parent_dir = sqlite_db_path_obj.parent
                     candidate_download_dir = sqlite_db_parent_dir / "public" / "data" / "image_downloads" / task_id
@@ -830,7 +444,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                     effective_image_download_dir = str(candidate_download_dir.resolve())
                     dprint(f"Task {task_id}: Determined SQLite-based image_download_dir for standard task: {effective_image_download_dir}")
                 else:
-                    dprint(f"Task {task_id}: SQLITE_DB_PATH '{SQLITE_DB_PATH}' is not a file. Cannot determine parent for image_download_dir.")        
+                    dprint(f"Task {task_id}: SQLITE_DB_PATH '{db_ops.SQLITE_DB_PATH}' is not a file. Cannot determine parent for image_download_dir.")        
             except Exception as e_idir_sqlite:
                 dprint(f"Task {task_id}: Could not create SQLite-based image_download_dir for standard task: {e_idir_sqlite}.")
         # Add similar logic for Supabase if a writable shared path convention exists.
@@ -873,7 +487,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         model_filename_for_task, None, lora_dir_for_active_model, "", None
     )
 
-    state, ui_params = build_task_state(wgp_mod, model_filename_for_task, task_params_dict, all_loras_for_active_model, image_download_dir, apply_booster_loras=apply_booster_loras)
+    state, ui_params = build_task_state(wgp_mod, model_filename_for_task, task_params_dict, all_loras_for_active_model, image_download_dir, apply_reward_lora=apply_reward_lora)
     
     gen_task_placeholder = {"id": 1, "prompt": ui_params.get("prompt"), "params": {}}
     send_cmd = make_send_cmd(task_id)
@@ -1013,52 +627,23 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
 
         if generated_video_file and generation_success:
             dprint(f"[Task ID: {task_id}] Processing final video: {generated_video_file}")
-            if DB_TYPE == "sqlite":
-                # Policy: If DB_TYPE is SQLite, ALWAYS use the public/files convention.
-                # Ignore any custom_output_path_str from task_params for the final save location and DB record.
-                if task_params_dict.get("output_path"):
-                    dprint(f"[Task ID: {task_id}] SQLite mode: Ignoring custom_output_path '{task_params_dict.get('output_path')}' from task params. Using public/files convention.")
-
-                if SQLITE_DB_PATH: # This should always be true if DB_TYPE is sqlite and configured
-                    sqlite_db_file_path = Path(SQLITE_DB_PATH).resolve()
-                    target_files_dir = sqlite_db_file_path.parent / "public" / "files"
-                    target_files_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    final_video_path = sm_get_unique_target_path(
-                        target_files_dir, 
-                        task_id, # name_stem
-                        generated_video_file.suffix # suffix (e.g., ".mp4")
-                    )
-                    # For this path, output_location_to_db will be "files/filename.ext"
-                    output_location_to_db_for_move = f"files/{final_video_path.name}" 
-                else:
-                    # Fallback if SQLITE_DB_PATH is somehow not set (should be an error state)
-                    print(f"[CRITICAL ERROR Task ID: {task_id}] DB_TYPE is SQLite but SQLITE_DB_PATH is not available. Cannot determine SQLite public/files save location. Defaulting to server's main_output_dir_base for this task.")
-                    fallback_output_dir = main_output_dir_base / task_id
-                    fallback_output_dir.mkdir(parents=True, exist_ok=True)
-                    final_video_path = sm_get_unique_target_path(
-                        fallback_output_dir,
-                        task_id,
-                        generated_video_file.suffix
-                    )
-                    output_location_to_db_for_move = str(final_video_path.resolve())
+            if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
+                sqlite_db_file_path = Path(db_ops.SQLITE_DB_PATH).resolve()
+                target_files_dir = sqlite_db_file_path.parent / "public" / "files"
+                target_files_dir.mkdir(parents=True, exist_ok=True)
                 
+                final_video_path = sm_get_unique_target_path(
+                    target_files_dir, 
+                    task_id, # name_stem
+                    generated_video_file.suffix # suffix (e.g., ".mp4")
+                )
+                output_location_to_db = f"files/{final_video_path.name}"
                 try:
                     shutil.move(str(generated_video_file), str(final_video_path))
-                    output_location_to_db = output_location_to_db_for_move # Set the final DB location string
                     print(f"[Task ID: {task_id}] Output video saved to: {final_video_path.resolve()} (DB location: {output_location_to_db})")
-
-                    # Cleanup for the original custom_output_path scenario is no longer directly applicable for SQLite here,
-                    # as custom_output_path is ignored for the *final file placement*.
-                    # However, wgp.py might have created a directory if 'output_sub_dir' was in params, 
-                    # or if it used main_output_dir_base / task_id due to its own internal logic if not saving to a system temp dir.
-                    # The current wgp.py save path is a system temp dir, so this specific cleanup below might not be needed
-                    # unless wgp.py's save behavior changes from using tempfile.mkdtemp().
-                    # For now, let's assume this cleanup is for other potential outputs, not the main video.
-                    if task_params_dict.get("output_path"): # Check if an original custom path was even suggested
+    
+                    if task_params_dict.get("output_path"):
                         default_dir_to_clean = (main_output_dir_base / task_id)
-                        # This check needs to be more robust: only clean if this path is NOT where final_video_path points to
-                        # and if it exists and is a directory.
                         if default_dir_to_clean.exists() and default_dir_to_clean.is_dir() and default_dir_to_clean != final_video_path.parent:
                             try:
                                 shutil.rmtree(default_dir_to_clean)
@@ -1067,1672 +652,68 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                                 print(f"[WARNING Task ID: {task_id}] Could not clean up auxiliary task directory {default_dir_to_clean}: {e_cleanup_aux}")
                 except Exception as e_move:
                     print(f"[ERROR Task ID: {task_id}] Failed to move video to final local destination: {e_move}")
-                    generation_success = False # Mark as failed if file handling fails
-            
-            elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
-                # For Supabase, use task_id as part of the object name to ensure uniqueness
-                # You might want to include the original filename if it's meaningful
-                
-                # URL-encode the filename part to handle spaces and special characters
+                    generation_success = False
+            elif db_ops.DB_TYPE == "supabase" and db_ops.SUPABASE_CLIENT:
                 encoded_file_name = urllib.parse.quote(generated_video_file.name)
-                object_name = f"{task_id}/{encoded_file_name}" 
-                # Or if you wanted task_id as the filename: object_name = f"{task_id}.mp4"
-                # Or if you wanted just the encoded filename: object_name = encoded_file_name
+                object_name = f"{task_id}/{encoded_file_name}"
                 dprint(f"[Task ID: {task_id}] Original filename: {generated_video_file.name}")
                 dprint(f"[Task ID: {task_id}] Encoded filename for Supabase object: {encoded_file_name}")
                 dprint(f"[Task ID: {task_id}] Final Supabase object_name: {object_name}")
                 
-                public_url = upload_to_supabase_storage(generated_video_file, object_name, SUPABASE_VIDEO_BUCKET)
+                public_url = db_ops.upload_to_supabase_storage(generated_video_file, object_name, db_ops.SUPABASE_VIDEO_BUCKET)
                 if public_url:
                     output_location_to_db = public_url
                 else:
                     print(f"[WARNING Task ID: {task_id}] Supabase upload failed or no URL returned. No output location will be saved.")
-                    generation_success = False # Mark as failed if upload fails
+                    generation_success = False
             else:
-                print(f"[WARNING Task ID: {task_id}] Output generated but DB_TYPE ({DB_TYPE}) is not sqlite or Supabase client is not configured for upload.")
-                generation_success = False # Cannot determine final resting place
+                print(f"[WARNING Task ID: {task_id}] Output generated but DB_TYPE ({db_ops.DB_TYPE}) is not sqlite or Supabase client is not configured for upload.")
+                generation_success = False
         else:
             print(f"[WARNING Task ID: {task_id}] Generation reported success, but no .mp4 file found in {temp_output_dir}")
-            generation_success = False # No output to save
+            generation_success = False
     
-    # Clean up the temporary directory
     try:
         shutil.rmtree(temp_output_dir)
         dprint(f"[Task ID: {task_id}] Cleaned up temporary directory: {temp_output_dir}")
     except Exception as e_clean:
         print(f"[WARNING Task ID: {task_id}] Failed to clean up temporary directory {temp_output_dir}: {e_clean}")
 
-    # --- SM_RESTRUCTURE: Handle chaining for travel segment WGP sub-tasks ---
     if generation_success and task_params_dict.get("travel_chain_details"):
         dprint(f"WGP Task {task_id} is part of a travel sequence. Attempting to chain.")
-        # output_location_to_db at this point is the path to the successfully generated WGP video
         
-        chain_success, chain_message, final_path_from_chaining = _handle_travel_chaining_after_wgp(
+        chain_success, chain_message, final_path_from_chaining = tbi._handle_travel_chaining_after_wgp(
             wgp_task_params=task_params_dict, 
-            actual_wgp_output_video_path=output_location_to_db, # This is the raw WGP output path
+            actual_wgp_output_video_path=output_location_to_db,
             wgp_mod=wgp_mod,
-            image_download_dir = image_download_dir # Pass down for potential use in re-processing if needed
+            image_download_dir = image_download_dir,
+            dprint=dprint
         )
         
         if chain_success:
-            # If chaining was successful, the final_path_from_chaining is the one that should be stored
-            # for THIS WGP task, as it might be the saturated version.
-            # final_path_from_chaining is relative "files/..." if SQLite, or absolute otherwise.
-            
             path_to_check_existence: Path
-            if DB_TYPE == "sqlite" and SQLITE_DB_PATH and isinstance(final_path_from_chaining, str) and final_path_from_chaining.startswith("files/"):
-                sqlite_db_parent = Path(SQLITE_DB_PATH).resolve().parent
+            if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and isinstance(final_path_from_chaining, str) and final_path_from_chaining.startswith("files/"):
+                sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
                 path_to_check_existence = (sqlite_db_parent / "public" / final_path_from_chaining).resolve()
                 dprint(f"Task {task_id}: Chaining returned SQLite relative path '{final_path_from_chaining}'. Resolved to '{path_to_check_existence}' for existence check.")
-            elif final_path_from_chaining: # Assumed to be an absolute path string or Path object already
+            elif final_path_from_chaining:
                 path_to_check_existence = Path(final_path_from_chaining).resolve()
                 dprint(f"Task {task_id}: Chaining returned absolute-like path '{final_path_from_chaining}'. Resolved to '{path_to_check_existence}' for existence check.")
-            else: # final_path_from_chaining is None
-                path_to_check_existence = None # type: ignore
+            else:
+                path_to_check_existence = None
 
             if path_to_check_existence and path_to_check_existence.exists() and path_to_check_existence.is_file():
-                if str(path_to_check_existence.resolve()) != str(Path(output_location_to_db).resolve() if Path(output_location_to_db).is_absolute() else ((Path(SQLITE_DB_PATH).resolve().parent / "public" / output_location_to_db).resolve() if DB_TYPE == "sqlite" and SQLITE_DB_PATH and output_location_to_db.startswith("files/") else Path(output_location_to_db).resolve() )):
+                if str(path_to_check_existence.resolve()) != str(Path(output_location_to_db).resolve() if Path(output_location_to_db).is_absolute() else ((Path(db_ops.SQLITE_DB_PATH).resolve().parent / "public" / output_location_to_db).resolve() if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and output_location_to_db.startswith("files/") else Path(output_location_to_db).resolve() )):
                     dprint(f"Task {task_id}: Chaining modified output path for DB. Original (DB form): {output_location_to_db}, New (DB form): {final_path_from_chaining} (Checked file: {path_to_check_existence})")
-                output_location_to_db = final_path_from_chaining # Update to potentially saturated path (which is in correct DB form)
+                output_location_to_db = final_path_from_chaining
             else:
                 print(f"[WARNING Task ID: {task_id}] Chaining reported success, but final path '{final_path_from_chaining}' (checked as '{path_to_check_existence}') is invalid or not a file. Using original WGP output '{output_location_to_db}' for DB.")
         else:
-            # If chaining itself fails, the WGP task is still "Complete" with its original raw output.
-            # The sequence is broken, but the WGP part did its job.
             print(f"[ERROR Task ID: {task_id}] Travel sequence chaining failed after WGP completion: {chain_message}. The raw WGP output '{output_location_to_db}' will be used for this task's DB record.")
-            # output_location_to_db remains the raw WGP output in this case.
-    # --- End SM_RESTRUCTURE ---
 
     print(f"--- Finished task ID: {task_id} (Success: {generation_success}) ---")
     return generation_success, output_location_to_db
 
-# -----------------------------------------------------------------------------
-# +++. New function to handle 'generate_openpose' task
-# -----------------------------------------------------------------------------
-def _handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: Path, task_id: str):
-    """
-    Handles the 'generate_openpose' task type.
-    Generates an OpenPose image from an input image path specified in task_params_dict.
-    Saves the OpenPose image to the output_path also specified in task_params_dict.
-    """
-    print(f"[Task ID: {task_id}] Handling 'generate_openpose' task.")
-    input_image_path_str = task_params_dict.get("input_image_path")
-    # output_image_path_str is a suggestion from the caller.
-    # If DB_TYPE is sqlite, we will override this to save to public/files.
-    suggested_output_image_path_str = task_params_dict.get("output_path") 
-
-    if not input_image_path_str:
-        print(f"[ERROR Task ID: {task_id}] 'input_image_path' not specified for generate_openpose task.")
-        return False, "Missing input_image_path"
-    
-    if not suggested_output_image_path_str:
-        # Fallback if not specified, though steerable_motion.py should always provide it
-        default_output_dir = main_output_dir_base / task_id
-        default_output_dir.mkdir(parents=True, exist_ok=True)
-        output_image_path = default_output_dir / f"{task_id}_openpose.png"
-        print(f"[WARNING Task ID: {task_id}] 'output_path' not specified. Defaulting to {output_image_path}")
-    else:
-        output_image_path = Path(suggested_output_image_path_str)
-
-    input_image_path = Path(input_image_path_str)
-    output_image_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if not input_image_path.is_file():
-        print(f"[ERROR Task ID: {task_id}] Input image file not found: {input_image_path}")
-        return False, f"Input image not found: {input_image_path}"
-
-    final_save_path = output_image_path # Default to originally determined path
-    db_output_location = str(output_image_path.resolve())
-
-    if DB_TYPE == "sqlite" and SQLITE_DB_PATH:
-        sqlite_db_file_path = Path(SQLITE_DB_PATH).resolve()
-        target_files_dir = sqlite_db_file_path.parent / "public" / "files"
-        target_files_dir.mkdir(parents=True, exist_ok=True)
-        
-        file_stem = f"{task_id}_openpose"
-        final_save_path = sm_get_unique_target_path(target_files_dir, file_stem, ".png")
-        final_save_path.parent.mkdir(parents=True, exist_ok=True) # Ensure parent of final_save_path exists
-        db_output_location = f"files/{final_save_path.name}"
-        dprint(f"[Task ID: {task_id}] SQLite mode: OpenPose will be saved to {final_save_path} (DB: {db_output_location})")
-
-    try:
-        pil_input_image = Image.open(input_image_path).convert("RGB")
-        
-        # Config for Pose Annotator (similar to wgp.py)
-        # Ensure these ckpt paths are accessible relative to where headless.py runs
-        pose_cfg_dict = {
-            "DETECTION_MODEL": "ckpts/pose/yolox_l.onnx",
-            "POSE_MODEL": "ckpts/pose/dw-ll_ucoco_384.onnx",
-            "RESIZE_SIZE": 1024 # Internal resize for detection, not necessarily final output size
-        }
-        if PoseBodyFaceVideoAnnotator is None: # Should have been caught earlier, but double check
-             raise ImportError("PoseBodyFaceVideoAnnotator could not be imported.")
-             
-        pose_annotator = PoseBodyFaceVideoAnnotator(pose_cfg_dict)
-        
-        # The forward method expects a list of PIL images
-        # It returns a list of NumPy arrays (H, W, C) in BGR format by default from dwpose
-        openpose_np_frames_bgr = pose_annotator.forward([pil_input_image])
-
-        if not openpose_np_frames_bgr or openpose_np_frames_bgr[0] is None:
-            print(f"[ERROR Task ID: {task_id}] OpenPose generation failed or returned no frame.")
-            return False, "OpenPose generation returned no data."
-
-        openpose_np_frame_bgr = openpose_np_frames_bgr[0]
-        
-        # PoseBodyFaceVideoAnnotator output is BGR, convert to RGB for PIL save if needed
-        # However, PIL Image.fromarray can often handle BGR if mode is not specified,
-        # but explicitly converting is safer for PNG.
-        # Or, let's check if the annotator itself returns RGB.
-        # dwpose.annotator.py > draw_pose seems to draw on an RGB copy.
-        # Let's assume `anno_ins.forward` gives RGB-compatible array or directly RGB.
-        # If colors are inverted, we'll need: openpose_np_frame_rgb = cv2.cvtColor(openpose_np_frame_bgr, cv2.COLOR_BGR2RGB)
-        # For now, let's assume it's directly usable by PIL.
-        
-        openpose_pil_image = Image.fromarray(openpose_np_frame_bgr.astype(np.uint8)) # Ensure uint8
-        openpose_pil_image.save(final_save_path)
-        
-        print(f"[Task ID: {task_id}] Successfully generated OpenPose image to: {final_save_path.resolve()}")
-        return True, db_output_location
-
-    except ImportError as ie:
-        print(f"[ERROR Task ID: {task_id}] Import error during OpenPose generation: {ie}. Ensure 'preprocessing' module is in PYTHONPATH and dependencies are installed.")
-        traceback.print_exc()
-        return False, f"Import error: {ie}"
-    except FileNotFoundError as fnfe: # For missing ONNX models
-        print(f"[ERROR Task ID: {task_id}] ONNX model file not found for OpenPose: {fnfe}. Ensure 'ckpts/pose/*' models are present.")
-        traceback.print_exc()
-        return False, f"ONNX model not found: {fnfe}"
-    except Exception as e:
-        print(f"[ERROR Task ID: {task_id}] Failed during OpenPose image generation: {e}")
-        traceback.print_exc()
-        return False, f"OpenPose generation exception: {e}"
-
-# -----------------------------------------------------------------------------
-# +++. New function to handle 'rife_interpolate_images' task
-# -----------------------------------------------------------------------------
-def _handle_rife_interpolate_task(wgp_mod, task_params_dict: dict, main_output_dir_base: Path, task_id: str):
-    """
-    Handles the 'rife_interpolate_images' task type using wgp.py's RIFE capabilities.
-    """
-    print(f"[Task ID: {task_id}] Handling 'rife_interpolate_images' task.")
-    
-    input_image_path1_str = task_params_dict.get("input_image_path1")
-    input_image_path2_str = task_params_dict.get("input_image_path2")
-    output_video_path_str = task_params_dict.get("output_path")
-    num_rife_frames = task_params_dict.get("frames")
-    resolution_str = task_params_dict.get("resolution") # e.g., "960x544"
-    # Default model for RIFE context, actual RIFE process might be model-agnostic in wgp.py
-    # Using a known model type like t2v for get_model_filename
-    default_model_for_context = task_params_dict.get("model_context_for_rife", "vace_14B") 
-
-    # Validate required parameters
-    required_params = {
-        "input_image_path1": input_image_path1_str,
-        "input_image_path2": input_image_path2_str,
-        "output_path": output_video_path_str,
-        "frames": num_rife_frames,
-        "resolution": resolution_str
-    }
-    missing_params = [key for key, value in required_params.items() if value is None]
-    if missing_params:
-        error_msg = f"Missing required parameters for rife_interpolate_images: {', '.join(missing_params)}"
-        print(f"[ERROR Task ID: {task_id}] {error_msg}")
-        return False, error_msg
-
-    input_image1_path = Path(input_image_path1_str)
-    input_image2_path = Path(input_image_path2_str)
-    output_video_path = Path(output_video_path_str)
-    output_video_path.parent.mkdir(parents=True, exist_ok=True)
-
-    generation_success = False # Initialize
-    output_location_to_db = None # Initialize
-
-    # Determine final save path and DB output location based on DB_TYPE
-    final_save_path_for_video = output_video_path # Default to originally determined path
-    db_output_location_for_rife = str(output_video_path.resolve())
-
-    if DB_TYPE == "sqlite" and SQLITE_DB_PATH:
-        sqlite_db_file_path = Path(SQLITE_DB_PATH).resolve()
-        target_files_dir = sqlite_db_file_path.parent / "public" / "files"
-        target_files_dir.mkdir(parents=True, exist_ok=True)
-        
-        file_stem = f"{task_id}_rife_interpolated"
-        final_save_path_for_video = sm_get_unique_target_path(target_files_dir, file_stem, ".mp4")
-        # Ensure parent of final_save_path_for_video exists (sm_get_unique_target_path might not create it if target_files_dir is deep)
-        final_save_path_for_video.parent.mkdir(parents=True, exist_ok=True)
-        db_output_location_for_rife = f"files/{final_save_path_for_video.name}"
-        dprint(f"[Task ID: {task_id}] SQLite mode: RIFE video will be saved to {final_save_path_for_video} (DB: {db_output_location_for_rife})")
-    else:
-        # For non-SQLite, ensure the parent of the originally determined output_video_path exists
-        output_video_path.parent.mkdir(parents=True, exist_ok=True)
-        # final_save_path_for_video and db_output_location_for_rife are already set to non-SQLite defaults
-
-    dprint(f"[Task ID: {task_id}] Checking input image paths.")
-    if not input_image1_path.is_file():
-        print(f"[ERROR Task ID: {task_id}] Input image 1 not found: {input_image1_path}")
-        return False, f"Input image 1 not found: {input_image1_path}"
-    if not input_image2_path.is_file():
-        print(f"[ERROR Task ID: {task_id}] Input image 2 not found: {input_image2_path}")
-        return False, f"Input image 2 not found: {input_image2_path}"
-    dprint(f"[Task ID: {task_id}] Input images found.")
-
-    # Create a temporary directory for wgp.py output (though not used by direct RIFE, kept for structure)
-    temp_output_dir = tempfile.mkdtemp(prefix=f"wgp_rife_{task_id}_")
-    original_wgp_save_path = wgp_mod.save_path
-    wgp_mod.save_path = str(temp_output_dir)
-    
-    try:
-        pil_image_start = Image.open(input_image1_path).convert("RGB")
-        pil_image_end = Image.open(input_image2_path).convert("RGB")
-
-        # Get a valid model_filename for wgp.py context (RIFE might not use its weights)
-        # Assuming default transformer_quantization and transformer_dtype_policy from wgp_mod
-        actual_model_filename = wgp_mod.get_model_filename(
-            default_model_for_context, # e.g., "vace_14B"
-            wgp_mod.transformer_quantization,
-            wgp_mod.transformer_dtype_policy
-        )
-        dprint(f"[Task ID: {task_id}] Using model file for RIFE context: {actual_model_filename}")
-
-        # Prepare minimal state for wgp.py
-        # LoRA setup for the context model (RIFE likely won't use these LoRAs)
-        lora_dir_for_context_model = wgp_mod.get_lora_dir(actual_model_filename)
-        all_loras_for_context_model, _, _, _, _, _, _ = wgp_mod.setup_loras(
-             actual_model_filename, None, lora_dir_for_context_model, "", None
-        )
-        
-        # Basic state, RIFE might not need detailed model-specific ui_params
-        # The key is that `generate_video` has a valid `model_filename` in `state`
-        # and `state[wgp_mod.get_model_type(actual_model_filename)]` exists.
-        model_type_key = wgp_mod.get_model_type(actual_model_filename)
-        minimal_ui_defaults_for_model_type = wgp_mod.get_default_settings(actual_model_filename).copy()
-        # Override crucial RIFE params in the minimal_ui_defaults for clarity if generate_video uses them from here
-        minimal_ui_defaults_for_model_type["resolution"] = resolution_str
-        minimal_ui_defaults_for_model_type["video_length"] = int(num_rife_frames)
-
-
-        state = {
-            "model_filename": actual_model_filename,
-            "loras": all_loras_for_context_model, # Provide loras for the context model
-            model_type_key: minimal_ui_defaults_for_model_type, # Default settings for the context model type
-            "gen": {"queue": [], "file_list": [], "file_settings_list": [], "prompt_no": 1, "prompts_max": 1} 
-        }
-
-        print(f"[Task ID: {task_id}] Starting direct RIFE interpolation (bypassing wgp.py).")
-        dprint(f"  Input 1: {input_image1_path}")
-        dprint(f"  Input 2: {input_image2_path}")
-
-        # ---- Direct RIFE Implementation ----
-        import torch
-        import numpy as np
-        from rife.inference import temporal_interpolation
-        dprint(f"[Task ID: {task_id}] Imported RIFE modules.")
-
-        width_out, height_out = map(int, resolution_str.split("x"))
-        dprint(f"[Task ID: {task_id}] Parsed resolution: {width_out}x{height_out}")
-
-        def pil_to_tensor_rgb_norm(pil_im: Image.Image):
-            pil_resized = pil_im.resize((width_out, height_out), Image.Resampling.LANCZOS)
-            np_rgb = np.asarray(pil_resized).astype(np.float32) / 127.5 - 1.0  # [0,255]->[-1,1]
-            tensor = torch.from_numpy(np_rgb).permute(2, 0, 1)  # C H W
-            return tensor
-
-        t_start = pil_to_tensor_rgb_norm(pil_image_start)
-        t_end   = pil_to_tensor_rgb_norm(pil_image_end)
-
-        sample_in = torch.stack([t_start, t_end], dim=1).unsqueeze(0)  # 1 x 3 x 2 x H x W
-
-        device_for_rife = "cuda" if torch.cuda.is_available() else "cpu"
-        sample_in = sample_in.to(device_for_rife)
-        dprint(f"[Task ID: {task_id}] Input tensor for RIFE prepared on device: {device_for_rife}, shape: {sample_in.shape}")
-
-        exp_val = 3  # x8 (2^3 + 1 = 9 frames output by this RIFE implementation for 2 inputs)
-        flownet_ckpt = os.path.join("ckpts", "flownet.pkl")
-        dprint(f"[Task ID: {task_id}] Checking for RIFE model: {flownet_ckpt}")
-        if not os.path.exists(flownet_ckpt):
-            error_msg_flownet = f"RIFE Error: flownet.pkl not found at {flownet_ckpt}"
-            print(f"[ERROR Task ID: {task_id}] {error_msg_flownet}")
-            # generation_success remains False, will be returned
-            return False, error_msg_flownet # Explicitly return
-        dprint(f"[Task ID: {task_id}] RIFE model found: {flownet_ckpt}. Exp_val: {exp_val}")
-        
-        # Remove batch dimension for rife.inference.temporal_interpolation's internal process_frames
-        sample_in_for_rife = sample_in[0] # Shape: C x 2 x H x W
-
-        try:
-            # sample_out_from_rife will have shape C x F_out x H x W
-            dprint(f"[Task ID: {task_id}] Calling temporal_interpolation with input shape: {sample_in_for_rife.shape}")
-            sample_out_from_rife = temporal_interpolation(flownet_ckpt, sample_in_for_rife, exp_val, device=device_for_rife)
-            dprint(f"[Task ID: {task_id}] temporal_interpolation call completed.")
-            if sample_out_from_rife is not None:
-                dprint(f"[Task ID: {task_id}] RIFE output tensor shape: {sample_out_from_rife.shape}")
-            else:
-                dprint(f"[Task ID: {task_id}] RIFE process returned None for sample_out_from_rife.")
-        except Exception as e_rife: # Inner catch for temporal_interpolation
-            print(f"[ERROR Task ID: {task_id}] RIFE interpolation failed: {e_rife}")
-            traceback.print_exc()
-            generation_success = False
-            sample_out_from_rife = None
-
-        if sample_out_from_rife is not None:
-            sample_out_no_batch = sample_out_from_rife.to("cpu")  # Shape C x F_out x H x W
-            total_frames_generated = sample_out_no_batch.shape[1] # F_out is at index 1
-            dprint(f"[Task ID: {task_id}] RIFE produced {total_frames_generated} frames.")
-
-            # Trim / pad to desired num_rife_frames
-            if total_frames_generated < num_rife_frames:
-                print(f"[Task ID: {task_id}] Warning: RIFE produced {total_frames_generated} frames, expected {num_rife_frames}. Padding last frame.")
-                pad_frames = num_rife_frames - total_frames_generated
-            else:
-                pad_frames = 0
-            
-            frames_list_np = []
-            # Iterate up to the smaller of desired frames or actual RIFE output frames
-            for idx in range(min(num_rife_frames, total_frames_generated)):
-                frame_tensor = sample_out_no_batch[:, idx] # Shape: C x H x W
-                frame_np = ((frame_tensor.permute(1, 2, 0).numpy() + 1.0) * 127.5).clip(0, 255).astype(np.uint8)  # H W C RGB
-                frame_bgr = cv2.cvtColor(frame_np, cv2.COLOR_RGB2BGR)
-                frames_list_np.append(frame_bgr)
-            
-            # Pad with last frame if RIFE produced fewer frames than desired *and* we have at least one frame
-            if pad_frames > 0 and frames_list_np:
-                last_frame_to_pad = frames_list_np[-1].copy()
-                frames_list_np.extend([last_frame_to_pad for _ in range(pad_frames)])
-            elif not frames_list_np and num_rife_frames > 0: # RIFE produced 0 frames, or processing failed to create any
-                 dprint(f"[Task ID: {task_id}] Error: No frames available to write for RIFE video (num_rife_frames: {num_rife_frames}).")
-                 # generation_success remains False (from initialization)
-
-            # Only proceed to write if we have frames in frames_list_np
-            if frames_list_np:
-                try:
-                    fps_output = 16 # Or use a parameter if available/needed
-                    dprint(f"[Task ID: {task_id}] Writing RIFE output video to: {final_save_path_for_video} with {len(frames_list_np)} frames.")
-                    # output_video_path.parent.mkdir(parents=True, exist_ok=True) # Parent dir already ensured above
-                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                    out_writer = cv2.VideoWriter(str(final_save_path_for_video), fourcc, float(fps_output), (width_out, height_out))
-                    if not out_writer.isOpened():
-                        # This will be caught by the outer broad 'except Exception as e'
-                        raise IOError(f"Failed to open VideoWriter for output RIFE video: {final_save_path_for_video}")
-                    for frame_np in frames_list_np:
-                        out_writer.write(frame_np)
-                    out_writer.release()
-
-                    if final_save_path_for_video.exists() and final_save_path_for_video.stat().st_size > 0:
-                        dprint(f"[Task ID: {task_id}] Video file confirmed exists and has size > 0.")
-                        generation_success = True # Set to True only after successful write and check
-                        output_location_to_db = db_output_location_for_rife # Use the determined DB path
-                        print(f"[Task ID: {task_id}] Direct RIFE video saved to: {final_save_path_for_video.resolve()} (DB: {output_location_to_db})")
-                    else:
-                        print(f"[ERROR Task ID: {task_id}] RIFE output file missing or empty after writing attempt: {final_save_path_for_video}")
-                        # generation_success remains False (from initialization)
-                except Exception as e_video_write:
-                    print(f"[ERROR Task ID: {task_id}] Exception during RIFE video writing: {e_video_write}")
-                    traceback.print_exc()
-                    # generation_success remains False (from initialization)
-            # If frames_list_np was empty, generation_success remains False
-        else: # sample_out_from_rife was None (RIFE call itself failed and was caught by e_rife)
-            # generation_success remains False (error already printed by e_rife block)
-            pass # dprint for this case is already after the e_rife block
-
-        # ---- End Direct RIFE Implementation ----
-
-    except Exception as e: # Broad catch-all for the whole RIFE block
-        print(f"[ERROR Task ID: {task_id}] Overall _handle_rife_interpolate_task failed: {e}")
-        traceback.print_exc()
-        generation_success = False
-    finally:
-        wgp_mod.save_path = original_wgp_save_path # Restore original save path
-
-    return generation_success, output_location_to_db
-
-
-# --- SM_RESTRUCTURE: New Handler Functions for Travel Tasks ---
-def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_base: Path, orchestrator_task_id_str: str, orchestrator_project_id: str | None):
-    dprint(f"_handle_travel_orchestrator_task: Starting for {orchestrator_task_id_str}")
-    dprint(f"Orchestrator Project ID: {orchestrator_project_id}") # Added dprint
-    dprint(f"Orchestrator task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
-    generation_success = False # Represents success of orchestration step
-    output_message_for_orchestrator_db = f"Orchestration for {orchestrator_task_id_str} initiated."
-
-    try:
-        if 'orchestrator_details' not in task_params_from_db:
-            msg = f"[ERROR Task ID: {orchestrator_task_id_str}] 'orchestrator_details' not found in task_params_from_db."
-            print(msg)
-            return False, msg
-        
-        orchestrator_payload = task_params_from_db['orchestrator_details']
-        dprint(f"Orchestrator payload for {orchestrator_task_id_str} (first 500 chars): {json.dumps(orchestrator_payload, indent=2, default=str)[:500]}...")
-
-        run_id = orchestrator_payload.get("run_id", orchestrator_task_id_str)
-        base_dir_for_this_run_str = orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
-        current_run_output_dir = Path(base_dir_for_this_run_str) / f"travel_run_{run_id}"
-        current_run_output_dir.mkdir(parents=True, exist_ok=True)
-        dprint(f"Orchestrator {orchestrator_task_id_str}: Base output directory for this run: {current_run_output_dir.resolve()}")
-
-        num_segments = orchestrator_payload.get("num_new_segments_to_generate", 0)
-        if num_segments <= 0:
-            msg = f"[WARNING Task ID: {orchestrator_task_id_str}] No new segments to generate based on orchestrator payload. Orchestration complete (vacuously)."
-            print(msg)
-            return True, msg
-
-        db_path_for_add = SQLITE_DB_PATH if DB_TYPE == "sqlite" else None
-        previous_segment_task_id = None
-
-        # --- Determine image download directory for this orchestrated run ---
-        segment_image_download_dir_str : str | None = None
-        if DB_TYPE == "sqlite" and SQLITE_DB_PATH: # SQLITE_DB_PATH is global
-            try:
-                sqlite_db_path_obj = Path(SQLITE_DB_PATH).resolve()
-                if sqlite_db_path_obj.is_file():
-                    sqlite_db_parent_dir = sqlite_db_path_obj.parent
-                    # Orchestrated downloads go into a subfolder named after the run_id
-                    candidate_download_dir = sqlite_db_parent_dir / "public" / "data" / "image_downloads_orchestrated" / run_id
-                    candidate_download_dir.mkdir(parents=True, exist_ok=True)
-                    segment_image_download_dir_str = str(candidate_download_dir.resolve())
-                    dprint(f"Orchestrator {orchestrator_task_id_str}: Determined segment_image_download_dir for run {run_id}: {segment_image_download_dir_str}")
-                else:
-                    dprint(f"Orchestrator {orchestrator_task_id_str}: SQLITE_DB_PATH '{SQLITE_DB_PATH}' is not a file. Cannot determine parent for image_download_dir.")
-            except Exception as e_idir_orch:
-                dprint(f"Orchestrator {orchestrator_task_id_str}: Could not create image_download_dir for run {run_id}: {e_idir_orch}. Segments may not download URL images to specific dir.")
-        # Add similar logic for Supabase if a writable shared path convention exists.
-
-        # Expanded arrays from orchestrator payload
-        expanded_base_prompts = orchestrator_payload["base_prompts_expanded"]
-        expanded_negative_prompts = orchestrator_payload["negative_prompts_expanded"]
-        expanded_segment_frames = orchestrator_payload["segment_frames_expanded"]
-        expanded_frame_overlap = orchestrator_payload["frame_overlap_expanded"]
-        vace_refs_instructions_all = orchestrator_payload.get("vace_image_refs_to_prepare_by_headless", [])
-
-        for idx in range(num_segments):
-            current_segment_task_id = sm_generate_unique_task_id(f"travel_seg_{run_id}_{idx:02d}_")
-            
-            # Define where this segment's specific processing assets will go and its final output
-            # Segment handler will create this directory.
-            segment_processing_dir_name = f"segment_{idx:02d}_{current_segment_task_id[:8]}"
-            # Define where the segment's final output video should be placed by the segment handler itself
-            # This path needs to be absolute for the segment handler.
-            final_video_output_path_for_segment = current_run_output_dir / segment_processing_dir_name / f"s{idx}_final_output.mp4"
-
-            # Determine frame_overlap_from_previous for current segment `idx`
-            current_frame_overlap_from_previous = 0
-            if idx == 0 and orchestrator_payload.get("continue_from_video_resolved_path"):
-                current_frame_overlap_from_previous = expanded_frame_overlap[0] if expanded_frame_overlap else 0
-            elif idx > 0:
-                # SM_RESTRUCTURE_FIX_OVERLAP_IDX: Use idx-1 for subsequent segments
-                current_frame_overlap_from_previous = expanded_frame_overlap[idx-1] if len(expanded_frame_overlap) > (idx-1) else 0
-            
-            # VACE refs for this specific segment
-            vace_refs_for_this_segment = [
-                ref_instr for ref_instr in vace_refs_instructions_all
-                if ref_instr.get("segment_idx_for_naming") == idx
-            ]
-
-            segment_payload = {
-                "task_id": current_segment_task_id,
-                "orchestrator_task_id_ref": orchestrator_task_id_str,
-                "orchestrator_run_id": run_id,
-                "project_id": orchestrator_project_id, # Added project_id
-                "segment_index": idx,
-                "is_first_segment": (idx == 0),
-                "is_last_segment": (idx == num_segments - 1),
-                
-                "current_run_base_output_dir": str(current_run_output_dir.resolve()), # Base for segment's own output folder creation
-                "final_video_output_path_for_segment": str(final_video_output_path_for_segment.resolve()),
-
-                "base_prompt": expanded_base_prompts[idx],
-                "negative_prompt": expanded_negative_prompts[idx],
-                "segment_frames_target": expanded_segment_frames[idx],
-                "frame_overlap_from_previous": current_frame_overlap_from_previous,
-                "frame_overlap_with_next": expanded_frame_overlap[idx] if len(expanded_frame_overlap) > idx else 0,
-                
-                "vace_image_refs_to_prepare_by_headless": vace_refs_for_this_segment, # Already filtered for this segment
-
-                "parsed_resolution_wh": orchestrator_payload["parsed_resolution_wh"],
-                "model_name": orchestrator_payload["model_name"],
-                "seed_to_use": orchestrator_payload.get("seed_base", 12345) + idx,
-                "use_causvid_lora": orchestrator_payload.get("use_causvid_lora", False),
-                "booster_loras": orchestrator_payload.get("booster_loras", False),
-                "cfg_star_switch": orchestrator_payload.get("cfg_star_switch", 0),
-                "cfg_zero_step": orchestrator_payload.get("cfg_zero_step", -1),
-                "params_json_str_override": orchestrator_payload.get("params_json_str_override"),
-                "fps_helpers": orchestrator_payload.get("fps_helpers", 16),
-                "fade_in_params_json_str": orchestrator_payload["fade_in_params_json_str"],
-                "fade_out_params_json_str": orchestrator_payload["fade_out_params_json_str"],
-                "subsequent_starting_strength_adjustment": orchestrator_payload.get("subsequent_starting_strength_adjustment", 0.0),
-                "desaturate_subsequent_starting_frames": orchestrator_payload.get("desaturate_subsequent_starting_frames", 0.0),
-                "adjust_brightness_subsequent_starting_frames": orchestrator_payload.get("adjust_brightness_subsequent_starting_frames", 0.0),
-                "after_first_post_generation_saturation": orchestrator_payload.get("after_first_post_generation_saturation"),
-                "after_first_post_generation_brightness": orchestrator_payload.get("after_first_post_generation_brightness"),
-                
-                "segment_image_download_dir": segment_image_download_dir_str, # Add the download dir path string
-                
-                "debug_mode_enabled": orchestrator_payload.get("debug_mode_enabled", False),
-                "skip_cleanup_enabled": orchestrator_payload.get("skip_cleanup_enabled", False),
-                "continue_from_video_resolved_path_for_guide": orchestrator_payload.get("continue_from_video_resolved_path") if idx == 0 else None,
-                "full_orchestrator_payload": orchestrator_payload, # Ensure full payload is passed to segment
-            }
-
-            dprint(f"Orchestrator: Enqueuing travel_segment {idx} (ID: {current_segment_task_id}) depends_on={previous_segment_task_id}")
-            sm_add_task_to_db(
-                task_payload=segment_payload, 
-                db_path=db_path_for_add, 
-                task_type_str="travel_segment",
-                dependant_on=previous_segment_task_id
-            )
-            previous_segment_task_id = current_segment_task_id
-            dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_segment {idx} (ID: {current_segment_task_id}) with payload (first 500 chars): {json.dumps(segment_payload, default=str)[:500]}... Depends on: {segment_payload.get('dependant_on')}")
-        
-        # After loop, enqueue the stitch task
-        stitch_task_id = f"travel_stitch_{run_id}" # Deterministic ID
-        final_stitched_video_name = f"travel_final_stitched_{run_id}.mp4"
-        # Stitcher saves its final primary output directly under main_output_dir (e.g., ./steerable_motion_output/)
-        # NOT under current_run_output_dir (which is .../travel_run_XYZ/)
-        # The main_output_dir_base is the one passed to headless.py (e.g. server's ./outputs or steerable_motion's ./steerable_motion_output)
-        # The orchestrator_payload["main_output_dir_for_run"] is this main_output_dir_base.
-        final_stitched_output_path = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))) / final_stitched_video_name
-
-        stitch_payload = {
-            "task_id": stitch_task_id,
-            "orchestrator_task_id_ref": orchestrator_task_id_str,
-            "orchestrator_run_id": run_id,
-            "project_id": orchestrator_project_id, # Added project_id
-            "num_total_segments_generated": num_segments,
-            "current_run_base_output_dir": str(current_run_output_dir.resolve()), # Stitcher needs this to find segment outputs
-            "frame_overlap_settings_expanded": expanded_frame_overlap,
-            "crossfade_sharp_amt": orchestrator_payload.get("crossfade_sharp_amt", 0.3),
-            "parsed_resolution_wh": orchestrator_payload["parsed_resolution_wh"],
-            "fps_final_video": orchestrator_payload.get("fps_helpers", 16),
-            "upscale_factor": orchestrator_payload.get("upscale_factor", 0.0),
-            "upscale_model_name": orchestrator_payload.get("upscale_model_name"),
-            "seed_for_upscale": orchestrator_payload.get("seed_base", 12345) + 5000, # Consistent seed for upscale
-            "debug_mode_enabled": orchestrator_payload.get("debug_mode_enabled", False),
-            "skip_cleanup_enabled": orchestrator_payload.get("skip_cleanup_enabled", False),
-            "initial_continued_video_path": orchestrator_payload.get("continue_from_video_resolved_path"),
-            "final_stitched_output_path": str(final_stitched_output_path.resolve()),
-             # For upscale polling, if stitcher enqueues an upscale sub-task
-            "poll_interval_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_interval", 15),
-            "poll_timeout_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_timeout", 1800),
-            "full_orchestrator_payload": orchestrator_payload, # Added this line
-        }
-        
-        dprint(f"Orchestrator: Enqueuing travel_stitch task (ID: {stitch_task_id}) depends_on={previous_segment_task_id}")
-        sm_add_task_to_db(
-            task_payload=stitch_payload, 
-            db_path=db_path_for_add, 
-            task_type_str="travel_stitch",
-            dependant_on=previous_segment_task_id
-        )
-        dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_stitch task (ID: {stitch_task_id}) with payload (first 500 chars): {json.dumps(stitch_payload, default=str)[:500]}... Depends on: {stitch_payload.get('dependant_on')}")
-
-        generation_success = True
-        output_message_for_orchestrator_db = f"Successfully enqueued all {num_segments} segment tasks and 1 stitch task for run {run_id}."
-        print(f"Orchestrator {orchestrator_task_id_str}: {output_message_for_orchestrator_db}")
-
-    except Exception as e:
-        msg = f"[ERROR Task ID: {orchestrator_task_id_str}] Failed during travel orchestration processing: {e}"
-        print(msg)
-        traceback.print_exc()
-        generation_success = False
-        output_message_for_orchestrator_db = msg
-    
-    return generation_success, output_message_for_orchestrator_db
-
-def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str, apply_booster_loras: bool = False):
-    dprint(f"_handle_travel_segment_task: Starting for {segment_task_id_str}")
-    dprint(f"Segment task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
-    # task_params_from_db contains what was enqueued for this specific segment,
-    # including potentially 'full_orchestrator_payload'.
-    segment_params = task_params_from_db 
-    generation_success = False # Success of the WGP/Comfy sub-task for this segment
-    final_segment_video_output_path_str = None # Output of the WGP sub-task
-    output_message_for_segment_task = "Segment task initiated."
-
-    # Ensure the flag is defined: if not set via parameter, try to derive it from task_params_from_db
-    if not apply_booster_loras:
-        apply_booster_loras = task_params_from_db.get("booster_loras", False)
-
-    try:
-        # --- 1. Initialization & Parameter Extraction ---
-        orchestrator_task_id_ref = segment_params.get("orchestrator_task_id_ref")
-        orchestrator_run_id = segment_params.get("orchestrator_run_id")
-        segment_idx = segment_params.get("segment_index")
-        segment_image_download_dir_str = segment_params.get("segment_image_download_dir") # Get the passed dir
-        segment_image_download_dir = Path(segment_image_download_dir_str) if segment_image_download_dir_str else None
-
-        if orchestrator_task_id_ref is None or orchestrator_run_id is None or segment_idx is None:
-            msg = f"Segment task {segment_task_id_str} missing critical orchestrator refs or segment_index."
-            print(f"[ERROR Task {segment_task_id_str}]: {msg}")
-            return False, msg
-
-        full_orchestrator_payload = segment_params.get("full_orchestrator_payload")
-        if not full_orchestrator_payload:
-            dprint(f"Segment {segment_idx}: full_orchestrator_payload not in direct params. Querying orchestrator task {orchestrator_task_id_ref}")
-            orchestrator_task_raw_params_json = None
-            if DB_TYPE == "sqlite":
-                def _get_orc_params(conn):
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT params FROM tasks WHERE id = ?", (orchestrator_task_id_ref,))
-                    row = cursor.fetchone()
-                    return row[0] if row else None
-                orchestrator_task_raw_params_json = execute_sqlite_with_retry(SQLITE_DB_PATH, _get_orc_params)
-            elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
-                orc_resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("params").eq("task_id", orchestrator_task_id_ref).execute()
-                if orc_resp.data: orchestrator_task_raw_params_json = orc_resp.data[0]["params"]
-            
-            if orchestrator_task_raw_params_json:
-                try: 
-                    fetched_params = json.loads(orchestrator_task_raw_params_json) if isinstance(orchestrator_task_raw_params_json, str) else orchestrator_task_raw_params_json
-                    full_orchestrator_payload = fetched_params.get("orchestrator_details")
-                    if not full_orchestrator_payload:
-                        raise ValueError("'orchestrator_details' key missing in fetched orchestrator task params.")
-                    dprint(f"Segment {segment_idx}: Successfully fetched orchestrator_details from DB.")
-                except Exception as e_fetch_orc:
-                    msg = f"Segment {segment_idx}: Failed to fetch/parse orchestrator_details from DB for task {orchestrator_task_id_ref}: {e_fetch_orc}"
-                    print(f"[ERROR Task {segment_task_id_str}]: {msg}")
-                    return False, msg
-            else:
-                msg = f"Segment {segment_idx}: Could not retrieve params for orchestrator task {orchestrator_task_id_ref}. Cannot proceed."
-                print(f"[ERROR Task {segment_task_id_str}]: {msg}")
-                return False, msg
-        
-        # Now full_orchestrator_payload is guaranteed to be populated or we've exited.
-        current_run_base_output_dir_str = segment_params.get("current_run_base_output_dir")
-        if not current_run_base_output_dir_str: # Should be passed by orchestrator/prev segment
-            current_run_base_output_dir_str = full_orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
-            current_run_base_output_dir_str = str(Path(current_run_base_output_dir_str) / f"travel_run_{orchestrator_run_id}")
-
-        current_run_base_output_dir = Path(current_run_base_output_dir_str)
-        segment_processing_dir = current_run_base_output_dir / f"segment_{segment_idx:02d}_{segment_task_id_str[:8]}"
-        segment_processing_dir.mkdir(parents=True, exist_ok=True)
-        dprint(f"Segment {segment_idx} (Task {segment_task_id_str}): Processing in {segment_processing_dir.resolve()}")
-
-        # --- Prepare VACE Refs for this Segment (moved to headless) ---
-        actual_vace_image_ref_paths_for_wgp = []
-        # Get the list of VACE ref instructions from the full orchestrator payload
-        vace_ref_instructions_from_orchestrator = full_orchestrator_payload.get("vace_image_refs_to_prepare_by_headless", [])
-        
-        # Filter instructions for the current segment_idx
-        # The segment_idx_for_naming in the instruction should match the current segment_idx
-        relevant_vace_instructions = [
-            instr for instr in vace_ref_instructions_from_orchestrator
-            if instr.get("segment_idx_for_naming") == segment_idx
-        ]
-        dprint(f"Segment {segment_idx}: Found {len(relevant_vace_instructions)} VACE ref instructions relevant to this segment.")
-
-        if relevant_vace_instructions:
-            # Ensure parsed_res_wh is available
-            current_parsed_res_wh = full_orchestrator_payload.get("parsed_resolution_wh")
-            if not current_parsed_res_wh:
-                # Fallback or error if resolution not found; for now, dprint and proceed (helper might handle None resolution)
-                dprint(f"[WARNING] Segment {segment_idx}: parsed_resolution_wh not found in full_orchestrator_payload. VACE refs might not be resized correctly.")
-
-            for ref_instr in relevant_vace_instructions:
-                # Pass segment_image_download_dir to _prepare_vace_ref_for_segment_headless
-                dprint(f"Segment {segment_idx}: Preparing VACE ref from instruction: {ref_instr}")
-                processed_ref_path = _prepare_vace_ref_for_segment_headless(
-                    ref_instruction=ref_instr,
-                    segment_processing_dir=segment_processing_dir,
-                    target_resolution_wh=current_parsed_res_wh,
-                    image_download_dir=segment_image_download_dir, # Pass it here
-                    task_id_for_logging=segment_task_id_str
-                )
-                if processed_ref_path:
-                    actual_vace_image_ref_paths_for_wgp.append(processed_ref_path)
-                    dprint(f"Segment {segment_idx}: Successfully prepared VACE ref: {processed_ref_path}")
-                else:
-                    dprint(f"Segment {segment_idx}: Failed to prepare VACE ref from instruction: {ref_instr}. It will be omitted.")
-        # --- End VACE Ref Preparation ---
-
-        # --- 2. Guide Video Preparation ---
-        actual_guide_video_path_for_wgp: Path | None = None
-        path_to_previous_segment_video_output_for_guide: str | None = None
-        
-        is_first_segment = segment_params.get("is_first_segment", segment_idx == 0) # is_first_segment should be reliable
-        is_first_segment_from_scratch = is_first_segment and not full_orchestrator_payload.get("continue_from_video_resolved_path")
-        is_first_new_segment_after_continue = is_first_segment and full_orchestrator_payload.get("continue_from_video_resolved_path")
-        is_subsequent_segment = not is_first_segment
-
-        # Ensure parsed_res_wh is a tuple of integers
-        parsed_res_wh_str = full_orchestrator_payload["parsed_resolution_wh"]
-        try:
-            parsed_res_wh = sm_parse_resolution(parsed_res_wh_str)
-            if parsed_res_wh is None:
-                raise ValueError(f"sm_parse_resolution returned None for input: {parsed_res_wh_str}")
-        except Exception as e_parse_res:
-            msg = f"Seg {segment_idx}: Invalid format or error parsing parsed_resolution_wh '{parsed_res_wh_str}': {e_parse_res}"
-            print(f"[ERROR Task {segment_task_id_str}]: {msg}"); return False, msg
-        dprint(f"Segment {segment_idx}: Parsed resolution (w,h): {parsed_res_wh}")
-
-        # Calculate total frames for this segment once and reuse
-        base_duration = segment_params.get("segment_frames_target", full_orchestrator_payload["segment_frames_expanded"][segment_idx])
-        frame_overlap_from_previous = segment_params.get("frame_overlap_from_previous", 0)
-        # The user-facing 'segment_frames_target' should represent the total length of the segment,
-        # not just the new content. The overlap is handled internally for transition.
-        total_frames_for_segment = base_duration
-
-        fps_helpers = full_orchestrator_payload.get("fps_helpers", 16)
-        fade_in_duration_str = full_orchestrator_payload["fade_in_params_json_str"]
-        fade_out_duration_str = full_orchestrator_payload["fade_out_params_json_str"]
-        
-        # Define gray_frame_bgr here for use in subsequent segment strength adjustment
-        gray_frame_bgr = sm_create_color_frame(parsed_res_wh, (128, 128, 128))
-
-        try: # Parsing fade params
-            fade_in_p = json.loads(fade_in_duration_str)
-            fi_low, fi_high, fi_curve, fi_factor = float(fade_in_p.get("low_point",0)), float(fade_in_p.get("high_point",1)), str(fade_in_p.get("curve_type","ease_in_out")), float(fade_in_p.get("duration_factor",0))
-        except Exception as e_fade_in:
-            fi_low, fi_high, fi_curve, fi_factor = 0.0,1.0,"ease_in_out",0.0
-            dprint(f"Seg {segment_idx} Warn: Using default fade-in params due to parse error on '{fade_in_duration_str}': {e_fade_in}")
-        try:
-            fade_out_p = json.loads(fade_out_duration_str)
-            fo_low, fo_high, fo_curve, fo_factor = float(fade_out_p.get("low_point",0)), float(fade_out_p.get("high_point",1)), str(fade_out_p.get("curve_type","ease_in_out")), float(fade_out_p.get("duration_factor",0))
-        except Exception as e_fade_out:
-            fo_low, fo_high, fo_curve, fo_factor = 0.0,1.0,"ease_in_out",0.0
-            dprint(f"Seg {segment_idx} Warn: Using default fade-out params due to parse error on '{fade_out_duration_str}': {e_fade_out}")
-
-        if is_first_new_segment_after_continue:
-            path_to_previous_segment_video_output_for_guide = full_orchestrator_payload.get("continue_from_video_resolved_path")
-            if not path_to_previous_segment_video_output_for_guide or not Path(path_to_previous_segment_video_output_for_guide).exists():
-                msg = f"Seg {segment_idx}: Continue video path {path_to_previous_segment_video_output_for_guide} invalid."
-                print(f"[ERROR Task {segment_task_id_str}]: {msg}"); return False, msg
-        elif is_subsequent_segment:
-            # path_to_previous_segment_video_output_for_guide = segment_params.get("path_to_previous_segment_output") # Old way
-            # if not path_to_previous_segment_video_output_for_guide: 
-            # --- Get predecessor task ID from current task's depends_on field --- 
-            task_dependency_id = None
-            if DB_TYPE == "sqlite":
-                def _get_dependency(conn):
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT dependant_on FROM tasks WHERE id = ?", (segment_task_id_str,)) # Changed from depends_on
-                    row = cursor.fetchone()
-                    return row[0] if row else None
-                task_dependency_id = execute_sqlite_with_retry(SQLITE_DB_PATH, _get_dependency)
-            elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
-                try:
-                    response = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("dependant_on").eq("id", segment_task_id_str).single().execute() # Changed from depends_on
-                    if response.data:
-                        task_dependency_id = response.data.get("dependant_on") # Changed from depends_on
-                except Exception as e_supabase_dep:
-                    dprint(f"Seg {segment_idx}: Error fetching depends_on from Supabase for task {segment_task_id_str}: {e_supabase_dep}")
-            
-            if task_dependency_id:
-                dprint(f"Seg {segment_idx}: Task {segment_task_id_str} depends on {task_dependency_id}. Fetching its output for guide video.")
-                # path_to_previous_segment_video_output_for_guide will be relative ("files/...") if from SQLite and stored that way
-                # or absolute if from Supabase or stored absolutely in SQLite.
-                raw_path_from_db = get_task_output_location_from_db(task_dependency_id)
-                
-                if raw_path_from_db:
-                    if DB_TYPE == "sqlite" and SQLITE_DB_PATH and raw_path_from_db.startswith("files/"):
-                        sqlite_db_parent = Path(SQLITE_DB_PATH).resolve().parent
-                        path_to_previous_segment_video_output_for_guide = str((sqlite_db_parent / "public" / raw_path_from_db).resolve())
-                        dprint(f"Seg {segment_idx}: Resolved SQLite relative path from DB '{raw_path_from_db}' to absolute path '{path_to_previous_segment_video_output_for_guide}'")
-                    else:
-                        # Path from DB is already absolute (Supabase) or an old absolute SQLite path
-                        path_to_previous_segment_video_output_for_guide = raw_path_from_db
-                else:
-                    path_to_previous_segment_video_output_for_guide = None # Task found, but no output_location
-            else:
-                dprint(f"Seg {segment_idx}: Could not find a valid 'depends_on' task ID for {segment_task_id_str}. Cannot create guide video based on predecessor.")
-                path_to_previous_segment_video_output_for_guide = None
-
-            if not path_to_previous_segment_video_output_for_guide or not Path(path_to_previous_segment_video_output_for_guide).exists():
-                error_detail_path = raw_path_from_db if 'raw_path_from_db' in locals() and raw_path_from_db else path_to_previous_segment_video_output_for_guide
-                msg = f"Seg {segment_idx}: Prev segment output for guide invalid/not found. Expected from prev task output. Path: {error_detail_path}"
-                print(f"[ERROR Task {segment_task_id_str}]: {msg}"); return False, msg
-        
-        try: # Guide Video Creation Block
-            guide_video_base_name = f"s{segment_idx}_guide_vid"
-            
-            guide_video_target_dir: Path
-            if DB_TYPE == "sqlite" and SQLITE_DB_PATH:
-                sqlite_db_parent = Path(SQLITE_DB_PATH).resolve().parent
-                guide_video_target_dir = sqlite_db_parent / "public" / "files"
-                guide_video_target_dir.mkdir(parents=True, exist_ok=True)
-                dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Guide video (SQLite mode) will target {guide_video_target_dir}")
-            else:
-                guide_video_target_dir = segment_processing_dir # Default to segment_processing_dir
-                dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Guide video (Non-SQLite mode) will target {guide_video_target_dir}")
-
-            # actual_guide_video_path_for_wgp will store the absolute path to the guide video where it's saved.
-            actual_guide_video_path_for_wgp = sm_get_unique_target_path(guide_video_target_dir, guide_video_base_name, ".mp4")
-            
-            unquantized_guide_video_total_frames = total_frames_for_segment
-
-            # Apply the same quantization as used for WGP generation later in this function
-            is_ltxv_m_for_guide_quant = "ltxv" in full_orchestrator_payload["model_name"].lower()
-            latent_s_for_guide_quant = 8 if is_ltxv_m_for_guide_quant else 4
-
-            guide_video_total_frames = unquantized_guide_video_total_frames
-            
-            dprint(f"Task {segment_task_id_str}: Guide video frames (unquantized): {guide_video_total_frames} (latent_s: {latent_s_for_guide_quant})")
-            
-            if guide_video_total_frames > 0:
-                dprint(f"Task {segment_task_id_str}: Interpolating guide video with {guide_video_total_frames} frames...")
-                frames_for_guide_list = [sm_create_color_frame(parsed_res_wh, (128,128,128)).copy() for _ in range(guide_video_total_frames)]
-                input_images_resolved_original = full_orchestrator_payload["input_image_paths_resolved"]
-                
-                # Download anchor images if they are URLs before using them for guide video
-                input_images_resolved_for_guide = [
-                    sm_download_image_if_url(img_path, segment_image_download_dir, segment_task_id_str) 
-                    for img_path in input_images_resolved_original
-                ]
-
-                end_anchor_img_path_str: str
-                if full_orchestrator_payload.get("continue_from_video_resolved_path"): # Number of input images matches number of new segments
-                    if segment_idx < len(input_images_resolved_for_guide):
-                        end_anchor_img_path_str = input_images_resolved_for_guide[segment_idx]
-                    else:
-                        raise ValueError(f"Seg {segment_idx}: End anchor index {segment_idx} out of bounds for input_images ({len(input_images_resolved_for_guide)}) with continue_from_video.")
-                else: # Not continuing from video, so number of input images is num_segments + 1
-                    if (segment_idx + 1) < len(input_images_resolved_for_guide):
-                        end_anchor_img_path_str = input_images_resolved_for_guide[segment_idx + 1]
-                    else:
-                        raise ValueError(f"Seg {segment_idx}: End anchor index {segment_idx+1} out of bounds for input_images ({len(input_images_resolved_for_guide)}) when not continuing from video.")
-                
-                # Pass segment_image_download_dir to sm_image_to_frame
-                end_anchor_frame_np = sm_image_to_frame(end_anchor_img_path_str, parsed_res_wh, task_id_for_logging=segment_task_id_str, image_download_dir=segment_image_download_dir)
-                if end_anchor_frame_np is None: raise ValueError(f"Failed to load end anchor image: {end_anchor_img_path_str}")
-                num_end_anchor_duplicates = 1
-                start_anchor_frame_np = None
-
-                if is_first_segment_from_scratch:
-                    start_anchor_img_path_str = input_images_resolved_for_guide[0]
-                    # Pass segment_image_download_dir to sm_image_to_frame
-                    start_anchor_frame_np = sm_image_to_frame(start_anchor_img_path_str, parsed_res_wh, task_id_for_logging=segment_task_id_str, image_download_dir=segment_image_download_dir)
-                    if start_anchor_frame_np is None: raise ValueError(f"Failed to load start anchor: {start_anchor_img_path_str}")
-                    if frames_for_guide_list: frames_for_guide_list[0] = start_anchor_frame_np.copy()
-                    # ... (Ported fade logic for start_anchor_frame_np from original file, using fo_low, fo_high, fo_curve, fo_factor) ...
-                    pot_max_idx_start_fade = guide_video_total_frames - num_end_anchor_duplicates - 1
-                    avail_frames_start_fade = max(0, pot_max_idx_start_fade) 
-                    num_start_fade_steps = int(avail_frames_start_fade * fo_factor)
-                    if num_start_fade_steps > 0:
-                        actual_start_fade_end_idx = min(num_start_fade_steps -1 , pot_max_idx_start_fade -1) 
-                        easing_fn_out = sm_get_easing_function(fo_curve)
-                        for k_fo in range(num_start_fade_steps):
-                            idx_in_guide = 1 + k_fo
-                            if idx_in_guide > actual_start_fade_end_idx +1 or idx_in_guide >= guide_video_total_frames: break
-                            alpha_lin = 1.0 - ((k_fo + 1) / float(num_start_fade_steps))
-                            e_alpha = fo_low + (fo_high - fo_low) * easing_fn_out(alpha_lin)
-                            e_alpha = np.clip(e_alpha, 0.0, 1.0)
-                            frames_for_guide_list[idx_in_guide] = cv2.addWeighted(frames_for_guide_list[idx_in_guide].astype(np.float32), 1.0 - e_alpha, start_anchor_frame_np.astype(np.float32), e_alpha, 0).astype(np.uint8)
-                    
-                    # ... (Ported fade logic for end_anchor_frame_np from original file, using fi_low, fi_high, fi_curve, fi_factor) ...
-                    min_idx_end_fade = 1 
-                    max_idx_end_fade = guide_video_total_frames - num_end_anchor_duplicates - 1
-                    avail_frames_end_fade = max(0, max_idx_end_fade - min_idx_end_fade + 1)
-                    num_end_fade_steps = int(avail_frames_end_fade * fi_factor)
-                    if num_end_fade_steps > 0:
-                        actual_end_fade_start_idx = max(min_idx_end_fade, max_idx_end_fade - num_end_fade_steps + 1)
-                        easing_fn_in = sm_get_easing_function(fi_curve)
-                        for k_fi in range(num_end_fade_steps):
-                            idx_in_guide = actual_end_fade_start_idx + k_fi
-                            if idx_in_guide > max_idx_end_fade or idx_in_guide >= guide_video_total_frames: break
-                            alpha_lin = (k_fi + 1) / float(num_end_fade_steps)
-                            e_alpha = fi_low + (fi_high - fi_low) * easing_fn_in(alpha_lin)
-                            e_alpha = np.clip(e_alpha, 0.0, 1.0)
-                            base_f = frames_for_guide_list[idx_in_guide]
-                            frames_for_guide_list[idx_in_guide] = cv2.addWeighted(base_f.astype(np.float32), 1.0 - e_alpha, end_anchor_frame_np.astype(np.float32), e_alpha, 0).astype(np.uint8)
-                    elif fi_factor > 0 and avail_frames_end_fade > 0: 
-                        for k_fill in range(min_idx_end_fade, max_idx_end_fade + 1):
-                            if k_fill < guide_video_total_frames: frames_for_guide_list[k_fill] = end_anchor_frame_np.copy()
-
-                elif path_to_previous_segment_video_output_for_guide: # Continued or Subsequent
-                    prev_vid_total_frames, _ = sm_get_video_frame_count_and_fps(path_to_previous_segment_video_output_for_guide)
-                    if prev_vid_total_frames is None: raise ValueError("Could not get frame count of previous video for guide.")
-                    actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
-                    start_extraction_idx = max(0, prev_vid_total_frames - actual_overlap_to_use)
-                    overlap_frames_raw = sm_extract_frames_from_video(path_to_previous_segment_video_output_for_guide, start_extraction_idx, actual_overlap_to_use)
-                    frames_read_for_overlap = 0
-                    for k, frame_fp in enumerate(overlap_frames_raw): # frame_fp is frame_from_prev
-                        if k >= guide_video_total_frames: break
-                        if frame_fp.shape[1]!=parsed_res_wh[0] or frame_fp.shape[0]!=parsed_res_wh[1]: frame_fp = cv2.resize(frame_fp, parsed_res_wh, interpolation=cv2.INTER_AREA)
-                        frames_for_guide_list[k] = frame_fp.copy()
-                        frames_read_for_overlap +=1
-                    
-                    # ... (Ported strength/desat/brightness logic from original, using segment_params/full_orchestrator_payload for settings) ...
-                    strength_adj = full_orchestrator_payload.get("subsequent_starting_strength_adjustment", 0.0)
-                    desat_factor = full_orchestrator_payload.get("desaturate_subsequent_starting_frames", 0.0)
-                    bright_adj = full_orchestrator_payload.get("adjust_brightness_subsequent_starting_frames", 0.0)
-                    if frames_read_for_overlap > 0:
-                        if fo_factor > 0.0:
-                            num_init_fade_steps = min(int(frames_read_for_overlap * fo_factor), frames_read_for_overlap)
-                            easing_fn_fo_ol = sm_get_easing_function(fo_curve)
-                            for k_fo_ol in range(num_init_fade_steps):
-                                alpha_l = 1.0 - ((k_fo_ol + 1) / float(num_init_fade_steps))
-                                eff_s = fo_low + (fo_high - fo_low) * easing_fn_fo_ol(alpha_l)
-                                eff_s += strength_adj
-                                eff_s = np.clip(eff_s,0,1)
-                                base_f=frames_for_guide_list[k_fo_ol]
-                                frames_for_guide_list[k_fo_ol] = cv2.addWeighted(gray_frame_bgr.astype(np.float32),1-eff_s,base_f.astype(np.float32),eff_s,0).astype(np.uint8)
-                                if desat_factor > 0:
-                                    g=cv2.cvtColor(frames_for_guide_list[k_fo_ol],cv2.COLOR_BGR2GRAY)
-                                    gb=cv2.cvtColor(g,cv2.COLOR_GRAY2BGR)
-                                    frames_for_guide_list[k_fo_ol]=cv2.addWeighted(frames_for_guide_list[k_fo_ol],1-desat_factor,gb,desat_factor,0)
-                                if bright_adj!=0:
-                                    frames_for_guide_list[k_fo_ol]=sm_adjust_frame_brightness(frames_for_guide_list[k_fo_ol],bright_adj)
-                        else:
-                            eff_s=fo_high+strength_adj; eff_s=np.clip(eff_s,0,1)
-                            if abs(eff_s-1.0)>1e-5 or desat_factor>0 or bright_adj!=0:
-                                for k_s_ol in range(frames_read_for_overlap):
-                                    base_f=frames_for_guide_list[k_s_ol];frames_for_guide_list[k_s_ol]=cv2.addWeighted(gray_frame_bgr.astype(np.float32),1-eff_s,base_f.astype(np.float32),eff_s,0).astype(np.uint8)
-                                    if desat_factor>0: g=cv2.cvtColor(frames_for_guide_list[k_s_ol],cv2.COLOR_BGR2GRAY);gb=cv2.cvtColor(g,cv2.COLOR_GRAY2BGR);frames_for_guide_list[k_s_ol]=cv2.addWeighted(frames_for_guide_list[k_s_ol],1-desat_factor,gb,desat_factor,0)
-                                    if bright_adj!=0: frames_for_guide_list[k_s_ol]=sm_adjust_frame_brightness(frames_for_guide_list[k_s_ol],bright_adj)
-                    # ... (Ported fade-in logic for end_anchor_frame_np for subsequent segments) ...
-                    min_idx_efs = frames_read_for_overlap; max_idx_efs = guide_video_total_frames - num_end_anchor_duplicates - 1
-                    avail_f_efs = max(0, max_idx_efs - min_idx_efs + 1); num_efs_steps = int(avail_f_efs * fi_factor)
-                    if num_efs_steps > 0:
-                        actual_efs_start_idx = max(min_idx_efs, max_idx_efs - num_efs_steps + 1)
-                        easing_fn_in_s = sm_get_easing_function(fi_curve)
-                        for k_fi_s in range(num_efs_steps):
-                            idx = actual_efs_start_idx+k_fi_s
-                            if idx > max_idx_efs or idx >= guide_video_total_frames: break
-                            if idx < min_idx_efs: continue # This line was missing, could cause issues if actual_efs_start_idx is less than min_idx_efs due to calculation complexities, though unlikely with max(). Added for safety.
-                            alpha_l=(k_fi_s+1)/float(num_efs_steps);e_alpha=fi_low+(fi_high-fi_low)*easing_fn_in_s(alpha_l);e_alpha=np.clip(e_alpha,0,1)
-                            base_f=frames_for_guide_list[idx];frames_for_guide_list[idx]=cv2.addWeighted(base_f.astype(np.float32),1-e_alpha,end_anchor_frame_np.astype(np.float32),e_alpha,0).astype(np.uint8)
-                    elif fi_factor > 0 and avail_f_efs > 0:
-                        for k_fill in range(min_idx_efs, max_idx_efs + 1):
-                            if k_fill < guide_video_total_frames: frames_for_guide_list[k_fill] = end_anchor_frame_np.copy()
-                
-                # Duplication & final first frame for all types
-                if guide_video_total_frames > 0:
-                    for k_dup in range(min(num_end_anchor_duplicates, guide_video_total_frames)):
-                        idx_s = guide_video_total_frames - 1 - k_dup
-                        if idx_s >= 0: 
-                            frames_for_guide_list[idx_s] = end_anchor_frame_np.copy()
-                        else: 
-                            break # break the loop if idx_s is out of bounds
-                if is_first_segment_from_scratch and guide_video_total_frames > 0 and start_anchor_frame_np is not None:
-                    frames_for_guide_list[0] = start_anchor_frame_np.copy()
-
-                if frames_for_guide_list:
-                    guide_video_file_path = None
-                    try:
-                        guide_video_file_path = sm_create_video_from_frames_list(frames_for_guide_list, actual_guide_video_path_for_wgp, fps_helpers, parsed_res_wh)
-                    except Exception as e_create_vid:
-                        print(f"[ERROR Task {segment_task_id_str}] Error creating guide video: {e_create_vid}")
-                        traceback.print_exc()
-
-                    if guide_video_file_path and guide_video_file_path.exists():
-                        actual_guide_video_path_for_wgp = guide_video_file_path
-                    else:
-                        print(f"[ERROR Task {segment_task_id_str}] Failed to create guide video at {actual_guide_video_path_for_wgp}")
-                        actual_guide_video_path_for_wgp = None
-                else:
-                    actual_guide_video_path_for_wgp = None
-        except Exception as e_guide:
-            print(f"ERROR Task {segment_task_id_str} guide prep: {e_guide}")
-            traceback.print_exc()
-            actual_guide_video_path_for_wgp = None
-        # --- Invoke WGP Generation directly ---
-        if actual_guide_video_path_for_wgp is None and not (is_first_segment_from_scratch or path_to_previous_segment_video_output_for_guide is not None and Path(path_to_previous_segment_video_output_for_guide).exists()):
-            # If guide creation failed AND it was essential (not first segment that could run guideless, or no prev video for subsequent)
-            msg = f"Task {segment_task_id_str}: Essential guide video failed or not possible. Cannot proceed with WGP processing."
-            print(f"[ERROR] {msg}")
-            return False, msg
-            
-        final_frames_for_wgp_generation = total_frames_for_segment
-        current_wgp_engine = "wgp" # Defaulting to WGP for travel segments
-        
-        dprint(f"Task {segment_task_id_str}: Using unquantized WGP input frames: {final_frames_for_wgp_generation}")
-
-        if final_frames_for_wgp_generation <= 0:
-            msg = f"Task {segment_task_id_str}: Calculated WGP frames {final_frames_for_wgp_generation}. Cannot generate. Check segment_frames_target and overlap."
-            print(f"[ERROR] {msg}")
-            return False, msg
-
-        # The WGP task will run with a unique ID, but it's processed in-line now
-        wgp_inline_task_id = sm_generate_unique_task_id(f"wgp_inline_{segment_task_id_str[:8]}_")
-        
-        # Define the absolute final output path for the WGP generation by process_single_task.
-        # If DB_TYPE is SQLite, process_single_task will ignore this and save to public/files, returning a relative path.
-        # If not SQLite, process_single_task will use this path (or its default construction) and return an absolute path.
-        wgp_video_filename = f"s{segment_idx}_{wgp_inline_task_id}_seg_output.mp4"
-        # For non-SQLite, wgp_final_output_path_for_this_segment is a suggestion for process_single_task
-        # For SQLite, this specific path isn't strictly used by process_single_task for its *final* save, but can be logged.
-        wgp_final_output_path_for_this_segment = segment_processing_dir / wgp_video_filename 
-        
-        safe_vace_image_ref_paths_for_wgp = [str(p.resolve()) if p else None for p in actual_vace_image_ref_paths_for_wgp]
-        safe_vace_image_ref_paths_for_wgp = [p for p in safe_vace_image_ref_paths_for_wgp if p is not None]
-
-        current_segment_base_prompt = segment_params.get("base_prompt", "") # Default to empty string if key is missing
-        
-        prompt_for_wgp = current_segment_base_prompt
-        if not current_segment_base_prompt or current_segment_base_prompt.strip() == "":
-            dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Original base_prompt was '{current_segment_base_prompt}'. It is empty or whitespace. Using a default prompt for WGP: 'A beautiful landscape.'")
-            prompt_for_wgp = "A beautiful landscape."
-        
-        dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Effective prompt for WGP payload will be: '{prompt_for_wgp}'")
-
-        wgp_payload = {
-            "task_id": wgp_inline_task_id, # ID for this specific WGP generation operation
-            "model": full_orchestrator_payload["model_name"],
-            "prompt": prompt_for_wgp, # Use the processed prompt_for_wgp
-            "negative_prompt": segment_params["negative_prompt"],
-            "resolution": f"{parsed_res_wh[0]}x{parsed_res_wh[1]}", # Use parsed tuple here
-            "frames": final_frames_for_wgp_generation,
-            "seed": segment_params["seed_to_use"],
-            # output_path for process_single_task: 
-            # - If SQLite, it's ignored, output goes to public/files, and a relative path is returned.
-            # - If not SQLite, this suggested path (or process_single_task's default) is used, and an absolute path is returned.
-            "output_path": str(wgp_final_output_path_for_this_segment.resolve()), 
-            "video_guide_path": str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
-            "use_causvid_lora": full_orchestrator_payload.get("use_causvid_lora", False),
-            "booster_loras": full_orchestrator_payload.get("booster_loras", False),
-            "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
-            "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
-            "image_refs_paths": safe_vace_image_ref_paths_for_wgp,
-            "frames_are_prequantized": True,
-        }
-        if full_orchestrator_payload.get("params_json_str_override"):
-            try:
-                additional_p = json.loads(full_orchestrator_payload["params_json_str_override"])
-                # Ensure critical calculated params are not accidentally overridden by generic JSON override
-                additional_p.pop("frames", None); additional_p.pop("video_length", None) 
-                additional_p.pop("resolution", None); additional_p.pop("output_path", None)
-                wgp_payload.update(additional_p)
-            except Exception as e_json: dprint(f"Error merging override params for WGP payload: {e_json}")
-        
-        # Add travel_chain_details so process_single_task can call _handle_travel_chaining_after_wgp
-        wgp_payload["travel_chain_details"] = {
-            "orchestrator_task_id_ref": orchestrator_task_id_ref,
-            "orchestrator_run_id": orchestrator_run_id,
-            "segment_index_completed": segment_idx, 
-            "is_last_segment_in_sequence": segment_params["is_last_segment"], 
-            "current_run_base_output_dir": str(current_run_base_output_dir.resolve()),
-            "full_orchestrator_payload": full_orchestrator_payload,
-            "segment_processing_dir_for_saturation": str(segment_processing_dir.resolve()),
-            "is_first_new_segment_after_continue": is_first_new_segment_after_continue,
-            "is_subsequent_segment": is_subsequent_segment
-        }
-
-        dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Directly invoking WGP processing (task_id for WGP op: {wgp_inline_task_id}). Payload (first 500 chars): {json.dumps(wgp_payload, default=str)[:500]}...")
-        
-        # process_single_task will handle the WGP generation. If travel_chain_details are present,
-        # it will also call _handle_travel_chaining_after_wgp.
-        # The main_output_dir_base is passed for context, but "output_path" in wgp_payload dictates the save location.
-        generation_success, wgp_output_path_or_msg = process_single_task(
-            wgp_mod,
-            wgp_payload,                # The parameters for the WGP generation itself
-            main_output_dir_base,       # Server's main output directory (context for process_single_task)
-            current_wgp_engine,         # Task type for process_single_task (e.g., "wgp")
-            project_id_for_task=segment_params.get("project_id"), # Added project_id
-            image_download_dir=segment_image_download_dir, # Pass the determined download dir
-            apply_booster_loras=apply_booster_loras
-        )
-
-        if generation_success:
-            # wgp_output_path_or_msg should be the path to the (potentially saturated) video
-            final_segment_video_output_path_str = wgp_output_path_or_msg
-            # The travel_segment task's record in the DB needs its output_location to be this final path.
-            # This path is also what the stitcher will look for.
-            # The _handle_travel_segment_task needs to return this path so the main loop can update its own DB record.
-            output_message_for_segment_task = f"Segment {segment_idx} processing (WGP generation & chaining) completed. Final output for this segment: {final_segment_video_output_path_str}"
-            print(f"Seg {segment_idx} (Task {segment_task_id_str}): {output_message_for_segment_task}")
-        else:
-            # wgp_output_path_or_msg contains the error message if generation_success is False
-            final_segment_video_output_path_str = None 
-            output_message_for_segment_task = f"Segment {segment_idx} (Task {segment_task_id_str}) processing (WGP generation & chaining) failed. Error: {wgp_output_path_or_msg}"
-            print(f"[ERROR] {output_message_for_segment_task}")
-        
-        # The old polling logic is no longer needed as process_single_task is synchronous here.
-
-        # The return value final_segment_video_output_path_str (if success) is the one that
-        # process_single_task itself would have set as 'output_location' for the WGP task.
-        # Now, it becomes the output_location for the parent travel_segment task.
-        return generation_success, final_segment_video_output_path_str if generation_success else output_message_for_segment_task
-
-    except Exception as e:
-        print(f"ERROR Task {segment_task_id_str}: Unexpected error during segment processing: {e}")
-        traceback.print_exc()
-        # return False, f"Unexpected error: {str(e)[:200]}"
-        return False, f"Segment {segment_idx} failed: {str(e)[:200]}"
-
-# --- SM_RESTRUCTURE: New function to handle chaining after WGP/Comfy sub-task ---
-def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_video_path: str | None, wgp_mod, image_download_dir: Path | str | None = None) -> tuple[bool, str, str | None]:
-    """
-    Handles the chaining logic after a WGP  sub-task for a travel segment completes.
-    This includes post-generation saturation and enqueuing the next segment or stitch task.
-    Returns: (success_bool, message_str, final_video_path_for_db_str_or_none)
-    The third element is the path that should be considered the definitive output of the WGP task
-    (e.g., path to saturated video if saturation was applied).
-    """
-    chain_details = wgp_task_params.get("travel_chain_details")
-    wgp_task_id = wgp_task_params.get("task_id", "unknown_wgp_task")
-
-    if not chain_details:
-        return False, f"Task {wgp_task_id}: Missing travel_chain_details. Cannot proceed with chaining.", None
-    
-    # actual_wgp_output_video_path comes from process_single_task.
-    # If DB_TYPE is sqlite, it will be like "files/wgp_output.mp4".
-    # Otherwise, it's an absolute path.
-    if not actual_wgp_output_video_path: # Check if it's None or empty string
-        return False, f"Task {wgp_task_id}: WGP output video path is None or empty. Cannot chain.", None
-
-    # This variable will track the absolute path of the video as it gets processed.
-    video_to_process_abs_path: Path
-    # This will hold the path to be stored in the DB (can be relative for SQLite).
-    final_video_path_for_db = actual_wgp_output_video_path
-
-    # Resolve initial absolute path
-    if DB_TYPE == "sqlite" and SQLITE_DB_PATH and isinstance(actual_wgp_output_video_path, str) and actual_wgp_output_video_path.startswith("files/"):
-        sqlite_db_parent = Path(SQLITE_DB_PATH).resolve().parent
-        video_to_process_abs_path = sqlite_db_parent / "public" / actual_wgp_output_video_path
-    else:
-        video_to_process_abs_path = Path(actual_wgp_output_video_path)
-
-    if not video_to_process_abs_path.exists():
-        return False, f"Task {wgp_task_id}: Source video for chaining '{video_to_process_abs_path}' (from '{actual_wgp_output_video_path}') does not exist.", actual_wgp_output_video_path
-
-    try:
-        orchestrator_task_id_ref = chain_details["orchestrator_task_id_ref"]
-        orchestrator_run_id = chain_details["orchestrator_run_id"]
-        segment_idx_completed = chain_details["segment_index_completed"]
-        full_orchestrator_payload = chain_details["full_orchestrator_payload"]
-        segment_processing_dir_for_saturation_str = chain_details["segment_processing_dir_for_saturation"]
-        
-        is_first_new_segment_after_continue = chain_details.get("is_first_new_segment_after_continue", False)
-        is_subsequent_segment_val = chain_details.get("is_subsequent_segment", False)
-
-        dprint(f"Chaining for WGP task {wgp_task_id} (segment {segment_idx_completed} of run {orchestrator_run_id}). Initial video: {video_to_process_abs_path}")
-
-        # --- Post-generation Processing Chain ---
-        if is_subsequent_segment_val or is_first_new_segment_after_continue:
-
-            # --- 1. Saturation ---
-            sat_level = full_orchestrator_payload.get("after_first_post_generation_saturation")
-            if sat_level is not None and isinstance(sat_level, (float, int)) and sat_level >= 0.0:
-                dprint(f"Chain (Seg {segment_idx_completed}): Applying post-gen saturation {sat_level} to {video_to_process_abs_path}")
-
-                target_dir_for_sat, db_prefix_for_sat = _get_post_processing_target_dir(DB_TYPE, SQLITE_DB_PATH, segment_processing_dir_for_saturation_str)
-                sat_out_base = f"s{segment_idx_completed}_sat_{sat_level:.2f}"
-                saturated_video_output_abs_path = sm_get_unique_target_path(target_dir_for_sat, sat_out_base, video_to_process_abs_path.suffix)
-                
-                if sm_apply_saturation_to_video_ffmpeg(str(video_to_process_abs_path), saturated_video_output_abs_path, sat_level):
-                    new_db_path = f"{db_prefix_for_sat}{saturated_video_output_abs_path.name}"
-                    dprint(f"Chain (Seg {segment_idx_completed}): Saturation successful. New path: {new_db_path}")
-                    _cleanup_intermediate_video(full_orchestrator_payload, video_to_process_abs_path, segment_idx_completed, "raw")
-                    
-                    video_to_process_abs_path = saturated_video_output_abs_path
-                    final_video_path_for_db = new_db_path
-                else:
-                    dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Saturation failed. Continuing with unsaturated video.")
-            
-            # --- 2. Brightness ---
-            brightness_adjust = full_orchestrator_payload.get("after_first_post_generation_brightness", 0.0)
-            if isinstance(brightness_adjust, (float, int)) and abs(brightness_adjust) > 1e-6:
-                dprint(f"Chain (Seg {segment_idx_completed}): Applying post-gen brightness {brightness_adjust} to {video_to_process_abs_path}")
-                
-                target_dir_for_bright, db_prefix_for_bright = _get_post_processing_target_dir(DB_TYPE, SQLITE_DB_PATH, segment_processing_dir_for_saturation_str)
-                bright_out_base = f"s{segment_idx_completed}_bright_{brightness_adjust:+.2f}"
-                brightened_video_output_abs_path = sm_get_unique_target_path(target_dir_for_bright, bright_out_base, video_to_process_abs_path.suffix)
-                
-                processed_video = _apply_brightness_to_video_frames_headless(str(video_to_process_abs_path), brightened_video_output_abs_path, brightness_adjust, wgp_task_id)
-
-                if processed_video and processed_video.exists():
-                    new_db_path = f"{db_prefix_for_bright}{brightened_video_output_abs_path.name}"
-                    dprint(f"Chain (Seg {segment_idx_completed}): Brightness adjustment successful. New path: {new_db_path}")
-                    _cleanup_intermediate_video(full_orchestrator_payload, video_to_process_abs_path, segment_idx_completed, "saturated")
-
-                    video_to_process_abs_path = brightened_video_output_abs_path
-                    final_video_path_for_db = new_db_path
-                else:
-                    dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Brightness adjustment failed. Continuing with previous video version.")
-
-
-        # The orchestrator has already enqueued all segment and stitch tasks.
-        msg = f"Chain (Seg {segment_idx_completed}): Post-WGP processing complete. Final path for this WGP task's output: {final_video_path_for_db}"
-        dprint(msg)
-        return True, msg, str(final_video_path_for_db)
-
-    except Exception as e_chain:
-        error_msg = f"Chain (Seg {chain_details.get('segment_index_completed', 'N/A')} for WGP {wgp_task_id}): Failed during chaining: {e_chain}"
-        print(f"[ERROR] {error_msg}")
-        traceback.print_exc()
-        return False, error_msg, str(final_video_path_for_db) # Return path as it was before error
-
-def _get_post_processing_target_dir(db_type, sqlite_db_path, default_dir_str):
-    """Helper to determine the correct output directory for post-processing steps."""
-    if db_type == "sqlite" and sqlite_db_path:
-        sqlite_db_parent = Path(sqlite_db_path).resolve().parent
-        target_dir = sqlite_db_parent / "public" / "files"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        return target_dir, "files/"
-    else:
-        return Path(default_dir_str), ""
-
-def _cleanup_intermediate_video(orchestrator_payload, video_path: Path, segment_idx: int, stage: str):
-    """Helper to cleanup intermediate video files during chaining."""
-    if not orchestrator_payload.get("skip_cleanup_enabled", False) and \
-       not orchestrator_payload.get("debug_mode_enabled", False) and \
-       video_path.exists():
-        try:
-            video_path.unlink()
-            dprint(f"Chain (Seg {segment_idx}): Removed intermediate '{stage}' video {video_path}")
-        except Exception as e_del:
-            dprint(f"Chain (Seg {segment_idx}): Warning - could not remove intermediate video {video_path}: {e_del}")
-
-def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: Path, stitch_task_id_str: str):
-    dprint(f"_handle_travel_stitch_task: Starting for {stitch_task_id_str}")
-    dprint(f"Stitch task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
-    stitch_params = task_params_from_db # This now contains full_orchestrator_payload
-    stitch_success = False
-    final_video_location_for_db = None
-    
-    try:
-        # --- 1. Initialization & Parameter Extraction --- 
-        orchestrator_task_id_ref = stitch_params.get("orchestrator_task_id_ref")
-        orchestrator_run_id = stitch_params.get("orchestrator_run_id")
-        full_orchestrator_payload = stitch_params.get("full_orchestrator_payload")
-
-        if not all([orchestrator_task_id_ref, orchestrator_run_id, full_orchestrator_payload]):
-            msg = f"Stitch task {stitch_task_id_str} missing critical orchestrator refs or full_orchestrator_payload."
-            print(f"[ERROR Task {stitch_task_id_str}]: {msg}")
-            return False, msg
-
-        current_run_base_output_dir_str = stitch_params.get("current_run_base_output_dir", 
-                                                            full_orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve())))
-        current_run_base_output_dir = Path(current_run_base_output_dir_str)
-        # If current_run_base_output_dir was the generic one, ensure it includes the run_id subfolder.
-        if not str(current_run_base_output_dir.name).endswith(orchestrator_run_id):
-            current_run_base_output_dir = current_run_base_output_dir / f"travel_run_{orchestrator_run_id}"
-        
-        stitch_processing_dir = current_run_base_output_dir / f"stitch_final_output_{stitch_task_id_str[:8]}"
-        stitch_processing_dir.mkdir(parents=True, exist_ok=True)
-        dprint(f"Stitch Task {stitch_task_id_str}: Processing in {stitch_processing_dir.resolve()}")
-
-        num_expected_new_segments = full_orchestrator_payload["num_new_segments_to_generate"]
-        
-        # Ensure parsed_res_wh is a tuple of integers for stitch task
-        parsed_res_wh_str = full_orchestrator_payload["parsed_resolution_wh"]
-        try:
-            parsed_res_wh = sm_parse_resolution(parsed_res_wh_str)
-            if parsed_res_wh is None:
-                raise ValueError(f"sm_parse_resolution returned None for input: {parsed_res_wh_str}")
-        except Exception as e_parse_res_stitch:
-            msg = f"Stitch Task {stitch_task_id_str}: Invalid format or error parsing parsed_resolution_wh '{parsed_res_wh_str}': {e_parse_res_stitch}"
-            print(f"[ERROR Task {stitch_task_id_str}]: {msg}"); return False, msg
-        dprint(f"Stitch Task {stitch_task_id_str}: Parsed resolution (w,h): {parsed_res_wh}")
-
-        final_fps = full_orchestrator_payload.get("fps_helpers", 16)
-        expanded_frame_overlaps = full_orchestrator_payload["frame_overlap_expanded"]
-        crossfade_sharp_amt = full_orchestrator_payload.get("crossfade_sharp_amt", 0.3)
-        initial_continued_video_path_str = full_orchestrator_payload.get("continue_from_video_resolved_path")
-
-        # Extract upscale parameters
-        upscale_factor = full_orchestrator_payload.get("upscale_factor", 0.0) # Default to 0.0 if not present
-        upscale_model_name = full_orchestrator_payload.get("upscale_model_name") # Default to None if not present
-
-        # --- 2. Collect Paths to All Segment Videos --- 
-        segment_video_paths_for_stitch = []
-        if initial_continued_video_path_str and Path(initial_continued_video_path_str).exists():
-            dprint(f"Stitch: Prepending initial continued video: {initial_continued_video_path_str}")
-            segment_video_paths_for_stitch.append(str(Path(initial_continued_video_path_str).resolve()))
-        
-        # Query DB for all completed generation sub-tasks for this run_id
-        completed_segment_outputs_from_db = [] # This will now store (segment_index, video_path_str)
-        generation_task_type = "wgp" # Defaulting to WGP for travel segments
-
-
-        if DB_TYPE == "sqlite":
-            dprint(f"Stitch Task {stitch_task_id_str}: Querying for travel_segment tasks with orchestrator_run_id='{orchestrator_run_id}' and status='{STATUS_COMPLETE}'") # ADDED DPRINT
-            def _get_sqlite_generated_segments_for_stitch(conn):
-                cursor = conn.cursor()
-                sql_query = f"""
-                    SELECT json_extract(params, '$.segment_index') AS segment_idx, output_location
-                    FROM tasks
-                    WHERE json_extract(params, '$.orchestrator_run_id') = ?
-                      AND task_type = 'travel_segment'
-                      AND status = ?
-                      AND output_location IS NOT NULL
-                    ORDER BY CAST(segment_idx AS INTEGER) ASC
-                """
-                cursor.execute(sql_query, (orchestrator_run_id, STATUS_COMPLETE))
-                rows = cursor.fetchall()
-                return rows
-            completed_segment_outputs_from_db = execute_sqlite_with_retry(SQLITE_DB_PATH, _get_sqlite_generated_segments_for_stitch)
-            dprint(f"Stitch Task {stitch_task_id_str}: Raw completed_segment_outputs_from_db (SQLite): {completed_segment_outputs_from_db}") # ADDED DPRINT
-        
-        elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
-            try:
-                # IMPORTANT: User needs to create this SQL function 'func_get_completed_generation_segments_for_stitch'
-                # in their Supabase/PostgreSQL database. See accompanying SQL.
-                rpc_params = {"p_run_id": orchestrator_run_id, "p_gen_task_type": generation_task_type}
-                rpc_response = SUPABASE_CLIENT.rpc("func_get_completed_generation_segments_for_stitch", rpc_params).execute()
-
-                if rpc_response.data:
-                    for item in rpc_response.data: # Expecting list of dicts like {"segment_idx": int, "output_loc": str}
-                        completed_segment_outputs_from_db.append((item.get("segment_idx"), item.get("output_loc")))
-                elif rpc_response.error:
-                    dprint(f"Stitch Supabase: Error from RPC func_get_completed_generation_segments_for_stitch: {rpc_response.error}. Stitching may fail.")
-            except Exception as e_supabase_fetch_gen:
-                 dprint(f"Stitch Supabase: Exception during generation segment fetch: {e_supabase_fetch_gen}. Stitching may fail.")
-
-        # Filter and add valid paths from DB query results
-        # `completed_segment_outputs_from_db` now contains (segment_idx, video_path_str) directly
-        for seg_idx, video_path_str_from_db in completed_segment_outputs_from_db:
-            resolved_video_path_for_stitch: Path | None = None
-            if video_path_str_from_db:
-                if DB_TYPE == "sqlite" and SQLITE_DB_PATH and video_path_str_from_db.startswith("files/"):
-                    sqlite_db_parent = Path(SQLITE_DB_PATH).resolve().parent
-                    absolute_path_candidate = (sqlite_db_parent / "public" / video_path_str_from_db).resolve()
-                    dprint(f"Stitch: Resolved SQLite relative path from DB '{video_path_str_from_db}' to absolute '{absolute_path_candidate}' for segment index {seg_idx}")
-                    if absolute_path_candidate.exists() and absolute_path_candidate.is_file():
-                        resolved_video_path_for_stitch = absolute_path_candidate
-                    else:
-                        dprint(f"[WARNING] Stitch: Resolved absolute path '{absolute_path_candidate}' for segment index {seg_idx} (DB path: '{video_path_str_from_db}') does not exist or is not a file.")
-                else: # Path from DB is already absolute (Supabase) or an old absolute SQLite path, or non-standard
-                    absolute_path_candidate = Path(video_path_str_from_db).resolve()
-                    if absolute_path_candidate.exists() and absolute_path_candidate.is_file():
-                        resolved_video_path_for_stitch = absolute_path_candidate
-                    else:
-                        dprint(f"[WARNING] Stitch: Absolute path from DB '{absolute_path_candidate}' for segment index {seg_idx} does not exist or is not a file.")
-
-            if resolved_video_path_for_stitch:
-                segment_video_paths_for_stitch.append(str(resolved_video_path_for_stitch))
-                dprint(f"Stitch: Adding valid video for segment index {seg_idx}: {resolved_video_path_for_stitch}")
-            else: 
-                dprint(f"[WARNING] Stitch: Segment video (from DB, index {seg_idx}, original path '{video_path_str_from_db}') is missing or invalid after path resolution. It will be excluded.")
-
-        total_videos_for_stitch = (1 if initial_continued_video_path_str and Path(initial_continued_video_path_str).exists() else 0) + num_expected_new_segments
-        if len(segment_video_paths_for_stitch) < total_videos_for_stitch:
-            # This is a warning because some segments might have legitimately failed and been skipped by their handlers.
-            # The stitcher should proceed with what it has, unless it has zero or one video when multiple were expected.
-            dprint(f"[WARNING] Stitch: Expected {total_videos_for_stitch} videos for stitch, but found {len(segment_video_paths_for_stitch)}. Stitching with available videos.")
-        
-        if not segment_video_paths_for_stitch:
-            raise ValueError("Stitch: No valid segment videos found to stitch.")
-        if len(segment_video_paths_for_stitch) == 1 and total_videos_for_stitch > 1:
-            dprint(f"Stitch: Only one video segment found ({segment_video_paths_for_stitch[0]}) but {total_videos_for_stitch} were expected. Using this single video as the 'stitched' output.")
-            # No actual stitching needed, just move/copy this single video to final dest.
-
-        # --- 3. Stitching (Crossfade or Concatenate) --- 
-        # temp_stitched_video_output_path will now be the direct final path if SQLite, or temp if not.
-        current_stitched_video_path: Path | None = None # This will hold the path to the current version of the stitched video
-
-        final_target_dir_for_stitch_outputs: Path
-        db_path_prefix_for_stitch_outputs = ""
-
-        if DB_TYPE == "sqlite" and SQLITE_DB_PATH:
-            sqlite_db_parent = Path(SQLITE_DB_PATH).resolve().parent
-            final_target_dir_for_stitch_outputs = sqlite_db_parent / "public" / "files"
-            final_target_dir_for_stitch_outputs.mkdir(parents=True, exist_ok=True)
-            db_path_prefix_for_stitch_outputs = "files/"
-            dprint(f"Stitch Task {stitch_task_id_str}: SQLite mode. Stitch outputs will target {final_target_dir_for_stitch_outputs} directly.")
-        else:
-            # Non-SQLite: Use stitch_processing_dir as the target for intermediate/final stitch products before any final move
-            final_target_dir_for_stitch_outputs = stitch_processing_dir
-            # db_path_prefix_for_stitch_outputs remains "" (paths will be absolute)
-            dprint(f"Stitch Task {stitch_task_id_str}: Non-SQLite mode. Stitch outputs will target {final_target_dir_for_stitch_outputs}.")
-
-
-        if len(segment_video_paths_for_stitch) == 1:
-            # If only one video, copy it directly to the final target dir with a 'stitched' or 'final' name
-            source_single_video_path = Path(segment_video_paths_for_stitch[0])
-            single_video_name_stem = f"stitched_single_{orchestrator_run_id}" # Or use source_single_video_path.stem
-            
-            current_stitched_video_path = sm_get_unique_target_path(
-                final_target_dir_for_stitch_outputs,
-                single_video_name_stem,
-                source_single_video_path.suffix
-            )
-            shutil.copy2(str(source_single_video_path), str(current_stitched_video_path))
-            dprint(f"Stitch: Only one video found. Copied {source_single_video_path} to {current_stitched_video_path}")
-        else: # More than one video, proceed with stitching logic
-            num_stitch_points = len(segment_video_paths_for_stitch) - 1
-            actual_overlaps_for_stitching = []
-            if initial_continued_video_path_str: 
-                actual_overlaps_for_stitching = expanded_frame_overlaps[:num_stitch_points] 
-            else: 
-                actual_overlaps_for_stitching = expanded_frame_overlaps[:num_stitch_points]
-            any_positive_overlap = any(o > 0 for o in actual_overlaps_for_stitching)
-
-            raw_stitched_video_name_stem = f"stitched_raw_{orchestrator_run_id}"
-            path_for_raw_stitched_video = sm_get_unique_target_path(
-                final_target_dir_for_stitch_outputs,
-                raw_stitched_video_name_stem,
-                ".mp4" 
-            )
-
-            if any_positive_overlap:
-                dprint(f"Stitch: Using cross-fade due to overlap values: {actual_overlaps_for_stitching}. Output to: {path_for_raw_stitched_video}")
-                all_segment_frames_lists = [sm_extract_frames_from_video(p) for p in segment_video_paths_for_stitch]
-                if not all(f_list is not None and len(f_list)>0 for f_list in all_segment_frames_lists):
-                    raise ValueError("Stitch: Frame extraction failed for one or more segments during cross-fade prep.")
-                
-                final_stitched_frames = []
-                overlap_for_first_join = actual_overlaps_for_stitching[0] if actual_overlaps_for_stitching else 0
-                if len(all_segment_frames_lists[0]) > overlap_for_first_join:
-                    final_stitched_frames.extend(all_segment_frames_lists[0][:-overlap_for_first_join if overlap_for_first_join > 0 else len(all_segment_frames_lists[0])])
-                else: 
-                    final_stitched_frames.extend(all_segment_frames_lists[0])
-
-                for i in range(num_stitch_points): 
-                    frames_prev_segment = all_segment_frames_lists[i]
-                    frames_curr_segment = all_segment_frames_lists[i+1]
-                    current_overlap_val = actual_overlaps_for_stitching[i]
-
-                    if current_overlap_val > 0:
-                        faded_frames = sm_cross_fade_overlap_frames(frames_prev_segment, frames_curr_segment, current_overlap_val, "linear_sharp", crossfade_sharp_amt)
-                        final_stitched_frames.extend(faded_frames)
-                    else: 
-                        pass 
-                    
-                    if (i + 1) < num_stitch_points: 
-                        overlap_for_next_join_of_curr = actual_overlaps_for_stitching[i+1]
-                        start_index_for_curr_tail = current_overlap_val 
-                        end_index_for_curr_tail = len(frames_curr_segment) - (overlap_for_next_join_of_curr if overlap_for_next_join_of_curr > 0 else 0)
-                        if end_index_for_curr_tail > start_index_for_curr_tail:
-                             final_stitched_frames.extend(frames_curr_segment[start_index_for_curr_tail : end_index_for_curr_tail])
-                    else: 
-                        start_index_for_last_segment_tail = current_overlap_val
-                        if len(frames_curr_segment) > start_index_for_last_segment_tail:
-                            final_stitched_frames.extend(frames_curr_segment[start_index_for_last_segment_tail:])
-                
-                if not final_stitched_frames: raise ValueError("Stitch: No frames produced after cross-fade logic.")
-                created_video_path_obj = sm_create_video_from_frames_list(final_stitched_frames, path_for_raw_stitched_video, final_fps, parsed_res_wh)
-                if created_video_path_obj and created_video_path_obj.exists():
-                    current_stitched_video_path = created_video_path_obj
-                else:
-                    raise RuntimeError(f"Stitch: Cross-fade sm_create_video_from_frames_list failed to produce video at {path_for_raw_stitched_video}")
-
-            else: 
-                dprint(f"Stitch: Using simple FFmpeg concatenation. Output to: {path_for_raw_stitched_video}")
-                if 'sm_stitch_videos_ffmpeg' not in globals() and 'sm_stitch_videos_ffmpeg' not in locals():
-                    from Wan2GP.sm_functions.common_utils import stitch_videos_ffmpeg as sm_stitch_videos_ffmpeg
-
-                if sm_stitch_videos_ffmpeg(segment_video_paths_for_stitch, str(path_for_raw_stitched_video)):
-                    current_stitched_video_path = path_for_raw_stitched_video
-                else: 
-                    raise RuntimeError(f"Stitch: Simple FFmpeg concatenation failed for output {path_for_raw_stitched_video}.")
-
-        if not current_stitched_video_path or not current_stitched_video_path.exists():
-            raise RuntimeError(f"Stitch: Stitching process failed, output video not found at {current_stitched_video_path}")
-        
-        video_path_after_optional_upscale = current_stitched_video_path
-
-        if isinstance(upscale_factor, (float, int)) and upscale_factor > 1.0 and upscale_model_name:
-            dprint(f"Stitch: Upscaling (x{upscale_factor}) video {current_stitched_video_path.name} using model {upscale_model_name}")
-            
-            original_frames_count, _ = sm_get_video_frame_count_and_fps(str(current_stitched_video_path))
-            if original_frames_count is None or original_frames_count == 0:
-                raise ValueError(f"Stitch: Cannot get frame count or 0 frames for video {current_stitched_video_path} before upscaling.")
-
-            target_width_upscaled = int(parsed_res_wh[0] * upscale_factor)
-            target_height_upscaled = int(parsed_res_wh[1] * upscale_factor)
-            
-            upscale_sub_task_id = sm_generate_unique_task_id(f"upscale_stitch_{orchestrator_run_id}_")
-            
-            upscale_payload = {
-                "task_id": upscale_sub_task_id,
-                "project_id": stitch_params.get("project_id"),
-                "model": upscale_model_name,
-                "video_source_path": str(current_stitched_video_path.resolve()), 
-                "resolution": f"{target_width_upscaled}x{target_height_upscaled}",
-                "frames": original_frames_count,
-                "prompt": full_orchestrator_payload.get("original_task_args",{}).get("upscale_prompt", "cinematic, masterpiece, high detail, 4k"), 
-                "seed": full_orchestrator_payload.get("seed_for_upscale", full_orchestrator_payload.get("seed_base", 12345) + 5000),
-            }
-            
-            db_path_for_upscale_add = SQLITE_DB_PATH if DB_TYPE == "sqlite" else None
-            upscaler_engine_to_use = stitch_params.get("execution_engine_for_upscale", "wgp")
-            
-            sm_add_task_to_db(
-                task_payload=upscale_payload, 
-                db_path=db_path_for_upscale_add, 
-                task_type_str=upscaler_engine_to_use
-            )
-            print(f"Stitch Task {stitch_task_id_str}: Enqueued upscale sub-task {upscale_sub_task_id} ({upscaler_engine_to_use}). Waiting...")
-            
-            from Wan2GP.sm_functions.common_utils import poll_task_status as sm_poll_status_direct
-            poll_interval_ups = full_orchestrator_payload.get("poll_interval", 15)
-            poll_timeout_ups = full_orchestrator_payload.get("poll_timeout_upscale", full_orchestrator_payload.get("poll_timeout", 30 * 60) * 2)
-            
-            upscaled_video_db_location = sm_poll_status_direct(
-                task_id=upscale_sub_task_id, 
-                db_path=db_path_for_upscale_add, 
-                poll_interval_seconds=poll_interval_ups, 
-                timeout_seconds=poll_timeout_ups
-            )
-            dprint(f"Stitch Task {stitch_task_id_str}: Upscale sub-task {upscale_sub_task_id} poll result: {upscaled_video_db_location}")
-
-            if upscaled_video_db_location:
-                upscaled_video_abs_path: Path
-                if DB_TYPE == "sqlite" and SQLITE_DB_PATH and upscaled_video_db_location.startswith("files/"):
-                    sqlite_db_parent = Path(SQLITE_DB_PATH).resolve().parent
-                    upscaled_video_abs_path = sqlite_db_parent / "public" / upscaled_video_db_location
-                else: 
-                    upscaled_video_abs_path = Path(upscaled_video_db_location)
-
-                if upscaled_video_abs_path.exists():
-                    dprint(f"Stitch: Upscale sub-task {upscale_sub_task_id} completed. Output: {upscaled_video_abs_path}")
-                    video_path_after_optional_upscale = upscaled_video_abs_path
-                    
-                    if not full_orchestrator_payload.get("skip_cleanup_enabled", False) and \
-                       not full_orchestrator_payload.get("debug_mode_enabled", False) and \
-                       current_stitched_video_path.exists() and current_stitched_video_path != video_path_after_optional_upscale:
-                        try:
-                            current_stitched_video_path.unlink()
-                            dprint(f"Stitch: Removed non-upscaled video {current_stitched_video_path} after successful upscale.")
-                        except Exception as e_del_non_upscaled:
-                            dprint(f"Stitch: Warning - could not remove non-upscaled video {current_stitched_video_path}: {e_del_non_upscaled}")
-                else: 
-                    print(f"[WARNING] Stitch Task {stitch_task_id_str}: Upscale sub-task {upscale_sub_task_id} output missing ({upscaled_video_abs_path}). Using non-upscaled video.")
-            else: 
-                print(f"[WARNING] Stitch Task {stitch_task_id_str}: Upscale sub-task {upscale_sub_task_id} failed or timed out. Using non-upscaled video.")
-
-        elif upscale_factor > 1.0 and not upscale_model_name:
-            dprint(f"Stitch: Upscale factor {upscale_factor} > 1.0 but no upscale_model_name provided. Skipping upscale.")
-
-        if DB_TYPE == "sqlite" and SQLITE_DB_PATH:
-            if video_path_after_optional_upscale.is_absolute():
-                try:
-                    sqlite_public_files_dir = (Path(SQLITE_DB_PATH).resolve().parent / "public" / "files").resolve()
-                    if video_path_after_optional_upscale.resolve().parent == sqlite_public_files_dir:
-                        final_video_location_for_db = f"files/{video_path_after_optional_upscale.name}"
-                    else: 
-                        final_video_location_for_db = str(video_path_after_optional_upscale.resolve())
-                        dprint(f"[WARNING] Stitch SQLite: final video {final_video_location_for_db} is absolute but not in public/files. This is unexpected.")
-                except Exception as e_rel_path:
-                     dprint(f"[WARNING] Stitch SQLite: Error ensuring relative path for {video_path_after_optional_upscale}: {e_rel_path}. Using absolute.")
-                     final_video_location_for_db = str(video_path_after_optional_upscale.resolve())
-
-            elif isinstance(video_path_after_optional_upscale, str) and video_path_after_optional_upscale.startswith("files/"):
-                final_video_location_for_db = video_path_after_optional_upscale
-            elif isinstance(video_path_after_optional_upscale, Path) and not video_path_after_optional_upscale.is_absolute():
-                 final_video_location_for_db = str(video_path_after_optional_upscale)
-            else: 
-                final_video_location_for_db = str(video_path_after_optional_upscale.resolve())
-                dprint(f"[WARNING] Stitch SQLite: Fallback for final_video_location_for_db using resolve() for: {video_path_after_optional_upscale}")
-
-            print(f"Stitch Task {stitch_task_id_str}: Final SQLite Video is at: {video_path_after_optional_upscale.resolve()} (DB location: {final_video_location_for_db})")
-        
-        else: 
-            user_specified_final_path_str = stitch_params.get("final_stitched_output_path")
-            final_destination_if_move_needed: Path | None = None
-
-            if DB_TYPE != "sqlite": 
-                if user_specified_final_path_str:
-                    candidate_path = Path(user_specified_final_path_str)
-                    candidate_path.parent.mkdir(parents=True, exist_ok=True)
-                    if candidate_path.is_dir():
-                        base_name = f"travel_final_{orchestrator_run_id}"
-                        if upscale_factor > 1.0: base_name = f"travel_final_upscaled_{upscale_factor:.1f}x_{orchestrator_run_id}"
-                        final_destination_if_move_needed = sm_get_unique_target_path(candidate_path, base_name, video_path_after_optional_upscale.suffix)
-                    else:
-                        final_destination_if_move_needed = candidate_path
-                else:
-                    base_name = f"travel_final_{orchestrator_run_id}"
-                    if upscale_factor > 1.0: base_name = f"travel_final_upscaled_{upscale_factor:.1f}x_{orchestrator_run_id}"
-                    final_destination_if_move_needed = sm_get_unique_target_path(current_run_base_output_dir, base_name, video_path_after_optional_upscale.suffix)
-
-                if video_path_after_optional_upscale.resolve() != final_destination_if_move_needed.resolve():
-                    dprint(f"Stitch Task {stitch_task_id_str} (Non-SQLite): Moving {video_path_after_optional_upscale} to {final_destination_if_move_needed}")
-                    shutil.move(str(video_path_after_optional_upscale), str(final_destination_if_move_needed))
-                    video_path_after_optional_upscale = final_destination_if_move_needed
-                else:
-                    dprint(f"Stitch Task {stitch_task_id_str} (Non-SQLite): Video already at final destination {video_path_after_optional_upscale}")
-            
-            final_video_location_for_db = str(video_path_after_optional_upscale.resolve())
-            print(f"Stitch Task {stitch_task_id_str}: Final Video (Non-SQLite or user-specified path) saved to: {final_video_location_for_db}")
-
-        stitch_success = True
-
-    except Exception as e_stitch_main:
-        msg = f"Stitch Task {stitch_task_id_str}: Main process failed: {e_stitch_main}"
-        print(f"[ERROR Task {stitch_task_id_str}]: {msg}"); traceback.print_exc()
-        stitch_success = False
-        final_video_location_for_db = msg # Store truncated error for DB
-    
-    finally:
-        # --- 6. Cleanup --- 
-        debug_mode = False # Default
-        skip_cleanup = False # Default
-        if full_orchestrator_payload: # Check if it's not None
-            debug_mode = full_orchestrator_payload.get("debug_mode_enabled", False)
-            skip_cleanup = full_orchestrator_payload.get("skip_cleanup_enabled", False)
-        
-        # Condition for cleaning the stitch_processing_dir (the sub-workspace)
-        # Cleaned if stitch was successful and skip_cleanup is not set.
-        # debug_mode does not prevent cleanup of this specific intermediate directory.
-        cleanup_stitch_sub_workspace = stitch_success and not skip_cleanup
-
-        if cleanup_stitch_sub_workspace and stitch_processing_dir.exists():
-            dprint(f"Stitch: Cleaning up stitch processing sub-workspace: {stitch_processing_dir}")
-            try: shutil.rmtree(stitch_processing_dir)
-            except Exception as e_c1: dprint(f"Stitch: Error cleaning up {stitch_processing_dir}: {e_c1}")
-        elif stitch_processing_dir.exists(): # Not cleaning it up, state why
-            dprint(f"Stitch: Skipping cleanup of stitch processing sub-workspace: {stitch_processing_dir} (stitch_success:{stitch_success}, skip_cleanup:{skip_cleanup})")
-
-        # Condition for cleaning the main run directory (current_run_base_output_dir)
-        # Cleaned if stitch was successful, skip_cleanup is not set, AND debug_mode is not set.
-        cleanup_main_run_dir = stitch_success and not skip_cleanup and not debug_mode
-
-        if cleanup_main_run_dir and current_run_base_output_dir.exists():
-            dprint(f"Stitch: Full run successful, not in debug, and cleanup not skipped. Cleaning up main run directory: {current_run_base_output_dir}")
-            try: shutil.rmtree(current_run_base_output_dir)
-            except Exception as e_c2: dprint(f"Stitch: Error cleaning up main run directory {current_run_base_output_dir}: {e_c2}")
-        elif current_run_base_output_dir.exists(): # Not cleaning main run dir, state why
-            reasons_for_keeping_main_run_dir = []
-            if not stitch_success: reasons_for_keeping_main_run_dir.append("stitch_failed")
-            if skip_cleanup: reasons_for_keeping_main_run_dir.append("skip_cleanup_enabled")
-            if debug_mode: reasons_for_keeping_main_run_dir.append("debug_mode_enabled")
-            # Add a more specific reason if stitch_sub_workspace was kept due to skip_cleanup, which then prevents main dir cleanup
-            if not cleanup_stitch_sub_workspace and stitch_success and skip_cleanup: 
-                reasons_for_keeping_main_run_dir.append("stitch_sub_workspace_kept_due_to_skip_cleanup")
-            
-            # Filter out redundant "debug_mode_enabled" if it's already implied by other conditions not met for cleanup_main_run_dir
-            if not (stitch_success and not skip_cleanup) and "debug_mode_enabled" in reasons_for_keeping_main_run_dir:
-                 if not debug_mode: # if debug_mode is false, but it's listed as a reason, it's because other primary conditions failed
-                     pass # Let it be listed if debug_mode is true
-                 elif not (stitch_success and not skip_cleanup): # if other conditions failed, debug is secondary
-                     # This part of logic for dprint is getting complex, simplify the message:
-                     pass # Handled by the general list.
-
-            final_reason_text = ", ".join(reasons_for_keeping_main_run_dir) if reasons_for_keeping_main_run_dir else "(e.g. stitch failed or conditions not met for cleanup)"
-            dprint(f"Stitch: Skipping cleanup of main run directory: {current_run_base_output_dir} (Reasons: {final_reason_text})")
-            
-    return stitch_success, final_video_location_for_db
 
 # -----------------------------------------------------------------------------
 # 7. Main server loop
@@ -2740,53 +721,55 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
 
 def main():
     load_dotenv() # Load .env file variables into environment
-    global DB_TYPE, PG_TABLE_NAME, SQLITE_DB_PATH, SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_VIDEO_BUCKET, SUPABASE_CLIENT
+    global DB_TYPE, SQLITE_DB_PATH, SUPABASE_CLIENT, SUPABASE_VIDEO_BUCKET
 
     # Determine DB type from environment variables
     env_db_type = os.getenv("DB_TYPE", "sqlite").lower()
     env_pg_table_name = os.getenv("POSTGRES_TABLE_NAME", "tasks")
     env_supabase_url = os.getenv("SUPABASE_URL")
     env_supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
-    env_supabase_bucket = os.getenv("SUPABASE_VIDEO_BUCKET", "videos")    
+    env_supabase_bucket = os.getenv("SUPABASE_VIDEO_BUCKET", "videos")
     env_sqlite_db_path = os.getenv("SQLITE_DB_PATH_ENV") # Read SQLite DB path from .env
 
     cli_args = parse_args()
 
     # --- Configure DB Type and Connection Globals ---
-    # This block sets DB_TYPE, SQLITE_DB_PATH, SUPABASE_CLIENT, PG_TABLE_NAME etc.
+    # This block sets DB_TYPE, SQLITE_DB_PATH, SUPABASE_CLIENT, etc. in the db_ops module
     if env_db_type == "supabase" and env_supabase_url and env_supabase_key:
         try:
             temp_supabase_client = create_client(env_supabase_url, env_supabase_key)
-            if temp_supabase_client: 
+            if temp_supabase_client:
+                db_ops.DB_TYPE = "supabase"
+                db_ops.PG_TABLE_NAME = env_pg_table_name
+                db_ops.SUPABASE_URL = env_supabase_url
+                db_ops.SUPABASE_SERVICE_KEY = env_supabase_key
+                db_ops.SUPABASE_VIDEO_BUCKET = env_supabase_bucket
+                db_ops.SUPABASE_CLIENT = temp_supabase_client
+                # Also set local globals for non-db logic if needed
                 DB_TYPE = "supabase"
-                PG_TABLE_NAME = env_pg_table_name 
-                SUPABASE_URL = env_supabase_url
-                SUPABASE_SERVICE_KEY = env_supabase_key
-                SUPABASE_VIDEO_BUCKET = env_supabase_bucket
                 SUPABASE_CLIENT = temp_supabase_client
-                # Initial print about using Supabase will be done after migrations
+                SUPABASE_VIDEO_BUCKET = env_supabase_bucket
             else:
                 raise Exception("Supabase client creation returned None")
         except Exception as e:
             print(f"[ERROR] Failed to initialize Supabase client: {e}. Check SUPABASE_URL and SUPABASE_SERVICE_KEY.")
             print("Falling back to SQLite due to Supabase client initialization error.")
+            db_ops.DB_TYPE = "sqlite"
+            db_ops.SQLITE_DB_PATH = env_sqlite_db_path if env_sqlite_db_path else cli_args.db_file
             DB_TYPE = "sqlite"
-            # Determine SQLite path for fallback: .env, then CLI, then default
-            SQLITE_DB_PATH = env_sqlite_db_path if env_sqlite_db_path else cli_args.db_file
-    elif env_db_type == "sqlite":
+            SQLITE_DB_PATH = db_ops.SQLITE_DB_PATH
+    else: # Default to sqlite if .env DB_TYPE is unrecognized or not set, or if it's explicitly "sqlite"
+        if env_db_type != "sqlite":
+            print(f"DB_TYPE '{env_db_type}' in .env is not recognized. Defaulting to SQLite.")
+        db_ops.DB_TYPE = "sqlite"
+        db_ops.SQLITE_DB_PATH = env_sqlite_db_path if env_sqlite_db_path else cli_args.db_file
         DB_TYPE = "sqlite"
-        # Determine SQLite path: .env, then CLI, then default
-        SQLITE_DB_PATH = env_sqlite_db_path if env_sqlite_db_path else cli_args.db_file
-    else: # Default to sqlite if .env DB_TYPE is unrecognized or not set
-        print(f"DB_TYPE '{env_db_type}' in .env is not recognized or not set. Defaulting to SQLite.")
-        DB_TYPE = "sqlite"
-        # Determine SQLite path: .env, then CLI, then default
-        SQLITE_DB_PATH = env_sqlite_db_path if env_sqlite_db_path else cli_args.db_file
+        SQLITE_DB_PATH = db_ops.SQLITE_DB_PATH
     # --- End DB Type Configuration ---
 
-    # --- Run DB Migrations --- 
+    # --- Run DB Migrations ---
     # Must be after DB type/config is determined but before DB schema is strictly enforced by init_db or heavy use.
-    _run_db_migrations() 
+    db_ops._run_db_migrations()
     # --- End DB Migrations ---
 
     # --- Handle --migrate-only flag --- (Section 6)
@@ -2800,22 +783,23 @@ def main():
     main_output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"WanGP Headless Server Started.")
-    if DB_TYPE == "supabase":
-        print(f"Monitoring Supabase (PostgreSQL backend) table: {PG_TABLE_NAME}")
+    if db_ops.DB_TYPE == "supabase":
+        print(f"Monitoring Supabase (PostgreSQL backend) table: {db_ops.PG_TABLE_NAME}")
     else: # SQLite
-        print(f"Monitoring SQLite database: {SQLITE_DB_PATH}")
+        print(f"Monitoring SQLite database: {db_ops.SQLITE_DB_PATH}")
     print(f"Outputs will be saved under: {main_output_dir}")
     print(f"Polling interval: {cli_args.poll_interval} seconds.")
 
     # Initialize database
-    if DB_TYPE == "supabase":
-        init_db_supabase() # New call, uses globals
+    if db_ops.DB_TYPE == "supabase":
+        db_ops.init_db_supabase() # New call, uses globals in db_ops
     else: # SQLite
-        init_db(SQLITE_DB_PATH) # Existing SQLite init
+        db_ops.init_db(db_ops.SQLITE_DB_PATH) # Existing SQLite init
 
     # Activate global debug switch early so that all subsequent code paths can use dprint()
     global debug_mode
     debug_mode = cli_args.debug
+    db_ops.debug_mode = cli_args.debug # Also set it in the db_ops module
     dprint("Verbose debug logging enabled.")
 
     # original_argv = sys.argv.copy() # No longer needed to copy if not restoring fully
@@ -2858,7 +842,7 @@ def main():
         print("             Ensure models are manually placed in 'ckpts' or a video generation task runs first to trigger downloads.")
     # --- End early model download ---
 
-    db_path_str = str(SQLITE_DB_PATH) if DB_TYPE == "sqlite" else PG_TABLE_NAME # Use consistent string path for db functions
+    db_path_str = str(db_ops.SQLITE_DB_PATH) if db_ops.DB_TYPE == "sqlite" else db_ops.PG_TABLE_NAME # Use consistent string path for db functions
 
     # --- Ensure LoRA directories expected by wgp.py exist, especially for LTXV ---
     try:
@@ -2884,18 +868,13 @@ def main():
     # --- End LoRA directory check ---
 
     try:
-        # --- Add a one-time diagnostic log for task counts (SQLite only for now) ---
-        if DB_TYPE == "sqlite" and SQLITE_DB_PATH and debug_mode:
-            def _get_initial_task_counts(conn):
-                cursor = conn.cursor()
-                cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE_NAME}")
-                total_tasks = cursor.fetchone()[0]
-                cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE_NAME} WHERE status = ?", (STATUS_QUEUED,))
-                queued_tasks = cursor.fetchone()[0]
-                dprint(f"SQLite Initial State: Total tasks in '{PG_TABLE_NAME}': {total_tasks}. Tasks with status '{STATUS_QUEUED}': {queued_tasks}.")
-                return True # Dummy return
+        # --- Add a one-time diagnostic log for task counts ---
+        if db_ops.DB_TYPE == "sqlite" and debug_mode:
             try:
-                execute_sqlite_with_retry(SQLITE_DB_PATH, _get_initial_task_counts)
+                counts = db_ops.get_initial_task_counts()
+                if counts:
+                    total_tasks, queued_tasks = counts
+                    dprint(f"SQLite Initial State: Total tasks in '{db_ops.PG_TABLE_NAME}': {total_tasks}. Tasks with status '{db_ops.STATUS_QUEUED}': {queued_tasks}.")
             except Exception as e_diag:
                 dprint(f"SQLite Diagnostic Error: Could not get initial task counts: {e_diag}")
         # --- End one-time diagnostic log ---
@@ -2905,28 +884,28 @@ def main():
             current_task_id_for_status_update = None # Used to hold the task_id for status updates
             current_project_id = None # To hold the project_id for the current task
 
-            if DB_TYPE == "supabase":
-                dprint(f"Checking for queued tasks in Supabase (PostgreSQL backend) table {PG_TABLE_NAME} via Supabase RPC...")
-                task_info = get_oldest_queued_task_supabase()
+            if db_ops.DB_TYPE == "supabase":
+                dprint(f"Checking for queued tasks in Supabase (PostgreSQL backend) table {db_ops.PG_TABLE_NAME} via Supabase RPC...")
+                task_info = db_ops.get_oldest_queued_task_supabase()
                 dprint(f"Supabase task_info: {task_info}") # ADDED DPRINT
                 if task_info:
                     current_task_id_for_status_update = task_info["task_id"]
                     # Status is already set to IN_PROGRESS by func_claim_task RPC
             else: # SQLite
-                dprint(f"Checking for queued tasks in SQLite {SQLITE_DB_PATH}...")
-                task_info = get_oldest_queued_task(SQLITE_DB_PATH)
+                dprint(f"Checking for queued tasks in SQLite {db_ops.SQLITE_DB_PATH}...")
+                task_info = db_ops.get_oldest_queued_task(db_ops.SQLITE_DB_PATH)
                 dprint(f"SQLite task_info: {task_info}") # ADDED DPRINT
                 if task_info:
                     current_task_id_for_status_update = task_info["task_id"]
-                    update_task_status(SQLITE_DB_PATH, current_task_id_for_status_update, STATUS_IN_PROGRESS)
+                    db_ops.update_task_status(db_ops.SQLITE_DB_PATH, current_task_id_for_status_update, db_ops.STATUS_IN_PROGRESS)
 
             if not task_info:
                 dprint("No queued tasks found. Sleeping...")
-                if DB_TYPE == "sqlite":
+                if db_ops.DB_TYPE == "sqlite":
                     # Wait until either the WAL/db file changes or the normal
                     # poll interval elapses.  This reduces perceived latency
                     # without hammering the database.
-                    _wait_for_sqlite_change(SQLITE_DB_PATH, cli_args.poll_interval)
+                    _wait_for_sqlite_change(db_ops.SQLITE_DB_PATH, cli_args.poll_interval)
                 else:
                     time.sleep(cli_args.poll_interval)
                 continue
@@ -2934,16 +913,16 @@ def main():
             # current_task_data = task_info["params"] # Params are already a dict
             current_task_params = task_info["params"]
             current_task_type = task_info["task_type"] # Retrieve task_type
-            current_project_id = task_info.get("project_id") # Get project_id, might be None if not returned (e.g. Supabase old RPC)
+            current_project_id = task_info.get("project_id") # Get project_id, might be None if not returned
             
-            # If project_id wasn't part of task_info (e.g. from Supabase if RPC func_claim_task doesn't return it yet)
-            # or if it was somehow None from SQLite (shouldn't happen with the fix), try to fetch it.
+            # This fallback logic remains, but it's less likely to be needed
+            # if get_oldest_queued_task and its supabase equivalent are reliable.
             if current_project_id is None and current_task_id_for_status_update:
                 dprint(f"Project ID not directly available for task {current_task_id_for_status_update}. Attempting to fetch manually...")
-                if DB_TYPE == "supabase" and SUPABASE_CLIENT:
+                if db_ops.DB_TYPE == "supabase" and db_ops.SUPABASE_CLIENT:
                     try:
                         # Using 'id' as the column name for task_id based on Supabase schema conventions seen elsewhere (e.g. init_db)
-                        response = SUPABASE_CLIENT.table(PG_TABLE_NAME)\
+                        response = db_ops.SUPABASE_CLIENT.table(db_ops.PG_TABLE_NAME)\
                             .select("project_id")\
                             .eq("id", current_task_id_for_status_update)\
                             .single()\
@@ -2955,31 +934,22 @@ def main():
                             dprint(f"Could not fetch project_id for task {current_task_id_for_status_update} from Supabase. Response data: {response.data}, error: {response.error}")
                     except Exception as e_fetch_proj_id:
                         dprint(f"Exception while fetching project_id for {current_task_id_for_status_update} from Supabase: {e_fetch_proj_id}")
-                elif DB_TYPE == "sqlite": # Should have been fetched by get_oldest_queued_task, but as a fallback
-                    def _fetch_project_id_sqlite(conn):
-                        cursor = conn.cursor()
-                        cursor.execute("SELECT project_id FROM tasks WHERE id = ?", (current_task_id_for_status_update,))
-                        row = cursor.fetchone()
-                        return row[0] if row else None
-                    try:
-                        fetched_pid_sqlite = execute_sqlite_with_retry(SQLITE_DB_PATH, _fetch_project_id_sqlite)
-                        if fetched_pid_sqlite:
-                            current_project_id = fetched_pid_sqlite
-                            dprint(f"Successfully fetched project_id '{current_project_id}' for task {current_task_id_for_status_update} from SQLite (fallback).")
-                        else:
-                            dprint(f"Could not fetch project_id for task {current_task_id_for_status_update} from SQLite (fallback).")
-                    except Exception as e_fetch_proj_sqlite:
-                        dprint(f"Exception fetching project_id from SQLite (fallback) for {current_task_id_for_status_update}: {e_fetch_proj_sqlite}")
+                elif db_ops.DB_TYPE == "sqlite": # Should have been fetched, but as a fallback
+                    # This fallback no longer needs its own db connection logic.
+                    # A new helper could be added to db_ops if this is truly needed,
+                    # but for now, we assume the primary fetch works.
+                    dprint(f"Project_id was not fetched for {current_task_id_for_status_update} from SQLite. This is unexpected.")
+
             
             # Critical check: project_id is NOT NULL for sub-tasks created by orchestrator
             if current_project_id is None and current_task_type == "travel_orchestrator":
                 print(f"[CRITICAL ERROR] Task {current_task_id_for_status_update} (travel_orchestrator) has no project_id. Sub-tasks cannot be created. Skipping task.")
                 # Update status to FAILED to prevent re-processing this broken state
                 error_message_for_db = "Failed: Orchestrator task missing project_id, cannot create sub-tasks."
-                if DB_TYPE == "supabase":
-                    update_task_status_supabase(current_task_id_for_status_update, STATUS_FAILED, error_message_for_db)
+                if db_ops.DB_TYPE == "supabase":
+                    db_ops.update_task_status_supabase(current_task_id_for_status_update, db_ops.STATUS_FAILED, error_message_for_db)
                 else:
-                    update_task_status(SQLITE_DB_PATH, current_task_id_for_status_update, STATUS_FAILED, error_message_for_db)
+                    db_ops.update_task_status(db_ops.SQLITE_DB_PATH, current_task_id_for_status_update, db_ops.STATUS_FAILED, error_message_for_db)
                 time.sleep(1) # Brief pause
                 continue # Skip to next polling cycle
 
@@ -2991,21 +961,22 @@ def main():
             
             task_succeeded, output_location = process_single_task(
                 wgp_mod, current_task_params, main_output_dir, current_task_type, current_project_id,
-                image_download_dir=segment_image_download_dir
-                # Removed apply_booster_loras parameter because it's now determined within process_single_task
+                image_download_dir=segment_image_download_dir,
+                apply_reward_lora=cli_args.apply_reward_lora,
+                colour_match_videos=cli_args.colour_match_videos
             )
 
             if task_succeeded:
-                if DB_TYPE == "supabase":
-                    update_task_status_supabase(current_task_id_for_status_update, STATUS_COMPLETE, output_location)
+                if db_ops.DB_TYPE == "supabase":
+                    db_ops.update_task_status_supabase(current_task_id_for_status_update, db_ops.STATUS_COMPLETE, output_location)
                 else:
-                    update_task_status(SQLITE_DB_PATH, current_task_id_for_status_update, STATUS_COMPLETE, output_location)
+                    db_ops.update_task_status(db_ops.SQLITE_DB_PATH, current_task_id_for_status_update, db_ops.STATUS_COMPLETE, output_location)
                 print(f"Task {current_task_id_for_status_update} completed successfully. Output location: {output_location}")
             else:
-                if DB_TYPE == "supabase":
-                    update_task_status_supabase(current_task_id_for_status_update, STATUS_FAILED, output_location)
+                if db_ops.DB_TYPE == "supabase":
+                    db_ops.update_task_status_supabase(current_task_id_for_status_update, db_ops.STATUS_FAILED, output_location)
                 else:
-                    update_task_status(SQLITE_DB_PATH, current_task_id_for_status_update, STATUS_FAILED, output_location)
+                    db_ops.update_task_status(db_ops.SQLITE_DB_PATH, current_task_id_for_status_update, db_ops.STATUS_FAILED, output_location)
                 print(f"Task {current_task_id_for_status_update} failed. Review logs for errors. Output location recorded: {output_location if output_location else 'N/A'}")
             
             time.sleep(1) # Brief pause before checking for the next task
@@ -3021,304 +992,7 @@ def main():
                 print(f"Error during offloadobj release: {e_release}")
         print("Server stopped.")
 
-# -----------------------------------------------------------------------------
-# Supabase Storage Helper
-# -----------------------------------------------------------------------------
-def upload_to_supabase_storage(local_file_path: Path, object_name_in_bucket: str, bucket_name: str) -> str | None:
-    """Uploads a file to Supabase storage and returns its public URL."""
-    if not SUPABASE_CLIENT:
-        print("[ERROR] Supabase client not initialized. Cannot upload.")
-        return None
 
-    try:
-
-        with open(local_file_path, 'rb') as f:
-            # The object name can include paths, e.g., "videos/task_123.mp4"
-            res = SUPABASE_CLIENT.storage.from_(bucket_name).upload(
-                path=object_name_in_bucket, 
-                file=f,
-                file_options={"cache-control": "3600", "upsert": "true"} # Upsert to overwrite if exists
-            )
-        
-        dprint(f"Supabase upload response data: {res.json() if hasattr(res, 'json') else res}")
-
-        # Get public URL
-        public_url_response = SUPABASE_CLIENT.storage.from_(bucket_name).get_public_url(object_name_in_bucket)
-        
-        # public_url_response is a string directly
-        dprint(f"Supabase get_public_url response: {public_url_response}")
-        if public_url_response:
-            print(f"INFO: Successfully uploaded {local_file_path.name} to Supabase bucket '{bucket_name}' as '{object_name_in_bucket}'. URL: {public_url_response}")
-            return public_url_response
-        else:
-            print(f"[ERROR] Failed to get public URL for {object_name_in_bucket} in Supabase bucket '{bucket_name}'. Upload may have succeeded.")
-            return None # Or construct a presumed URL if your bucket is public and path is known
-
-    except Exception as e:
-        print(f"[ERROR] Failed to upload {local_file_path.name} to Supabase: {e}")
-        traceback.print_exc()
-        return None
-
-# -----------------------------------------------------------------------------
-# PostgreSQL Specific DB Functions (Now using Supabase RPC)
-# Renamed to reflect Supabase usage more directly
-# -----------------------------------------------------------------------------
-
-def init_db_supabase(): # Renamed from init_db_postgres
-    """Initializes the PostgreSQL tasks table via Supabase RPC if it doesn't exist."""
-    if not SUPABASE_CLIENT:
-        print("[ERROR] Supabase client not initialized. Cannot initialize database table.")
-        sys.exit(1)
-    try:
-        # RPC call to the SQL function func_initialize_tasks_table
-        # IMPORTANT: The func_initialize_tasks_table SQL function itself
-        # must be updated to include "task_type TEXT NOT NULL" and "dependant_on TEXT NULL"
-        # along with an index "idx_dependant_on" on the "dependant_on" column in its
-        # CREATE TABLE statement for the specified p_table_name.
-        SUPABASE_CLIENT.rpc("func_initialize_tasks_table", {"p_table_name": PG_TABLE_NAME}).execute()
-        print(f"Supabase RPC: Table '{PG_TABLE_NAME}' initialization requested.")
-        # Note: RPC for DDL might not return specific confirmation beyond successful execution.
-        # You might need to add a SELECT to confirm table existence if strict feedback is needed.
-    except Exception as e: # Broader exception for Supabase/PostgREST errors
-        print(f"[ERROR] Supabase RPC for table initialization failed: {e}")
-        traceback.print_exc()
-        sys.exit(1)
-
-def get_oldest_queued_task_supabase(): # Renamed from get_oldest_queued_task_postgres
-    """Fetches the oldest task via Supabase RPC using func_claim_task."""
-    if not SUPABASE_CLIENT:
-        print("[ERROR] Supabase client not initialized. Cannot get task.")
-        return None
-    try:
-        worker_id = f"worker_{os.getpid()}" # Example worker ID
-        dprint(f"DEBUG get_oldest_queued_task_supabase: About to call RPC func_claim_task.")
-        dprint(f"DEBUG get_oldest_queued_task_supabase: PG_TABLE_NAME = '{PG_TABLE_NAME}' (type: {type(PG_TABLE_NAME)})")
-        dprint(f"DEBUG get_oldest_queued_task_supabase: worker_id = '{worker_id}' (type: {type(worker_id)})")
-        
-        response = SUPABASE_CLIENT.rpc(
-            "func_claim_task", 
-            {"p_table_name": PG_TABLE_NAME, "p_worker_id": worker_id}
-        ).execute()
-        
-        dprint(f"Supabase RPC func_claim_task response data: {response.data}")
-
-        if response.data and len(response.data) > 0:
-            task_data = response.data[0] # RPC should return a single row or empty
-            dprint(f"Supabase RPC: Raw task_data from func_claim_task: {task_data}") # DEBUG ADDED
-            # Ensure the RPC returns task_id_out, params_out, and now task_type_out
-            if task_data.get("task_id_out") and task_data.get("params_out") is not None and task_data.get("task_type_out") is not None:
-                dprint(f"Supabase RPC: Claimed task {task_data['task_id_out']} of type {task_data['task_type_out']}")
-                return {"task_id": task_data["task_id_out"], "params": task_data["params_out"], "task_type": task_data["task_type_out"]}
-            else:
-                dprint("Supabase RPC: func_claim_task returned but no task was claimed or required fields (task_id_out, params_out, task_type_out) are missing.")
-                return None
-        else:
-            dprint("Supabase RPC: No task claimed or empty response from func_claim_task.")
-            return None
-    except Exception as e:
-        print(f"[ERROR] Supabase RPC func_claim_task failed: {e}")
-        traceback.print_exc()
-        return None
-
-def update_task_status_supabase(task_id_str, status_str, output_location_val=None): # Renamed from update_task_status_postgres
-    """Updates a task's status via Supabase RPC using func_update_task_status."""
-    if not SUPABASE_CLIENT:
-        print("[ERROR] Supabase client not initialized. Cannot update task status.")
-        return
-    try:
-        params = {
-            "p_table_name": PG_TABLE_NAME,
-            "p_task_id": task_id_str,
-            "p_status": status_str
-        }
-        if output_location_val is not None:
-            params["p_output_location"] = output_location_val
-        
-        SUPABASE_CLIENT.rpc("func_update_task_status", params).execute()
-        dprint(f"Supabase RPC: Updated status of task {task_id_str} to {status_str}. Output: {output_location_val if output_location_val else 'N/A'}")
-    except Exception as e:
-        print(f"[ERROR] Supabase RPC func_update_task_status for {task_id_str} failed: {e}")
-
-def _migrate_supabase_schema():
-    """Applies necessary schema migrations to an existing Supabase/PostgreSQL database via RPC."""
-    if not SUPABASE_CLIENT:
-        print("[ERROR] Supabase Migration: Supabase client not initialized. Cannot run migration.")
-        return
-
-    dprint(f"Supabase Migration: Requesting schema migration via RPC 'func_migrate_tasks_for_task_type' for table {PG_TABLE_NAME}...")
-    try:
-
-        # IMPORTANT: The func_migrate_tasks_for_task_type SQL function itself (or a new one like func_migrate_tasks_add_dependant_on)
-        # must be extended to perform:
-        # ALTER TABLE {p_table_name} ADD COLUMN IF NOT EXISTS dependant_on TEXT NULL;
-        # CREATE INDEX IF NOT EXISTS idx_dependant_on ON {p_table_name}(dependant_on);
-        # It should also handle renaming 'depends_on' to 'dependant_on' if the old (previously incorrect) misspelled column 'depends_on' exists.
-        response = SUPABASE_CLIENT.rpc("func_migrate_tasks_for_task_type", {"p_table_name": PG_TABLE_NAME}).execute()
-        
-        # Improved response handling based on Supabase Python client v2+ structure
-        if response.error:
-            print(f"[ERROR] Supabase Migration: RPC 'func_migrate_tasks_for_task_type' returned an error: {response.error.message} (Code: {response.error.code}, Details: {response.error.details})")
-        elif response.data:
-            dprint(f"Supabase Migration: RPC 'func_migrate_tasks_for_task_type' executed. Response data: {response.data}")
-        else:
-            dprint("Supabase Migration: RPC 'func_migrate_tasks_for_task_type' executed. (No specific data or error in response, check RPC logs if issues)")
-            
-    except Exception as e:
-        print(f"[ERROR] Supabase Migration: Failed to execute RPC 'func_migrate_tasks_for_task_type': {e}")
-        traceback.print_exc()
-
-def _run_db_migrations():
-    """Runs database migrations based on the configured DB_TYPE."""
-    dprint(f"DB Migrations: Running for DB_TYPE: {DB_TYPE}")
-    if DB_TYPE == "sqlite":
-        if SQLITE_DB_PATH:
-            _migrate_sqlite_schema(SQLITE_DB_PATH)
-        else:
-            print("[ERROR] DB Migration: SQLITE_DB_PATH not set. Skipping SQLite migration.")
-    elif DB_TYPE == "supabase":
-        if SUPABASE_CLIENT and PG_TABLE_NAME:
-            _migrate_supabase_schema()
-        else:
-            print("[ERROR] DB Migration: Supabase client or PG_TABLE_NAME not configured. Skipping Supabase migration.")
-    else:
-        dprint(f"DB Migrations: No migration logic for DB_TYPE '{DB_TYPE}'. Skipping migrations.")
-
-# Helper to query DB for a specific task's output (needed by segment handler)
-def get_task_output_location_from_db(task_id_to_find: str) -> str | None:
-    dprint(f"Querying DB for output location of task: {task_id_to_find}")
-    if DB_TYPE == "sqlite":
-        def _get_op(conn):
-            cursor = conn.cursor()
-            # Ensure we only get tasks that are actually complete with an output
-            cursor.execute("SELECT output_location FROM tasks WHERE id = ? AND status = ? AND output_location IS NOT NULL", 
-                           (task_id_to_find, STATUS_COMPLETE))
-            row = cursor.fetchone()
-            return row[0] if row else None
-        try:
-            return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_op)
-        except Exception as e:
-            print(f"Error querying SQLite for task output {task_id_to_find}: {e}")
-            return None
-    elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
-        try:
-            # This assumes an RPC function `func_get_task_details` exists or similar direct query access.
-            # The RPC should return at least `output_location` and `status`.
-            # Example: response = SUPABASE_CLIENT.rpc("func_get_task_details", {"p_task_id": task_id_to_find}).execute()
-            # If direct query:
-            response = SUPABASE_CLIENT.table(PG_TABLE_NAME)\
-                .select("output_location, status")\
-                .eq("task_id", task_id_to_find)\
-                .execute()
-
-            if response.data and len(response.data) > 0:
-                task_details = response.data[0]
-                if task_details.get("status") == STATUS_COMPLETE and task_details.get("output_location"):
-                    return task_details.get("output_location")
-                else:
-                    dprint(f"Task {task_id_to_find} found but not complete or no output_location. Status: {task_details.get('status')}")
-                    return None
-            else:
-                dprint(f"Task {task_id_to_find} not found in Supabase.")
-                return None
-        except Exception as e:
-            print(f"Error querying Supabase for task output {task_id_to_find}: {e}")
-            traceback.print_exc()
-            return None
-    dprint(f"DB type {DB_TYPE} not supported or client not init for get_task_output_location_from_db")
-    return None
-
-# Helper function for VACE Ref preparation, to be used by _handle_travel_segment_task
-# This function is similar to what was previously in travel_between_images.py
-def _apply_strength_to_image_for_headless(image_path: Path, strength: float, output_path: Path, target_resolution: tuple[int, int] | None) -> Path | None:
-    '''
-    Applies a brightness adjustment to the image at image_path using the given strength,
-    optionally resizes it to target_resolution, saves the result to output_path, and returns output_path.
-    '''
-    try:
-        # Ensure PIL and ImageEnhance are available (already imported globally but good practice for helper)
-        from PIL import Image, ImageEnhance
-        img = Image.open(image_path)
-        if target_resolution: # target_resolution is (width, height)
-            img = img.resize(target_resolution, Image.Resampling.LANCZOS)
-        
-        enhancer = ImageEnhance.Brightness(img)
-        processed_img = enhancer.enhance(strength)
-        
-        output_path.parent.mkdir(parents=True, exist_ok=True) # Ensure output directory exists
-        processed_img.save(output_path)
-        dprint(f"Headless VACE Ref: Applied strength {strength} to {image_path}, saved to {output_path}")
-        return output_path
-    except Exception as e:
-        dprint(f"[ERROR] Headless VACE Ref: Error applying strength to image {image_path}: {e}")
-        traceback.print_exc()
-        return None
-
-def _prepare_vace_ref_for_segment_headless(
-    ref_instruction: dict,
-    segment_processing_dir: Path,
-    target_resolution_wh: tuple[int, int] | None,
-    image_download_dir: Path | str | None = None, # Added for downloading URLs
-    task_id_for_logging: str | None = "generic_headless_task" # Added for logging
-) -> Path | None:
-    '''
-    Prepares a VACE reference image for a segment based on the given instruction.
-    Downloads the image if 'original_path' is a URL and image_download_dir is provided.
-    Applies strength adjustment and resizes, saving the result to segment_processing_dir.
-    Returns the path to the processed image if successful, or None otherwise.
-    '''
-    dprint(f"Task {task_id_for_logging} (_prepare_vace_ref): VACE Ref instruction: {ref_instruction}, download_dir: {image_download_dir}")
-
-    original_image_path_str = ref_instruction.get("original_path")
-    strength_to_apply = ref_instruction.get("strength_to_apply")
-
-    if not original_image_path_str:
-        dprint(f"Task {task_id_for_logging}, Segment {segment_processing_dir.name}: No original_path in VACE ref instruction. Skipping.")
-        return None
-    
-    # Download the original_path if it's a URL, using the passed image_download_dir
-    local_original_image_path_str = sm_download_image_if_url(original_image_path_str, image_download_dir, task_id_for_logging)
-    local_original_image_path = Path(local_original_image_path_str)
-
-    if not local_original_image_path.exists():
-        dprint(f"Task {task_id_for_logging}, Segment {segment_processing_dir.name}: VACE ref original image not found (after potential download): {local_original_image_path} (original input: {original_image_path_str})")
-        return None
-
-    vace_ref_type = ref_instruction.get("type", "generic")
-    segment_idx_for_naming = ref_instruction.get("segment_idx_for_naming", "unknown_idx")
-    processed_vace_base_name = f"vace_ref_s{segment_idx_for_naming}_{vace_ref_type}_str{strength_to_apply:.2f}"
-    original_suffix = local_original_image_path.suffix if local_original_image_path.suffix else ".png"
-    
-    # _get_unique_target_path is from common_utils (sm_get_unique_target_path)
-    output_path_for_processed_vace = sm_get_unique_target_path(segment_processing_dir, processed_vace_base_name, original_suffix)
-
-    effective_target_resolution_wh = None
-    if target_resolution_wh:
-        effective_target_resolution_wh = ((target_resolution_wh[0] // 16) * 16, (target_resolution_wh[1] // 16) * 16)
-        if effective_target_resolution_wh != target_resolution_wh:
-            dprint(f"Task {task_id_for_logging}, Segment {segment_processing_dir.name}: Adjusted VACE ref target resolution from {target_resolution_wh} to {effective_target_resolution_wh}")
-
-    # Call the common_utils version of sm_apply_strength_to_image.
-    # image_download_dir is passed as None because local_original_image_path is guaranteed to be local by this point.
-    final_processed_path = sm_apply_strength_to_image( # This is from common_utils
-        image_path_input=local_original_image_path, 
-        strength=strength_to_apply,
-        output_path=output_path_for_processed_vace,
-        target_resolution_wh=effective_target_resolution_wh,
-        task_id_for_logging=task_id_for_logging,
-        image_download_dir=None # Input path is already local here
-    )
-
-    if final_processed_path and final_processed_path.exists():
-        dprint(f"Task {task_id_for_logging}, Segment {segment_processing_dir.name}: Prepared VACE ref: {final_processed_path}")
-        return final_processed_path
-    else:
-        dprint(f"Task {task_id_for_logging}, Segment {segment_processing_dir.name}: Failed to apply strength/save VACE ref from {local_original_image_path}. Skipping.")
-        traceback.print_exc() # Add traceback for detail on failure
-        return None
-
-# -----------------------------------------------------------------------------
-# Helper – wait for SQLite WAL changes to wake the poll loop early
-# -----------------------------------------------------------------------------
 
 def _wait_for_sqlite_change(db_path_str: str, timeout_seconds: int):
     """Block up to timeout_seconds waiting for mtime change on db / -wal / -shm.
@@ -3358,58 +1032,6 @@ def _wait_for_sqlite_change(db_path_str: str, timeout_seconds: int):
                 pass
     # Timed out – return control to caller
     return
-
-def _apply_brightness_to_video_frames_headless(input_video_path: str, output_video_path: Path, brightness_adjust: float, task_id_for_logging: str) -> Path | None:
-    """
-    Applies brightness adjustment to a video by processing its frames.
-    A brightness_adjust of 0 means no change. Negative values darken, positive values brighten.
-    """
-    try:
-        dprint(f"Task {task_id_for_logging}: Applying brightness adjustment {brightness_adjust} to {input_video_path}")
-        
-        # We need video properties to re-encode
-        total_frames, fps = sm_get_video_frame_count_and_fps(input_video_path)
-        if total_frames is None or fps is None or total_frames == 0:
-            print(f"[ERROR] Task {task_id_for_logging}: Could not get frame count or fps for {input_video_path}, or video has 0 frames.")
-            return None
-
-        # Extract frames
-        frames_iterator = sm_extract_frames_from_video(input_video_path)
-        if frames_iterator is None:
-            print(f"[ERROR] Task {task_id_for_logging}: Could not extract frames from {input_video_path}")
-            return None
-
-        adjusted_frames = []
-        first_frame = None
-        for frame_np in frames_iterator:
-            if first_frame is None:
-                first_frame = frame_np
-            # sm_adjust_frame_brightness is already imported from common_utils
-            adjusted_frame = sm_adjust_frame_brightness(frame_np, brightness_adjust)
-            adjusted_frames.append(adjusted_frame)
-        
-        if not adjusted_frames or first_frame is None:
-            print(f"[ERROR] Task {task_id_for_logging}: No frames to write for brightness-adjusted video.")
-            return None
-
-        # Get resolution from the first frame
-        h, w, _ = first_frame.shape
-        resolution_wh = (w, h)
-        
-        # Create new video from adjusted frames
-        created_video_path = sm_create_video_from_frames_list(adjusted_frames, output_video_path, fps, resolution_wh)
-        
-        if created_video_path and created_video_path.exists():
-            dprint(f"Task {task_id_for_logging}: Successfully created brightness-adjusted video at {created_video_path}")
-            return created_video_path
-        else:
-            print(f"[ERROR] Task {task_id_for_logging}: Failed to create brightness-adjusted video.")
-            return None
-
-    except Exception as e:
-        print(f"[ERROR] Task {task_id_for_logging}: Exception in _apply_brightness_to_video_frames_headless: {e}")
-        traceback.print_exc()
-        return None
 
 if __name__ == "__main__":
     main() 

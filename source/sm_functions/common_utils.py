@@ -1122,6 +1122,28 @@ def generate_different_pose_debug_video_summary(
     create_video_from_frames_list(all_output_frames, output_path, fps, target_resolution)
     print(f"Debug video summary for 'different_pose' saved to: {output_path.resolve()}") 
 
+def download_file(url, dest_folder, filename):
+    dest_path = Path(dest_folder) / filename
+    if dest_path.exists():
+        print(f"[INFO] File {filename} already exists in {dest_folder}.")
+        return True
+    try:
+        print(f"Downloading {filename} from {url} to {dest_folder}...")
+        response = requests.get(url, stream=True)
+        response.raise_for_status() # Raise an exception for HTTP errors
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        print(f"Successfully downloaded {filename}.")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to download {filename}: {e}")
+        if dest_path.exists(): # Attempt to clean up partial download
+            try: os.remove(dest_path)
+            except: pass
+        return False
+
 # Added to provide a unique target path generator for files.
 def _get_unique_target_path(target_dir: Path, base_name: str, extension: str) -> Path:
     """Generates a unique target Path in the given directory by appending a timestamp and random string."""
@@ -1320,3 +1342,50 @@ def _adjust_frame_brightness(frame: np.ndarray, factor: float) -> np.ndarray:
     # cv2 alpha: >1 = brighter, <1 = darker
     cv2_alpha = 1.0 - factor 
     return cv2.convertScaleAbs(frame, alpha=cv2_alpha, beta=0)
+
+def sm_get_unique_target_path(target_dir: Path, name_stem: str, suffix: str) -> Path:
+    """Generates a unique target Path in the given directory by appending a number if needed."""
+    if not suffix.startswith('.'):
+        suffix = f".{suffix}"
+    
+    final_path = target_dir / f"{name_stem}{suffix}"
+    counter = 1
+    while final_path.exists():
+        final_path = target_dir / f"{name_stem}_{counter}{suffix}"
+        counter += 1
+    return final_path
+
+def load_pil_images(
+    paths_list_or_str: list[str] | str,
+    wgp_convert_func: callable,
+    image_download_dir: Path | str | None,
+    task_id_for_log: str,
+    dprint: callable
+) -> list[Any] | None:
+    """
+    Loads one or more images from paths or URLs, downloads them if necessary,
+    and applies a conversion function.
+    """
+    if paths_list_or_str is None:
+        return None
+
+    paths_list = paths_list_or_str if isinstance(paths_list_or_str, list) else [paths_list_or_str]
+    images = []
+
+    for p_str in paths_list:
+        local_p_str = download_image_if_url(p_str, image_download_dir, task_id_for_log)
+        if not local_p_str:
+            dprint(f"[Task {task_id_for_log}] Skipping image as download_image_if_url returned nothing for: {p_str}")
+            continue
+
+        p = Path(local_p_str.strip())
+        if not p.is_file():
+            dprint(f"[Task {task_id_for_log}] load_pil_images: Image file not found after potential download: {p} (original: {p_str})")
+            continue
+        try:
+            img = Image.open(p)
+            images.append(wgp_convert_func(img))
+        except Exception as e:
+            print(f"[WARNING] Failed to load image {p}: {e}")
+            
+    return images if images else None
