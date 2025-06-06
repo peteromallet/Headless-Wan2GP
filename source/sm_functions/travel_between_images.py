@@ -820,6 +820,7 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
         dprint(f"Chaining for WGP task {wgp_task_id} (segment {segment_idx_completed} of run {orchestrator_run_id}). Initial video: {video_to_process_abs_path}")
 
         # --- Post-generation Processing Chain ---
+        # Saturation and Brightness are only applied to segments AFTER the first one.
         if is_subsequent_segment_val or is_first_new_segment_after_continue:
 
             # --- 1. Saturation ---
@@ -862,36 +863,36 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                 else:
                     dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Brightness adjustment failed. Continuing with previous video version.")
 
-            # --- 3. Color Matching ---
-            if chain_details.get("colour_match_videos"):
-                start_ref = chain_details.get("cm_start_ref_path")
-                end_ref = chain_details.get("cm_end_ref_path")
-                dprint(f"Chain (Seg {segment_idx_completed}): Color matching requested. Start Ref: {start_ref}, End Ref: {end_ref}")
+        # --- 3. Color Matching (Applied to all segments if enabled) ---
+        if chain_details.get("colour_match_videos"):
+            start_ref = chain_details.get("cm_start_ref_path")
+            end_ref = chain_details.get("cm_end_ref_path")
+            dprint(f"Chain (Seg {segment_idx_completed}): Color matching requested. Start Ref: {start_ref}, End Ref: {end_ref}")
 
-                if start_ref and end_ref and Path(start_ref).exists() and Path(end_ref).exists():
-                    target_dir_for_cm, db_prefix_for_cm = _get_post_processing_target_dir(db_ops.DB_TYPE, db_ops.SQLITE_DB_PATH, segment_processing_dir_for_saturation_str)
-                    cm_out_base = f"s{segment_idx_completed}_colormatched"
-                    cm_video_output_abs_path = sm_get_unique_target_path(target_dir_for_cm, cm_out_base, video_to_process_abs_path.suffix)
+            if start_ref and end_ref and Path(start_ref).exists() and Path(end_ref).exists():
+                target_dir_for_cm, db_prefix_for_cm = _get_post_processing_target_dir(db_ops.DB_TYPE, db_ops.SQLITE_DB_PATH, segment_processing_dir_for_saturation_str)
+                cm_out_base = f"s{segment_idx_completed}_colormatched"
+                cm_video_output_abs_path = sm_get_unique_target_path(target_dir_for_cm, cm_out_base, video_to_process_abs_path.suffix)
 
-                    matched_video_path = _apply_color_matching_to_video(
-                        str(video_to_process_abs_path),
-                        start_ref,
-                        end_ref,
-                        str(cm_video_output_abs_path),
-                        dprint
-                    )
+                matched_video_path = _apply_color_matching_to_video(
+                    str(video_to_process_abs_path),
+                    start_ref,
+                    end_ref,
+                    str(cm_video_output_abs_path),
+                    dprint
+                )
 
-                    if matched_video_path and matched_video_path.exists():
-                        new_db_path = f"{db_prefix_for_cm}{matched_video_path.name}"
-                        dprint(f"Chain (Seg {segment_idx_completed}): Color matching successful. New path: {new_db_path}")
-                        _cleanup_intermediate_video(full_orchestrator_payload, video_to_process_abs_path, segment_idx_completed, "pre-colormatch", dprint)
+                if matched_video_path and matched_video_path.exists():
+                    new_db_path = f"{db_prefix_for_cm}{matched_video_path.name}"
+                    dprint(f"Chain (Seg {segment_idx_completed}): Color matching successful. New path: {new_db_path}")
+                    _cleanup_intermediate_video(full_orchestrator_payload, video_to_process_abs_path, segment_idx_completed, "pre-colormatch", dprint)
 
-                        video_to_process_abs_path = matched_video_path
-                        final_video_path_for_db = new_db_path
-                    else:
-                        dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Color matching failed. Continuing with previous video version.")
+                    video_to_process_abs_path = matched_video_path
+                    final_video_path_for_db = new_db_path
                 else:
-                    dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Skipping color matching due to missing or invalid reference image paths.")
+                    dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Color matching failed. Continuing with previous video version.")
+            else:
+                dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Skipping color matching due to missing or invalid reference image paths.")
 
 
         # The orchestrator has already enqueued all segment and stitch tasks.
