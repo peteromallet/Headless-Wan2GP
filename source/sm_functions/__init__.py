@@ -52,16 +52,16 @@ from ..common_utils import (
 )
 
 # --- Make video_utils directly importable --- 
-from ..video_utils import (
-    crossfade_ease, # Renamed to avoid conflict if other eases are added
-    _blend_linear,
-    _blend_linear_sharp,
-    cross_fade_overlap_frames,
-    extract_frames_from_video,
-    create_video_from_frames_list,
-    _apply_saturation_to_video_ffmpeg,
-    color_match_video_to_reference
-)
+# from ..video_utils import (
+#     crossfade_ease, # Renamed to avoid conflict if other eases are added
+#     _blend_linear,
+#     _blend_linear_sharp,
+#     cross_fade_overlap_frames,
+#     extract_frames_from_video,
+#     create_video_from_frames_list,
+#     _apply_saturation_to_video_ffmpeg,
+#     color_match_video_to_reference
+# )
 
 __all__ = [
     # common_utils exports
@@ -82,12 +82,12 @@ __all__ = [
     # different_pose exports
     "run_different_pose_task",
     # video_utils exports
-    "crossfade_ease",
-    "_blend_linear",
-    "_blend_linear_sharp",
-    "cross_fade_overlap_frames",
-    "extract_frames_from_video",
-    "create_video_from_frames_list",
-    "_apply_saturation_to_video_ffmpeg",
-    "color_match_video_to_reference"
+    # "crossfade_ease",
+    # "_blend_linear",
+    # "_blend_linear_sharp",
+    # "cross_fade_overlap_frames",
+    # "extract_frames_from_video",
+    # "create_video_from_frames_list",
+    # "_apply_saturation_to_video_ffmpeg",
+    # "color_match_video_to_reference"
 ] 
