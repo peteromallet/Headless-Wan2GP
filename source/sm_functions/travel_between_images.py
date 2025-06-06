@@ -408,11 +408,6 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
     final_segment_video_output_path_str = None # Output of the WGP sub-task
     output_message_for_segment_task = "Segment task initiated."
 
-    # Check for server-wide override flag first. If not set, use the value from payload.
-    # This allows a server operator to force-enable/disable boosters for all tasks.
-    if not apply_reward_lora:
-        apply_reward_lora = task_params_from_db.get("apply_reward_lora", task_params_from_db.get("booster_loras", False))
-
     try:
         # --- 1. Initialization & Parameter Extraction ---
         orchestrator_task_id_ref = segment_params.get("orchestrator_task_id_ref")
@@ -449,6 +444,10 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 return False, msg
         
         # Now full_orchestrator_payload is guaranteed to be populated or we've exited.
+        # FIX: Prioritize job-specific settings from orchestrator payload over server-wide CLI flags.
+        effective_colour_match_enabled = full_orchestrator_payload.get("colour_match_videos", colour_match_videos)
+        effective_apply_reward_lora = full_orchestrator_payload.get("apply_reward_lora", apply_reward_lora)
+
         current_run_base_output_dir_str = segment_params.get("current_run_base_output_dir")
         if not current_run_base_output_dir_str: # Should be passed by orchestrator/prev segment
             current_run_base_output_dir_str = full_orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
@@ -461,7 +460,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
 
         # --- Color Match Reference Image Determination ---
         start_ref_path_for_cm, end_ref_path_for_cm = None, None
-        if colour_match_videos:
+        if effective_colour_match_enabled:
             input_images_for_cm = full_orchestrator_payload.get("input_image_paths_resolved", [])
             is_continuing_for_cm = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
             
@@ -725,7 +724,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             "segment_processing_dir_for_saturation": str(segment_processing_dir.resolve()),
             "is_first_new_segment_after_continue": is_first_new_segment_after_continue,
             "is_subsequent_segment": is_subsequent_segment,
-            "colour_match_videos": colour_match_videos,
+            "colour_match_videos": effective_colour_match_enabled,
             "cm_start_ref_path": start_ref_path_for_cm,
             "cm_end_ref_path": end_ref_path_for_cm,
         }
@@ -742,7 +741,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             current_wgp_engine,         # Task type for process_single_task (e.g., "wgp")
             project_id_for_task=segment_params.get("project_id"), # Added project_id
             image_download_dir=segment_image_download_dir, # Pass the determined download dir
-            apply_reward_lora=apply_reward_lora
+            apply_reward_lora=effective_apply_reward_lora
         )
 
         if generation_success:
