@@ -20,7 +20,7 @@ try:
     from Wan2GP.rife.inference import temporal_interpolation
     from source.common_utils import (
         dprint, get_video_frame_count_and_fps,
-        download_image_if_url, sm_get_unique_target_path, sm_apply_strength_to_image,
+        download_image_if_url, sm_get_unique_target_path, apply_strength_to_image as sm_apply_strength_to_image,
         sm_create_color_frame, sm_image_to_frame, sm_adjust_frame_brightness
     )
     from source.sm_functions.travel_between_images import get_easing_function as sm_get_easing_function

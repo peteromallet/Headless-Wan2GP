@@ -5,7 +5,7 @@ for `steerable_motion.py`.
 """
 
 # Task Handlers
-from .travel_between_images import run_travel_between_images_task
+# from .travel_between_images import run_travel_between_images_task
 from .different_pose import run_different_pose_task
 
 # Common Utilities
@@ -78,7 +78,7 @@ __all__ = [
     "draw_multiline_text",
     "generate_different_pose_debug_video_summary",
     # travel_between_images exports
-    "run_travel_between_images_task",
+    # "run_travel_between_images_task",
     # different_pose exports
     "run_different_pose_task",
     # video_utils exports

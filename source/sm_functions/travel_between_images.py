@@ -19,6 +19,7 @@ from ..common_utils import (
     _get_unique_target_path as sm_get_unique_target_path,
     create_color_frame as sm_create_color_frame,
     parse_resolution as sm_parse_resolution,
+    stitch_videos_ffmpeg as sm_stitch_videos_ffmpeg,
 )
 from ..video_utils import (
     extract_frames_from_video as sm_extract_frames_from_video,
