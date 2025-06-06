@@ -11,7 +11,7 @@ from .different_pose import run_different_pose_task
 # Common Utilities
 # These are re-exported here for convenience, allowing task modules to import
 # them directly from `sm_functions.common_utils` or just `sm_functions` if preferred.
-from .common_utils import (
+from ..common_utils import (
     DEBUG_MODE, # Note: This is a global, set by steerable_motion.py
     DEFAULT_DB_TABLE_NAME,
     STATUS_QUEUED, 
@@ -52,7 +52,7 @@ from .common_utils import (
 )
 
 # --- Make video_utils directly importable --- 
-from .video_utils import (
+from ..video_utils import (
     crossfade_ease, # Renamed to avoid conflict if other eases are added
     _blend_linear,
     _blend_linear_sharp,
