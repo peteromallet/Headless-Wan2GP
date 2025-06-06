@@ -484,9 +484,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             
             # Download images if they are URLs so they exist locally for the color matching function.
             if start_ref_path_for_cm:
-                start_ref_path_for_cm = sm_download_image_if_url(start_ref_path_for_cm, segment_processing_dir, f"s{segment_idx}_cm_start_ref", dprint, segment_task_id_str)
+                start_ref_path_for_cm = sm_download_image_if_url(start_ref_path_for_cm, segment_processing_dir, segment_task_id_str)
             if end_ref_path_for_cm:
-                end_ref_path_for_cm = sm_download_image_if_url(end_ref_path_for_cm, segment_processing_dir, f"s{segment_idx}_cm_end_ref", dprint, segment_task_id_str)
+                end_ref_path_for_cm = sm_download_image_if_url(end_ref_path_for_cm, segment_processing_dir, segment_task_id_str)
 
             dprint(f"Seg {segment_idx} CM Refs: Start='{start_ref_path_for_cm}', End='{end_ref_path_for_cm}'")
         # --- End Color Match Reference Image Determination ---
