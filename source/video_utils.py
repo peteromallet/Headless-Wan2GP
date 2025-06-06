@@ -11,18 +11,19 @@ try:
     from PIL import Image
     import torch
 
-    # Add Wan2GP path for rife import
-    wan2gp_path = Path(__file__).resolve().parent.parent.parent / "Wan2GP"
-    if str(wan2gp_path) not in sys.path:
-        sys.path.insert(0, str(wan2gp_path))
-    from rife.inference import temporal_interpolation
+    # Add project root to path to allow absolute imports from source
+    project_root = Path(__file__).resolve().parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
 
-    from ..common_utils import (
+    # Now that root is in path, we can import from Wan2GP and source
+    from Wan2GP.rife.inference import temporal_interpolation
+    from source.common_utils import (
         dprint, get_video_frame_count_and_fps,
         download_image_if_url, sm_get_unique_target_path, sm_apply_strength_to_image,
         sm_create_color_frame, sm_image_to_frame, sm_adjust_frame_brightness
     )
-    from .travel_between_images import get_easing_function as sm_get_easing_function
+    from source.sm_functions.travel_between_images import get_easing_function as sm_get_easing_function
 except ImportError as e_import:
     print(f"Critical import error in video_utils.py: {e_import}")
     traceback.print_exc()
