@@ -605,6 +605,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         
         try: # Guide Video Creation Block
             guide_video_base_name = f"s{segment_idx}_guide_vid"
+            input_images_resolved_original = full_orchestrator_payload["input_image_paths_resolved"]
             
             guide_video_target_dir: Path
             if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
@@ -616,7 +617,6 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 guide_video_target_dir = segment_processing_dir # Default to segment_processing_dir
                 dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Guide video (Non-SQLite mode) will target {guide_video_target_dir}")
 
-                input_images_resolved_original = full_orchestrator_payload["input_image_paths_resolved"]
             # The download is now handled inside sm_create_guide_video_for_travel_segment (via sm_image_to_frame)
             # Just pass the original paths.
             input_images_resolved_for_guide = input_images_resolved_original
