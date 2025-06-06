@@ -4,6 +4,7 @@ from pathlib import Path
 import traceback
 import os
 import sys
+import json
 
 try:
     import cv2  # pip install opencv-python
@@ -548,23 +549,26 @@ def create_guide_video_for_travel_segment(
     total_frames_for_segment: int,
     parsed_res_wh: tuple[int, int],
     fps_helpers: int,
-    fade_in_p: dict,
-    fade_out_p: dict,
     input_images_resolved_for_guide: list[str],
     path_to_previous_segment_video_output_for_guide: str | None,
-    frame_overlap_from_previous: int,
-    strength_adj: float,
-    desat_factor: float,
-    bright_adj: float,
     output_target_dir: Path,
     guide_video_base_name: str,
     segment_image_download_dir: Path | None,
     task_id_for_logging: str,
+    full_orchestrator_payload: dict,
+    segment_params: dict,
 ) -> Path | None:
     """Creates the guide video for a travel segment with all fading and adjustments."""
     try:
         actual_guide_video_path = sm_get_unique_target_path(output_target_dir, guide_video_base_name, ".mp4")
         gray_frame_bgr = sm_create_color_frame(parsed_res_wh, (128, 128, 128))
+
+        fade_in_p = json.loads(full_orchestrator_payload["fade_in_params_json_str"])
+        fade_out_p = json.loads(full_orchestrator_payload["fade_out_params_json_str"])
+        strength_adj = segment_params.get("subsequent_starting_strength_adjustment", 0.0)
+        desat_factor = segment_params.get("desaturate_subsequent_starting_frames", 0.0)
+        bright_adj = segment_params.get("adjust_brightness_subsequent_starting_frames", 0.0)
+        frame_overlap_from_previous = segment_params.get("frame_overlap_from_previous", 0)
 
         fi_low, fi_high, fi_curve, fi_factor = float(fade_in_p.get("low_point",0)), float(fade_in_p.get("high_point",1)), str(fade_in_p.get("curve_type","ease_in_out")), float(fade_in_p.get("duration_factor",0))
         fo_low, fo_high, fo_curve, fo_factor = float(fade_out_p.get("low_point",0)), float(fade_out_p.get("high_point",1)), str(fade_out_p.get("curve_type","ease_in_out")), float(fade_out_p.get("duration_factor",0))
