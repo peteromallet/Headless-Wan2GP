@@ -8,7 +8,7 @@ from PIL import Image
 
 # Add the parent directory to Python path to allow Wan2GP module import
 import sys
-wan2gp_path = Path(__file__).resolve().parent.parent.parent / "Wan2GP"
+wan2gp_path = Path(__file__).resolve().parent.parent / "Wan2GP"
 if str(wan2gp_path) not in sys.path:
     sys.path.insert(0, str(wan2gp_path))
 
