@@ -41,9 +41,9 @@ from source.specialized_handlers import (
 )
 from source.common_utils import (
     sm_get_unique_target_path,
-    sm_download_image_if_url,
+    download_image_if_url as sm_download_image_if_url,
     download_file,
-    sm_load_pil_images
+    load_pil_images as sm_load_pil_images
 )
 from source.sm_functions import travel_between_images as tbi
 # --- End SM_RESTRUCTURE imports ---
