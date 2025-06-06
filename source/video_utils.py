@@ -24,9 +24,9 @@ try:
         _apply_strength_to_image as sm_apply_strength_to_image,
         create_color_frame as sm_create_color_frame, 
         image_to_frame as sm_image_to_frame, 
-        _adjust_frame_brightness as sm_adjust_frame_brightness
+        _adjust_frame_brightness as sm_adjust_frame_brightness,
+        get_easing_function as sm_get_easing_function
     )
-    from source.sm_functions.travel_between_images import get_easing_function as sm_get_easing_function
 except ImportError as e_import:
     print(f"Critical import error in video_utils.py: {e_import}")
     traceback.print_exc()

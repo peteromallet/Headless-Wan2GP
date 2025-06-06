@@ -901,7 +901,7 @@ def main():
                 dprint(f"SQLite task_info: {task_info}") # ADDED DPRINT
                 if task_info:
                     current_task_id_for_status_update = task_info["task_id"]
-                    db_ops.update_task_status(db_ops.SQLITE_DB_PATH, current_task_id_for_status_update, db_ops.STATUS_IN_PROGRESS)
+                    db_ops.update_task_status(current_task_id_for_status_update, db_ops.STATUS_IN_PROGRESS)
 
             if not task_info:
                 dprint("No queued tasks found. Sleeping...")
@@ -953,7 +953,7 @@ def main():
                 if db_ops.DB_TYPE == "supabase":
                     db_ops.update_task_status_supabase(current_task_id_for_status_update, db_ops.STATUS_FAILED, error_message_for_db)
                 else:
-                    db_ops.update_task_status(db_ops.SQLITE_DB_PATH, current_task_id_for_status_update, db_ops.STATUS_FAILED, error_message_for_db)
+                    db_ops.update_task_status(current_task_id_for_status_update, db_ops.STATUS_FAILED, error_message_for_db)
                 time.sleep(1) # Brief pause
                 continue # Skip to next polling cycle
 
@@ -974,13 +974,13 @@ def main():
                 if db_ops.DB_TYPE == "supabase":
                     db_ops.update_task_status_supabase(current_task_id_for_status_update, db_ops.STATUS_COMPLETE, output_location)
                 else:
-                    db_ops.update_task_status(db_ops.SQLITE_DB_PATH, current_task_id_for_status_update, db_ops.STATUS_COMPLETE, output_location)
+                    db_ops.update_task_status(current_task_id_for_status_update, db_ops.STATUS_COMPLETE, output_location)
                 print(f"Task {current_task_id_for_status_update} completed successfully. Output location: {output_location}")
             else:
                 if db_ops.DB_TYPE == "supabase":
                     db_ops.update_task_status_supabase(current_task_id_for_status_update, db_ops.STATUS_FAILED, output_location)
                 else:
-                    db_ops.update_task_status(db_ops.SQLITE_DB_PATH, current_task_id_for_status_update, db_ops.STATUS_FAILED, output_location)
+                    db_ops.update_task_status(current_task_id_for_status_update, db_ops.STATUS_FAILED, output_location)
                 print(f"Task {current_task_id_for_status_update} failed. Review logs for errors. Output location recorded: {output_location if output_location else 'N/A'}")
             
             time.sleep(1) # Brief pause before checking for the next task
