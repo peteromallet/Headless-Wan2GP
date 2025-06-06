@@ -16,7 +16,7 @@ from .. import db_operations as db_ops
 from ..common_utils import (
     generate_unique_task_id as sm_generate_unique_task_id,
     get_video_frame_count_and_fps as sm_get_video_frame_count_and_fps,
-    _get_unique_target_path as sm_get_unique_target_path,
+    sm_get_unique_target_path,
     create_color_frame as sm_create_color_frame,
     parse_resolution as sm_parse_resolution,
     stitch_videos_ffmpeg as sm_stitch_videos_ffmpeg,
