@@ -23,7 +23,7 @@
 
 A light-weight, testable wrapper around the bulky `steerable_motion.py` logic.  It holds:
 
-* **common_utils.py** – Reusable helpers (DB access, ffmpeg helpers, MediaPipe keypoint interpolation, debug utilities, etc.)
+* **common_utils.py** – Reusable helpers (DB access, file downloads, ffmpeg helpers, MediaPipe keypoint interpolation, debug utilities, etc.)
 * **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images.  Builds guide videos, queues generation tasks, stitches outputs.
 * **different_pose.py** – Generates a new pose for a single image using an OpenPose-driven guide video plus optional RIFE interpolation for smoothness.
 * **__init__.py** – Re-exports public APIs (`run_travel_between_images_task`, `run_different_pose_task`) and common utilities for convenient importing.
