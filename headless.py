@@ -974,15 +974,57 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         wgp_mod.save_path = original_wgp_save_path # Restore original save path
 
     if generation_success:
-        # Find the generated video file (assuming one .mp4)
-        generated_video_file = None
-        for item in Path(temp_output_dir).iterdir():
-            if item.is_file() and item.suffix.lower() == ".mp4":
-                generated_video_file = item
-                break
+        # Find the generated video file(s)
+        generated_video_files = sorted([
+            item for item in Path(temp_output_dir).iterdir()
+            if item.is_file() and item.suffix.lower() == ".mp4"
+        ])
         
-        if generated_video_file:
-            dprint(f"[Task ID: {task_id}] Found generated video: {generated_video_file}")
+        generated_video_file = None
+        if not generated_video_files:
+            print(f"[WARNING Task ID: {task_id}] Generation reported success, but no .mp4 files found in {temp_output_dir}")
+            generation_success = False
+        elif len(generated_video_files) == 1:
+            generated_video_file = generated_video_files[0]
+            dprint(f"[Task ID: {task_id}] Found a single generated video: {generated_video_file}")
+        else:
+            dprint(f"[Task ID: {task_id}] Found {len(generated_video_files)} video segments to stitch: {generated_video_files}")
+            # Stitch the videos together
+            stitched_video_path = Path(temp_output_dir) / f"{task_id}_stitched.mp4"
+            
+            # Ensure the stitching utility is available
+            if 'sm_stitch_videos_ffmpeg' not in globals() and 'sm_stitch_videos_ffmpeg' not in locals():
+                try:
+                    from sm_functions.common_utils import stitch_videos_ffmpeg as sm_stitch_videos_ffmpeg
+                except ImportError:
+                    print(f"[CRITICAL ERROR Task ID: {task_id}] Failed to import 'stitch_videos_ffmpeg'. Cannot proceed with stitching.")
+                    generation_success = False # Cannot proceed
+            
+            if generation_success: # Check if import was successful before proceeding
+                try:
+                    # The function expects a list of strings
+                    video_paths_str = [str(p.resolve()) for p in generated_video_files]
+                    sm_stitch_videos_ffmpeg(video_paths_str, str(stitched_video_path.resolve()))
+                    
+                    if stitched_video_path.exists() and stitched_video_path.stat().st_size > 0:
+                        generated_video_file = stitched_video_path
+                        dprint(f"[Task ID: {task_id}] Successfully stitched video segments to: {generated_video_file}")
+                        # Optional: clean up the original segments now
+                        for segment_file in generated_video_files:
+                            try:
+                                segment_file.unlink()
+                            except OSError as e_clean:
+                                print(f"[WARNING Task ID: {task_id}] Could not delete segment file {segment_file}: {e_clean}")
+                    else:
+                        print(f"[ERROR Task ID: {task_id}] Stitching failed. Output file '{stitched_video_path}' not created or is empty.")
+                        generation_success = False
+                except Exception as e_stitch:
+                    print(f"[ERROR Task ID: {task_id}] An exception occurred during video stitching: {e_stitch}")
+                    traceback.print_exc()
+                    generation_success = False
+
+        if generated_video_file and generation_success:
+            dprint(f"[Task ID: {task_id}] Processing final video: {generated_video_file}")
             if DB_TYPE == "sqlite":
                 # Policy: If DB_TYPE is SQLite, ALWAYS use the public/files convention.
                 # Ignore any custom_output_path_str from task_params for the final save location and DB record.
