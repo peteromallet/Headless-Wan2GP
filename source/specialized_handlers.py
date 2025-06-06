@@ -18,7 +18,7 @@ except ImportError:
     PoseBodyFaceVideoAnnotator = None
 
 from . import db_operations as db_ops
-from .common_utils import sm_get_unique_target_path
+from .common_utils import get_unique_target_path as sm_get_unique_target_path
 from .common_utils import parse_resolution as sm_parse_resolution
 from .video_utils import rife_interpolate_images_to_video as sm_rife_interpolate_images_to_video
 
