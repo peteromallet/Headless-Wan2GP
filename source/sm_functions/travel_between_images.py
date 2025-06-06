@@ -631,15 +631,15 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 is_first_segment_from_scratch=is_first_segment_from_scratch,
                 total_frames_for_segment=total_frames_for_segment,
                 parsed_res_wh=parsed_res_wh,
-                task_id_for_logging=segment_task_id_str,
-                segment_image_download_dir=segment_image_download_dir,
-                guide_video_target_dir=guide_video_target_dir,
-                guide_video_base_name=guide_video_base_name,
+                fps_helpers=fps_helpers,
                 input_images_resolved_for_guide=input_images_resolved_for_guide,
                 path_to_previous_segment_video_output_for_guide=path_to_previous_segment_video_output_for_guide,
+                output_target_dir=guide_video_target_dir,
+                guide_video_base_name=guide_video_base_name,
+                segment_image_download_dir=segment_image_download_dir,
+                task_id_for_logging=segment_task_id_str, # Corrected keyword argument
                 full_orchestrator_payload=full_orchestrator_payload,
-                segment_params=segment_params,
-                fps_helpers=fps_helpers,
+                segment_params=segment_params
             )
         except Exception as e_guide:
             print(f"ERROR Task {segment_task_id_str} guide prep: {e_guide}")
