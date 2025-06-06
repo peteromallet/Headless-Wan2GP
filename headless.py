@@ -794,7 +794,7 @@ def main():
     if db_ops.DB_TYPE == "supabase":
         db_ops.init_db_supabase() # New call, uses globals in db_ops
     else: # SQLite
-        db_ops.init_db(db_ops.SQLITE_DB_PATH) # Existing SQLite init
+        db_ops.init_db() # Existing SQLite init
 
     # Activate global debug switch early so that all subsequent code paths can use dprint()
     global debug_mode
