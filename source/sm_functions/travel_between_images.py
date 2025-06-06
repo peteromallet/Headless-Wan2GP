@@ -631,7 +631,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 is_first_segment_from_scratch=is_first_segment_from_scratch,
                 total_frames_for_segment=total_frames_for_segment,
                 parsed_res_wh=parsed_res_wh,
-                segment_task_id_str=segment_task_id_str,
+                task_id_for_logging=segment_task_id_str,
                 segment_image_download_dir=segment_image_download_dir,
                 guide_video_target_dir=guide_video_target_dir,
                 guide_video_base_name=guide_video_base_name,
