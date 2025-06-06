@@ -34,12 +34,12 @@ from supabase import create_client, Client as SupabaseClient
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # --- SM_RESTRUCTURE: Import moved/new utilities ---
-from source.sm_functions import db_operations as db_ops
-from source.sm_functions.specialized_handlers import (
+from source import db_operations as db_ops
+from source.specialized_handlers import (
     handle_generate_openpose_task,
     handle_rife_interpolate_task
 )
-from source.sm_functions.common_utils import (
+from source.common_utils import (
     sm_get_unique_target_path,
     sm_download_image_if_url,
     download_file,

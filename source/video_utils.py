@@ -17,9 +17,9 @@ try:
         sys.path.insert(0, str(wan2gp_path))
     from rife.inference import temporal_interpolation
 
-    from .common_utils import (
+    from ..common_utils import (
         dprint, get_video_frame_count_and_fps,
-        sm_download_image_if_url, sm_get_unique_target_path, sm_apply_strength_to_image,
+        download_image_if_url, sm_get_unique_target_path, sm_apply_strength_to_image,
         sm_create_color_frame, sm_image_to_frame, sm_adjust_frame_brightness
     )
     from .travel_between_images import get_easing_function as sm_get_easing_function
@@ -500,7 +500,7 @@ def prepare_vace_ref_for_segment(
         dprint(f"Task {task_id_for_logging}, Segment {segment_processing_dir.name}: No original_path in VACE ref instruction. Skipping.")
         return None
     
-    local_original_image_path_str = sm_download_image_if_url(original_image_path_str, image_download_dir, task_id_for_logging)
+    local_original_image_path_str = download_image_if_url(original_image_path_str, image_download_dir, task_id_for_logging)
     local_original_image_path = Path(local_original_image_path_str)
 
     if not local_original_image_path.exists():

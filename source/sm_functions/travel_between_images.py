@@ -12,15 +12,15 @@ except ImportError:
     _COLOR_MATCH_DEPS_AVAILABLE = False
 
 # --- SM_RESTRUCTURE: Import moved/new utilities ---
-from . import db_operations as db_ops
-from .common_utils import (
+from .. import db_operations as db_ops
+from ..common_utils import (
     generate_unique_task_id as sm_generate_unique_task_id,
     get_video_frame_count_and_fps as sm_get_video_frame_count_and_fps,
     _get_unique_target_path as sm_get_unique_target_path,
     create_color_frame as sm_create_color_frame,
     parse_resolution as sm_parse_resolution,
 )
-from .video_utils import (
+from ..video_utils import (
     extract_frames_from_video as sm_extract_frames_from_video,
     create_video_from_frames_list as sm_create_video_from_frames_list,
     cross_fade_overlap_frames as sm_cross_fade_overlap_frames,

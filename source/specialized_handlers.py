@@ -18,7 +18,8 @@ except ImportError:
     PoseBodyFaceVideoAnnotator = None
 
 from . import db_operations as db_ops
-from .common_utils import sm_get_unique_target_path, sm_parse_resolution
+from .common_utils import sm_get_unique_target_path
+from .common_utils import parse_resolution as sm_parse_resolution
 from .video_utils import rife_interpolate_images_to_video as sm_rife_interpolate_images_to_video
 
 def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable):
