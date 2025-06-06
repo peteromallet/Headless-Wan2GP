@@ -21,7 +21,9 @@ try:
     from source.common_utils import (
         dprint, get_video_frame_count_and_fps,
         download_image_if_url, sm_get_unique_target_path, _apply_strength_to_image as sm_apply_strength_to_image,
-        sm_create_color_frame, sm_image_to_frame, sm_adjust_frame_brightness
+        create_color_frame as sm_create_color_frame, 
+        image_to_frame as sm_image_to_frame, 
+        _adjust_frame_brightness as sm_adjust_frame_brightness
     )
     from source.sm_functions.travel_between_images import get_easing_function as sm_get_easing_function
 except ImportError as e_import:
