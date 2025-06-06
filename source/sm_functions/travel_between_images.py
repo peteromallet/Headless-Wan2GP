@@ -144,11 +144,16 @@ def _apply_color_matching_to_video(video_path: str, start_ref_path: str, end_ref
         dprint(f"Color Matching: Skipping due to missing deps or files. Deps:{_COLOR_MATCH_DEPS_AVAILABLE}, Video:{Path(video_path).exists()}, Start:{Path(start_ref_path).exists()}, End:{Path(end_ref_path).exists()}")
         return None
 
-    frames, fps, resolution = sm_extract_frames_from_video(video_path, with_metadata=True)
-    if not frames:
-        dprint("Color Matching: Frame extraction failed.")
+    frames = sm_extract_frames_from_video(video_path)
+    frame_count, fps = sm_get_video_frame_count_and_fps(video_path)
+    if not frames or not frame_count or not fps:
+        dprint("Color Matching: Frame extraction or metadata retrieval failed.")
         return None
 
+    # Get resolution from the first frame
+    h, w, _ = frames[0].shape
+    resolution = (w, h)
+    
     start_ref_bgr = cv2.imread(start_ref_path)
     end_ref_bgr = cv2.imread(end_ref_path)
     start_ref_resized = cv2.resize(start_ref_bgr, resolution)
