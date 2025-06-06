@@ -897,7 +897,7 @@ def main():
                     # Status is already set to IN_PROGRESS by func_claim_task RPC
             else: # SQLite
                 dprint(f"Checking for queued tasks in SQLite {db_ops.SQLITE_DB_PATH}...")
-                task_info = db_ops.get_oldest_queued_task(db_ops.SQLITE_DB_PATH)
+                task_info = db_ops.get_oldest_queued_task()
                 dprint(f"SQLite task_info: {task_info}") # ADDED DPRINT
                 if task_info:
                     current_task_id_for_status_update = task_info["task_id"]
