@@ -20,6 +20,7 @@ from ..common_utils import (
     create_color_frame as sm_create_color_frame,
     parse_resolution as sm_parse_resolution,
     stitch_videos_ffmpeg as sm_stitch_videos_ffmpeg,
+    download_image_if_url as sm_download_image_if_url,
 )
 from ..video_utils import (
     extract_frames_from_video as sm_extract_frames_from_video,
