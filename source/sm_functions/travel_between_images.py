@@ -90,6 +90,45 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         expanded_frame_overlap = orchestrator_payload["frame_overlap_expanded"]
         vace_refs_instructions_all = orchestrator_payload.get("vace_image_refs_to_prepare_by_headless", [])
 
+        # --- SM_QUANTIZE_FRAMES_AND_OVERLAPS ---
+        # Adjust all segment lengths to match model constraints (4*N+1 format).
+        # Then, adjust overlap values to be even and not exceed the length of the
+        # smaller of the two segments they connect. This prevents errors downstream
+        # in guide video creation, generation, and stitching.
+        
+        quantized_segment_frames = []
+        for i, frames in enumerate(expanded_segment_frames):
+            # Follow the same pattern as i2v_inference.py: (frames // 4)*4 + 1
+            new_frames = (frames // 4) * 4 + 1
+            if new_frames != frames:
+                dprint(f"Orchestrator: Quantized segment {i} length from {frames} to {new_frames} (4*N+1 format).")
+            quantized_segment_frames.append(new_frames)
+        
+        quantized_frame_overlap = []
+        if len(expanded_frame_overlap) > 0 and len(quantized_segment_frames) > 1:
+            # Loop assumes len(expanded_frame_overlap) is num_segments - 1
+            for i in range(len(expanded_frame_overlap)):
+                original_overlap = expanded_frame_overlap[i]
+                
+                # Overlap connects segment i and i+1.
+                # It cannot be larger than the shorter of the two segments.
+                max_possible_overlap = min(quantized_segment_frames[i], quantized_segment_frames[i+1])
+
+                # Quantize original overlap to be even, then cap it.
+                new_overlap = (original_overlap // 2) * 2
+                new_overlap = min(new_overlap, max_possible_overlap)
+                if new_overlap < 0: new_overlap = 0
+
+                if new_overlap != original_overlap:
+                    dprint(f"Orchestrator: Adjusted overlap between segments {i}-{i+1} from {original_overlap} to {new_overlap}.")
+                
+                quantized_frame_overlap.append(new_overlap)
+        
+        # Replace original lists with the new quantized ones for all subsequent logic
+        expanded_segment_frames = quantized_segment_frames
+        expanded_frame_overlap = quantized_frame_overlap
+        # --- END SM_QUANTIZE_FRAMES_AND_OVERLAPS ---
+
         for idx in range(num_segments):
             current_segment_task_id = sm_generate_unique_task_id(f"travel_seg_{run_id}_{idx:02d}_")
             
@@ -382,6 +421,20 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # not just the new content. The overlap is handled internally for transition.
         total_frames_for_segment = base_duration
 
+        # --- SM_QUANTIZE_FRAMES ---
+        # Adjust total_frames_for_segment to be a multiple of 16. This ensures
+        # the guide video length matches the final generated video length, as
+        # the generation model (`wgp.py`) may enforce this constraint internally.
+        original_total_frames = total_frames_for_segment
+        if original_total_frames > 0:
+            total_frames_for_segment = (original_total_frames // 16) * 16
+            if total_frames_for_segment == 0: # For inputs < 16, round up to 16.
+                total_frames_for_segment = 16
+        
+        if total_frames_for_segment != original_total_frames:
+            dprint(f"Segment {segment_idx}: Adjusted total_frames_for_segment from {original_total_frames} to {total_frames_for_segment} (multiple of 16).")
+        # --- END SM_QUANTIZE_FRAMES ---
+
         fps_helpers = full_orchestrator_payload.get("fps_helpers", 16)
         fade_in_duration_str = full_orchestrator_payload["fade_in_params_json_str"]
         fade_out_duration_str = full_orchestrator_payload["fade_out_params_json_str"]
@@ -488,7 +541,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         final_frames_for_wgp_generation = total_frames_for_segment
         current_wgp_engine = "wgp" # Defaulting to WGP for travel segments
         
-        dprint(f"Task {segment_task_id_str}: Using unquantized WGP input frames: {final_frames_for_wgp_generation}")
+        dprint(f"Task {segment_task_id_str}: Requesting WGP generation with {final_frames_for_wgp_generation} frames.")
 
         if final_frames_for_wgp_generation <= 0:
             msg = f"Task {segment_task_id_str}: Calculated WGP frames {final_frames_for_wgp_generation}. Cannot generate. Check segment_frames_target and overlap."
@@ -536,7 +589,6 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
             "image_refs_paths": safe_vace_image_ref_paths_for_wgp,
-            "frames_are_prequantized": True,
         }
         if additional_loras:
             wgp_payload["additional_loras"] = additional_loras

@@ -619,6 +619,18 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         except Exception as err:
             dprint(f"Error adjusting resolution: {err}")
     
+    # Adjust video_length in ui_params to match model constraints (4*N+1 format)
+    if "video_length" in ui_params:
+        try:
+            original_length = int(ui_params["video_length"])
+            # Follow the same pattern as i2v_inference.py: (frames // 4)*4 + 1
+            adjusted_length = (original_length // 4) * 4 + 1
+            if adjusted_length != original_length:
+                ui_params["video_length"] = adjusted_length
+                dprint(f"Adjusted video_length in ui_params from {original_length} to {adjusted_length} (4*N+1 format)")
+        except Exception as err:
+            dprint(f"Error adjusting video_length: {err}")
+    
     tea_cache_value = ui_params.get("tea_cache_setting", ui_params.get("tea_cache", 0.0))
 
     print(f"[Task ID: {task_id}] Starting generation with effective params: {json.dumps(ui_params, default=lambda o: 'Unserializable' if isinstance(o, Image.Image) else o.__dict__ if hasattr(o, '__dict__') else str(o), indent=2)}")
