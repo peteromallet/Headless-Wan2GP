@@ -431,20 +431,6 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # not just the new content. The overlap is handled internally for transition.
         total_frames_for_segment = base_duration
 
-        # --- SM_QUANTIZE_FRAMES ---
-        # Adjust total_frames_for_segment to be a multiple of 16. This ensures
-        # the guide video length matches the final generated video length, as
-        # the generation model (`wgp.py`) may enforce this constraint internally.
-        original_total_frames = total_frames_for_segment
-        if original_total_frames > 0:
-            total_frames_for_segment = (original_total_frames // 16) * 16
-            if total_frames_for_segment == 0: # For inputs < 16, round up to 16.
-                total_frames_for_segment = 16
-        
-        if total_frames_for_segment != original_total_frames:
-            dprint(f"Segment {segment_idx}: Adjusted total_frames_for_segment from {original_total_frames} to {total_frames_for_segment} (multiple of 16).")
-        # --- END SM_QUANTIZE_FRAMES ---
-
         fps_helpers = full_orchestrator_payload.get("fps_helpers", 16)
         fade_in_duration_str = full_orchestrator_payload["fade_in_params_json_str"]
         fade_out_duration_str = full_orchestrator_payload["fade_out_params_json_str"]
