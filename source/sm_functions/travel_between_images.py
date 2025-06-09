@@ -97,18 +97,28 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         # in guide video creation, generation, and stitching.
         
         quantized_segment_frames = []
+        dprint(f"Orchestrator: Quantizing frame counts. Original segment_frames_expanded: {expanded_segment_frames}")
         for i, frames in enumerate(expanded_segment_frames):
-            # Follow the same pattern as i2v_inference.py: (frames // 4)*4 + 1
+            # Quantize to 4*N+1 format to match model constraints, applied later in headless.py
             new_frames = (frames // 4) * 4 + 1
             if new_frames != frames:
                 dprint(f"Orchestrator: Quantized segment {i} length from {frames} to {new_frames} (4*N+1 format).")
             quantized_segment_frames.append(new_frames)
+        dprint(f"Orchestrator: Finished quantizing frame counts. New quantized_segment_frames: {quantized_segment_frames}")
         
         quantized_frame_overlap = []
-        if len(expanded_frame_overlap) > 0 and len(quantized_segment_frames) > 1:
-            # Loop assumes len(expanded_frame_overlap) is num_segments - 1
-            for i in range(len(expanded_frame_overlap)):
-                original_overlap = expanded_frame_overlap[i]
+        # There are N-1 overlaps for N segments. The loop must not iterate more times than this.
+        num_overlaps_to_process = len(quantized_segment_frames) - 1
+
+        if num_overlaps_to_process > 0:
+            for i in range(num_overlaps_to_process):
+                # Gracefully handle if the original overlap array is longer than expected.
+                if i < len(expanded_frame_overlap):
+                    original_overlap = expanded_frame_overlap[i]
+                else:
+                    # This case should not happen if client is correct, but as a fallback.
+                    dprint(f"Orchestrator: Overlap at index {i} missing. Defaulting to 0.")
+                    original_overlap = 0
                 
                 # Overlap connects segment i and i+1.
                 # It cannot be larger than the shorter of the two segments.
