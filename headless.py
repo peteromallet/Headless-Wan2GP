@@ -606,7 +606,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
 
     state, ui_params = build_task_state(wgp_mod, model_filename_for_task, task_params_dict, all_loras_for_active_model, image_download_dir, apply_reward_lora=apply_reward_lora)
     
-    gen_task_placeholder = {"id": 1, "prompt": ui_params.get("prompt"), "params": {"model_filename_from_gui_state": model_filename_for_task}, "model": task_model_type_logical}
+    gen_task_placeholder = {"id": 1, "prompt": ui_params.get("prompt"), "params": {"model_filename_from_gui_state": model_filename_for_task, "model": task_model_type_logical}}
     send_cmd = make_send_cmd(task_id)
 
     # Adjust resolution in ui_params to be multiples of 16 for consistency with image processing
