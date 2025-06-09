@@ -18,8 +18,7 @@ from ..common_utils import (
     get_video_frame_count_and_fps as sm_get_video_frame_count_and_fps,
     sm_get_unique_target_path,
     create_color_frame as sm_create_color_frame,
-    parse_resolution as sm_parse_resolution,
-    stitch_videos_ffmpeg as sm_stitch_videos_ffmpeg,
+    parse_resolution as sm_parse_resolution,    
     download_image_if_url as sm_download_image_if_url,
 )
 from ..video_utils import (
@@ -30,190 +29,9 @@ from ..video_utils import (
     apply_brightness_to_video_frames,
     prepare_vace_ref_for_segment as sm_prepare_vace_ref_for_segment,
     create_guide_video_for_travel_segment as sm_create_guide_video_for_travel_segment,
+    apply_color_matching_to_video as sm_apply_color_matching_to_video,
+    extract_last_frame_as_image as sm_extract_last_frame_as_image,
 )
-
-def get_easing_function(name: str):
-    """
-    Returns an easing function by name.
-    """
-    if name == 'linear':
-        return lambda t: t
-    elif name == 'ease_in_quad':
-        return lambda t: t * t
-    elif name == 'ease_out_quad':
-        return lambda t: t * (2 - t)
-    elif name == 'ease_in_out_quad' or name == 'ease_in_out': # Added alias
-        return lambda t: 2 * t * t if t < 0.5 else -1 + (4 - 2 * t) * t
-    elif name == 'ease_in_cubic':
-        return lambda t: t * t * t
-    elif name == 'ease_out_cubic':
-        return lambda t: 1 + ((t - 1) ** 3)
-    elif name == 'ease_in_out_cubic':
-        return lambda t: 4 * t * t * t if t < 0.5 else 1 + ((2 * t - 2) ** 3) / 2
-    elif name == 'ease_in_quart':
-        return lambda t: t * t * t * t
-    elif name == 'ease_out_quart':
-        return lambda t: 1 - ((t - 1) ** 4)
-    elif name == 'ease_in_out_quart':
-        return lambda t: 8 * t * t * t * t if t < 0.5 else 1 - ((-2 * t + 2) ** 4) / 2
-    elif name == 'ease_in_quint':
-        return lambda t: t * t * t * t * t
-    elif name == 'ease_out_quint':
-        return lambda t: 1 + ((t - 1) ** 5)
-    elif name == 'ease_in_out_quint':
-        return lambda t: 16 * t * t * t * t * t if t < 0.5 else 1 + ((-2 * t + 2) ** 5) / 2
-    elif name == 'ease_in_sine':
-        return lambda t: 1 - math.cos(t * math.pi / 2)
-    elif name == 'ease_out_sine':
-        return lambda t: math.sin(t * math.pi / 2)
-    elif name == 'ease_in_out_sine':
-        return lambda t: -(math.cos(math.pi * t) - 1) / 2
-    elif name == 'ease_in_expo':
-        return lambda t: 0 if t == 0 else 2 ** (10 * (t - 1))
-    elif name == 'ease_out_expo':
-        return lambda t: 1 if t == 1 else 1 - 2 ** (-10 * t)
-    elif name == 'ease_in_out_expo':
-        if t == 0: return 0
-        if t == 1: return 1
-        if t < 0.5:
-            return (2 ** (20 * t - 10)) / 2
-        else:
-            return (2 - 2 ** (-20 * t + 10)) / 2
-    else: # Default to ease_in_out
-        return lambda t: 2 * t * t if t < 0.5 else -1 + (4 - 2 * t) * t
-
-
-# --- Colour Matching Helpers ---
-MIN_ALLOWED_STD_RATIO_FOR_COLOR = 0.4
-
-def _cm_enhance_saturation(image_bgr, saturation_factor=0.5):
-    """
-    Adjust saturation of an image by the given factor.
-    saturation_factor: 1.0 = no change, 0.5 = 50% reduction, 1.3 = 30% increase, etc.
-    """
-    if not _COLOR_MATCH_DEPS_AVAILABLE: return image_bgr
-    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
-    hsv_float = hsv.astype(np.float32)
-    h, s, v = cv2.split(hsv_float)
-    s_adjusted = s * saturation_factor
-    s_adjusted = np.clip(s_adjusted, 0, 255)
-    hsv_adjusted = cv2.merge([h, s_adjusted, v])
-    hsv_adjusted_uint8 = hsv_adjusted.astype(np.uint8)
-    adjusted_bgr = cv2.cvtColor(hsv_adjusted_uint8, cv2.COLOR_HSV2BGR)
-    return adjusted_bgr
-
-def _cm_transfer_mean_std_lab(source_bgr, target_bgr):
-    if not _COLOR_MATCH_DEPS_AVAILABLE: return source_bgr
-    MIN_ALLOWED_STD_RATIO_FOR_LUMINANCE = 0.1
-    source_lab = cv2.cvtColor(source_bgr, cv2.COLOR_BGR2LAB)
-    target_lab = cv2.cvtColor(target_bgr, cv2.COLOR_BGR2LAB)
-
-    source_lab_float = source_lab.astype(np.float32)
-    target_lab_float = target_lab.astype(np.float32)
-
-    s_l, s_a, s_b = cv2.split(source_lab_float)
-    t_l, t_a, t_b = cv2.split(target_lab_float)
-
-    channels_out = []
-    for i, (s_chan, t_chan) in enumerate(zip([s_l, s_a, s_b], [t_l, t_a, t_b])):
-        s_mean_val, s_std_val = cv2.meanStdDev(s_chan)
-        t_mean_val, t_std_val = cv2.meanStdDev(t_chan)
-        s_mean, s_std = s_mean_val[0][0], s_std_val[0][0]
-        t_mean, t_std = t_mean_val[0][0], t_std_val[0][0]
-
-        std_ratio = t_std / s_std if s_std > 1e-5 else 1.0
-        
-        min_ratio = MIN_ALLOWED_STD_RATIO_FOR_LUMINANCE if i == 0 else MIN_ALLOWED_STD_RATIO_FOR_COLOR
-        effective_std_ratio = max(std_ratio, min_ratio)
-
-        if s_std > 1e-5:
-            transformed_chan = (s_chan - s_mean) * effective_std_ratio + t_mean
-        else: 
-            transformed_chan = np.full_like(s_chan, t_mean)
-        
-        channels_out.append(transformed_chan)
-
-    result_lab_float = cv2.merge(channels_out)
-    result_lab_clipped = np.clip(result_lab_float, 0, 255)
-    result_lab_uint8 = result_lab_clipped.astype(np.uint8)
-    result_bgr = cv2.cvtColor(result_lab_uint8, cv2.COLOR_LAB2BGR)
-    return result_bgr
-
-def _apply_color_matching_to_video(video_path: str, start_ref_path: str, end_ref_path: str, output_path: str, dprint):
-    if not all([_COLOR_MATCH_DEPS_AVAILABLE, Path(video_path).exists(), Path(start_ref_path).exists(), Path(end_ref_path).exists()]):
-        dprint(f"Color Matching: Skipping due to missing deps or files. Deps:{_COLOR_MATCH_DEPS_AVAILABLE}, Video:{Path(video_path).exists()}, Start:{Path(start_ref_path).exists()}, End:{Path(end_ref_path).exists()}")
-        return None
-
-    frames = sm_extract_frames_from_video(video_path)
-    frame_count, fps = sm_get_video_frame_count_and_fps(video_path)
-    if not frames or not frame_count or not fps:
-        dprint("Color Matching: Frame extraction or metadata retrieval failed.")
-        return None
-
-    # Get resolution from the first frame
-    h, w, _ = frames[0].shape
-    resolution = (w, h)
-    
-    start_ref_bgr = cv2.imread(start_ref_path)
-    end_ref_bgr = cv2.imread(end_ref_path)
-    start_ref_resized = cv2.resize(start_ref_bgr, resolution)
-    end_ref_resized = cv2.resize(end_ref_bgr, resolution)
-
-    total_frames = len(frames)
-    accumulated_frames = []
-
-    for i, frame_bgr in enumerate(frames):
-        frame_bgr_desaturated = _cm_enhance_saturation(frame_bgr, saturation_factor=0.5)
-        
-        corrected_start_bgr = _cm_transfer_mean_std_lab(frame_bgr_desaturated, start_ref_resized)
-        corrected_end_bgr = _cm_transfer_mean_std_lab(frame_bgr_desaturated, end_ref_resized)
-        
-        t = i / (total_frames - 1) if total_frames > 1 else 1.0
-        w_original = (0.5 * t) if t < 0.5 else (0.5 - 0.5 * t)
-        w_correct = 1.0 - w_original
-        w_start = (1.0 - t) * w_correct
-        w_end = t * w_correct
-
-        blend_float = (w_start * corrected_start_bgr.astype(np.float32) + 
-                       w_end * corrected_end_bgr.astype(np.float32) + 
-                       w_original * frame_bgr.astype(np.float32))
-        
-        blended_frame_bgr = np.clip(blend_float, 0, 255).astype(np.uint8)
-        accumulated_frames.append(blended_frame_bgr)
-    
-    if accumulated_frames:
-        created_video_path = sm_create_video_from_frames_list(accumulated_frames, output_path, fps, resolution)
-        dprint(f"Color Matching: Successfully created color matched video at {created_video_path}")
-        return created_video_path
-    
-    dprint("Color Matching: Failed to produce any frames.")
-    return None
-
-def _extract_last_frame_as_image(video_path: str, output_dir: Path, task_id_for_log: str) -> str | None:
-    if not _COLOR_MATCH_DEPS_AVAILABLE: return None
-    try:
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            print(f"[ERROR Task {task_id_for_log}] _extract_last_frame: Could not open video {video_path}")
-            return None
-        
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if frame_count <= 0:
-            cap.release()
-            return None
-
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_count - 1)
-        ret, frame = cap.read()
-        cap.release()
-
-        if ret:
-            output_path = output_dir / f"last_frame_ref_{Path(video_path).stem}.png"
-            cv2.imwrite(str(output_path), frame)
-            return str(output_path.resolve())
-        return None
-    except Exception as e:
-        print(f"[ERROR Task {task_id_for_log}] _extract_last_frame: Exception extracting frame from {video_path}: {e}")
-        return None
 
 # --- SM_RESTRUCTURE: New Handler Functions for Travel Tasks ---
 def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_base: Path, orchestrator_task_id_str: str, orchestrator_project_id: str | None, *, dprint):
@@ -454,6 +272,10 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         effective_colour_match_enabled = full_orchestrator_payload.get("colour_match_videos", colour_match_videos)
         effective_apply_reward_lora = full_orchestrator_payload.get("apply_reward_lora", apply_reward_lora)
 
+        additional_loras = full_orchestrator_payload.get("additional_loras", {})
+        if additional_loras:
+            dprint(f"Segment {segment_idx}: Found additional_loras in orchestrator payload: {additional_loras}")
+
         current_run_base_output_dir_str = segment_params.get("current_run_base_output_dir")
         if not current_run_base_output_dir_str: # Should be passed by orchestrator/prev segment
             current_run_base_output_dir_str = full_orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
@@ -475,7 +297,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     continued_video_path = full_orchestrator_payload.get("continue_from_video_resolved_path")
                     if continued_video_path and Path(continued_video_path).exists():
                         dprint(f"Seg {segment_idx} CM: Extracting last frame from {continued_video_path} as start ref.")
-                        start_ref_path_for_cm = _extract_last_frame_as_image(continued_video_path, segment_processing_dir, segment_task_id_str)
+                        start_ref_path_for_cm = sm_extract_last_frame_as_image(continued_video_path, segment_processing_dir, segment_task_id_str)
                     if input_images_for_cm:
                         end_ref_path_for_cm = input_images_for_cm[0]
                 else: # Subsequent segment when continuing
@@ -716,6 +538,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             "image_refs_paths": safe_vace_image_ref_paths_for_wgp,
             "frames_are_prequantized": True,
         }
+        if additional_loras:
+            wgp_payload["additional_loras"] = additional_loras
+
         if full_orchestrator_payload.get("params_json_str_override"):
             try:
                 additional_p = json.loads(full_orchestrator_payload["params_json_str_override"])
@@ -886,7 +711,7 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                 cm_out_base = f"s{segment_idx_completed}_colormatched"
                 cm_video_output_abs_path = sm_get_unique_target_path(target_dir_for_cm, cm_out_base, video_to_process_abs_path.suffix)
 
-                matched_video_path = _apply_color_matching_to_video(
+                matched_video_path = sm_apply_color_matching_to_video(
                     str(video_to_process_abs_path),
                     start_ref,
                     end_ref,

@@ -8,306 +8,300 @@ from pathlib import Path
 import cv2 # pip install opencv-python
 from PIL import Image # pip install Pillow
 
-# Import from the new common_utils module
+# Import from the new common_utils and db_operations modules
+from .. import db_operations as db_ops
 from ..common_utils import (
     DEBUG_MODE, dprint, generate_unique_task_id, add_task_to_db, poll_task_status,
     save_frame_from_video, create_pose_interpolated_guide_video,
-    generate_different_pose_debug_video_summary # For debug mode
+    generate_different_pose_debug_video_summary,
+    parse_resolution as sm_parse_resolution
 )
 
-def run_different_pose_task(task_args, common_args, parsed_resolution, main_output_dir, db_file_path, executed_command_str: str | None = None):
-    print("--- Running Task: Different Pose (Modified Workflow: User Input + OpenPose T2I) ---") 
-    dprint(f"Task Args: {task_args}")
-    dprint(f"Common Args: {common_args}")
-
-    num_target_frames = common_args.output_video_frames
-    if num_target_frames < 2: 
-        print(f"Error: --output_video_frames (set to {num_target_frames}) must be at least 2.") 
-        return 1
-
-    user_input_image_path = Path(task_args.input_image).resolve()
-    if not user_input_image_path.exists():
-        print(f"Error: Input image not found: {user_input_image_path}")
-        return 1
-
-    task_run_id = generate_unique_task_id("sm_pose_rife_")
-    task_work_dir = main_output_dir / f"different_pose_run_{task_run_id}"
-    task_work_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Working directory for this 'different_pose' run: {task_work_dir.resolve()}")
-
-    if DEBUG_MODE and executed_command_str:
-        try:
-            command_file_path = task_work_dir / "executed_command.txt"
-            with open(command_file_path, "w") as f:
-                f.write(executed_command_str)
-            dprint(f"Saved executed command to {command_file_path}")
-        except Exception as e_cmd_save:
-            dprint(f"Warning: Could not save executed command: {e_cmd_save}")
-
-    debug_video_stages_data = [] 
-    default_image_display_frames = common_args.fps_helpers * 2 
-
-    if DEBUG_MODE:
-        debug_video_stages_data.append({
-            'label': f"0. User Input ({user_input_image_path.name})", 
-            'type': 'image',
-            'path': str(user_input_image_path),
-            'display_frames': default_image_display_frames
-        })
-
-    # --- Step 1: Generate OpenPose from User Input Image ---
-    print("\nStep 1: Generating OpenPose from user input image...")
-    openpose_user_input_task_id = generate_unique_task_id("pose_op_user_")
-    openpose_user_input_output_path = task_work_dir / f"{openpose_user_input_task_id}_openpose_from_user.png"
-
-    openpose_user_input_payload = {
-        "task_id": openpose_user_input_task_id,
-        "task_type": "generate_openpose",
-        "model": "core_pose_processor", 
-        "input_image_path": str(user_input_image_path.resolve()),
-        "output_path": str(openpose_user_input_output_path.resolve())
-    }
-    dprint(f"OpenPose task payload for user input: {json.dumps(openpose_user_input_payload, indent=2)}")
-    try:
-        add_task_to_db(openpose_user_input_payload, db_file_path, "generate_openpose")
-        openpose_user_input_path_str = poll_task_status(openpose_user_input_task_id, db_file_path, common_args.poll_interval, common_args.poll_timeout)
-    except Exception as e_cmd_save:
-        dprint(f"Warning: Could not save executed command: {e_cmd_save}")
-
-    if not openpose_user_input_path_str:
-        print("Failed to generate OpenPose from user input image.")
-        return 1
-    openpose_user_input_path = Path(openpose_user_input_path_str)
-    print(f"Successfully generated OpenPose from user input image: {openpose_user_input_path}")
-    if DEBUG_MODE:
-        debug_video_stages_data.append({
-            'label': f"1. OpenPose from User Input ({openpose_user_input_path.name})", 
-            'type': 'image',
-            'path': str(openpose_user_input_path),
-            'display_frames': default_image_display_frames
-        })
-
-    # --- Step 2: Initial Image Generation (Text-to-Image for target pose reference) ---
-    print("\nStep 2: Generating target image from prompt (Text-to-Image)...")
-    t2i_target_task_id = generate_unique_task_id("pose_t2i_target_")
-    t2i_target_guide_video_path = task_work_dir / f"{t2i_target_task_id}_guide.mp4"
-    t2i_target_headless_output_path = task_work_dir / f"{t2i_target_task_id}_video_raw.mp4"
-    generated_image_for_target_pose_path = task_work_dir / f"{t2i_target_task_id}_generated_from_prompt.png"
-    
-    temp_neutral_guide_image_path_s2 = task_work_dir / "_temp_neutral_guide_frame_s2.png"
-    try:
-        neutral_pil_image_s2 = Image.new('RGB', (parsed_resolution[0] // 16, parsed_resolution[1] // 16), (128, 128, 128))
-        neutral_pil_image_s2.save(temp_neutral_guide_image_path_s2)
-        create_pose_interpolated_guide_video(
-            output_video_path=t2i_target_guide_video_path,
-            resolution=parsed_resolution,
-            total_frames=1, # Single frame for T2I guide
-            start_image_path=temp_neutral_guide_image_path_s2, # Use neutral image for both
-            end_image_path=temp_neutral_guide_image_path_s2,
-            fps=common_args.fps_helpers,
-            confidence_threshold=0.01, 
-            include_face=False, 
-            include_hands=False
-        )
-    except Exception as e:
-        print(f"Error creating neutral guide video for T2I step: {e}")
-        if temp_neutral_guide_image_path_s2.exists(): temp_neutral_guide_image_path_s2.unlink(missing_ok=True)
-        return 1
-    finally:
-        if temp_neutral_guide_image_path_s2.exists(): temp_neutral_guide_image_path_s2.unlink(missing_ok=True)
-
-    t2i_target_payload = {
-        "task_id": t2i_target_task_id,
-        "prompt": task_args.prompt,
-        "model": common_args.model_name, 
-        "resolution": common_args.resolution,
-        "frames": 1, 
-        "seed": common_args.seed, 
-        "video_guide_path": str(t2i_target_guide_video_path.resolve()),
-        "output_path": str(t2i_target_headless_output_path.resolve())
-    }
-    if common_args.use_causvid_lora: t2i_target_payload["use_causvid_lora"] = True    
-    dprint(f"Added lora_name: 'jump' to T2I target payload.") 
-    dprint(f"Target T2I/I2I task payload: {json.dumps(t2i_target_payload, indent=2)}")
-    try:
-        add_task_to_db(t2i_target_payload, db_file_path, task_args.task)
-        raw_video_from_headless_s2 = poll_task_status(t2i_target_task_id, db_file_path, common_args.poll_interval, common_args.poll_timeout)
-    except Exception as e_cmd_save:
-        dprint(f"Warning: Could not save executed command: {e_cmd_save}")
-
-    if not raw_video_from_headless_s2:
-        print("Failed to generate target image from prompt.")
-        return 1
-    t2i_video_output_path_s2 = Path(raw_video_from_headless_s2)
-    if not save_frame_from_video(t2i_video_output_path_s2, 0, generated_image_for_target_pose_path, parsed_resolution):
-        print(f"Failed to extract frame from target T2I video: {t2i_video_output_path_s2}")
-        return 1
-    print(f"Successfully generated target image from prompt: {generated_image_for_target_pose_path}")
-    if DEBUG_MODE:
-        debug_video_stages_data.append({
-            'label': f"2. Target T2I Image ({generated_image_for_target_pose_path.name})", 
-            'type': 'image',
-            'path': str(generated_image_for_target_pose_path),
-            'display_frames': default_image_display_frames
-        })
-
-    # --- Step 3: Generate OpenPose from the Target T2I Image ---
-    print("\nStep 3: Generating OpenPose from the target text-generated image...")
-    openpose_t2i_task_id = generate_unique_task_id("pose_op_t2i_")
-    openpose_t2i_output_path = task_work_dir / f"{openpose_t2i_task_id}_openpose_from_t2i.png"
-
-    openpose_t2i_payload = {
-        "task_id": openpose_t2i_task_id,
-        "task_type": "generate_openpose",
-        "model": "core_pose_processor", 
-        "input_image_path": str(generated_image_for_target_pose_path.resolve()), 
-        "output_path": str(openpose_t2i_output_path.resolve())
-    }
-    dprint(f"OpenPose T2I/I2I task payload: {json.dumps(openpose_t2i_payload, indent=2)}")
-    try:
-        add_task_to_db(openpose_t2i_payload, db_file_path, "generate_openpose")
-        openpose_t2i_path_str = poll_task_status(openpose_t2i_task_id, db_file_path, common_args.poll_interval, common_args.poll_timeout)
-    except Exception as e_cmd_save:
-        dprint(f"Warning: Could not save executed command: {e_cmd_save}")
-
-    if not openpose_t2i_path_str:
-        print("Failed to generate OpenPose from T2I image.")
-        return 1
-    openpose_t2i_path = Path(openpose_t2i_path_str)
-    print(f"Successfully generated OpenPose from T2I image: {openpose_t2i_path}")
-    if DEBUG_MODE:
-        debug_video_stages_data.append({
-            'label': f"3. OpenPose from T2I ({openpose_t2i_path.name})", 
-            'type': 'image',
-            'path': str(openpose_t2i_path),
-            'display_frames': default_image_display_frames
-        })
-
-    print("\nStep 4: RIFE Interpolation SKIPPED as per modification.")
-
-    # --- Step 5: Create Final Composite Guide Video ---
-    print("\nStep 5: Creating custom guide video (OpenPose T2I only)...")
-    custom_guide_video_id = generate_unique_task_id("pose_custom_guide_")
-    custom_guide_video_path = task_work_dir / f"{custom_guide_video_id}_custom_guide.mp4"
-    
-    try:
-        create_pose_interpolated_guide_video(
-            output_video_path=custom_guide_video_path,
-            resolution=parsed_resolution,
-            total_frames=num_target_frames, 
-            start_image_path=user_input_image_path, 
-            end_image_path=generated_image_for_target_pose_path, 
-            fps=common_args.fps_helpers,
-            confidence_threshold=0.1, 
-            include_face=True,
-            include_hands=True
-        )
-        print(f"Successfully created pose-interpolated guide video: {custom_guide_video_path}")
-    except Exception as e_custom_guide:
-        print(f"Error creating custom guide video: {e_custom_guide}")
-        traceback.print_exc()
-        return 1
-
-    final_video_guide_path = custom_guide_video_path 
-
-    if DEBUG_MODE: 
-        debug_video_stages_data.append({
-            'label': f"4. Custom Guide Video ({custom_guide_video_path.name})", 
-            'type': 'video',
-            'path': str(custom_guide_video_path.resolve()),
-            'display_frames': common_args.fps_helpers * (num_target_frames // common_args.fps_helpers + 1)
-        })
-    
-    # --- Step 6: Final Video Generation ---
-    print("\nStep 6: Generating final video using custom guide (OpenPose T2I only) and user input reference...")
-    final_video_task_id = generate_unique_task_id("pose_finalvid_custom_") 
-    final_video_headless_output_path = task_work_dir / f"{final_video_task_id}_video_raw.mp4"
-
-    final_video_payload = {
-        "task_id": final_video_task_id,
-        "prompt": task_args.prompt, 
-        "model": common_args.model_name,
-        "resolution": common_args.resolution,
-        "frames": num_target_frames, 
-        "seed": common_args.seed + 1, 
-        "video_guide_path": str(final_video_guide_path.resolve()), 
-        "reference_image_path": str(user_input_image_path.resolve()), 
-        "image_refs_paths": [str(user_input_image_path.resolve())], 
-        "image_prompt_type": "IV", 
-        "output_path": str(final_video_headless_output_path.resolve())
-    }
-
-    if common_args.use_causvid_lora: final_video_payload["use_causvid_lora"] = True    
-    dprint(f"Added lora_name: 'jump' to final video payload.") 
-    dprint(f"Final video generation task payload: {json.dumps(final_video_payload, indent=2)}")
-    try:
-        add_task_to_db(final_video_payload, db_file_path, task_args.task)
-        raw_final_video_from_headless = poll_task_status(final_video_task_id, db_file_path, common_args.poll_interval, common_args.poll_timeout)
-    except Exception as e_cmd_save:
-        dprint(f"Warning: Could not save executed command: {e_cmd_save}")
-
-    if not raw_final_video_from_headless:
-        print("Failed to generate final video using custom guide and reference.")
-        return 1
-    final_posed_video_path = Path(raw_final_video_from_headless)
-    print(f"Successfully generated final video with custom guide and reference: {final_posed_video_path}")
-
-    print("\nTrimming logic for final video SKIPPED as per modification.")
-
-    if DEBUG_MODE:
-         debug_video_stages_data.append({
-            'label': f"5. Final Video with Custom Guide ({final_posed_video_path.name})", 
-            'type': 'video',
-            'path': str(final_posed_video_path),
-            'display_frames': common_args.fps_helpers * (num_target_frames // common_args.fps_helpers +1) 
-        })
-
-    # --- Step 7: Result Extraction ---
-    print(f"\nStep 7: Extracting the final posed image (last frame of {num_target_frames}-frame video)...")
-    final_posed_image_output_path = main_output_dir / f"final_posed_image_{task_run_id}.png"
-
-    cap_tmp_s7 = cv2.VideoCapture(str(final_posed_video_path))
-    total_frames_generated_s7 = int(cap_tmp_s7.get(cv2.CAP_PROP_FRAME_COUNT)) if cap_tmp_s7.isOpened() else 0
-    if cap_tmp_s7.isOpened(): cap_tmp_s7.release()
-
-    if total_frames_generated_s7 == 0:
-        print(f"Error: Final generated video is empty: {final_posed_video_path}")
-        return 1
-    target_frame_index_s7 = num_target_frames - 1 
-    if target_frame_index_s7 >= total_frames_generated_s7 : 
-        print(f"Warning: Target frame index {target_frame_index_s7} is out of bounds for video with {total_frames_generated_s7} frames. Using last available frame.")
-        target_frame_index_s7 = max(0, total_frames_generated_s7 - 1)
-
-    if not save_frame_from_video(final_posed_video_path, target_frame_index_s7, final_posed_image_output_path, parsed_resolution):
-        print(f"Failed to extract final posed image from custom-guided video with reference: {final_posed_video_path}")
-        return 1
-    
-    print(f"\nSuccessfully completed 'different_pose' task with custom (OpenPose T2I only guide + user input reference) workflow!")
-    print(f"Final posed image saved to: {final_posed_image_output_path.resolve()}")
-
-    if DEBUG_MODE:
-        debug_video_stages_data.append({
-            'label': f"6. Final Extracted Image ({final_posed_image_output_path.name})", 
-            'type': 'image',
-            'path': str(final_posed_image_output_path),
-            'display_frames': default_image_display_frames
-        })
-        if debug_video_stages_data:
-            video_collage_file_name_s7 = f"debug_video_summary_pose_rife_{task_run_id}.mp4"
-            video_collage_output_path_s7 = main_output_dir / video_collage_file_name_s7
-            generate_different_pose_debug_video_summary(
-                debug_video_stages_data, video_collage_output_path_s7, 
-                fps=common_args.fps_helpers, target_resolution=parsed_resolution
-            )
-
-    if not common_args.skip_cleanup and not DEBUG_MODE:
-        print(f"\nCleaning up intermediate files in {task_work_dir}...")
-        try:
-            shutil.rmtree(task_work_dir)
-            print(f"Removed intermediate directory: {task_work_dir}")
-        except OSError as e_clean:
-            print(f"Error removing intermediate directory {task_work_dir}: {e_clean}")
+def _get_abs_path_from_db_path(db_path: str, dprint) -> Path | None:
+    """Helper to resolve a path from the DB (which might be relative) to a usable absolute path."""
+    if not db_path:
+        return None
+        
+    resolved_path = None
+    if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and isinstance(db_path, str) and db_path.startswith("files/"):
+        sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
+        resolved_path = (sqlite_db_parent / "public" / db_path).resolve()
+        dprint(f"Resolved SQLite relative path '{db_path}' to '{resolved_path}'")
     else:
-        print(f"Skipping cleanup of intermediate files in {task_work_dir}.")
+        # Path from DB is already absolute (Supabase) or a non-standard path
+        resolved_path = Path(db_path).resolve()
+    
+    if resolved_path and resolved_path.exists():
+        return resolved_path
+    else:
+        dprint(f"Warning: Resolved path '{resolved_path}' from DB path '{db_path}' does not exist.")
+        return None
 
-    return 0 
+def _handle_different_pose_orchestrator_task(task_params_from_db: dict, main_output_dir_base: Path, orchestrator_task_id_str: str, dprint):
+    """
+    This is the entry point for a 'different_pose' job.
+    It sets up the environment and enqueues the very first step of the sequence.
+    The rest of the process is handled by the chaining function.
+    """
+    print(f"--- Orchestrating Task: Different Pose (ID: {orchestrator_task_id_str}) ---")
+    dprint(f"Orchestrator Task Params: {task_params_from_db}")
+
+    try:
+        run_id = generate_unique_task_id("dp_run_")
+        work_dir = main_output_dir_base / f"different_pose_run_{run_id}"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Working directory for this 'different_pose' run: {work_dir.resolve()}")
+
+        # Prepare the state dictionary that will be passed through the entire chain
+        chain_details = {
+            "run_id": run_id,
+            "orchestrator_task_id": orchestrator_task_id_str,
+            "work_dir": str(work_dir.resolve()),
+            "main_output_dir": str(main_output_dir_base.resolve()),
+            "original_params": task_params_from_db,
+            "current_step": "user_pose_gen", # This is the first step we are enqueuing
+            "debug_mode": task_params_from_db.get("debug_mode", False),
+            "skip_cleanup": task_params_from_db.get("skip_cleanup", False),
+            "debug_video_stages": [], # For the final debug video collage
+        }
+        
+        if chain_details["debug_mode"]:
+            input_image_path = task_params_from_db.get('input_image_path')
+            if input_image_path:
+                chain_details["debug_video_stages"].append({
+                    'label': f"0. User Input ({Path(input_image_path).name})", 
+                    'type': 'image', 'path': input_image_path
+                })
+
+        # --- Enqueue Step 1: Generate OpenPose from User Input Image ---
+        user_pose_task_id = generate_unique_task_id("dp_user_pose_")
+        user_pose_output_path = work_dir / f"{user_pose_task_id}_openpose_from_user.png"
+
+        payload = {
+            "task_id": user_pose_task_id,
+            "input_image_path": task_params_from_db['input_image_path'],
+            "output_path": str(user_pose_output_path.resolve()),
+            "different_pose_chain_details": chain_details, # Pass the state
+        }
+        
+        db_ops.add_task_to_db(payload, "generate_openpose")
+        dprint(f"Orchestrator {orchestrator_task_id_str} enqueued first step ('user_pose_gen') with task ID {user_pose_task_id}")
+
+        return True, f"Successfully enqueued different_pose job with run_id {run_id}."
+    except Exception as e:
+        error_msg = f"Different Pose orchestration failed: {e}"
+        print(f"[ERROR] {error_msg}")
+        traceback.print_exc()
+        return False, error_msg
+
+def _handle_different_pose_chaining(completed_task_params: dict, task_output_path: str, dprint):
+    """
+    The state machine for the 'different_pose' process.
+    This function is called after each step completes. It analyzes the output
+    and enqueues the next logical step in the sequence.
+    """
+    chain_details = completed_task_params.get("different_pose_chain_details")
+    if not chain_details:
+        return False, "Chaining failed: 'different_pose_chain_details' not found in completed task.", None
+
+    current_step = chain_details.get("current_step")
+    work_dir = Path(chain_details["work_dir"])
+    original_params = chain_details["original_params"]
+    final_path_for_db = None # Only populated on the very last step
+
+    try:
+        # --- Step 1 (USER_POSE_GEN) is complete -> Start Step 2 (T2I_GEN) ---
+        if current_step == "user_pose_gen":
+            dprint("DP Chain: Step 1 (user_pose_gen) complete. Starting Step 2 (t2i_gen).")
+            user_pose_image_path = _get_abs_path_from_db_path(task_output_path, dprint)
+            if not user_pose_image_path:
+                return False, f"Could not resolve user pose image path from '{task_output_path}'", None
+            
+            chain_details["user_pose_image_path"] = str(user_pose_image_path)
+            if chain_details["debug_mode"]:
+                chain_details["debug_video_stages"].append({
+                    'label': f"1. OpenPose from User Input ({user_pose_image_path.name})",
+                    'type': 'image', 'path': str(user_pose_image_path)
+                })
+
+            # Prepare payload for T2I generation
+            t2i_task_id = generate_unique_task_id("dp_t2i_")
+            t2i_output_video_path = work_dir / f"{t2i_task_id}_video_raw.mp4"
+            
+            payload = {
+                "task_id": t2i_task_id,
+                "prompt": original_params.get("prompt"),
+                "model": original_params.get("model_name"),
+                "resolution": original_params.get("resolution"),
+                "frames": 1,
+                "seed": original_params.get("seed", -1),
+                "output_path": str(t2i_output_video_path.resolve()),
+                "use_causvid_lora": original_params.get("use_causvid_lora", False),
+            }
+
+            chain_details["current_step"] = "t2i_gen"
+            payload["different_pose_chain_details"] = chain_details
+            
+            db_ops.add_task_to_db(payload, "wgp")
+            dprint(f"DP Chain: Enqueued Step 2 (t2i_gen) with task ID {t2i_task_id}")
+
+        # --- Step 2 (T2I_GEN) is complete -> Start Step 3 (T2I_POSE_GEN) ---
+        elif current_step == "t2i_gen":
+            dprint("DP Chain: Step 2 (t2i_gen) complete. Starting Step 3 (t2i_pose_gen).")
+            t2i_video_path = _get_abs_path_from_db_path(task_output_path, dprint)
+            if not t2i_video_path:
+                return False, f"Could not resolve T2I video path from '{task_output_path}'", None
+            
+            parsed_res = sm_parse_resolution(original_params.get("resolution"))
+            
+            # Extract the single frame from the generated video
+            t2i_image_path = work_dir / f"{completed_task_params['task_id']}_generated_from_prompt.png"
+            if not save_frame_from_video(t2i_video_path, 0, t2i_image_path, parsed_res):
+                return False, f"Failed to extract frame from T2I video {t2i_video_path}", None
+            
+            chain_details["t2i_image_path"] = str(t2i_image_path)
+            if chain_details["debug_mode"]:
+                chain_details["debug_video_stages"].append({
+                    'label': f"2. Target T2I Image ({t2i_image_path.name})",
+                    'type': 'image', 'path': str(t2i_image_path)
+                })
+
+            # Prepare payload for OpenPose generation on the T2I image
+            t2i_pose_task_id = generate_unique_task_id("dp_t2i_pose_")
+            t2i_pose_output_path = work_dir / f"{t2i_pose_task_id}_openpose_from_t2i.png"
+            
+            payload = {
+                "task_id": t2i_pose_task_id,
+                "input_image_path": str(t2i_image_path),
+                "output_path": str(t2i_pose_output_path.resolve()),
+            }
+
+            chain_details["current_step"] = "t2i_pose_gen"
+            payload["different_pose_chain_details"] = chain_details
+            
+            db_ops.add_task_to_db(payload, "generate_openpose")
+            dprint(f"DP Chain: Enqueued Step 3 (t2i_pose_gen) with task ID {t2i_pose_task_id}")
+
+        # --- Step 3 (T2I_POSE_GEN) is complete -> Start Step 4 (FINAL_VIDEO_GEN) ---
+        elif current_step == "t2i_pose_gen":
+            dprint("DP Chain: Step 3 (t2i_pose_gen) complete. Starting Step 4 (final_video_gen).")
+            t2i_pose_image_path = _get_abs_path_from_db_path(task_output_path, dprint)
+            if not t2i_pose_image_path:
+                 return False, f"Could not resolve T2I pose image path from '{task_output_path}'", None
+            
+            chain_details["t2i_pose_image_path"] = str(t2i_pose_image_path)
+            if chain_details["debug_mode"]:
+                chain_details["debug_video_stages"].append({
+                    'label': f"3. OpenPose from T2I ({t2i_pose_image_path.name})",
+                    'type': 'image', 'path': str(t2i_pose_image_path)
+                })
+            
+            # Create the final interpolated guide video directly, as it's a CPU-bound task
+            print("\nDP Chain: Creating custom guide video...")
+            custom_guide_video_path = work_dir / f"{generate_unique_task_id('dp_custom_guide_')}.mp4"
+            
+            create_pose_interpolated_guide_video(
+                output_video_path=custom_guide_video_path,
+                resolution=sm_parse_resolution(original_params.get("resolution")),
+                total_frames=original_params.get("output_video_frames", 16),
+                start_image_path=Path(original_params['input_image_path']),
+                end_image_path=Path(chain_details['t2i_image_path']),
+                fps=original_params.get("fps_helpers", 16),
+                confidence_threshold=0.1,
+                include_face=True,
+                include_hands=True
+            )
+            print(f"DP Chain: Successfully created pose-interpolated guide video: {custom_guide_video_path}")
+            chain_details['final_guide_video_path'] = str(custom_guide_video_path)
+            if chain_details["debug_mode"]:
+                chain_details["debug_video_stages"].append({
+                    'label': f"4. Custom Guide Video ({custom_guide_video_path.name})",
+                    'type': 'video', 'path': str(custom_guide_video_path)
+                })
+
+            # Prepare payload for final video generation
+            final_video_task_id = generate_unique_task_id("dp_final_vid_")
+            final_video_headless_output_path = work_dir / f"{final_video_task_id}_video_raw.mp4"
+            
+            payload = {
+                "task_id": final_video_task_id,
+                "prompt": original_params.get("prompt"),
+                "model": original_params.get("model_name"),
+                "resolution": original_params.get("resolution"),
+                "frames": original_params.get("output_video_frames", 16),
+                "seed": original_params.get("seed", -1) + 1,
+                "video_guide_path": str(custom_guide_video_path.resolve()),
+                "image_refs_paths": [original_params['input_image_path']],
+                "image_prompt_type": "IV",
+                "output_path": str(final_video_headless_output_path.resolve()),
+                "use_causvid_lora": original_params.get("use_causvid_lora", False),
+            }
+
+            chain_details["current_step"] = "final_video_gen"
+            payload["different_pose_chain_details"] = chain_details
+            
+            db_ops.add_task_to_db(payload, "wgp")
+            dprint(f"DP Chain: Enqueued Step 4 (final_video_gen) with task ID {final_video_task_id}")
+
+        # --- Step 4 (FINAL_VIDEO_GEN) is complete -> Do final extraction & cleanup ---
+        elif current_step == "final_video_gen":
+            dprint("DP Chain: Step 4 (final_video_gen) complete. Finalizing process.")
+            final_video_path = _get_abs_path_from_db_path(task_output_path, dprint)
+            if not final_video_path:
+                 return False, f"Could not resolve final video path from '{task_output_path}'", None
+            
+            if chain_details["debug_mode"]:
+                chain_details["debug_video_stages"].append({
+                    'label': f"5. Final Video ({final_video_path.name})",
+                    'type': 'video', 'path': str(final_video_path)
+                })
+
+            # Extract the final frame
+            print("\nDP Chain: Extracting final posed image...")
+            final_posed_image_output_path = Path(chain_details["main_output_dir"]) / f"final_posed_image_{chain_details['run_id']}.png"
+            
+            if not save_frame_from_video(final_video_path, -1, final_posed_image_output_path, sm_parse_resolution(original_params.get("resolution"))):
+                 return False, f"Failed to extract final posed image from {final_video_path}", None
+            
+            print(f"Successfully completed 'different_pose' task!")
+            print(f"Final posed image saved to: {final_posed_image_output_path.resolve()}")
+            final_path_for_db = str(final_posed_image_output_path.resolve()) # This is the final output of the whole job
+
+            if chain_details["debug_mode"]:
+                chain_details["debug_video_stages"].append({
+                    'label': f"6. Final Extracted Image ({final_posed_image_output_path.name})",
+                    'type': 'image', 'path': str(final_posed_image_output_path)
+                })
+                video_collage_path = Path(chain_details["main_output_dir"]) / f"debug_summary_dp_{chain_details['run_id']}.mp4"
+                print(f"DP Chain: Generating debug video summary to {video_collage_path}")
+                # This function might need adjustment for the new data structure
+                # generate_different_pose_debug_video_summary(...)
+            
+            # Cleanup intermediate files
+            if not chain_details["skip_cleanup"] and not chain_details["debug_mode"]:
+                print(f"DP Chain: Cleaning up intermediate files in {work_dir}...")
+                try:
+                    shutil.rmtree(work_dir)
+                    print(f"Removed intermediate directory: {work_dir}")
+                except OSError as e_clean:
+                    print(f"Error removing intermediate directory {work_dir}: {e_clean}")
+            else:
+                print(f"Skipping cleanup of intermediate files in {work_dir}.")
+            
+            # The chain is complete. We return the final output path.
+            # This will be saved to the original orchestrator task's DB record.
+            db_ops.update_task_status(chain_details['orchestrator_task_id'], db_ops.STATUS_COMPLETE, final_path_for_db)
+            dprint(f"DP Chain: Process complete. Final image at {final_path_for_db}")
+        
+        else:
+            return False, f"Unknown step in different_pose chaining: {current_step}", None
+            
+    except Exception as e:
+        error_msg = f"Different Pose chaining failed at step '{current_step}': {e}"
+        print(f"[ERROR] {error_msg}")
+        traceback.print_exc()
+        db_ops.update_task_status(chain_details['orchestrator_task_id'], db_ops.STATUS_FAILED, error_msg)
+        return False, error_msg, None
+
+    # For all intermediate steps, we don't have a final output for the orchestrator task yet.
+    return True, f"Chaining successful for step {current_step}", final_path_for_db 

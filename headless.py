@@ -50,6 +50,7 @@ from source.common_utils import (
     load_pil_images as sm_load_pil_images
 )
 from source.sm_functions import travel_between_images as tbi
+from source.sm_functions import different_pose as dp
 # --- End SM_RESTRUCTURE imports ---
 
 
@@ -378,6 +379,40 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         ui_defaults["loras_multipliers"] = " ".join(list(lora_mult_map.values()))
         dprint(f"Reward LoRA applied. Activated: {ui_defaults['activated_loras']}, Multipliers: {ui_defaults['loras_multipliers']}")
 
+    # Apply additional LoRAs that may have been passed via task params (e.g. from travel orchestrator)
+    processed_additional_loras = task_params_dict.get("processed_additional_loras", {})
+    if processed_additional_loras:
+        dprint(f"[Task ID: {task_id_for_dprint}] Applying processed additional LoRAs: {processed_additional_loras}")
+        
+        # Get current activated LoRAs and multipliers again, as they may have been modified by other logic.
+        current_activated = ui_defaults.get("activated_loras", [])
+        if not isinstance(current_activated, list):
+            try:
+                current_activated = [str(item).strip() for item in str(current_activated).split(',') if item.strip()]
+            except:
+                current_activated = []
+
+        current_multipliers_str = ui_defaults.get("loras_multipliers", "")
+        if isinstance(current_multipliers_str, (list, tuple)):
+            current_multipliers_list = [str(m).strip() for m in current_multipliers_str if str(m).strip()]
+        elif isinstance(current_multipliers_str, str):
+            current_multipliers_list = [m.strip() for m in current_multipliers_str.split(" ") if m.strip()]
+        else:
+            current_multipliers_list = []
+
+        # Pad multipliers to match activated LoRAs before creating map
+        while len(current_multipliers_list) < len(current_activated):
+            current_multipliers_list.append("1.0")
+
+        lora_mult_map = dict(zip(current_activated, current_multipliers_list))
+        
+        # Add/update additional loras - this will overwrite strength if lora was already present
+        lora_mult_map.update(processed_additional_loras)
+
+        ui_defaults["activated_loras"] = list(lora_mult_map.keys())
+        ui_defaults["loras_multipliers"] = " ".join(list(lora_mult_map.values()))
+        dprint(f"Additional LoRAs applied. Final Activated: {ui_defaults['activated_loras']}, Final Multipliers: {ui_defaults['loras_multipliers']}")
+
     state[model_type_key] = ui_defaults
     return state, ui_defaults
 
@@ -399,6 +434,8 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
     # --- Check for new task type ---
     if task_type == "generate_openpose":
         print(f"[Task ID: {task_id}] Identified as 'generate_openpose' task.")
+        # This handler might need access to wgp_mod for some utilities, so pass it along.
+        # It's better to pass dependencies explicitly than rely on globals.
         return handle_generate_openpose_task(task_params_dict, main_output_dir_base, task_id, dprint)
     elif task_type == "rife_interpolate_images":
         print(f"[Task ID: {task_id}] Identified as 'rife_interpolate_images' task.")
@@ -418,6 +455,17 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         return tbi._handle_travel_stitch_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, stitch_task_id_str=task_id, dprint=dprint)
     # --- End SM_RESTRUCTURE ---
     
+    # --- Different Pose Orchestrator ---
+    elif task_type == "different_pose_orchestrator":
+        print(f"[Task ID: {task_id}] Identified as 'different_pose_orchestrator' task.")
+        return dp._handle_different_pose_orchestrator_task(
+            task_params_from_db=task_params_dict,
+            main_output_dir_base=main_output_dir_base,
+            orchestrator_task_id_str=task_id,
+            dprint=dprint
+        )
+    # --- End Different Pose ---
+
     # Default handling for standard wgp tasks (original logic)
     task_model_type_logical = task_params_dict.get("model", "t2v")
     # Determine the actual model filename before checking/downloading LoRA, as LoRA path depends on it
@@ -475,6 +523,76 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                  pass 
         if not "14B" in model_filename_for_task or not "t2v" in model_filename_for_task.lower():
             print(f"[WARNING Task ID: {task_id}] CausVid LoRA is intended for 14B T2V models. Current model is {model_filename_for_task}. Results may vary.")
+
+    # Handle additional LoRAs from task params, which may be passed by travel orchestrator
+    additional_loras = task_params_dict.get("additional_loras", {})
+    if additional_loras:
+        dprint(f"[Task ID: {task_id}] Processing additional LoRAs: {additional_loras}")
+        base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
+        processed_loras = {}
+        for lora_path, lora_strength in additional_loras.items():
+            try:
+                lora_filename = Path(urllib.parse.urlparse(lora_path).path).name
+                
+                if lora_path.startswith("http://") or lora_path.startswith("https://"):
+                    # URL case: download the LoRA to central Wan2GP/loras directory
+                    wan2gp_loras_dir = Path("Wan2GP/loras")
+                    wan2gp_loras_dir.mkdir(parents=True, exist_ok=True)
+                    dprint(f"Task {task_id}: Downloading LoRA from {lora_path} to {wan2gp_loras_dir}")
+                    download_file(lora_path, wan2gp_loras_dir, lora_filename)
+                    
+                    # Now copy from Wan2GP/loras to model-specific directory if needed
+                    downloaded_lora_path = wan2gp_loras_dir / lora_filename
+                    target_path = base_lora_dir_for_model / lora_filename
+                    if not target_path.exists() or downloaded_lora_path.resolve() != target_path.resolve():
+                        shutil.copy(str(downloaded_lora_path), str(target_path))
+                        dprint(f"Copied downloaded LoRA from {downloaded_lora_path} to {target_path}")
+                    else:
+                        dprint(f"Downloaded LoRA already exists at target: {target_path}")
+                else:
+                    # Local file case: check multiple locations
+                    source_path = Path(lora_path)
+                    target_path = base_lora_dir_for_model / lora_filename
+                    
+                    if source_path.is_absolute() and source_path.exists():
+                        # Full absolute path that exists
+                        if not target_path.exists() or source_path.resolve() != target_path.resolve():
+                            shutil.copy(str(source_path), str(target_path))
+                            dprint(f"Copied local LoRA from {source_path} to {target_path}")
+                        else:
+                            dprint(f"LoRA already exists at target: {target_path}")
+                    elif (base_lora_dir_for_model / lora_path).exists():
+                        # Relative path within LoRA directory (e.g., "my_lora.safetensors" or "subfolder/my_lora.safetensors")
+                        existing_lora_path = base_lora_dir_for_model / lora_path
+                        lora_filename = existing_lora_path.name  # Update filename to actual file
+                        dprint(f"Found existing LoRA in directory: {existing_lora_path}")
+                        # No need to copy, it's already in the right place
+                    elif (Path("Wan2GP/loras") / lora_path).exists():
+                        # Check standard Wan2GP/loras directory
+                        wan2gp_lora_path = Path("Wan2GP/loras") / lora_path
+                        target_path = base_lora_dir_for_model / wan2gp_lora_path.name
+                        if not target_path.exists() or wan2gp_lora_path.resolve() != target_path.resolve():
+                            shutil.copy(str(wan2gp_lora_path), str(target_path))
+                            dprint(f"Copied LoRA from Wan2GP/loras: {wan2gp_lora_path} to {target_path}")
+                        else:
+                            dprint(f"LoRA from Wan2GP/loras already exists at target: {target_path}")
+                        lora_filename = wan2gp_lora_path.name
+                    elif source_path.exists():
+                        # Relative path from current working directory
+                        if not target_path.exists() or source_path.resolve() != target_path.resolve():
+                            shutil.copy(str(source_path), str(target_path))
+                            dprint(f"Copied local LoRA from {source_path} to {target_path}")
+                        else:
+                            dprint(f"LoRA already exists at target: {target_path}")
+                    else:
+                        dprint(f"[WARNING Task ID: {task_id}] LoRA not found at any location: '{lora_path}'. Checked: full path, LoRA directory, and relative path. Skipping.")
+                        continue # Skip this lora
+                
+                processed_loras[lora_filename] = str(lora_strength)
+            except Exception as e_lora:
+                print(f"[ERROR Task ID: {task_id}] Failed to process additional LoRA {lora_path}: {e_lora}")
+        
+        task_params_dict["processed_additional_loras"] = processed_loras
 
     print(f"[Task ID: {task_id}] Using model file: {model_filename_for_task}")
 
@@ -683,37 +801,66 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
     except Exception as e_clean:
         print(f"[WARNING Task ID: {task_id}] Failed to clean up temporary directory {temp_output_dir}: {e_clean}")
 
-    if generation_success and task_params_dict.get("travel_chain_details"):
-        dprint(f"WGP Task {task_id} is part of a travel sequence. Attempting to chain.")
-        
-        chain_success, chain_message, final_path_from_chaining = tbi._handle_travel_chaining_after_wgp(
-            wgp_task_params=task_params_dict, 
-            actual_wgp_output_video_path=output_location_to_db,
-            wgp_mod=wgp_mod,
-            image_download_dir = image_download_dir,
-            dprint=dprint
-        )
-        
-        if chain_success:
-            path_to_check_existence: Path
-            if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and isinstance(final_path_from_chaining, str) and final_path_from_chaining.startswith("files/"):
-                sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
-                path_to_check_existence = (sqlite_db_parent / "public" / final_path_from_chaining).resolve()
-                dprint(f"Task {task_id}: Chaining returned SQLite relative path '{final_path_from_chaining}'. Resolved to '{path_to_check_existence}' for existence check.")
-            elif final_path_from_chaining:
-                path_to_check_existence = Path(final_path_from_chaining).resolve()
-                dprint(f"Task {task_id}: Chaining returned absolute-like path '{final_path_from_chaining}'. Resolved to '{path_to_check_existence}' for existence check.")
+    if generation_success:
+        chaining_result_path_override = None
+
+        if task_params_dict.get("travel_chain_details"):
+            dprint(f"WGP Task {task_id} is part of a travel sequence. Attempting to chain.")
+            chain_success, chain_message, final_path_from_chaining = tbi._handle_travel_chaining_after_wgp(
+                wgp_task_params=task_params_dict, 
+                actual_wgp_output_video_path=output_location_to_db,
+                wgp_mod=wgp_mod,
+                image_download_dir=image_download_dir,
+                dprint=dprint
+            )
+            if chain_success:
+                chaining_result_path_override = final_path_from_chaining
+                dprint(f"Task {task_id}: Travel chaining successful. Message: {chain_message}")
             else:
-                path_to_check_existence = None
+                print(f"[ERROR Task ID: {task_id}] Travel sequence chaining failed after WGP completion: {chain_message}. The raw WGP output '{output_location_to_db}' will be used for this task's DB record.")
+        
+        elif task_params_dict.get("different_pose_chain_details"):
+            dprint(f"Task {task_id} is part of a different_pose sequence. Attempting to chain.")
+            
+            # This call will enqueue the next task in the sequence.
+            # It may return a new path if post-processing occurred on the current task's output.
+            chain_success, chain_message, final_path_from_chaining = dp._handle_different_pose_chaining(
+                completed_task_params=task_params_dict, 
+                task_output_path=output_location_to_db,
+                dprint=dprint
+            )
+            if chain_success:
+                # The final path of the *entire* sequence is what matters for the orchestrator task,
+                # but for this intermediate step, we just need to know if the output path was modified.
+                chaining_result_path_override = final_path_from_chaining
+                dprint(f"Task {task_id}: Different Pose chaining successful. Message: {chain_message}")
+            else:
+                print(f"[ERROR Task ID: {task_id}] Different Pose sequence chaining failed: {chain_message}. This may halt the sequence.")
+
+
+        if chaining_result_path_override:
+            # This logic handles if the chaining function (travel or other) returned a new, modified path for the output.
+            # E.g., a path to a color-corrected video.
+            path_to_check_existence: Path | None = None
+            if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and isinstance(chaining_result_path_override, str) and chaining_result_path_override.startswith("files/"):
+                sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
+                path_to_check_existence = (sqlite_db_parent / "public" / chaining_result_path_override).resolve()
+                dprint(f"Task {task_id}: Chaining returned SQLite relative path '{chaining_result_path_override}'. Resolved to '{path_to_check_existence}' for existence check.")
+            elif chaining_result_path_override:
+                # It could be an absolute path from Supabase or other non-SQLite setups
+                path_to_check_existence = Path(chaining_result_path_override).resolve()
+                dprint(f"Task {task_id}: Chaining returned absolute-like path '{chaining_result_path_override}'. Resolved to '{path_to_check_existence}' for existence check.")
 
             if path_to_check_existence and path_to_check_existence.exists() and path_to_check_existence.is_file():
-                if str(path_to_check_existence.resolve()) != str(Path(output_location_to_db).resolve() if Path(output_location_to_db).is_absolute() else ((Path(db_ops.SQLITE_DB_PATH).resolve().parent / "public" / output_location_to_db).resolve() if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and output_location_to_db.startswith("files/") else Path(output_location_to_db).resolve() )):
-                    dprint(f"Task {task_id}: Chaining modified output path for DB. Original (DB form): {output_location_to_db}, New (DB form): {final_path_from_chaining} (Checked file: {path_to_check_existence})")
-                output_location_to_db = final_path_from_chaining
-            else:
-                print(f"[WARNING Task ID: {task_id}] Chaining reported success, but final path '{final_path_from_chaining}' (checked as '{path_to_check_existence}') is invalid or not a file. Using original WGP output '{output_location_to_db}' for DB.")
-        else:
-            print(f"[ERROR Task ID: {task_id}] Travel sequence chaining failed after WGP completion: {chain_message}. The raw WGP output '{output_location_to_db}' will be used for this task's DB record.")
+                # A crude check to see if the path changed, for logging purposes.
+                is_output_path_different = str(chaining_result_path_override) != str(output_location_to_db)
+                if is_output_path_different:
+                    dprint(f"Task {task_id}: Chaining modified output path for DB. Original: {output_location_to_db}, New: {chaining_result_path_override} (Checked file: {path_to_check_existence})")
+                output_location_to_db = chaining_result_path_override
+            elif chaining_result_path_override is not None:
+                # A path was returned but it's not valid. This is a warning. The original output will be used.
+                print(f"[WARNING Task ID: {task_id}] Chaining reported success, but final path '{chaining_result_path_override}' (checked as '{path_to_check_existence}') is invalid or not a file. Using original WGP output '{output_location_to_db}' for DB.")
+
 
     print(f"--- Finished task ID: {task_id} (Success: {generation_success}) ---")
     return generation_success, output_location_to_db
