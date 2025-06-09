@@ -6,7 +6,7 @@ for `steerable_motion.py`.
 
 # Task Handlers
 # from .travel_between_images import run_travel_between_images_task
-from .different_pose import run_different_pose_task
+# from .different_pose import run_different_pose_task
 
 # Common Utilities
 # These are re-exported here for convenience, allowing task modules to import
@@ -80,7 +80,7 @@ __all__ = [
     # travel_between_images exports
     # "run_travel_between_images_task",
     # different_pose exports
-    "run_different_pose_task",
+    # "run_different_pose_task",
     # video_utils exports
     # "crossfade_ease",
     # "_blend_linear",
