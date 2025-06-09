@@ -276,11 +276,6 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         ui_defaults["activated_loras"] = current_activated_list # Update ui_defaults
     # --- End Custom LoRA Handling ---
 
-    # --- Handle remove_background_image_ref legacy key ---
-    if "remove_background_image_ref" in ui_defaults and "remove_background_images_ref" not in ui_defaults:
-        ui_defaults["remove_background_images_ref"] = ui_defaults["remove_background_image_ref"]
-    # --- End Handle remove_background_image_ref ---
-
     # Apply CausVid LoRA specific settings if the flag is true
     if causvid_active:
         print(f"[Task ID: {task_params_dict.get('task_id')}] Applying CausVid LoRA settings.")
@@ -674,7 +669,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
             sliding_window_overlap=ui_params.get("sliding_window_overlap", 5),
             sliding_window_overlap_noise=ui_params.get("sliding_window_overlap_noise", 20),
             sliding_window_discard_last_frames=ui_params.get("sliding_window_discard_last_frames", 0),
-            remove_background_image_ref=ui_params.get("remove_background_images_ref", False),
+            remove_background_images_ref=ui_params.get("remove_background_images_ref", False),
             temporal_upsampling=ui_params.get("temporal_upsampling", ""),
             spatial_upsampling=ui_params.get("spatial_upsampling", ""),
             RIFLEx_setting=ui_params.get("RIFLEx_setting", 0),
