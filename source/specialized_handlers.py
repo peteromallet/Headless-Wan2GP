@@ -1,16 +1,19 @@
 """Specialized task handlers for headless.py."""
 
-import traceback
-import tempfile
+import sys
 from pathlib import Path
-import numpy as np
-from PIL import Image
 
 # Add the parent directory to Python path to allow Wan2GP module import
-import sys
-wan2gp_path = Path(__file__).resolve().parent.parent / "Wan2GP"
-if str(wan2gp_path) not in sys.path:
-    sys.path.insert(0, str(wan2gp_path))
+# This is crucial for ensuring that imports like `from ltx_video...` work correctly.
+wan2gp_dir = Path(__file__).resolve().parent.parent / "Wan2GP"
+if str(wan2gp_dir) not in sys.path:
+    sys.path.insert(0, str(wan2gp_dir))
+
+import traceback
+import tempfile
+import numpy as np
+from PIL import Image
+import cv2
 
 try:
     from preprocessing.dwpose.pose import PoseBodyFaceVideoAnnotator
@@ -212,3 +215,233 @@ def handle_rife_interpolate_task(wgp_mod, task_params_dict: dict, main_output_di
 
 
     return generation_success, output_location_to_db 
+
+def handle_ltxv_upscale_task(task_params_dict: dict, main_output_dir_base: Path, task_id: str, *, dprint) -> tuple[bool, str]:
+    """
+    Handle LTXV upscaling task using only the necessary components (VAE + spatial upsampler).
+    Optimized to avoid loading the full 13B transformer which isn't needed for upscaling.
+    """
+    try:
+        from source.video_utils import extract_frames_from_video, create_video_from_frames_list
+        from source.common_utils import sm_get_unique_target_path
+        from source import db_operations as db_ops
+        import torch
+        
+        # Import wgp module to access model downloading functions
+        import sys
+        import os
+        wan2gp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Wan2GP")
+        if wan2gp_path not in sys.path:
+            sys.path.append(wan2gp_path)
+        from Wan2GP import wgp as wgp_mod
+        
+        dprint(f"LTXV Upscale Task {task_id}: Starting optimized video upscaling (VAE + spatial upsampler only)")
+        dprint(f"LTXV Upscale Task {task_id}: Input video: {task_params_dict.get('video_source_path')}")
+        dprint(f"LTXV Upscale Task {task_id}: Upscale factor: {task_params_dict.get('upscale_factor')}")
+
+        input_video_path = task_params_dict.get("video_source_path")
+        upscale_factor = task_params_dict.get("upscale_factor", 2.0)
+        output_path = task_params_dict.get("output_path")
+
+        if not input_video_path or not Path(input_video_path).exists():
+            return False, f"Input video not found: {input_video_path}"
+
+        if upscale_factor <= 1.0:
+            return False, f"Invalid upscale_factor: {upscale_factor}"
+
+        # Download only the required components for upscaling
+        dprint(f"LTXV Upscale Task {task_id}: Downloading required upscaling components...")
+        required_files = [
+            "ltxv_0.9.7_VAE.safetensors",
+            "ltxv_0.9.7_spatial_upscaler.safetensors"
+        ]
+        for file in required_files:
+            wgp_mod.download_models(file)
+        
+        # Load only VAE and spatial upsampler (no transformer needed for upscaling)
+        dprint(f"LTXV Upscale Task {task_id}: Loading VAE and spatial upsampler components directly...")
+        
+        # Import LTXV components directly
+        from ltx_video.models.autoencoders.causal_video_autoencoder import CausalVideoAutoencoder
+        from ltx_video.models.autoencoders.latent_upsampler import LatentUpsampler
+        
+        # Load VAE directly
+        vae_dtype = torch.float16 if wgp_mod.server_config.get("vae_precision", "16") == "16" else torch.float32
+        dprint(f"LTXV Upscale Task {task_id}: Loading VAE with dtype {vae_dtype}")
+        
+        vae = CausalVideoAutoencoder.from_pretrained("ckpts/ltxv_0.9.7_VAE.safetensors")
+        vae = vae.to(dtype=vae_dtype).eval()
+        
+        # Load spatial upsampler directly
+        dprint(f"LTXV Upscale Task {task_id}: Loading spatial upsampler")
+        latent_upsampler = LatentUpsampler.from_pretrained("ckpts/ltxv_0.9.7_spatial_upsampler.safetensors")
+        latent_upsampler = latent_upsampler.to(dtype=vae_dtype).eval()
+        
+        dprint(f"LTXV Upscale Task {task_id}: Successfully loaded VAE and spatial upsampler (skipped 13B transformer)")
+        
+        # Extract frames from input video
+        dprint(f"LTXV Upscale Task {task_id}: Extracting frames from input video...")
+        input_frames = extract_frames_from_video(input_video_path)
+        if not input_frames:
+            return False, f"Failed to extract frames from {input_video_path}"
+        
+        dprint(f"LTXV Upscale Task {task_id}: Extracted {len(input_frames)} frames")
+        
+        # Process frames in batches for memory efficiency
+        import torch
+        import torchvision.transforms as transforms
+        
+        device = next(vae.parameters()).device
+        upscaled_frames = []
+        batch_size = 4  # Process 4 frames at a time
+
+        # Get original frame dimensions and calculate VAE-compatible size (multiple of 32)
+        first_frame = input_frames[0]
+        # Assuming extract_frames_from_video returns numpy arrays (H, W, C)
+        original_h, original_w, _ = first_frame.shape
+        # The LTXV VAE requires dimensions to be divisible by 2 at each of its
+        # downsampling stages. The total downsampling requires divisibility by 32.
+        new_h = (original_h // 32) * 32
+        new_w = (original_w // 32) * 32
+        dprint(f"LTXV Upscale Task {task_id}: Resizing input frames from {original_w}x{original_h} to {new_w}x{new_h} for VAE compatibility")
+        
+        # This transform pipeline expects PIL Images
+        transform = transforms.Compose([
+            transforms.Resize((new_h, new_w), antialias=True), # Ensure dimensions are VAE-compatible
+            transforms.ToTensor(),
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])  # Normalize to [-1, 1]
+        ])
+        
+        dprint(f"LTXV Upscale Task {task_id}: Processing frames...")
+        for i in range(0, len(input_frames), batch_size):
+            batch_frames = input_frames[i:i + batch_size]
+            dprint(f"LTXV Upscale Task {task_id}: Processing batch {i//batch_size + 1}/{(len(input_frames) + batch_size - 1)//batch_size}")
+            
+            # Convert frames to tensor batch
+            batch_tensors = []
+            for frame in batch_frames:
+                # Convert numpy array to PIL Image before applying transforms
+                pil_frame = Image.fromarray(frame)
+                frame_tensor = transform(pil_frame).unsqueeze(0)  # Add batch dimension
+                batch_tensors.append(frame_tensor)
+            
+            # Use the actual dtype of the VAE model from the pipe, not the calculated one.
+            # This handles cases where ltx_video internally forces a dtype (e.g. bfloat16).
+            batch_tensor = torch.cat(batch_tensors, dim=0).to(device, dtype=vae.dtype)
+            
+            # Add temporal dimension for LTXV VAE (expects 5D: B, C, T, H, W)
+            batch_tensor_5d = batch_tensor.unsqueeze(2)  # Add time dimension
+            
+            with torch.no_grad():
+                # Encode to latent space
+                latents = vae.encode(batch_tensor_5d).latent_dist.sample()
+                
+                # Use wgp.py's upscaling approach with proper normalization
+                # Import the required functions from ltx_video
+                try:
+                    from ltx_video.models.autoencoders.vae_encode import normalize_latents, un_normalize_latents
+                    from ltx_video.pipelines.pipeline_ltx_video import adain_filter_latent
+                    
+                    # Store original latents for AdaIN filtering
+                    original_latents = latents.clone()
+                    
+                    # Un-normalize latents before upscaling (like wgp.py does)
+                    latents = un_normalize_latents(latents, vae, vae_per_channel_normalize=True)
+                    
+                    # Upscale latents
+                    upscaled_latents = latent_upsampler(latents)
+                    
+                    # Re-normalize latents after upscaling
+                    upscaled_latents = normalize_latents(upscaled_latents, vae, vae_per_channel_normalize=True)
+                    
+                    # Apply AdaIN filtering for consistency (like wgp.py does)
+                    upscaled_latents = adain_filter_latent(latents=upscaled_latents, reference_latents=original_latents)
+                    
+                except ImportError:
+                    # Fallback to our original approach if the functions aren't available
+                    dprint(f"LTXV Upscale Task {task_id}: Using fallback upscaling method (missing ltx_video utils)")
+                    upscaled_latents = latent_upsampler(latents)
+                
+                # Calculate the target shape for decoding
+                # The upsampler doubles the latent dimensions, so the pixel dimensions will also be doubled.
+                upscaled_h = new_h * 2
+                upscaled_w = new_w * 2
+                target_shape = (batch_tensor.shape[0], batch_tensor.shape[1], 1, upscaled_h, upscaled_w)
+
+                # Create a timestep tensor for the batch, as required by the VAE decoder for batch processing.
+                timestep_tensor = torch.zeros(batch_tensor.shape[0], device=device, dtype=torch.long)
+                
+                # Decode back to pixels, providing the target shape and a timestep tensor for the batch.
+                upscaled_batch_5d = vae.decode(upscaled_latents, target_shape=target_shape, timestep=timestep_tensor).sample
+                
+                # Remove temporal dimension and convert back to images
+                upscaled_batch = upscaled_batch_5d.squeeze(2)  # Remove time dimension
+                
+                # Convert tensors back to PIL images
+                for j in range(upscaled_batch.shape[0]):
+                    frame_tensor = upscaled_batch[j]
+                    # Denormalize from [-1, 1] to [0, 1]
+                    frame_tensor = (frame_tensor + 1.0) / 2.0
+                    frame_tensor = torch.clamp(frame_tensor, 0.0, 1.0)
+                    
+                    # Convert to float32 before converting to PIL, as bfloat16 is not supported by ToPILImage
+                    frame_pil = transforms.ToPILImage()(frame_tensor.cpu().float())
+                    upscaled_frames.append(frame_pil)
+        
+        if not upscaled_frames:
+            return False, "No frames were upscaled"
+        
+        # Determine output resolution from upscaled frames
+        output_width, output_height = upscaled_frames[0].size
+        dprint(f"LTXV Upscale Task {task_id}: Output resolution: {output_width}x{output_height}")
+        
+        # Get original video FPS
+        cap = cv2.VideoCapture(input_video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        cap.release()
+        
+        # Determine output path
+        if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
+            sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
+            target_dir = sqlite_db_parent / "public" / "files"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            output_video_path = sm_get_unique_target_path(target_dir, f"{task_id}_upscaled", ".mp4")
+            output_location = f"files/{output_video_path.name}"
+        else:
+            if output_path:
+                output_video_path = Path(output_path)
+                output_video_path.parent.mkdir(parents=True, exist_ok=True)
+            else:
+                output_video_path = main_output_dir_base / f"{task_id}_upscaled.mp4"
+            output_location = str(output_video_path.resolve())
+        
+        # Create output video from upscaled frames
+        dprint(f"LTXV Upscale Task {task_id}: Creating output video...")
+        
+        # Convert PIL Images to NumPy arrays in BGR format for video creation
+        upscaled_frames_np = []
+        for pil_frame in upscaled_frames:
+            # Convert PIL to RGB numpy array
+            rgb_array = np.array(pil_frame)
+            # Convert RGB to BGR for OpenCV/video creation
+            bgr_array = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2BGR)
+            upscaled_frames_np.append(bgr_array)
+        
+        output_video_obj = create_video_from_frames_list(
+            upscaled_frames_np,  # Now using NumPy BGR arrays
+            output_video_path, 
+            fps, 
+            (output_width, output_height)
+        )
+        
+        if output_video_obj and output_video_obj.exists():
+            dprint(f"LTXV Upscale Task {task_id}: Successfully created upscaled video: {output_video_path}")
+            return True, output_location
+        else:
+            return False, f"Failed to create output video at {output_video_path}"
+            
+    except Exception as e:
+        dprint(f"LTXV Upscale Task {task_id}: Error during processing: {e}")
+        import traceback
+        traceback.print_exc()
+        return False, f"LTXV upscaling failed: {e}" 
