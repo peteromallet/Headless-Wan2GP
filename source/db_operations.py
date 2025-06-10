@@ -284,43 +284,29 @@ def update_task_status_sqlite(db_path_str: str, task_id: str, status: str, outpu
     """Updates a task's status and updated_at timestamp with proper error handling"""
     def _update_operation(conn, task_id, status, output_location_val):
         cursor = conn.cursor()
-        
+        current_utc_iso_ts = datetime.datetime.utcnow().isoformat() + "Z"
+
         if status == STATUS_COMPLETE and output_location_val is not None:
-            # Step 1: Update output_location and updated_at for the location change
-            current_utc_iso_ts_loc_update = datetime.datetime.utcnow().isoformat() + "Z"
+            # For completion, we perform a two-step update to ensure atomicity isn't an issue
+            # across different parts of the application that might check status vs. output_location.
             dprint(f"SQLite Update (Split Step 1): Updating output_location for {task_id} to {output_location_val}")
             cursor.execute("UPDATE tasks SET output_location = ?, updated_at = ? WHERE id = ?",
-                           (output_location_val, current_utc_iso_ts_loc_update, task_id))
-            conn.commit()  # Explicitly commit the output_location update
+                           (output_location_val, current_utc_iso_ts, task_id))
+            conn.commit()  # Commit the output_location update separately
 
-            # Step 2: Update status and updated_at for the status change
-            current_utc_iso_ts_status_update = datetime.datetime.utcnow().isoformat() + "Z"
             dprint(f"SQLite Update (Split Step 2): Updating status for {task_id} to {status}")
             cursor.execute("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
-                           (status, current_utc_iso_ts_status_update, task_id))
-            # The final commit for this status update will be handled by execute_sqlite_with_retry
+                           (status, current_utc_iso_ts, task_id))
 
-        elif status == STATUS_FAILED and output_location_val is not None: # output_location_val is error message here
-            current_utc_iso_ts_fail_update = datetime.datetime.utcnow().isoformat() + "Z"
+        elif status == STATUS_FAILED and output_location_val is not None:  # output_location_val is the error message here
             dprint(f"SQLite Update (Single): Updating status to FAILED and output_location (error msg) for {task_id}")
             cursor.execute("UPDATE tasks SET status = ?, updated_at = ?, output_location = ? WHERE id = ?",
-                           (status, current_utc_iso_ts_fail_update, output_location_val, task_id))
+                           (status, current_utc_iso_ts, output_location_val, task_id))
 
-        else: # For "In Progress" or other statuses, or if output_location_val is None
-            current_utc_iso_ts_progress_update = datetime.datetime.utcnow().isoformat() + "Z"
-            dprint(f"SQLite Update (Single): Updating status for {task_id} to {status} (output_location_val: {output_location_val})")
-            # If output_location_val is None even for COMPLETE or FAILED, it won't be set here.
-            # This branch primarily handles IN_PROGRESS or status changes where output_location is not part of the update.
-            # If status is COMPLETE/FAILED and output_location_val is None, only status and updated_at change.
-            if output_location_val is not None and status in [STATUS_COMPLETE, STATUS_FAILED]:
-                 # This case should ideally be caught by the specific branches above,
-                 # but as a safeguard if logic changes:
-                 dprint(f"SQLite Update (Single with output_location): Updating status, output_location for {task_id}")
-                 cursor.execute("UPDATE tasks SET status = ?, updated_at = ?, output_location = ? WHERE id = ?",
-                               (status, current_utc_iso_ts_progress_update, output_location_val, task_id))
-            else:
-                 cursor.execute("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
-                               (status, current_utc_iso_ts_progress_update, task_id))
+        else:  # Handles "In Progress" or other statuses where output_location isn't being set at the same time.
+            dprint(f"SQLite Update (Single): Updating status for {task_id} to {status}")
+            cursor.execute("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
+                           (status, current_utc_iso_ts, task_id))
         return True
     
     try:
@@ -479,23 +465,29 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
     if not task_id:
         raise ValueError("task_id must be present in the task_payload.")
 
-    # Shared logic: Sanitize payload and get project_id
+    # Shared logic: Sanitize payload, get project_id, and generate timestamp
     params_for_db = task_payload.copy()
-    params_for_db.pop("task_type", None) # Ensure task_type is not duplicated in params
+    params_for_db.pop("task_type", None)  # Ensure task_type is not duplicated in params
     params_json_str = json.dumps(params_for_db)
     project_id = task_payload.get("project_id", "default_project_id")
+    current_timestamp_utc_iso = datetime.datetime.utcnow().isoformat() + "Z"
 
     if DB_TYPE == "supabase":
         if not SUPABASE_CLIENT:
             print("[ERROR] Supabase client not initialized. Cannot add task.")
             return
         try:
+            # Note: This assumes the 'func_add_task' RPC on Supabase has been updated
+            # to accept a 'p_created_at' parameter. If not, the 'created_at' column
+            # in the PostgreSQL table should have a `DEFAULT now()` or `DEFAULT CURRENT_TIMESTAMP`.
+            # Sending it from the client is a robust way to ensure it's set correctly.
             rpc_params = {
                 "p_task_id": task_id,
                 "p_params": params_json_str,
                 "p_task_type": task_type_str,
                 "p_project_id": project_id,
                 "p_dependant_on": dependant_on,
+                "p_created_at": current_timestamp_utc_iso,
                 "p_table_name": PG_TABLE_NAME,
             }
             dprint(f"Supabase RPC: Adding task {task_id} via func_add_task with params: {rpc_params}")
@@ -505,17 +497,17 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
             print(f"[ERROR] Supabase RPC func_add_task for {task_id} failed: {e}")
             raise
 
-    else: # Default to SQLite
+    else:  # Default to SQLite
         db_to_use = db_path if db_path else SQLITE_DB_PATH
         if not db_to_use:
             raise ValueError("SQLite DB path is not configured.")
 
         def _add_op(conn):
             cursor = conn.cursor()
-            current_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Using UTC ISO format for consistency with Supabase and updates.
             cursor.execute(
                 f"INSERT INTO tasks (id, params, task_type, status, created_at, project_id, dependant_on) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (task_id, params_json_str, task_type_str, STATUS_QUEUED, current_timestamp, project_id, dependant_on)
+                (task_id, params_json_str, task_type_str, STATUS_QUEUED, current_timestamp_utc_iso, project_id, dependant_on)
             )
         try:
             execute_sqlite_with_retry(db_to_use, _add_op)
