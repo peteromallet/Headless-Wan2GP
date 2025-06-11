@@ -160,8 +160,12 @@ def create_multi_vace_task(
         dummy_mask = Image.new('L', (width, height), 0)  # 'L' mode for greyscale
         dummy_masks = [dummy_mask] * len(ref_images_list)
         
+        # Create dummy frames to align with reference images and masks
+        dummy_frame = Image.new('RGB', (width, height), color=(0, 0, 0))
+        dummy_frames = [dummy_frame] * len(ref_images_list)
+        
         multi_vace_inputs.append({
-            'frames': None,
+            'frames': dummy_frames,
             'masks': dummy_masks,
             'ref_images': ref_images_list,
             'strength': reference_strength,
@@ -189,13 +193,17 @@ def create_multi_vace_task(
                 guidance_frames.append(grey_frame)
                 grey_count += 1
         
+        # Create dummy black masks for every context frame to ensure data alignment
+        context_dummy_mask = Image.new('L', (width, height), 0)
+        context_masks = [context_dummy_mask] * len(guidance_frames)
+        
         print(f"Context frames: {context_count}")
         print(f"Grey frames: {grey_count}")
         print(f"Context indices: {sorted(context_indices)}")
         
         multi_vace_inputs.append({
             'frames': guidance_frames,
-            'masks': None,
+            'masks': context_masks,
             'ref_images': None,
             'strength': guidance_strength,
             'start_percent': 0.0,
@@ -313,14 +321,6 @@ def queue_task_for_headless(
                 frame_paths.append(str(frame_path))
             processed_input["frame_paths"] = frame_paths
             del processed_input["frames"]
-        
-        # Add dummy frame for reference-only streams
-        if processed_input.get("ref_image_paths") and not processed_input.get("frame_paths"):
-            dummy_frame_path = output_dir / f"ref_stream{i}_dummy_frame.png"
-            # Use target resolution to avoid interpolation issues
-            dummy_img = Image.new('RGB', (720, 720), color=(0, 0, 0))
-            dummy_img.save(dummy_frame_path)
-            processed_input["frame_paths"] = [str(dummy_frame_path)]
         
         processed_multi_vace_inputs.append(processed_input)
     
