@@ -507,8 +507,8 @@ class WanT2V:
                 phantom = True
                 input_ref_images = self.get_vae_latents(input_ref_images, self.device)
                 input_ref_images_neg = torch.zeros_like(input_ref_images)
-            F = frame_num
-            target_shape = (self.vae.model.z_dim, (F - 1) // self.vae_stride[0] + 1 + (input_ref_images.shape[1] if input_ref_images != None else 0),
+            frame_count = frame_num
+            target_shape = (self.vae.model.z_dim, (frame_count - 1) // self.vae_stride[0] + 1 + (input_ref_images.shape[1] if input_ref_images != None else 0),
                             height // self.vae_stride[1],
                             width // self.vae_stride[2])
 
