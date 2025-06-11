@@ -292,7 +292,8 @@ def queue_task_for_headless(
         # Add dummy frame for reference-only streams
         if processed_input.get("ref_image_paths") and not processed_input.get("frame_paths"):
             dummy_frame_path = output_dir / f"ref_stream{i}_dummy_frame.png"
-            dummy_img = Image.new('RGB', (64, 64), color=(0, 0, 0))
+            # Use target resolution to avoid interpolation issues
+            dummy_img = Image.new('RGB', (720, 720), color=(0, 0, 0))
             dummy_img.save(dummy_frame_path)
             processed_input["frame_paths"] = [str(dummy_frame_path)]
         
