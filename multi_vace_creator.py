@@ -152,10 +152,11 @@ def create_multi_vace_task(
         print(f"Saved: {first_path}")
         print(f"Saved: {last_path}")
         
+        ref_images_list = [first_frame, last_frame]
         multi_vace_inputs.append({
             'frames': None,
-            'masks': None,
-            'ref_images': [first_frame, last_frame],
+            'masks': [None] * len(ref_images_list),
+            'ref_images': ref_images_list,
             'strength': reference_strength,
             'start_percent': 0.0,
             'end_percent': 1.0,
