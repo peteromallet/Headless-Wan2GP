@@ -153,9 +153,16 @@ def create_multi_vace_task(
         print(f"Saved: {last_path}")
         
         ref_images_list = [first_frame, last_frame]
+
+        # Create dummy black masks to prevent downstream filtering of None.
+        # Use the same size as the reference images to avoid resize issues.
+        width, height = ref_images_list[0].size
+        dummy_mask = Image.new('L', (width, height), 0)  # 'L' mode for greyscale
+        dummy_masks = [dummy_mask] * len(ref_images_list)
+        
         multi_vace_inputs.append({
             'frames': None,
-            'masks': [None] * len(ref_images_list),
+            'masks': dummy_masks,
             'ref_images': ref_images_list,
             'strength': reference_strength,
             'start_percent': 0.0,
@@ -283,6 +290,19 @@ def queue_task_for_headless(
                 ref_image_paths.append(str(ref_path))
             processed_input["ref_image_paths"] = ref_image_paths
             del processed_input["ref_images"]
+        
+        # Handle masks
+        if vace_input.get("masks"):
+            mask_paths = []
+            for j, pil_img in enumerate(vace_input["masks"]):
+                if pil_img:
+                    mask_path = output_dir / f"mask_img_stream{i}_frame{j}.png"
+                    pil_img.save(mask_path)
+                    mask_paths.append(str(mask_path))
+                else:
+                    mask_paths.append(None)
+            processed_input["mask_paths"] = mask_paths
+            del processed_input["masks"]
         
         # Handle guidance frames
         if vace_input.get("frames"):
