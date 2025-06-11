@@ -28,8 +28,8 @@ if __name__ == "__main__":
     sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Wan2GP"))
     sys.path.insert(0, str(Path(__file__).parent / "source"))
 
-def extract_frames_from_video(video_path, max_frames=None):
-    """Extracts frames from a video file."""
+def extract_frames_from_video(video_path, max_frames=None, target_size=(720, 720)):
+    """Extracts frames from a video file and resizes them."""
     if not Path(video_path).exists():
         print(f"Error: Video file not found at {video_path}")
         return []
@@ -47,6 +47,10 @@ def extract_frames_from_video(video_path, max_frames=None):
             break
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(frame_rgb)
+        
+        # Resize frame to target size to prevent dimension mismatch issues
+        pil_image = pil_image.resize(target_size, Image.Resampling.LANCZOS)
+        
         frames.append(pil_image)
         frame_count += 1
         if max_frames and frame_count >= max_frames:
