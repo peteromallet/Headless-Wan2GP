@@ -289,15 +289,10 @@ def queue_task_for_headless(
             processed_input["frame_paths"] = frame_paths
             del processed_input["frames"]
         
-        # Add dummy frame(s) for reference-only streams so len(frames) == len(ref_images)
+        # For reference-only streams, use the same images as both "frames" and "ref_images"
+        # so the VACE encoder gets matching lengths without creating artificial blank frames.
         if processed_input.get("ref_image_paths") and not processed_input.get("frame_paths"):
-            dummy_paths = []
-            for j in range(len(processed_input["ref_image_paths"])):
-                dummy_frame_path = output_dir / f"ref_stream{i}_dummy_frame{j}.png"
-                dummy_img = Image.new('RGB', (64, 64), color=(0, 0, 0))
-                dummy_img.save(dummy_frame_path)
-                dummy_paths.append(str(dummy_frame_path))
-            processed_input["frame_paths"] = dummy_paths
+            processed_input["frame_paths"] = list(processed_input["ref_image_paths"])
         
         processed_multi_vace_inputs.append(processed_input)
     
