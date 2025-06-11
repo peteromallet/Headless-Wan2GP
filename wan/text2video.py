@@ -352,54 +352,71 @@ class WanT2V:
         
         # Handle multi-VACE inputs - convert to original format for compatibility
         if multi_vace_inputs is not None and len(multi_vace_inputs) > 0:
-            # Extract and combine all streams into the original format
+            # Process multi-VACE inputs properly by combining streams
             all_input_frames = []
             all_input_masks = []
             all_input_ref_images = []
             has_any_masks = False
             
-            for stream_idx, vace_input in enumerate(multi_vace_inputs):
-                # Extract frames and convert PIL Images to tensors
+            # Find the maximum number of frames across all streams to determine output size
+            max_frames = 0
+            for vace_input in multi_vace_inputs:
                 if vace_input.get('frames'):
-                    stream_frames = []
-                    for frame in vace_input['frames']:
-                        if hasattr(frame, 'to'):  # Already a tensor
-                            stream_frames.append(frame)
-                        else:  # PIL Image, convert to tensor
-                            tensor_frame = TF.to_tensor(frame).sub_(0.5).div_(0.5).unsqueeze(1)
-                            stream_frames.append(tensor_frame)
-                    all_input_frames.extend(stream_frames)
+                    max_frames = max(max_frames, len(vace_input['frames']))
+            
+            # If no frames found, use default frame count
+            if max_frames == 0:
+                max_frames = frame_num
+            
+            # Create frame and ref_image lists ensuring they have matching lengths
+            for frame_idx in range(max_frames):
+                frame_for_this_idx = None
+                ref_images_for_this_idx = []
+                mask_for_this_idx = None
                 
-                # Extract masks and convert PIL Images to tensors if needed
-                if vace_input.get('masks'):
-                    has_any_masks = True
-                    stream_masks = []
-                    for mask in vace_input['masks']:
-                        if hasattr(mask, 'to'):  # Already a tensor
-                            stream_masks.append(mask)
-                        else:  # PIL Image, convert to tensor
-                            tensor_mask = TF.to_tensor(mask).unsqueeze(1)
-                            stream_masks.append(tensor_mask)
-                    all_input_masks.extend(stream_masks)
+                # Process each VACE stream for this frame index
+                for stream_idx, vace_input in enumerate(multi_vace_inputs):
+                    # Handle frames
+                    if vace_input.get('frames') and frame_idx < len(vace_input['frames']):
+                        frame = vace_input['frames'][frame_idx]
+                        if frame_for_this_idx is None:  # Use first available frame
+                            if hasattr(frame, 'to'):  # Already a tensor
+                                frame_for_this_idx = frame
+                            else:  # PIL Image, convert to tensor
+                                frame_for_this_idx = TF.to_tensor(frame).sub_(0.5).div_(0.5).unsqueeze(1)
+                    
+                    # Handle reference images for this stream
+                    if vace_input.get('ref_images'):
+                        for ref in vace_input['ref_images']:
+                            if hasattr(ref, 'to'):  # Already a tensor
+                                ref_images_for_this_idx.append(ref)
+                            else:  # PIL Image, convert to tensor
+                                tensor_ref = TF.to_tensor(ref).sub_(0.5).div_(0.5).unsqueeze(1)
+                                ref_images_for_this_idx.append(tensor_ref)
+                    
+                    # Handle masks
+                    if vace_input.get('masks') and frame_idx < len(vace_input['masks']):
+                        mask = vace_input['masks'][frame_idx]
+                        if mask_for_this_idx is None:  # Use first available mask
+                            has_any_masks = True
+                            if hasattr(mask, 'to'):  # Already a tensor
+                                mask_for_this_idx = mask
+                            else:  # PIL Image, convert to tensor
+                                mask_for_this_idx = TF.to_tensor(mask).unsqueeze(1)
                 
-                # Extract reference images and convert PIL Images to tensors
-                if vace_input.get('ref_images'):
-                    stream_ref_images = []
-                    for ref in vace_input['ref_images']:
-                        if hasattr(ref, 'to'):  # Already a tensor
-                            stream_ref_images.append(ref)
-                        else:  # PIL Image, convert to tensor
-                            tensor_ref = TF.to_tensor(ref).sub_(0.5).div_(0.5).unsqueeze(1)
-                            stream_ref_images.append(tensor_ref)
-                    all_input_ref_images.extend(stream_ref_images)
+                # Add to final lists (ensuring we have a frame for each position)
+                if frame_for_this_idx is not None:
+                    all_input_frames.append(frame_for_this_idx)
+                    all_input_ref_images.append(ref_images_for_this_idx if ref_images_for_this_idx else None)
+                    if has_any_masks:
+                        all_input_masks.append(mask_for_this_idx)
             
             # Use the combined inputs in the original format
             if all_input_frames:
                 input_frames = all_input_frames
+                input_ref_images = all_input_ref_images
             if has_any_masks and all_input_masks:
                 input_masks = all_input_masks
-            if all_input_ref_images:
-                input_ref_images = [all_input_ref_images]  # Wrap in list as expected
             
             # For multi-VACE, use the first stream's strength as the context_scale
             if multi_vace_inputs and multi_vace_inputs[0].get('strength') is not None:
