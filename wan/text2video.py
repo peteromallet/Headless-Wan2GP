@@ -357,6 +357,7 @@ class WanT2V:
             all_input_masks = []
             all_input_ref_images = []
             has_any_masks = False
+            target_size = (height, width)  # Target resolution for all tensors
             
             # Find the maximum number of frames across all streams to determine output size
             max_frames = 0
@@ -368,7 +369,7 @@ class WanT2V:
             if max_frames == 0:
                 max_frames = frame_num
             
-            # Create frame and ref_image lists ensuring they have matching lengths
+            # Create frame and ref_image lists ensuring they have matching lengths and dimensions
             for frame_idx in range(max_frames):
                 frame_for_this_idx = None
                 ref_images_for_this_idx = []
@@ -381,18 +382,39 @@ class WanT2V:
                         frame = vace_input['frames'][frame_idx]
                         if frame_for_this_idx is None:  # Use first available frame
                             if hasattr(frame, 'to'):  # Already a tensor
-                                frame_for_this_idx = frame
+                                frame_tensor = frame
                             else:  # PIL Image, convert to tensor
-                                frame_for_this_idx = TF.to_tensor(frame).sub_(0.5).div_(0.5).unsqueeze(1)
+                                frame_tensor = TF.to_tensor(frame).sub_(0.5).div_(0.5).unsqueeze(1)
+                            
+                            # Resize frame to target dimensions
+                            if frame_tensor.shape[-2:] != target_size:
+                                frame_tensor = F.interpolate(
+                                    frame_tensor.squeeze(1),
+                                    size=target_size,
+                                    mode='bilinear',
+                                    align_corners=False
+                                ).unsqueeze(1)
+                            
+                            frame_for_this_idx = frame_tensor
                     
                     # Handle reference images for this stream
                     if vace_input.get('ref_images'):
                         for ref in vace_input['ref_images']:
                             if hasattr(ref, 'to'):  # Already a tensor
-                                ref_images_for_this_idx.append(ref)
+                                ref_tensor = ref
                             else:  # PIL Image, convert to tensor
-                                tensor_ref = TF.to_tensor(ref).sub_(0.5).div_(0.5).unsqueeze(1)
-                                ref_images_for_this_idx.append(tensor_ref)
+                                ref_tensor = TF.to_tensor(ref).sub_(0.5).div_(0.5).unsqueeze(1)
+                            
+                            # Resize reference image to target dimensions
+                            if ref_tensor.shape[-2:] != target_size:
+                                ref_tensor = F.interpolate(
+                                    ref_tensor.squeeze(1),
+                                    size=target_size,
+                                    mode='bilinear',
+                                    align_corners=False
+                                ).unsqueeze(1)
+                            
+                            ref_images_for_this_idx.append(ref_tensor)
                     
                     # Handle masks
                     if vace_input.get('masks') and frame_idx < len(vace_input['masks']):
@@ -400,9 +422,19 @@ class WanT2V:
                         if mask_for_this_idx is None:  # Use first available mask
                             has_any_masks = True
                             if hasattr(mask, 'to'):  # Already a tensor
-                                mask_for_this_idx = mask
+                                mask_tensor = mask
                             else:  # PIL Image, convert to tensor
-                                mask_for_this_idx = TF.to_tensor(mask).unsqueeze(1)
+                                mask_tensor = TF.to_tensor(mask).unsqueeze(1)
+                            
+                            # Resize mask to target dimensions
+                            if mask_tensor.shape[-2:] != target_size:
+                                mask_tensor = F.interpolate(
+                                    mask_tensor.squeeze(1),
+                                    size=target_size,
+                                    mode='nearest'
+                                ).unsqueeze(1)
+                            
+                            mask_for_this_idx = mask_tensor
                 
                 # Add to final lists (ensuring we have a frame for each position)
                 if frame_for_this_idx is not None:
