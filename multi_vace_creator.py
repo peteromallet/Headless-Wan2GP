@@ -157,7 +157,7 @@ def create_multi_vace_task(
         # Create dummy black masks to prevent downstream filtering of None.
         # Use the same size as the reference images to avoid resize issues.
         width, height = ref_images_list[0].size
-        dummy_mask = Image.new('RGB', (width, height), (0, 0, 0))  # Use RGB for channel consistency
+        dummy_mask = Image.new('RGB', (width, height), (1, 1, 1))  # Use off-black to force 3-channel load
         dummy_masks = [dummy_mask] * len(ref_images_list)
         
         # Create dummy frames to align with reference images and masks
@@ -194,7 +194,7 @@ def create_multi_vace_task(
                 grey_count += 1
         
         # Create dummy black masks for every context frame to ensure data alignment
-        context_dummy_mask = Image.new('RGB', (width, height), (0, 0, 0)) # Use RGB for channel consistency
+        context_dummy_mask = Image.new('RGB', (width, height), (1, 1, 1)) # Use off-black to force 3-channel load
         context_masks = [context_dummy_mask] * len(guidance_frames)
         
         print(f"Context frames: {context_count}")
