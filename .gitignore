@@ -25,6 +25,7 @@
 cache
 __pycache__/
 storage/
+samples/
 !.gitignore
 !requirements.txt
 .DS_Store
@@ -39,8 +40,3 @@ gradio_outputs/
 ckpts/
 loras/
 loras_i2v/
-.env
-
-_test*
-
-*.db

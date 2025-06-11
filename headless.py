@@ -408,6 +408,86 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         ui_defaults["loras_multipliers"] = " ".join(list(lora_mult_map.values()))
         dprint(f"Additional LoRAs applied. Final Activated: {ui_defaults['activated_loras']}, Final Multipliers: {ui_defaults['loras_multipliers']}")
 
+    # --- Handle Multi-VACE Inputs ---
+    multi_vace_inputs = task_params_dict.get("multi_vace_inputs")
+    if multi_vace_inputs and isinstance(multi_vace_inputs, list):
+        dprint(f"[Task ID: {task_id_for_dprint}] Processing {len(multi_vace_inputs)} multi-VACE inputs")
+        
+        processed_multi_vace = []
+        for i, vace_input in enumerate(multi_vace_inputs):
+            if not isinstance(vace_input, dict):
+                dprint(f"[Task ID: {task_id_for_dprint}] Skipping invalid VACE input {i}: not a dict")
+                continue
+                
+            processed_vace = {
+                'frames': None,
+                'masks': None, 
+                'ref_images': None,
+                'strength': vace_input.get('strength', 1.0)
+            }
+            
+            # Process frames
+            frame_paths = vace_input.get('frame_paths') or vace_input.get('frames')
+            if frame_paths:
+                loaded_frames = sm_load_pil_images(
+                    frame_paths,
+                    wgp_mod.convert_image,
+                    image_download_dir,
+                    current_task_id_for_log,
+                    dprint
+                )
+                if loaded_frames:
+                    processed_vace['frames'] = loaded_frames
+                    dprint(f"[Task ID: {task_id_for_dprint}] VACE input {i}: Loaded {len(loaded_frames)} frames")
+            
+            # Process masks
+            mask_paths = vace_input.get('mask_paths') or vace_input.get('masks')
+            if mask_paths:
+                loaded_masks = sm_load_pil_images(
+                    mask_paths,
+                    wgp_mod.convert_image,
+                    image_download_dir,
+                    current_task_id_for_log,
+                    dprint
+                )
+                if loaded_masks:
+                    processed_vace['masks'] = loaded_masks
+                    dprint(f"[Task ID: {task_id_for_dprint}] VACE input {i}: Loaded {len(loaded_masks)} masks")
+            
+            # Process reference images
+            ref_image_paths = vace_input.get('ref_image_paths') or vace_input.get('ref_images')
+            if ref_image_paths:
+                loaded_refs = sm_load_pil_images(
+                    ref_image_paths,
+                    wgp_mod.convert_image,
+                    image_download_dir,
+                    current_task_id_for_log,
+                    dprint
+                )
+                if loaded_refs:
+                    processed_vace['ref_images'] = loaded_refs
+                    dprint(f"[Task ID: {task_id_for_dprint}] VACE input {i}: Loaded {len(loaded_refs)} reference images")
+            
+            # Process step control parameters
+            start_percent = vace_input.get('start_percent', 0.0)
+            end_percent = vace_input.get('end_percent', 1.0)
+            processed_vace['start_percent'] = start_percent
+            processed_vace['end_percent'] = end_percent
+            
+            # Only add if we have at least frames or masks
+            if processed_vace['frames'] is not None or processed_vace['masks'] is not None:
+                processed_multi_vace.append(processed_vace)
+                dprint(f"[Task ID: {task_id_for_dprint}] VACE input {i}: Added with strength {processed_vace['strength']}, active from {start_percent*100:.1f}% to {end_percent*100:.1f}% of steps")
+            else:
+                dprint(f"[Task ID: {task_id_for_dprint}] VACE input {i}: Skipped - no frames or masks")
+        
+        if processed_multi_vace:
+            ui_defaults["multi_vace_inputs"] = processed_multi_vace
+            dprint(f"[Task ID: {task_id_for_dprint}] Multi-VACE: Prepared {len(processed_multi_vace)} valid VACE streams")
+        else:
+            dprint(f"[Task ID: {task_id_for_dprint}] Multi-VACE: No valid VACE streams found")
+    # --- End Multi-VACE Handling ---
+
     state[model_type_key] = ui_defaults
     return state, ui_defaults
 
@@ -681,7 +761,8 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
             cfg_zero_step=ui_params.get("cfg_zero_step", -1),
             prompt_enhancer=ui_params.get("prompt_enhancer", ""),
             state=state,
-            model_filename=model_filename_for_task
+            model_filename=model_filename_for_task,
+            multi_vace_inputs=ui_params.get("multi_vace_inputs")
         )
         print(f"[Task ID: {task_id}] Generation completed to temporary directory: {wgp_mod.save_path}")
         generation_success = True
