@@ -500,6 +500,10 @@ class WanT2V:
             # Use the frame encoder for masks to ensure channel consistency
             m0 = self.vace_encode_frames(input_masks, input_ref_images, masks=None, tile_size=VAE_tile_size, overlapped_latents=None)
             z = self.vace_latent(z0, m0)
+            
+            # HACK: Double the context channels to match model expectation (48 -> 96)
+            # This is likely needed for a guided/unguided context pair.
+            z = [torch.cat([u, u], dim=0) for u in z]
 
             target_shape = list(z0[0].shape)
             target_shape[0] = int(target_shape[0] / 2)
