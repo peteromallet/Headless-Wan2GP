@@ -356,6 +356,7 @@ class WanT2V:
             all_input_frames = []
             all_input_masks = []
             all_input_ref_images = []
+            has_any_masks = False
             
             for stream_idx, vace_input in enumerate(multi_vace_inputs):
                 # Extract frames and convert PIL Images to tensors
@@ -371,6 +372,7 @@ class WanT2V:
                 
                 # Extract masks and convert PIL Images to tensors if needed
                 if vace_input.get('masks'):
+                    has_any_masks = True
                     stream_masks = []
                     for mask in vace_input['masks']:
                         if hasattr(mask, 'to'):  # Already a tensor
@@ -379,10 +381,6 @@ class WanT2V:
                             tensor_mask = TF.to_tensor(mask).unsqueeze(1)
                             stream_masks.append(tensor_mask)
                     all_input_masks.extend(stream_masks)
-                else:
-                    # Create None masks for this stream's frames if no masks provided
-                    if vace_input.get('frames'):
-                        all_input_masks.extend([None] * len(vace_input['frames']))
                 
                 # Extract reference images and convert PIL Images to tensors
                 if vace_input.get('ref_images'):
@@ -398,7 +396,7 @@ class WanT2V:
             # Use the combined inputs in the original format
             if all_input_frames:
                 input_frames = all_input_frames
-            if all_input_masks:
+            if has_any_masks and all_input_masks:
                 input_masks = all_input_masks
             if all_input_ref_images:
                 input_ref_images = [all_input_ref_images]  # Wrap in list as expected
@@ -441,7 +439,11 @@ class WanT2V:
             # vace context encode
             input_frames = [u.to(self.device) for u in input_frames]
             input_ref_images = [ None if u == None else [v.to(self.device) for v in u]  for u in input_ref_images]
-            input_masks = [u.to(self.device) for u in input_masks]
+            # Handle masks that may contain None values from multi-VACE processing
+            if input_masks and any(mask is not None for mask in input_masks):
+                input_masks = [u.to(self.device) if u is not None else u for u in input_masks]
+            else:
+                input_masks = None
             previous_latents = None
             # if overlapped_latents != None:
                 # input_ref_images = [u[-1:] for u in input_ref_images]
