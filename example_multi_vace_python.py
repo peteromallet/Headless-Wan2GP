@@ -3,6 +3,7 @@
 Example: Multi-VACE with reference images and guidance video.
 This script takes file paths for reference images and a guidance video,
 processes them, and constructs the multi-VACE task structure ready for wgp.py.
+NOW INCLUDES: Database queuing for headless.py processing!
 """
 
 import os
@@ -15,6 +16,9 @@ import numpy as np
 # Add Wan2GP to path for imports if running as a script
 if __name__ == "__main__":
     sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Wan2GP"))
+
+# Add current directory to path for db_operations import
+sys.path.insert(0, str(Path(__file__).parent))
 
 def extract_frames_from_video(video_path, max_frames=None):
     """
@@ -214,11 +218,11 @@ def create_multi_vace_task(
 
     # 3. Build the complete parameter dictionary
     generation_params = {
-        "input_prompt": "A person dancing in a beautiful garden with flowers",
-        "resolution": "1280x720",
+        "input_prompt": "plants",
+        "resolution": "720x720",
         "frame_num": len(all_guidance_frames),
-        "sampling_steps": 30,
-        "guide_scale": 5.0,
+        "sampling_steps": 9,
+        "guide_scale": 1.0,
         "seed": 42,
         "multi_vace_inputs": multi_vace_inputs,
         "use_causvid_lora": use_causvid_lora,
@@ -303,5 +307,56 @@ if __name__ == "__main__":
         print(json.dumps(summary_params, indent=2))
         
         print("\nThis `generation_params` dictionary is now ready to be passed to a loaded WanT2V model.")
+        
+        # --- NEW: QUEUE THE TASK FOR HEADLESS.PY PROCESSING ---
+        print("\n🚀 QUEUING TASK FOR HEADLESS.PY PROCESSING...")
+        
+        # Import the database function with error handling
+        try:
+            from create_multi_vace_task import create_dual_vace_database_task
+        except ImportError as e:
+            print(f"❌ Import Error: {e}")
+            print("Make sure you're running this script from the same directory as create_multi_vace_task.py")
+            print("Current working directory:", os.getcwd())
+            print("Available files:", [f for f in os.listdir('.') if f.endswith('.py')])
+            
+            # Try alternative import approach
+            print("\n🔄 Trying alternative import approach...")
+            try:
+                # Add current working directory to path
+                import sys
+                import os
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                if current_dir not in sys.path:
+                    sys.path.insert(0, current_dir)
+                
+                from create_multi_vace_task import create_dual_vace_database_task
+                print("✅ Alternative import successful!")
+            except ImportError as e2:
+                print(f"❌ Alternative import also failed: {e2}")
+                print("\n💡 SOLUTION: Use the standalone create_multi_vace_task.py instead:")
+                print("   python create_multi_vace_task.py")
+                sys.exit(1)
+        
+        # Queue the task using the same parameters
+        task_id = create_dual_vace_database_task(
+            guidance_video_path=video_path,
+            output_dir=output_directory,
+            max_frames_to_process=max_frames,
+            context_frames_str=context_frames_spec,
+            reference_strength=reference_stream_settings["strength"],
+            guidance_strength=guidance_stream_settings["strength"],
+            sampling_steps=9,
+            use_causvid_lora=use_causvid,
+            apply_reward_lora=apply_reward,
+        )
+        
+        if task_id:
+            print(f"\n✅ SUCCESS! Task queued with ID: {task_id}")
+            print(f"🔄 Status: Queued for processing")
+            print(f"🚀 Run 'python headless.py' to process the task!")
+            print(f"📁 Files will be saved to the database-configured output location")
+        else:
+            print(f"\n❌ FAILED to queue task for processing")
         
     # No longer creating or cleaning up dummy files. 

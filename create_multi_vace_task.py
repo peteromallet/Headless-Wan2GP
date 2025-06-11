@@ -368,38 +368,276 @@ def create_multi_vace_database_task(
         print(f"❌ Failed to add task to database: {e}")
         return None
 
+def create_dual_vace_task(
+    guidance_video_path,
+    output_dir,
+    max_frames_to_process=40,
+    context_frames_str="0:16,34",
+    reference_strength=0.25,
+    guidance_strength=1.0,
+    use_causvid_lora=False,
+    apply_reward_lora=True,
+):
+    """
+    Creates a standardized dual-VACE task with exactly two encodings:
+    1. First and last frame as reference images
+    2. Video with specified frames shown and others grey
+    
+    Args:
+        guidance_video_path: Path to the input video
+        output_dir: Directory to save extracted frames
+        max_frames_to_process: Maximum number of frames to extract from video
+        context_frames_str: String specifying which frames to show (e.g., "0:16,32,54")
+        reference_strength: Strength for the reference image stream (0.0-1.0)
+        guidance_strength: Strength for the guidance video stream (0.0-1.0)
+        use_causvid_lora: Enable CausVid LoRA
+        apply_reward_lora: Enable Reward LoRA
+    
+    Returns:
+        Dict containing the complete task parameters for generation
+    """
+    print("--- Creating Dual-VACE Task ---")
+    print(f"VACE Encoding 1: First and last frame references")
+    print(f"VACE Encoding 2: Video with specified context frames")
+
+    # 1. Extract frames from video
+    all_guidance_frames = extract_frames_from_video(guidance_video_path, max_frames=max_frames_to_process)
+
+    if not all_guidance_frames:
+        print("Error: No guidance frames were extracted. Aborting.")
+        return None
+
+    if len(all_guidance_frames) < 2:
+        print("Error: Need at least 2 frames for first/last frame references. Aborting.")
+        return None
+
+    # 2. Prepare the dual-VACE inputs list
+    multi_vace_inputs = []
+
+    # --- VACE Encoding 1: First and Last Frame References ---
+    print(f"\n--- VACE Encoding 1: First and Last Frame References ---")
+    
+    first_frame = all_guidance_frames[0]
+    last_frame = all_guidance_frames[-1]
+    
+    # Save first and last frames
+    first_frame_path = output_dir / "first_frame_ref.png"
+    last_frame_path = output_dir / "last_frame_ref.png"
+    
+    first_frame.save(first_frame_path)
+    last_frame.save(last_frame_path)
+    
+    print(f"Saved first frame reference: {first_frame_path}")
+    print(f"Saved last frame reference: {last_frame_path}")
+    
+    # Add first and last frame reference stream
+    multi_vace_inputs.append({
+        'frames': None,
+        'masks': None,
+        'ref_images': [first_frame, last_frame],
+        'strength': reference_strength,
+        'start_percent': 0.0,
+        'end_percent': 1.0,
+        'description': 'First and Last Frame References'
+    })
+
+    # --- VACE Encoding 2: Context Frames with Grey Fill ---
+    print(f"\n--- VACE Encoding 2: Context Frames with Grey Fill ---")
+    
+    max_idx = len(all_guidance_frames) - 1
+    context_indices = parse_context_frames(context_frames_str, max_idx)
+    
+    width, height = all_guidance_frames[0].size
+    grey_frame = Image.new('RGB', (width, height), color=(128, 128, 128))
+    
+    guidance_frames_pil = []
+    context_count = 0
+    grey_count = 0
+    
+    for i, frame in enumerate(all_guidance_frames):
+        if i in context_indices:
+            guidance_frames_pil.append(frame)
+            context_count += 1
+        else:
+            guidance_frames_pil.append(grey_frame)
+            grey_count += 1
+    
+    print(f"Context frames used: {context_count}")
+    print(f"Grey frames filled: {grey_count}")
+    print(f"Context frame indices: {sorted(context_indices)}")
+    
+    # Add guidance video stream
+    multi_vace_inputs.append({
+        'frames': guidance_frames_pil,
+        'masks': None,
+        'ref_images': None,
+        'strength': guidance_strength,
+        'start_percent': 0.0,
+        'end_percent': 0.9,
+        'description': 'Context Frames with Grey Fill'
+    })
+
+    # 3. Build the complete parameter dictionary
+    generation_params = {
+        "input_prompt": "high quality video",
+        "resolution": "720x720",
+        "frame_num": len(all_guidance_frames),        
+        "guide_scale": 1.0,
+        "seed": 42,
+        "multi_vace_inputs": multi_vace_inputs,
+        "use_causvid_lora": use_causvid_lora,
+        "apply_reward_lora": apply_reward_lora,
+        "negative_prompt": "ugly, blurry, distorted, low quality",
+        "shift": 5.0,
+        "offload_model": True,
+        "VAE_tile_size": 0,
+        "enable_RIFLEx": True,
+        "joint_pass": False,
+    }
+    
+    print("\n--- Dual-VACE Task Creation Complete ---")
+    print(f"✅ VACE Encoding 1: First + Last frame references (strength: {reference_strength})")
+    print(f"✅ VACE Encoding 2: {context_count} context frames + {grey_count} grey frames (strength: {guidance_strength})")
+    print(f"✅ Total frames: {len(all_guidance_frames)}")
+    if use_causvid_lora:
+        print("✅ CausVid LoRA enabled")
+    if apply_reward_lora:
+        print("✅ Reward LoRA enabled")
+
+    return generation_params
+
+def create_dual_vace_database_task(
+    guidance_video_path,
+    output_dir=None,
+    max_frames_to_process=40,
+    context_frames_str="0:16,39",
+    reference_strength=0.25,
+    guidance_strength=1.0,
+    sampling_steps=9,
+    use_causvid_lora=True,
+    apply_reward_lora=True,
+    db_path="tasks.db"
+):
+    """
+    Creates a dual-VACE task: first/last frame refs + context frames with grey fill
+    """
+    from source.db_operations import add_task_to_db, init_db
+    
+    # Set default output directory
+    if output_dir is None:
+        output_dir = Path("./dual_vace_tests")
+    else:
+        output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True)
+    
+    # Check if video exists
+    if not Path(guidance_video_path).exists():
+        print(f"Error: Video file not found: {guidance_video_path}")
+        return None
+    
+    # Extract frames and create dual VACE setup
+    all_frames = extract_frames_from_video(guidance_video_path, max_frames_to_process)
+    if not all_frames or len(all_frames) < 2:
+        print("Error: Need at least 2 frames")
+        return None
+    
+    # Save first and last frames as references
+    first_frame = all_frames[0]
+    last_frame = all_frames[-1]
+    first_path = output_dir / "first_frame_ref.png"
+    last_path = output_dir / "last_frame_ref.png"
+    first_frame.save(first_path)
+    last_frame.save(last_path)
+    
+    # Create context frames with grey fill
+    context_indices = parse_context_frames(context_frames_str, len(all_frames) - 1)
+    grey_frame = Image.new('RGB', all_frames[0].size, color=(128, 128, 128))
+    
+    frame_paths = []
+    for i, frame in enumerate(all_frames):
+        frame_path = output_dir / f"context_frame_{i:04d}.png"
+        if i in context_indices:
+            frame.save(frame_path)
+        else:
+            grey_frame.save(frame_path)
+        frame_paths.append(str(frame_path))
+    
+    # Generate task ID
+    task_id = f"dual_vace_{int(datetime.datetime.now().timestamp())}_{uuid.uuid4().hex[:8]}"
+    
+    # Create task payload
+    task_payload = {
+        "task_id": task_id,
+        "prompt": "high quality video",
+        "negative_prompt": "ugly, blurry, distorted, low quality", 
+        "resolution": "720x720",
+        "video_length": len(all_frames),
+        "num_inference_steps": sampling_steps,
+        "seed": 42,
+        "guidance_scale": 1.0,
+        "flow_shift": 5.0,
+        "use_causvid_lora": use_causvid_lora,
+        "apply_reward_lora": apply_reward_lora,
+        "multi_vace_inputs": [
+            {
+                "ref_image_paths": [str(first_path), str(last_path)],
+                "strength": reference_strength,
+                "start_percent": 0.0,
+                "end_percent": 1.0,
+            },
+            {
+                "frame_paths": frame_paths,
+                "strength": guidance_strength,
+                "start_percent": 0.0,
+                "end_percent": 0.9,
+            }
+        ],
+        "offload_model": True,
+        "VAE_tile_size": 0,
+        "RIFLEx_setting": 1,
+        "joint_pass": False,
+        "project_id": "dual_vace_project"
+    }
+    
+    # Add to database
+    init_db()
+    add_task_to_db(task_payload, "dual_vace_task")
+    
+    print(f"✅ Task {task_id} queued!")
+    return task_id
+
 def main():
     """
-    Example usage of the multi-VACE task creation
+    Example usage of the dual-VACE task creation
     """
     # Configuration - modify these as needed
     video_path = "input.mp4"  # Change this to your video path
     
-    task_config = {
+    dual_vace_config = {
         "guidance_video_path": video_path,
-        "output_dir": "./multi_vace_tests",
+        "output_dir": "./dual_vace_tests",
         "max_frames_to_process": 40,
-        "context_frames_str": "0:16,39",  # Which frames to use for guidance
-        "reference_frame_indices": "0, 39",  # Which frames to extract as references
-        "reference_strength": 0.25,
-        "guidance_strength": 1.0,
+        "context_frames_str": "0:16,39",  # Show first 17 frames and last frame
+        "reference_strength": 0.25,       # Strength for first/last frame references
+        "guidance_strength": 1.0,         # Strength for context frame guidance
         "sampling_steps": 9,
         "use_causvid_lora": True,
         "apply_reward_lora": True
     }
     
-    print("Creating Multi-VACE Task for Headless Processing")
-    print("=" * 50)
-    print(f"Video: {task_config['guidance_video_path']}")
-    print(f"Frames to process: {task_config['max_frames_to_process']}")
-    print(f"Context frames: {task_config['context_frames_str']}")
-    print(f"Reference frames: {task_config['reference_frame_indices']}")
-    print("=" * 50)
+    print("Creating Dual-VACE Task for Headless Processing")
+    print("=" * 55)
+    print(f"🎬 Video: {dual_vace_config['guidance_video_path']}")
+    print(f"📊 Frames to process: {dual_vace_config['max_frames_to_process']}")
+    print(f"🎯 VACE Encoding 1: First and last frame references (strength: {dual_vace_config['reference_strength']})")
+    print(f"🎯 VACE Encoding 2: Context frames {dual_vace_config['context_frames_str']} (strength: {dual_vace_config['guidance_strength']})")
+    print("=" * 55)
     
-    task_id = create_multi_vace_database_task(**task_config)
+    task_id = create_dual_vace_database_task(**dual_vace_config)
     
     if task_id:
-        print(f"\n🎬 Run 'python headless.py' to process the task!")
+        print(f"\n🎉 Dual-VACE task created successfully!")
+        print(f"🚀 Run 'python headless.py' to process the task!")
     else:
         print(f"\n❌ Task creation failed. Check the error messages above.")
 
