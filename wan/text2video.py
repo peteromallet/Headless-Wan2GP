@@ -693,6 +693,9 @@ class WanT2V:
 
         x0 = [latents]
 
+        # Prepare ref images for decoding: ensure list length matches x0
+        decode_ref_images = [None] if vace else input_ref_images
+
         if return_latent_slice != None:
             if overlapped_latents != None:
                 # latents [:, 1:] = self.toto
@@ -707,7 +710,7 @@ class WanT2V:
             videos = self.vae.decode(x0, VAE_tile_size)
         else:
             # vace post processing
-            videos = self.decode_latent(x0, input_ref_images, VAE_tile_size)
+            videos = self.decode_latent(x0, decode_ref_images, VAE_tile_size)
         if return_latent_slice != None:
             return { "x" : videos[0], "latent_slice" : latent_slice }
         return videos[0]
