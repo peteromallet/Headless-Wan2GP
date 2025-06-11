@@ -358,23 +358,41 @@ class WanT2V:
             all_input_ref_images = []
             
             for stream_idx, vace_input in enumerate(multi_vace_inputs):
-                # Extract frames
+                # Extract frames and convert PIL Images to tensors
                 if vace_input.get('frames'):
-                    stream_frames = [frame for frame in vace_input['frames']]
+                    stream_frames = []
+                    for frame in vace_input['frames']:
+                        if hasattr(frame, 'to'):  # Already a tensor
+                            stream_frames.append(frame)
+                        else:  # PIL Image, convert to tensor
+                            tensor_frame = TF.to_tensor(frame).sub_(0.5).div_(0.5).unsqueeze(1)
+                            stream_frames.append(tensor_frame)
                     all_input_frames.extend(stream_frames)
                 
-                # Extract masks
+                # Extract masks and convert PIL Images to tensors if needed
                 if vace_input.get('masks'):
-                    stream_masks = [mask for mask in vace_input['masks']]
+                    stream_masks = []
+                    for mask in vace_input['masks']:
+                        if hasattr(mask, 'to'):  # Already a tensor
+                            stream_masks.append(mask)
+                        else:  # PIL Image, convert to tensor
+                            tensor_mask = TF.to_tensor(mask).unsqueeze(1)
+                            stream_masks.append(tensor_mask)
                     all_input_masks.extend(stream_masks)
                 else:
                     # Create None masks for this stream's frames if no masks provided
                     if vace_input.get('frames'):
                         all_input_masks.extend([None] * len(vace_input['frames']))
                 
-                # Extract reference images
+                # Extract reference images and convert PIL Images to tensors
                 if vace_input.get('ref_images'):
-                    stream_ref_images = [ref for ref in vace_input['ref_images']]
+                    stream_ref_images = []
+                    for ref in vace_input['ref_images']:
+                        if hasattr(ref, 'to'):  # Already a tensor
+                            stream_ref_images.append(ref)
+                        else:  # PIL Image, convert to tensor
+                            tensor_ref = TF.to_tensor(ref).sub_(0.5).div_(0.5).unsqueeze(1)
+                            stream_ref_images.append(tensor_ref)
                     all_input_ref_images.extend(stream_ref_images)
             
             # Use the combined inputs in the original format
