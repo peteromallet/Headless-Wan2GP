@@ -235,7 +235,8 @@ def queue_task_for_headless(
     guidance_strength=1.0,
     sampling_steps=9,
     use_causvid_lora=True,
-    apply_reward_lora=True
+    apply_reward_lora=True,
+    model_name="vace_14B"  # Add model parameter with VACE default
 ):
     """
     Creates a multi-VACE task and queues it for headless processing.
@@ -303,6 +304,7 @@ def queue_task_for_headless(
     # Create task payload
     task_payload = {
         "task_id": task_id,
+        "model": model_name,
         "prompt": generation_params["input_prompt"],
         "negative_prompt": generation_params["negative_prompt"],
         "resolution": generation_params["resolution"],
@@ -345,6 +347,7 @@ def main():
     
     parser.add_argument("--no-causvid", action="store_true", help="Disable CausVid LoRA")
     parser.add_argument("--no-reward", action="store_true", help="Disable Reward LoRA")
+    parser.add_argument("--model", type=str, default="vace_14B", help="Model to use (default: vace_14B)")
     parser.add_argument("--output-dir", type=str, default="./multi_vace_output", help="Output directory")
     parser.add_argument("--no-queue", action="store_true", help="Don't queue for headless processing")
     
@@ -374,6 +377,7 @@ def main():
         print(f"🎯 Ref strength: {args.ref_strength}")
     if encoding_mode in ["context_only", "both"]:
         print(f"🎥 Guide strength: {args.guide_strength}")
+    print(f"🤖 Model: {args.model}")
     print(f"🧬 CausVid LoRA: {'✅' if not args.no_causvid else '❌'}")
     print(f"🏆 Reward LoRA: {'✅' if not args.no_reward else '❌'}")
     print(f"🔢 Steps: {args.steps}")
@@ -412,7 +416,8 @@ def main():
             guidance_strength=args.guide_strength,
             sampling_steps=args.steps,
             use_causvid_lora=not args.no_causvid,
-            apply_reward_lora=not args.no_reward
+            apply_reward_lora=not args.no_reward,
+            model_name=args.model
         )
         
         if task_id:
