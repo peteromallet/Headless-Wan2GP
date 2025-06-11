@@ -305,6 +305,7 @@ class WanT2V:
                 overlap_noise = 0,
                 conditioning_latents_size = 0,
                 model_filename = None,
+                multi_vace_inputs = None,
                 **bbargs
                 ):
         r"""
@@ -331,6 +332,14 @@ class WanT2V:
                 Random seed for noise generation. If -1, use random seed.
             offload_model (`bool`, *optional*, defaults to True):
                 If True, offloads models to CPU during generation to save VRAM
+            multi_vace_inputs (`list`, *optional*, defaults to None):
+                List of VACE inputs for multi-stream guidance. Each item is a dict with:
+                - 'frames': list of PIL images for video guidance
+                - 'masks': list of PIL images for masks
+                - 'ref_images': list of PIL images for reference
+                - 'strength': float for guidance strength
+                - 'start_percent': float for start percentage
+                - 'end_percent': float for end percentage
 
         Returns:
             torch.Tensor:
@@ -340,6 +349,46 @@ class WanT2V:
                 - H: Frame height (from size)
                 - W: Frame width from size)
         """
+        
+        # Handle multi-VACE inputs - convert to original format for compatibility
+        if multi_vace_inputs is not None and len(multi_vace_inputs) > 0:
+            # Extract and combine all streams into the original format
+            all_input_frames = []
+            all_input_masks = []
+            all_input_ref_images = []
+            
+            for stream_idx, vace_input in enumerate(multi_vace_inputs):
+                # Extract frames
+                if vace_input.get('frames'):
+                    stream_frames = [frame for frame in vace_input['frames']]
+                    all_input_frames.extend(stream_frames)
+                
+                # Extract masks
+                if vace_input.get('masks'):
+                    stream_masks = [mask for mask in vace_input['masks']]
+                    all_input_masks.extend(stream_masks)
+                else:
+                    # Create None masks for this stream's frames if no masks provided
+                    if vace_input.get('frames'):
+                        all_input_masks.extend([None] * len(vace_input['frames']))
+                
+                # Extract reference images
+                if vace_input.get('ref_images'):
+                    stream_ref_images = [ref for ref in vace_input['ref_images']]
+                    all_input_ref_images.extend(stream_ref_images)
+            
+            # Use the combined inputs in the original format
+            if all_input_frames:
+                input_frames = all_input_frames
+            if all_input_masks:
+                input_masks = all_input_masks
+            if all_input_ref_images:
+                input_ref_images = [all_input_ref_images]  # Wrap in list as expected
+            
+            # For multi-VACE, use the first stream's strength as the context_scale
+            if multi_vace_inputs and multi_vace_inputs[0].get('strength') is not None:
+                context_scale = multi_vace_inputs[0]['strength']
+        
         # preprocess
         vace = "Vace" in model_filename
 

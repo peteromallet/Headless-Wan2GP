@@ -3339,7 +3339,21 @@ def generate_video(
                 elif metadata_choice == "metadata":
                     from mutagen.mp4 import MP4
                     file = MP4(video_path)
-                    file.tags['©cmt'] = [json.dumps(configs)]
+                    # Create a JSON-serializable copy of configs (remove PIL Images)
+                    configs_copy = configs.copy()
+                    if 'multi_vace_inputs' in configs_copy:
+                        # Replace multi_vace_inputs with a summary instead of actual PIL Images
+                        configs_copy['multi_vace_inputs_summary'] = [
+                            {
+                                'ref_images_count': len(item.get('ref_images', []) or []),
+                                'frames_count': len(item.get('frames', []) or []),
+                                'strength': item.get('strength', 0.0),
+                                'start_percent': item.get('start_percent', 0.0),
+                                'end_percent': item.get('end_percent', 1.0)
+                            } for item in configs_copy['multi_vace_inputs'] if isinstance(item, dict)
+                        ]
+                        del configs_copy['multi_vace_inputs']
+                    file.tags['©cmt'] = [json.dumps(configs_copy)]
                     file.save()
 
                 print(f"New video saved to Path: "+video_path)

@@ -66,6 +66,24 @@ def load_reference_images(image_paths):
             
     return loaded_images
 
+def parse_simple_indices(indices_str):
+    """
+    Parses a string like '0,32,54' into a list of frame indices.
+    """
+    if not indices_str:
+        return []
+    indices = []
+    parts = indices_str.split(',')
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            indices.append(int(part))
+        except ValueError:
+            print(f"Warning: Could not parse frame index '{part}'. Skipping.")
+    return indices
+
 def parse_context_frames(context_frames_str, max_frame_index):
     """
     Parses a string like '0:16,32,54' into a set of frame indices.
@@ -97,79 +115,114 @@ def parse_context_frames(context_frames_str, max_frame_index):
                 print(f"Warning: Could not parse frame index '{part}'. Skipping.")
     return indices
 
-def create_multi_vace_task(ref_image_paths, guidance_video_path, context_frames_str=""):
+def create_multi_vace_task(
+    guidance_video_path,
+    output_dir,
+    max_frames_to_process,
+    context_frames_str,
+    reference_stream_config,
+    guidance_stream_config,
+    use_causvid_lora=False,
+    apply_reward_lora=True,
+):
     """
-    Takes image and video paths, processes them, and builds the final task
+    Takes video path and configs, processes them, and builds the final task
     dictionary ready for generation.
 
     Args:
-        ref_image_paths (list): List of paths to reference images.
         guidance_video_path (str): Path to the guidance video.
-        context_frames_str (str): A string specifying which frames to use from the 
-                                  guidance video (e.g., "0:16,32,54"). Other frames
-                                  will be replaced with grey.
+        output_dir (Path): Directory to save extracted reference frames.
+        max_frames_to_process (int): The number of frames to trim the video to.
+        context_frames_str (str): A string specifying which context frames to use from
+                                  the guidance video (e.g., "0:16,32,54").
+        reference_stream_config (dict): Config for the reference image stream.
+        guidance_stream_config (dict): Config for the guidance video stream.
+        use_causvid_lora (bool): Whether to enable and apply the CausVid LoRA.
+        apply_reward_lora (bool): Whether to enable and apply the reward LoRA.
     """
     print("--- Starting Task Creation ---")
-    
-    # 1. Process inputs from paths into PIL Images
-    ref_images_pil = load_reference_images(ref_image_paths)
-    all_guidance_frames = extract_frames_from_video(guidance_video_path, max_frames=81)
 
+    # 1. Extract frames from video, trimming to the specified max_frames
+    all_guidance_frames = extract_frames_from_video(guidance_video_path, max_frames=max_frames_to_process)
+
+    if not all_guidance_frames:
+        print("Error: No guidance frames were extracted. Aborting.")
+        return None
+
+    # 2. Prepare the multi-VACE inputs list
+    multi_vace_inputs = []
+
+    # --- Stream 1: Reference images extracted from the video ---
+    ref_images_pil = []
+    if reference_stream_config:
+        ref_indices_str = reference_stream_config.get("frame_indices", "")
+        ref_indices = parse_simple_indices(ref_indices_str)
+        
+        print(f"\n--- Preparing Reference Stream ---")
+        for i in ref_indices:
+            if 0 <= i < len(all_guidance_frames):
+                frame_pil = all_guidance_frames[i]
+                ref_images_pil.append(frame_pil)
+                # Save the extracted frame to the specified output directory
+                save_path = output_dir / f"ref_frame_{i}.png"
+                frame_pil.save(save_path)
+                print(f"Extracted and saved reference frame {i} to {save_path}")
+            else:
+                print(f"Warning: Reference frame index {i} is out of bounds (video has {len(all_guidance_frames)} frames). Skipping.")
+        
+        if ref_images_pil:
+            multi_vace_inputs.append({
+                'frames': None,
+                'masks': None,
+                'ref_images': ref_images_pil,
+                'strength': reference_stream_config.get('strength', 0.25),
+                'start_percent': reference_stream_config.get('start_percent', 0.0),
+                'end_percent': reference_stream_config.get('end_percent', 1.0),
+            })
+
+    # --- Stream 2: Main guidance video with non-context frames replaced ---
     guidance_frames_pil = []
-    if all_guidance_frames:
+    if guidance_stream_config:
+        print(f"\n--- Preparing Guidance Stream ---")
         max_idx = len(all_guidance_frames) - 1
         context_indices = parse_context_frames(context_frames_str, max_idx)
         
-        # Get dimensions from the first frame to create a matching grey frame
         width, height = all_guidance_frames[0].size
         grey_frame = Image.new('RGB', (width, height), color=(128, 128, 128))
         
         for i, frame in enumerate(all_guidance_frames):
             if i in context_indices:
-                guidance_frames_pil.append(frame)  # Use the real frame
+                guidance_frames_pil.append(frame)
             else:
-                guidance_frames_pil.append(grey_frame)  # Use a grey frame
+                guidance_frames_pil.append(grey_frame)
         
         print(f"Processed guidance video: {len(context_indices)} frames used as context, {len(all_guidance_frames) - len(context_indices)} replaced with grey.")
-    else:
-        print("No guidance frames were extracted.")
 
-    if not ref_images_pil and not guidance_frames_pil:
-        print("Error: No valid reference images or guidance frames were loaded. Aborting.")
+        if guidance_frames_pil:
+            multi_vace_inputs.append({
+                'frames': guidance_frames_pil,
+                'masks': None,
+                'ref_images': None,
+                'strength': guidance_stream_config.get('strength', 1.0),
+                'start_percent': guidance_stream_config.get('start_percent', 0.0),
+                'end_percent': guidance_stream_config.get('end_percent', 0.9),
+            })
+
+    if not multi_vace_inputs:
+        print("Error: No valid VACE streams were created. Aborting.")
         return None
 
-    # 2. Structure the multi-VACE inputs with the processed PIL images
-    multi_vace_inputs = []
-    if ref_images_pil:
-        multi_vace_inputs.append({
-            'frames': None,
-            'masks': None,
-            'ref_images': ref_images_pil,
-            'strength': 0.25,
-            'start_percent': 0.0,
-            'end_percent': 1.0
-        })
-    
-    if guidance_frames_pil:
-        multi_vace_inputs.append({
-            'frames': guidance_frames_pil,
-            'masks': None,
-            'ref_images': None,
-            'strength': 1.0,
-            'start_percent': 0.0,
-            'end_percent': 0.9
-        })
-
-    # 3. Build the complete parameter dictionary for wgp.py's `generate_video`
+    # 3. Build the complete parameter dictionary
     generation_params = {
         "input_prompt": "A person dancing in a beautiful garden with flowers",
         "resolution": "1280x720",
-        "frame_num": 81,
+        "frame_num": len(all_guidance_frames),
         "sampling_steps": 30,
         "guide_scale": 5.0,
         "seed": 42,
-        "multi_vace_inputs": multi_vace_inputs,  # The final, processed structure
-        # --- Standard default parameters ---
+        "multi_vace_inputs": multi_vace_inputs,
+        "use_causvid_lora": use_causvid_lora,
+        "apply_reward_lora": apply_reward_lora,
         "negative_prompt": "ugly, blurry, distorted",
         "shift": 5.0,
         "offload_model": True,
@@ -180,26 +233,56 @@ def create_multi_vace_task(ref_image_paths, guidance_video_path, context_frames_
     
     print("\n--- Task Creation Complete ---")
     if ref_images_pil:
-        print(f"Stream 1 (Reference): {len(ref_images_pil)} images at strength 0.25")
+        print(f"Stream 1 (Reference): {len(ref_images_pil)} images at strength {reference_stream_config.get('strength', 0.25)}")
     if guidance_frames_pil:
-        print(f"Stream 2 (Guidance): {len(guidance_frames_pil)} frames at strength 1.0")
+        print(f"Stream 2 (Guidance): {len(guidance_frames_pil)} frames at strength {guidance_stream_config.get('strength', 1.0)}")
+    if use_causvid_lora:
+        print("LoRA Mode: CausVid LoRA enabled.")
+    if apply_reward_lora:
+        print("LoRA Mode: Reward LoRA enabled.")
 
     return generation_params
 
 if __name__ == "__main__":
-    # --- Point to the input files in the current directory ---
-    reference_paths = [
-        "frame_1.png",
-        "frame_2.png"
-    ]
+    # --- Create a directory for test outputs ---
+    output_directory = Path("./tests")
+    output_directory.mkdir(exist_ok=True)
+
+    max_frames = 40  # Trim the input video to this many frames for the task
+    # --- Point to the input video ---
     video_path = "input.mp4"
-    context_frames_spec = "0:16,32,54"  #<-- Specify which frames to use
+
+        # Stream 2: The main guidance video (with non-context frames greyed out)
+    guidance_stream_settings = {
+        "strength": 1.0,
+        "start_percent": 0.0,
+        "end_percent": 0.9,
+    }
+        
+    context_frames_spec = "0:16,32,54"  # <-- Specify which frames to use for guidance context
+
+    # Stream 1: Reference frames extracted from the video
+    reference_stream_settings = {
+        "frame_indices": "0, 39",  # Which frames to extract as references
+        "strength": 0.25,
+        "start_percent": 0.0,
+        "end_percent": 1.0,
+    }
+    
+    # --- LoRA settings ---
+    use_causvid = True
+    apply_reward = True
     
     # --- RUN THE TASK CREATION ---
     final_task_parameters = create_multi_vace_task(
-        reference_paths, 
-        video_path, 
-        context_frames_spec
+        guidance_video_path=video_path,
+        output_dir=output_directory,
+        max_frames_to_process=max_frames,
+        context_frames_str=context_frames_spec,
+        reference_stream_config=reference_stream_settings,
+        guidance_stream_config=guidance_stream_settings,
+        use_causvid_lora=use_causvid,
+        apply_reward_lora=apply_reward,
     )
     
     if final_task_parameters:
