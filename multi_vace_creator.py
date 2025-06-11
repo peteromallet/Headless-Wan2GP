@@ -296,10 +296,9 @@ def queue_task_for_headless(
                 ref_path = output_dir / f"ref_img_stream{i}_frame{j}.png"
                 pil_img.save(ref_path)
                 ref_image_paths.append(str(ref_path))
-            processed_input["ref_image_paths"] = ref_image_paths
-            del processed_input["ref_images"]
+            processed_input["ref_images"] = ref_image_paths
         
-        # Handle masks
+        # Handle masks by overwriting the key with paths
         if vace_input.get("masks"):
             mask_paths = []
             for j, pil_img in enumerate(vace_input["masks"]):
@@ -309,18 +308,16 @@ def queue_task_for_headless(
                     mask_paths.append(str(mask_path))
                 else:
                     mask_paths.append(None)
-            processed_input["mask_paths"] = mask_paths
-            del processed_input["masks"]
+            processed_input["masks"] = mask_paths
         
-        # Handle guidance frames
+        # Handle guidance frames by overwriting the key with paths
         if vace_input.get("frames"):
             frame_paths = []
             for j, frame_pil in enumerate(vace_input["frames"]):
                 frame_path = output_dir / f"guidance_stream{i}_frame{j:04d}.png"
                 frame_pil.save(frame_path)
                 frame_paths.append(str(frame_path))
-            processed_input["frame_paths"] = frame_paths
-            del processed_input["frames"]
+            processed_input["frames"] = frame_paths
         
         processed_multi_vace_inputs.append(processed_input)
     
