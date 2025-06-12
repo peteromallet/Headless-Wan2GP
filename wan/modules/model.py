@@ -528,6 +528,13 @@ class VaceWanAttentionBlock(WanAttentionBlock):
         c = hints[0]
         hints[0] = None
         if self.block_id == 0:
+            # Ensure c has the correct shape for linear layer
+            if c.dim() > 2:
+                # If c is more than 2D, we need to flatten it properly
+                batch_size = c.shape[0]
+                # Flatten all dimensions except batch and feature dimensions
+                c = c.view(batch_size, -1, c.shape[-1])
+            
             c = self.before_proj(c)
             # Safely add x only if sequence lengths match to prevent runtime errors
             if x is not None and x.shape[1] == c.shape[1]:
