@@ -529,7 +529,9 @@ class VaceWanAttentionBlock(WanAttentionBlock):
         hints[0] = None
         if self.block_id == 0:
             c = self.before_proj(c)
-            c += x
+            # Safely add x only if sequence lengths match to prevent runtime errors
+            if x is not None and x.shape[1] == c.shape[1]:
+                c += x
         c = super().forward(c, **kwargs)
         c_skip = self.after_proj(c)
         hints[0] = c
