@@ -199,8 +199,8 @@ def create_multi_vace_task(
     generation_params = {
         "input_prompt": "high quality video",
         "resolution": "720x720",
-        "frame_num": sampling_steps,
-        "sampling_steps": len(all_frames),
+        "frame_num": len(all_frames),
+        "sampling_steps": sampling_steps,
         "guide_scale": 1.0,
         "seed": 42,
         "multi_vace_inputs": multi_vace_inputs,
@@ -312,8 +312,8 @@ def queue_task_for_headless(
         "prompt": generation_params["input_prompt"],
         "negative_prompt": generation_params["negative_prompt"],
         "resolution": generation_params["resolution"],
-        "video_length": generation_params["sampling_steps"],
-        "num_inference_steps": generation_params["frame_num"],
+        "frames": generation_params["frame_num"],
+        "num_inference_steps": generation_params["sampling_steps"],
         "seed": generation_params["seed"],
         "guidance_scale": generation_params["guide_scale"],
         "flow_shift": generation_params["shift"],
@@ -337,11 +337,11 @@ def queue_task_for_headless(
 def main():
     parser = argparse.ArgumentParser(description="Multi-VACE Creator - Consolidated Script")
     parser.add_argument("--video", type=str, default="input.mp4", help="Input video file (default: input.mp4)")
-    parser.add_argument("--frames", type=int, default=30, help="Sampling steps (default: 9)")
+    parser.add_argument("--num-frames", type=int, default=40, help="Number of frames to generate (default: 40)")
+    parser.add_argument("--sampling-steps", type=int, default=9, help="Sampling steps for diffusion (default: 9)")
     parser.add_argument("--context", type=str, default="0:16,39", help="Context frames spec (default: 0:16,39)")
     parser.add_argument("--ref-strength", type=float, default=1.00, help="Reference image strength (default: 1.0)")
     parser.add_argument("--guide-strength", type=float, default=1.00, help="Guidance video strength (default: 1.0)")
-    parser.add_argument("--steps", type=int, default=9, help="Number of frames to generate (default: 40)")
     
     # VACE encoding selection flags
     encoding_group = parser.add_mutually_exclusive_group()
@@ -375,7 +375,8 @@ def main():
     # Display configuration
     print("=" * 60)
     print(f"🎬 Video: {args.video}")
-    print(f"📊 Frames: {args.frames}")
+    print(f"📊 Frames to Generate: {args.num_frames}")
+    print(f"🔢 Sampling Steps: {args.sampling_steps}")
     print(f"📋 Context: {args.context}")
     if encoding_mode in ["refs_only", "both"]:
         print(f"🎯 Ref strength: {args.ref_strength}")
@@ -384,7 +385,6 @@ def main():
     print(f"🤖 Model: {args.model}")
     print(f"🧬 CausVid LoRA: {'✅' if not args.no_causvid else '❌'}")
     print(f"🏆 Reward LoRA: {'✅' if not args.no_reward else '❌'}")
-    print(f"🔢 Steps: {args.steps}")
     print("=" * 60)
     
     # Create the task
@@ -393,14 +393,14 @@ def main():
         generation_params = create_multi_vace_task(
             guidance_video_path=args.video,
             output_dir=output_directory,
-            max_frames_to_process=args.steps,
+            max_frames_to_process=args.num_frames,
             encoding_mode=encoding_mode,
             context_frames_str=args.context,
             reference_strength=args.ref_strength,
             guidance_strength=args.guide_strength,
             use_causvid_lora=not args.no_causvid,
             apply_reward_lora=not args.no_reward,
-            sampling_steps=args.frames
+            sampling_steps=args.sampling_steps
         )
         
         if generation_params:
@@ -413,12 +413,12 @@ def main():
         task_id = queue_task_for_headless(
             guidance_video_path=args.video,
             output_dir=output_directory,
-            max_frames_to_process=args.steps,
+            max_frames_to_process=args.num_frames,
             encoding_mode=encoding_mode,
             context_frames_str=args.context,
             reference_strength=args.ref_strength,
             guidance_strength=args.guide_strength,
-            sampling_steps=args.frames,
+            sampling_steps=args.sampling_steps,
             use_causvid_lora=not args.no_causvid,
             apply_reward_lora=not args.no_reward,
             model_name=args.model
