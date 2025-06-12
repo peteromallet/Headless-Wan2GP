@@ -528,13 +528,6 @@ class VaceWanAttentionBlock(WanAttentionBlock):
         c = hints[0]
         hints[0] = None
         if self.block_id == 0:
-            # Ensure c has the correct shape for linear layer
-            if c.dim() > 2:
-                # If c is more than 2D, we need to flatten it properly
-                batch_size = c.shape[0]
-                # Flatten all dimensions except batch and feature dimensions
-                c = c.view(batch_size, -1, c.shape[-1])
-            
             c = self.before_proj(c)
             # Safely add x only if sequence lengths match to prevent runtime errors
             if x is not None and x.shape[1] == c.shape[1]:
@@ -1029,10 +1022,23 @@ class WanModel(ModelMixin, ConfigMixin):
             # Vace embeddings - process exactly like main latent
             c_list = []
             for u in vace_context:
-                u_processed = self.vace_patch_embedding(u.to(self.vace_patch_embedding.weight.dtype))
-                # Store grid sizes and reshape like main processing
-                vace_grid_sizes = u_processed.shape[2:]
-                u_processed = u_processed.flatten(2).transpose(1, 2)
+                # Debug: print tensor shape before processing
+                print(f"DEBUG: VACE context tensor shape before patch embedding: {u.shape}")
+                
+                # The VACE context comes from VAE encoding, so it's already in latent space
+                # We need to treat it like a latent tensor, not raw video frames
+                # Skip patch embedding and just reshape properly
+                if len(u.shape) == 5:  # [C, D, H, W] format from VAE
+                    # Reshape to match expected transformer input: [B, L, C]
+                    B, C, D, H, W = u.shape
+                    u_processed = u.permute(0, 2, 3, 4, 1).reshape(B, D * H * W, C)
+                else:
+                    # Fallback to patch embedding if shape is unexpected
+                    u_processed = self.vace_patch_embedding(u.to(self.vace_patch_embedding.weight.dtype))
+                    vace_grid_sizes = u_processed.shape[2:]
+                    u_processed = u_processed.flatten(2).transpose(1, 2)
+                
+                print(f"DEBUG: VACE context tensor shape after processing: {u_processed.shape}")
                 c_list.append(u_processed)
             c = c_list[0]  # Use first context
  
