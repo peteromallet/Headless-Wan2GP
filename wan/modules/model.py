@@ -1022,16 +1022,12 @@ class WanModel(ModelMixin, ConfigMixin):
             # Vace embeddings - process exactly like main latent
             c_list = []
             for u in vace_context:
-                # Handle VACE latent tensor directly (shape [C, D, H, W])
-                if u.dim() == 4:  # C, D, H, W
-                    C, D, H, W = u.shape
-                    # Convert to [1, L, C] where L = D*H*W
-                    u_processed = u.permute(1, 2, 3, 0).reshape(1, D * H * W, C)
-                else:
-                    # Unexpected shape – fall back to patch embedding path
-                    u_processed = self.vace_patch_embedding(u.to(self.vace_patch_embedding.weight.dtype))
-                    u_processed = u_processed.flatten(2).transpose(1, 2)
-                
+                # Ensure 5-D tensor for Conv3d patch embedding: [B, C, D, H, W]
+                if u.dim() == 4:  # latent arrives as [C, D, H, W]
+                    u = u.unsqueeze(0)              # -> [1, C, D, H, W]
+                # Pass through shared VACE patch embedding to map channels to model dim
+                u_processed = self.vace_patch_embedding(u.to(self.vace_patch_embedding.weight.dtype))  # [1, dim, D', H', W']
+                u_processed = u_processed.flatten(2).transpose(1, 2)  # -> [1, L, dim]
                 c_list.append(u_processed)
             c = c_list[0]  # Use first context
  
