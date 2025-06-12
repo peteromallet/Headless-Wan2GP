@@ -13,12 +13,9 @@ Supports both direct usage and database queuing for headless processing.
 
 import os
 import sys
-import json
-import sqlite3
 import datetime
 import uuid
 import cv2
-import numpy as np
 import argparse
 from pathlib import Path
 from PIL import Image
@@ -60,22 +57,6 @@ def extract_frames_from_video(video_path, max_frames=None, target_size=(720, 720
     print(f"Extracted {len(frames)} frames from {video_path}")
     return frames
 
-def parse_simple_indices(indices_str):
-    """Parses a string like '0,32,54' into a list of frame indices."""
-    if not indices_str:
-        return []
-    indices = []
-    parts = indices_str.split(',')
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        try:
-            indices.append(int(part))
-        except ValueError:
-            print(f"Warning: Could not parse frame index '{part}'. Skipping.")
-    return indices
-
 def parse_context_frames(context_frames_str, max_frame_index):
     """Parses a string like '0:16,32,54' into a set of frame indices."""
     if not context_frames_str:
@@ -110,7 +91,7 @@ def create_multi_vace_task(
     max_frames_to_process,
     encoding_mode="both",
     context_frames_str="0:16,39",
-    reference_strength=0.25,
+    reference_strength=1.0,
     guidance_strength=1.0,
     use_causvid_lora=True,
     apply_reward_lora=True,
@@ -218,8 +199,8 @@ def create_multi_vace_task(
     generation_params = {
         "input_prompt": "high quality video",
         "resolution": "720x720",
-        "frame_num": len(all_frames),
-        "sampling_steps": sampling_steps,
+        "frame_num": sampling_steps,
+        "sampling_steps": len(all_frames),
         "guide_scale": 1.0,
         "seed": 42,
         "multi_vace_inputs": multi_vace_inputs,
@@ -251,7 +232,7 @@ def queue_task_for_headless(
     max_frames_to_process,
     encoding_mode="both",
     context_frames_str="0:16,39",
-    reference_strength=0.25,
+    reference_strength=1.0,
     guidance_strength=1.0,
     sampling_steps=9,
     use_causvid_lora=True,
@@ -331,8 +312,8 @@ def queue_task_for_headless(
         "prompt": generation_params["input_prompt"],
         "negative_prompt": generation_params["negative_prompt"],
         "resolution": generation_params["resolution"],
-        "video_length": generation_params["frame_num"],
-        "num_inference_steps": generation_params["sampling_steps"],
+        "video_length": generation_params["sampling_steps"],
+        "num_inference_steps": generation_params["frame_num"],
         "seed": generation_params["seed"],
         "guidance_scale": generation_params["guide_scale"],
         "flow_shift": generation_params["shift"],
@@ -358,9 +339,9 @@ def main():
     parser.add_argument("--video", type=str, default="input.mp4", help="Input video file (default: input.mp4)")
     parser.add_argument("--frames", type=int, default=40, help="Max frames to process (default: 40)")
     parser.add_argument("--context", type=str, default="0:16,39", help="Context frames spec (default: 0:16,39)")
-    parser.add_argument("--ref-strength", type=float, default=0.25, help="Reference image strength (default: 0.25)")
+    parser.add_argument("--ref-strength", type=float, default=1.00, help="Reference image strength (default: 1.0)")
     parser.add_argument("--guide-strength", type=float, default=1.0, help="Guidance video strength (default: 1.0)")
-    parser.add_argument("--steps", type=int, default=9, help="Sampling steps (default: 9)")
+    parser.add_argument("--steps", type=int, default=40, help="Sampling steps (default: 40)")
     
     # VACE encoding selection flags
     encoding_group = parser.add_mutually_exclusive_group()
@@ -394,7 +375,7 @@ def main():
     # Display configuration
     print("=" * 60)
     print(f"🎬 Video: {args.video}")
-    print(f"📊 Frames: {args.frames}")
+    print(f"📊 Frames: {args.steps}")
     print(f"📋 Context: {args.context}")
     if encoding_mode in ["refs_only", "both"]:
         print(f"🎯 Ref strength: {args.ref_strength}")
@@ -403,7 +384,7 @@ def main():
     print(f"🤖 Model: {args.model}")
     print(f"🧬 CausVid LoRA: {'✅' if not args.no_causvid else '❌'}")
     print(f"🏆 Reward LoRA: {'✅' if not args.no_reward else '❌'}")
-    print(f"🔢 Steps: {args.steps}")
+    print(f"🔢 Steps: {args.frames}")
     print("=" * 60)
     
     # Create the task
@@ -412,14 +393,14 @@ def main():
         generation_params = create_multi_vace_task(
             guidance_video_path=args.video,
             output_dir=output_directory,
-            max_frames_to_process=args.frames,
+            max_frames_to_process=args.steps,
             encoding_mode=encoding_mode,
             context_frames_str=args.context,
             reference_strength=args.ref_strength,
             guidance_strength=args.guide_strength,
             use_causvid_lora=not args.no_causvid,
             apply_reward_lora=not args.no_reward,
-            sampling_steps=args.steps
+            sampling_steps=args.frames
         )
         
         if generation_params:
@@ -432,12 +413,12 @@ def main():
         task_id = queue_task_for_headless(
             guidance_video_path=args.video,
             output_dir=output_directory,
-            max_frames_to_process=args.frames,
+            max_frames_to_process=args.steps,
             encoding_mode=encoding_mode,
             context_frames_str=args.context,
             reference_strength=args.ref_strength,
             guidance_strength=args.guide_strength,
-            sampling_steps=args.steps,
+            sampling_steps=args.frames,
             use_causvid_lora=not args.no_causvid,
             apply_reward_lora=not args.no_reward,
             model_name=args.model
