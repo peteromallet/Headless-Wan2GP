@@ -1019,14 +1019,19 @@ class WanModel(ModelMixin, ConfigMixin):
         if vace_context == None:
             hints_list = [None ] *len(x_list)
         else:
-            # Vace embeddings
-            c = [self.vace_patch_embedding(u.to(self.vace_patch_embedding.weight.dtype)) for u in vace_context]
-            c = [u.flatten(2).transpose(1, 2) for u in c]
-            c = c[0]
+            # Vace embeddings - process exactly like main latent
+            c_list = []
+            for u in vace_context:
+                u_processed = self.vace_patch_embedding(u.to(self.vace_patch_embedding.weight.dtype))
+                # Store grid sizes and reshape like main processing
+                vace_grid_sizes = u_processed.shape[2:]
+                u_processed = u_processed.flatten(2).transpose(1, 2)
+                c_list.append(u_processed)
+            c = c_list[0]  # Use first context
  
             kwargs['context_scale'] = vace_context_scale
             hints_list = [ [c] for _ in range(len(x_list)) ] 
-            del c
+            del c, c_list
 
         should_calc = True
         if self.enable_teacache: 
