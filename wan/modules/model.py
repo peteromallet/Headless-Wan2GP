@@ -1022,23 +1022,16 @@ class WanModel(ModelMixin, ConfigMixin):
             # Vace embeddings - process exactly like main latent
             c_list = []
             for u in vace_context:
-                # Debug: print tensor shape before processing
-                print(f"DEBUG: VACE context tensor shape before patch embedding: {u.shape}")
-                
-                # The VACE context comes from VAE encoding, so it's already in latent space
-                # We need to treat it like a latent tensor, not raw video frames
-                # Skip patch embedding and just reshape properly
-                if len(u.shape) == 5:  # [C, D, H, W] format from VAE
-                    # Reshape to match expected transformer input: [B, L, C]
-                    B, C, D, H, W = u.shape
-                    u_processed = u.permute(0, 2, 3, 4, 1).reshape(B, D * H * W, C)
+                # Handle VACE latent tensor directly (shape [C, D, H, W])
+                if u.dim() == 4:  # C, D, H, W
+                    C, D, H, W = u.shape
+                    # Convert to [1, L, C] where L = D*H*W
+                    u_processed = u.permute(1, 2, 3, 0).reshape(1, D * H * W, C)
                 else:
-                    # Fallback to patch embedding if shape is unexpected
+                    # Unexpected shape – fall back to patch embedding path
                     u_processed = self.vace_patch_embedding(u.to(self.vace_patch_embedding.weight.dtype))
-                    vace_grid_sizes = u_processed.shape[2:]
                     u_processed = u_processed.flatten(2).transpose(1, 2)
                 
-                print(f"DEBUG: VACE context tensor shape after processing: {u_processed.shape}")
                 c_list.append(u_processed)
             c = c_list[0]  # Use first context
  
