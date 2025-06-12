@@ -337,11 +337,11 @@ def queue_task_for_headless(
 def main():
     parser = argparse.ArgumentParser(description="Multi-VACE Creator - Consolidated Script")
     parser.add_argument("--video", type=str, default="input.mp4", help="Input video file (default: input.mp4)")
-    parser.add_argument("--frames", type=int, default=40, help="Max frames to process (default: 40)")
+    parser.add_argument("--frames", type=int, default=30, help="Sampling steps (default: 9)")
     parser.add_argument("--context", type=str, default="0:16,39", help="Context frames spec (default: 0:16,39)")
     parser.add_argument("--ref-strength", type=float, default=1.00, help="Reference image strength (default: 1.0)")
-    parser.add_argument("--guide-strength", type=float, default=1.0, help="Guidance video strength (default: 1.0)")
-    parser.add_argument("--steps", type=int, default=40, help="Sampling steps (default: 40)")
+    parser.add_argument("--guide-strength", type=float, default=1.00, help="Guidance video strength (default: 1.0)")
+    parser.add_argument("--steps", type=int, default=9, help="Number of frames to generate (default: 40)")
     
     # VACE encoding selection flags
     encoding_group = parser.add_mutually_exclusive_group()
@@ -375,7 +375,7 @@ def main():
     # Display configuration
     print("=" * 60)
     print(f"🎬 Video: {args.video}")
-    print(f"📊 Frames: {args.steps}")
+    print(f"📊 Frames: {args.frames}")
     print(f"📋 Context: {args.context}")
     if encoding_mode in ["refs_only", "both"]:
         print(f"🎯 Ref strength: {args.ref_strength}")
@@ -384,7 +384,7 @@ def main():
     print(f"🤖 Model: {args.model}")
     print(f"🧬 CausVid LoRA: {'✅' if not args.no_causvid else '❌'}")
     print(f"🏆 Reward LoRA: {'✅' if not args.no_reward else '❌'}")
-    print(f"🔢 Steps: {args.frames}")
+    print(f"🔢 Steps: {args.steps}")
     print("=" * 60)
     
     # Create the task
