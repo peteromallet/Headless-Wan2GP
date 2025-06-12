@@ -505,8 +505,12 @@ class WanT2V:
             # This is likely needed for a guided/unguided context pair.
             z = [torch.cat([u, u], dim=0) for u in z]
 
-            target_shape = list(z0[0].shape)
-            target_shape[0] = int(target_shape[0] / 2)
+            # FIX: Use frame_num for target shape instead of z0[0].shape to ensure correct output length
+            ref_images_count = len(input_ref_images[0]) if input_ref_images and input_ref_images[0] else 0
+            target_shape = (self.vae.model.z_dim, 
+                          (frame_num - 1) // self.vae_stride[0] + 1 + ref_images_count,
+                          height // self.vae_stride[1],
+                          width // self.vae_stride[2])
         else:
             if input_ref_images != None: # Phantom Ref images
                 phantom = True

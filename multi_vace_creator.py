@@ -199,7 +199,7 @@ def create_multi_vace_task(
     generation_params = {
         "input_prompt": "high quality video",
         "resolution": "720x720",
-        "frame_num": len(all_frames),
+        "frame_num": max_frames_to_process,
         "sampling_steps": sampling_steps,
         "guide_scale": 1.0,
         "seed": 42,
