@@ -1032,7 +1032,7 @@ class WanModel(ModelMixin, ConfigMixin):
             c = c_list[0]  # Use first context
  
             # Adjust sequence length of c to match freqs length expected by attention
-            seq_len_expected = kwargs['freqs'].shape[0]
+            seq_len_expected = kwargs['grid_sizes'][0]
             if c.shape[1] != seq_len_expected:
                 repeat_factor = (seq_len_expected + c.shape[1] - 1) // c.shape[1]
                 c = c.repeat(1, repeat_factor, 1)[:, :seq_len_expected, :]
