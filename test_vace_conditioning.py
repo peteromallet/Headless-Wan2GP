@@ -149,6 +149,7 @@ def main():
                 self.patch_size = [1, 2, 2]
                 self.sample_neg_prompt = ""
                 self.sample_fps = 24
+                self.text_len = 512  # Add the missing text_len attribute
 
         cfg = MockConfig()
 
