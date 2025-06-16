@@ -2,6 +2,15 @@ import torch
 import numpy as np
 import os
 import sys
+
+# --- Path Setup ---
+# Add the 'Wan2GP' directory to the Python path to allow imports from 'wan'
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.join(script_dir, "Wan2GP")
+if not os.path.isdir(project_root):
+    raise FileNotFoundError("Could not find the 'Wan2GP' directory. Please run this script from the project root.")
+sys.path.insert(0, project_root)
+
 import wan
 from wan.configs import WAN_CONFIGS
 from wan.utils.utils import cache_video
