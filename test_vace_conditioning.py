@@ -4,16 +4,16 @@ import os
 import sys
 
 # --- Path Setup ---
-# Add the 'Wan2GP' directory to the Python path to allow imports from 'wan'
+# Add the project's root directory to the Python path.
+# This allows us to import 'Wan2GP' as a top-level package.
 script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.join(script_dir, "Wan2GP")
-if not os.path.isdir(project_root):
-    raise FileNotFoundError("Could not find the 'Wan2GP' directory. Please run this script from the project root.")
-sys.path.insert(0, project_root)
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
 
-import wan
-from wan.configs import WAN_CONFIGS
-from wan.utils.utils import cache_video
+# Now we can import from the Wan2GP package correctly.
+from Wan2GP.wan.configs import WAN_CONFIGS
+from Wan2GP.wan.utils.utils import cache_video
+from Wan2GP.wan import WanT2V
 from PIL import Image
 
 # --- Test Configuration ---
@@ -102,7 +102,7 @@ def main():
     try:
         # We need to use the 't2v-14B' config as VACE models are based on it
         cfg = WAN_CONFIGS['t2v-14B']
-        wan_model = wan.WanT2V(
+        wan_model = WanT2V(
             config=cfg,
             checkpoint_dir="ckpts",
             model_filename=[MODEL_FILENAME], # expects a list
