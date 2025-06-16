@@ -39,7 +39,7 @@ except ImportError as e:
 # --- Test Configuration ---
 MODEL_FILENAME = "ckpts/wan2.1_Vace_1.3B_mbf16.safetensors"
 # The new model seems to bundle the text encoder, so we might not need this explicitly.
-# TEXT_ENCODER_FILENAME = "ckpts/umt5-xxl/models_t5_umt5-xxl-enc-bf16.safetensors"
+TEXT_ENCODER_FILENAME = "ckpts/umt5-xxl/models_t5_umt5-xxl-enc-bf16.safetensors"
 VAE_FILENAME = "ckpts/Wan2.1_VAE.safetensors"
 
 # Use smaller dimensions and fewer steps for faster testing
@@ -130,7 +130,7 @@ def main():
     
     # Check if necessary model files exist
     # NOTE: Text encoder path check removed as it seems to be handled differently now.
-    for f in [MODEL_FILENAME, VAE_FILENAME]:
+    for f in [MODEL_FILENAME, VAE_FILENAME, TEXT_ENCODER_FILENAME]:
         if not os.path.exists(f):
             print(f"ERROR: Model file not found at {f}.")
             print("Please ensure you have downloaded the necessary models into the 'ckpts' directory.")
@@ -157,7 +157,7 @@ def main():
             config=cfg,
             checkpoint_dir="ckpts",
             model_filename=[MODEL_FILENAME],
-            text_encoder_filename=None, # This seems to be handled inside now
+            text_encoder_filename=TEXT_ENCODER_FILENAME, # Pass the text encoder filename
         )
         print("Model loaded successfully.")
     except Exception as e:
