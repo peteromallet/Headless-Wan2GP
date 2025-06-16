@@ -145,7 +145,7 @@ class WanLayerNorm(nn.LayerNorm):
         return x
         # return super().forward(x).type_as(x)
 
-from wan.modules.posemb_layers import apply_rotary_emb
+from .posemb_layers import apply_rotary_emb
 
 class WanSelfAttention(nn.Module):
 
