@@ -2690,6 +2690,19 @@ def parse_keep_frames_video_guide(keep_frames, video_length):
             break
     frames= frames[0: i+1]
     return  frames, error
+def generate_vace_scale_array(strength, start_step, end_step, total_steps):
+    """Generate scale array for VACE stream based on strength and step range"""
+    scale_array = np.zeros(total_steps)
+    
+    # Clamp step values to valid range
+    start_step = max(0, min(start_step, total_steps - 1))
+    end_step = max(start_step, min(end_step, total_steps))
+    
+    # Apply strength only in the specified step range
+    if end_step > start_step:
+        scale_array[start_step:end_step] = strength
+    
+    return scale_array
 
 def generate_video(
     task,
@@ -2738,8 +2751,41 @@ def generate_video(
     cfg_zero_step,
     prompt_enhancer,
     state,
-    model_filename
-
+    model_filename,
+    # New multi-VACE parameters
+    vace_stream_1_enabled,
+    vace_stream_1_id,
+    vace_stream_1_video_guide,
+    vace_stream_1_video_mask,
+    vace_stream_1_image_refs,
+    vace_stream_1_keep_frames,
+    vace_stream_1_start_percent,
+    vace_stream_1_end_percent,
+    vace_stream_1_strength,
+    vace_stream_1_start_step,
+    vace_stream_1_end_step,
+    vace_stream_2_enabled,
+    vace_stream_2_id,
+    vace_stream_2_video_guide,
+    vace_stream_2_video_mask,
+    vace_stream_2_image_refs,
+    vace_stream_2_keep_frames,
+    vace_stream_2_start_percent,
+    vace_stream_2_end_percent,
+    vace_stream_2_strength,
+    vace_stream_2_start_step,
+    vace_stream_2_end_step,
+    vace_stream_3_enabled,
+    vace_stream_3_id,
+    vace_stream_3_video_guide,
+    vace_stream_3_video_mask,
+    vace_stream_3_image_refs,
+    vace_stream_3_keep_frames,
+    vace_stream_3_start_percent,
+    vace_stream_3_end_percent,
+    vace_stream_3_strength,
+    vace_stream_3_start_step,
+    vace_stream_3_end_step
 ):
     global wan_model, offloadobj, reload_needed
     gen = get_gen_info(state)
@@ -3057,43 +3103,177 @@ def generate_video(
                     if vace:
                         height, width  = pre_video_guide.shape[-2:]     
             if vace:
-                image_refs_copy = image_refs.copy() if image_refs != None else None # required since prepare_source do inplace modifications
-                video_guide_copy = video_guide
-                video_mask_copy = video_mask
-                if any(process in video_prompt_type for process in ("P", "D", "G")) :
-                    preprocess_type = None
-                    if "P" in video_prompt_type :
-                        progress_args = [0, get_latest_status(state,"Extracting Open Pose Information")]
-                        preprocess_type = "pose"
-                    elif "D" in video_prompt_type :
-                        progress_args = [0, get_latest_status(state,"Extracting Depth Information")]
-                        preprocess_type = "depth"
-                    elif "G" in video_prompt_type :
-                        progress_args = [0, get_latest_status(state,"Extracting Gray Level Information")]
-                        preprocess_type = "gray"
-
-                    if preprocess_type != None :
-                        send_cmd("progress", progress_args)
-                        video_guide_copy = preprocess_video(preprocess_type, width=width, height=height,video_in=video_guide, max_frames= current_video_length if window_no == 1 else current_video_length - reuse_frames, start_frame = guide_start_frame, fit_canvas = fit_canvas, target_fps = fps)
-                keep_frames_parsed, error = parse_keep_frames_video_guide(keep_frames_video_guide, max_frames_to_generate)
-                if len(error) > 0:
-                    raise gr.Error(f"invalid keep frames {keep_frames_video_guide}")
-                keep_frames_parsed = keep_frames_parsed[guide_start_frame: guide_start_frame + current_video_length]
-
-                if window_no == 1:
-                    image_size = (height, width) #  default frame dimensions until it is set by video_src (if there is any)
+                # Collect multi-VACE configurations
+                vace_configs = []
                 
+                # Process each VACE stream
+                vace_streams = [
+                    {
+                        'enabled': vace_stream_1_enabled,
+                        'id': vace_stream_1_id,
+                        'video_guide': vace_stream_1_video_guide,
+                        'video_mask': vace_stream_1_video_mask,
+                        'image_refs': vace_stream_1_image_refs,
+                        'keep_frames': vace_stream_1_keep_frames,
+                        'start_percent': vace_stream_1_start_percent,
+                        'end_percent': vace_stream_1_end_percent,
+                        'strength': vace_stream_1_strength,
+                        'start_step': vace_stream_1_start_step,
+                        'end_step': vace_stream_1_end_step
+                    },
+                    {
+                        'enabled': vace_stream_2_enabled,
+                        'id': vace_stream_2_id,
+                        'video_guide': vace_stream_2_video_guide,
+                        'video_mask': vace_stream_2_video_mask,
+                        'image_refs': vace_stream_2_image_refs,
+                        'keep_frames': vace_stream_2_keep_frames,
+                        'start_percent': vace_stream_2_start_percent,
+                        'end_percent': vace_stream_2_end_percent,
+                        'strength': vace_stream_2_strength,
+                        'start_step': vace_stream_2_start_step,
+                        'end_step': vace_stream_2_end_step
+                    },
+                    {
+                        'enabled': vace_stream_3_enabled,
+                        'id': vace_stream_3_id,
+                        'video_guide': vace_stream_3_video_guide,
+                        'video_mask': vace_stream_3_video_mask,
+                        'image_refs': vace_stream_3_image_refs,
+                        'keep_frames': vace_stream_3_keep_frames,
+                        'start_percent': vace_stream_3_start_percent,
+                        'end_percent': vace_stream_3_end_percent,
+                        'strength': vace_stream_3_strength,
+                        'start_step': vace_stream_3_start_step,
+                        'end_step': vace_stream_3_end_step
+                    }
+                ]
+                
+                if window_no == 1:
+                    image_size = (height, width)
+                
+                for i, stream in enumerate(vace_streams):
+                    if not stream['enabled']:
+                        continue
+                        
+                    # Copy inputs to avoid modification
+                    image_refs_copy = stream['image_refs'].copy() if stream['image_refs'] else None
+                    video_guide_copy = stream['video_guide']
+                    video_mask_copy = stream['video_mask']
+                    
+                    # Apply preprocessing if needed (keeping legacy behavior)
+                    if any(process in video_prompt_type for process in ("P", "D", "G")):
+                        preprocess_type = None
+                        if "P" in video_prompt_type:
+                            progress_args = [0, get_latest_status(state, f"Extracting Open Pose Information - Stream {i+1}")]
+                            preprocess_type = "pose"
+                        elif "D" in video_prompt_type:
+                            progress_args = [0, get_latest_status(state, f"Extracting Depth Information - Stream {i+1}")]
+                            preprocess_type = "depth"
+                        elif "G" in video_prompt_type:
+                            progress_args = [0, get_latest_status(state, f"Extracting Gray Level Information - Stream {i+1}")]
+                            preprocess_type = "gray"
 
-                src_video, src_mask, src_ref_images = wan_model.prepare_source([video_guide_copy],
-                                                                        [video_mask_copy ],
-                                                                        [image_refs_copy], 
-                                                                        current_video_length, image_size = image_size, device ="cpu",
-                                                                        original_video= "O" in video_prompt_type,
-                                                                        keep_frames=keep_frames_parsed,
-                                                                        start_frame = guide_start_frame,
-                                                                        pre_src_video = [pre_video_guide],
-                                                                        fit_into_canvas = fit_canvas 
-                                                                        )
+                        if preprocess_type:
+                            send_cmd("progress", progress_args)
+                            video_guide_copy = preprocess_video(
+                                preprocess_type, width=width, height=height,
+                                video_in=video_guide_copy,
+                                max_frames=current_video_length if window_no == 1 else current_video_length - reuse_frames,
+                                start_frame=guide_start_frame,
+                                fit_canvas=fit_canvas,
+                                target_fps=fps
+                            )
+                    
+                    # Parse keep frames for this stream
+                    keep_frames_parsed, error = parse_keep_frames_video_guide(stream['keep_frames'], max_frames_to_generate)
+                    if len(error) > 0:
+                        raise gr.Error(f"invalid keep frames for stream {i+1}: {stream['keep_frames']}")
+                    keep_frames_parsed = keep_frames_parsed[guide_start_frame: guide_start_frame + current_video_length]
+                    
+                    # Prepare source for this stream
+                    src_video, src_mask, src_ref_images = wan_model.prepare_source(
+                        [video_guide_copy],
+                        [video_mask_copy],
+                        [image_refs_copy],
+                        current_video_length,
+                        image_size=image_size,
+                        device="cpu",
+                        original_video="O" in video_prompt_type,
+                        keep_frames=keep_frames_parsed,
+                        start_frame=guide_start_frame,
+                        pre_src_video=[pre_video_guide],
+                        fit_into_canvas=fit_canvas
+                    )
+                    
+                    # Generate scale array based on strength and step range
+                    scale_array = generate_vace_scale_array(
+                        stream['strength'],
+                        stream['start_step'],
+                        stream['end_step'],
+                        num_inference_steps
+                    )
+                    
+                    # Add to vace_configs list
+                    vace_config = {
+                        'id': stream['id'] if stream['id'] else f'stream_{i+1}',
+                        'frames': src_video,
+                        'masks': src_mask,
+                        'ref_images': src_ref_images,
+                        'scale_per_step_array': scale_array,
+                        'start_percent': stream['start_percent'],
+                        'end_percent': stream['end_percent']
+                    }
+                    vace_configs.append(vace_config)
+                
+                # If no streams enabled, fallback to legacy behavior
+                if not vace_configs:
+                    # Legacy fallback - use the old single stream approach
+                    image_refs_copy = image_refs.copy() if image_refs else None
+                    video_guide_copy = video_guide
+                    video_mask_copy = video_mask
+                    
+                    if any(process in video_prompt_type for process in ("P", "D", "G")):
+                        preprocess_type = None
+                        if "P" in video_prompt_type:
+                            progress_args = [0, get_latest_status(state, "Extracting Open Pose Information")]
+                            preprocess_type = "pose"
+                        elif "D" in video_prompt_type:
+                            progress_args = [0, get_latest_status(state, "Extracting Depth Information")]
+                            preprocess_type = "depth"
+                        elif "G" in video_prompt_type:
+                            progress_args = [0, get_latest_status(state, "Extracting Gray Level Information")]
+                            preprocess_type = "gray"
+
+                        if preprocess_type:
+                            send_cmd("progress", progress_args)
+                            video_guide_copy = preprocess_video(
+                                preprocess_type, width=width, height=height,
+                                video_in=video_guide,
+                                max_frames=current_video_length if window_no == 1 else current_video_length - reuse_frames,
+                                start_frame=guide_start_frame,
+                                fit_canvas=fit_canvas,
+                                target_fps=fps
+                            )
+                    
+                    keep_frames_parsed, error = parse_keep_frames_video_guide(keep_frames_video_guide, max_frames_to_generate)
+                    if len(error) > 0:
+                        raise gr.Error(f"invalid keep frames {keep_frames_video_guide}")
+                    keep_frames_parsed = keep_frames_parsed[guide_start_frame: guide_start_frame + current_video_length]
+
+                    src_video, src_mask, src_ref_images = wan_model.prepare_source(
+                        [video_guide_copy],
+                        [video_mask_copy],
+                        [image_refs_copy],
+                        current_video_length,
+                        image_size=image_size,
+                        device="cpu",
+                        original_video="O" in video_prompt_type,
+                        keep_frames=keep_frames_parsed,
+                        start_frame=guide_start_frame,
+                        pre_src_video=[pre_video_guide],
+                        fit_into_canvas=fit_canvas
+                    )
             if window_no ==  1:                
                 conditioning_latents_size = ( (prefix_video_frames_count-1) // latent_size) + 1 if prefix_video_frames_count > 0 else 0
             else:
@@ -3119,11 +3299,12 @@ def generate_video(
             try:
                 samples = wan_model.generate(
                     input_prompt = prompt,
+                    vace_configs = vace_configs if vace and vace_configs else None,  # Add multi-VACE configs
                     image_start = image_start,  
                     image_end = image_end if image_end != None else None,
-                    input_frames = src_video,
-                    input_ref_images=  src_ref_images,
-                    input_masks = src_mask,
+                    input_frames = src_video if not vace or not vace_configs else None,  # Use legacy only if no multi-VACE
+                    input_ref_images = src_ref_images if not vace or not vace_configs else None,  # Use legacy only if no multi-VACE
+                    input_masks = src_mask if not vace or not vace_configs else None,  # Use legacy only if no multi-VACE
                     input_video= pre_video_guide  if diffusion_forcing or ltxv else source_video,
                     target_camera= target_camera,
                     frame_num=(current_video_length // latent_size)* latent_size + 1,
@@ -4633,59 +4814,130 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
             with gr.Column(visible= vace or phantom or hunyuan_video_custom or hunyuan_video_avatar) as video_prompt_column: 
                 video_prompt_type_value= ui_defaults.get("video_prompt_type","")
                 video_prompt_type = gr.Text(value= video_prompt_type_value, visible= False)
-                with gr.Row():
-                    if vace:
-                        video_prompt_type_video_guide = gr.Dropdown(
-                            choices=[
-                                ("None", ""),
-                                ("Transfer Human Motion from the Control Video", "PV"),
-                                ("Transfer Depth from the Control Video", "DV"),
-                                ("Recolorize the Control Video", "CV"),
-                                ("Extend Video", "OV"),
-                                ("Video contains Open Pose, Depth, Black & White, Inpainting ", "V"),
-                                ("Control Video and Mask video for Inpainting ", "MV"),
-                            ],
-                            value=filter_letters(video_prompt_type_value, "ODPCMV"),
-                            label="Video to Video", scale = 3, visible= True
-                        )
-                    else:
-                        video_prompt_type_video_guide = gr.Dropdown(visible= False)
-
+                
+                if vace:
+                    # Multi-VACE Interface
+                    gr.Markdown("**Multi-VACE Configuration - Configure up to 3 VACE streams**")
+                    
+                    # VACE Stream containers
+                    vace_stream_1_enabled = gr.Checkbox(label="Enable VACE Stream 1", value=True)
+                    vace_stream_2_enabled = gr.Checkbox(label="Enable VACE Stream 2", value=False)
+                    vace_stream_3_enabled = gr.Checkbox(label="Enable VACE Stream 3", value=False)
+                    
+                    with gr.Tab("VACE Stream 1"):
+                        with gr.Column():
+                            vace_stream_1_id = gr.Textbox(label="Stream 1 ID", value="stream_1", placeholder="stream_1")
+                            with gr.Row():
+                                vace_stream_1_video_guide = gr.Video(label="Stream 1 Control Video", value=ui_defaults.get("video_guide", None))
+                                vace_stream_1_video_mask = gr.Video(label="Stream 1 Mask Video", value=ui_defaults.get("video_mask", None))
+                            vace_stream_1_image_refs = gr.Gallery(
+                                label="Stream 1 Reference Images", type="pil", show_label=True,
+                                columns=[3], rows=[1], object_fit="contain", height="auto", 
+                                selected_index=0, interactive=True, value=ui_defaults.get("image_refs", None)
+                            )
+                            vace_stream_1_keep_frames = gr.Text(
+                                label="Stream 1 Keep Frames", 
+                                value=ui_defaults.get("keep_frames_video_guide", ""),
+                                placeholder="empty=All, 1=first, a:b for range, space separated"
+                            )
+                            with gr.Row():
+                                vace_stream_1_start_percent = gr.Slider(0.0, 1.0, value=0.0, step=0.01, label="Stream 1 Start %")
+                                vace_stream_1_end_percent = gr.Slider(0.0, 1.0, value=1.0, step=0.01, label="Stream 1 End %")
+                            with gr.Row():
+                                vace_stream_1_strength = gr.Slider(0.0, 2.0, value=1.0, step=0.1, label="Stream 1 Strength")
+                                vace_stream_1_start_step = gr.Slider(0, 50, value=0, step=1, label="Stream 1 Start Step")
+                                vace_stream_1_end_step = gr.Slider(0, 50, value=50, step=1, label="Stream 1 End Step")
+                    
+                    with gr.Tab("VACE Stream 2"):
+                        with gr.Column():
+                            vace_stream_2_id = gr.Textbox(label="Stream 2 ID", value="stream_2", placeholder="stream_2")
+                            with gr.Row():
+                                vace_stream_2_video_guide = gr.Video(label="Stream 2 Control Video")
+                                vace_stream_2_video_mask = gr.Video(label="Stream 2 Mask Video")
+                            vace_stream_2_image_refs = gr.Gallery(
+                                label="Stream 2 Reference Images", type="pil", show_label=True,
+                                columns=[3], rows=[1], object_fit="contain", height="auto", 
+                                selected_index=0, interactive=True
+                            )
+                            vace_stream_2_keep_frames = gr.Text(
+                                label="Stream 2 Keep Frames", 
+                                placeholder="empty=All, 1=first, a:b for range, space separated"
+                            )
+                            with gr.Row():
+                                vace_stream_2_start_percent = gr.Slider(0.0, 1.0, value=0.0, step=0.01, label="Stream 2 Start %")
+                                vace_stream_2_end_percent = gr.Slider(0.0, 1.0, value=1.0, step=0.01, label="Stream 2 End %")
+                            with gr.Row():
+                                vace_stream_2_strength = gr.Slider(0.0, 2.0, value=1.0, step=0.1, label="Stream 2 Strength")
+                                vace_stream_2_start_step = gr.Slider(0, 50, value=0, step=1, label="Stream 2 Start Step")
+                                vace_stream_2_end_step = gr.Slider(0, 50, value=50, step=1, label="Stream 2 End Step")
+                    
+                    with gr.Tab("VACE Stream 3"):
+                        with gr.Column():
+                            vace_stream_3_id = gr.Textbox(label="Stream 3 ID", value="stream_3", placeholder="stream_3")
+                            with gr.Row():
+                                vace_stream_3_video_guide = gr.Video(label="Stream 3 Control Video")
+                                vace_stream_3_video_mask = gr.Video(label="Stream 3 Mask Video")
+                            vace_stream_3_image_refs = gr.Gallery(
+                                label="Stream 3 Reference Images", type="pil", show_label=True,
+                                columns=[3], rows=[1], object_fit="contain", height="auto", 
+                                selected_index=0, interactive=True
+                            )
+                            vace_stream_3_keep_frames = gr.Text(
+                                label="Stream 3 Keep Frames", 
+                                placeholder="empty=All, 1=first, a:b for range, space separated"
+                            )
+                            with gr.Row():
+                                vace_stream_3_start_percent = gr.Slider(0.0, 1.0, value=0.0, step=0.01, label="Stream 3 Start %")
+                                vace_stream_3_end_percent = gr.Slider(0.0, 1.0, value=1.0, step=0.01, label="Stream 3 End %")
+                            with gr.Row():
+                                vace_stream_3_strength = gr.Slider(0.0, 2.0, value=1.0, step=0.1, label="Stream 3 Strength")
+                                vace_stream_3_start_step = gr.Slider(0, 50, value=0, step=1, label="Stream 3 Start Step")
+                                vace_stream_3_end_step = gr.Slider(0, 50, value=50, step=1, label="Stream 3 End Step")
+                else:
+                    # Keep old variables for compatibility
+                    video_prompt_type_video_guide = gr.Dropdown(visible= False)
                     video_prompt_video_guide_trigger = gr.Text(visible=False, value="")
-
-                    video_prompt_type_image_refs = gr.Dropdown(
-                        choices=[
-                            ("None", ""),
-                            ("Inject custom Faces / Objects", "I"),
-                        ],
-                        value="I" if "I" in video_prompt_type_value  else "",
-                        label="Reference Images", scale = 2
-                    )
-
-                # video_prompt_type_image_refs = gr.Checkbox(value="I" in video_prompt_type_value , label= "Use References Images (Faces, Objects) to customize New Video",  scale =1 ) 
-                video_guide = gr.Video(label= "Control Video", visible= "V" in video_prompt_type_value, value= ui_defaults.get("video_guide", None),)
-                keep_frames_video_guide = gr.Text(value=ui_defaults.get("keep_frames_video_guide","") , visible= "V" in video_prompt_type_value, scale = 2, label= "Frames to keep in Control Video (empty=All, 1=first, a:b for a range, space to separate values)" ) #, -1=last
-                image_refs = gr.Gallery( label ="Reference Images",
-                        type ="pil",   show_label= True,
-                        columns=[3], rows=[1], object_fit="contain", height="auto", selected_index=0, interactive= True, visible= "I" in video_prompt_type_value, 
-                        value= ui_defaults.get("image_refs", None),
-                 )
-
-                # with gr.Row():
-                remove_background_images_ref = gr.Dropdown(
-                    choices=[
-                        ("Keep Backgrounds of All Images (landscape)", 0),
-                        ("Remove Backgrounds of All Images (objects / faces)", 1),
-                        ("Keep it for first Image (landscape) and remove it for other Images (objects / faces)", 2),
-                    ],
-                    value=ui_defaults.get("remove_background_images_ref",1),
-                    label="Remove Background of Images References", scale = 3, visible= "I" in video_prompt_type_value and not hunyuan_video_avatar
-                )
-
-                # remove_background_images_ref = gr.Checkbox(value=ui_defaults.get("remove_background_images_ref",1), label= "Remove Background of Images References", visible= "I" in video_prompt_type_value, scale =1 ) 
-
-
-                video_mask = gr.Video(label= "Video Mask (for Inpainting or Outpaing, white pixels = Mask)", visible= "M" in video_prompt_type_value, value= ui_defaults.get("video_mask", None)) 
+                    video_prompt_type_image_refs = gr.Dropdown(visible=False)
+                    video_guide = gr.Video(visible=False)
+                    keep_frames_video_guide = gr.Text(visible=False)
+                    image_refs = gr.Gallery(visible=False)
+                    remove_background_images_ref = gr.Dropdown(visible=False)
+                    video_mask = gr.Video(visible=False)
+                    
+                    # Initialize VACE stream variables for compatibility
+                    vace_stream_1_enabled = gr.Checkbox(visible=False, value=False)
+                    vace_stream_2_enabled = gr.Checkbox(visible=False, value=False)
+                    vace_stream_3_enabled = gr.Checkbox(visible=False, value=False)
+                    vace_stream_1_id = gr.Textbox(visible=False)
+                    vace_stream_1_video_guide = gr.Video(visible=False)
+                    vace_stream_1_video_mask = gr.Video(visible=False)
+                    vace_stream_1_image_refs = gr.Gallery(visible=False)
+                    vace_stream_1_keep_frames = gr.Text(visible=False)
+                    vace_stream_1_start_percent = gr.Slider(visible=False)
+                    vace_stream_1_end_percent = gr.Slider(visible=False)
+                    vace_stream_1_strength = gr.Slider(visible=False)
+                    vace_stream_1_start_step = gr.Slider(visible=False)
+                    vace_stream_1_end_step = gr.Slider(visible=False)
+                    vace_stream_2_id = gr.Textbox(visible=False)
+                    vace_stream_2_video_guide = gr.Video(visible=False)
+                    vace_stream_2_video_mask = gr.Video(visible=False)
+                    vace_stream_2_image_refs = gr.Gallery(visible=False)
+                    vace_stream_2_keep_frames = gr.Text(visible=False)
+                    vace_stream_2_start_percent = gr.Slider(visible=False)
+                    vace_stream_2_end_percent = gr.Slider(visible=False)
+                    vace_stream_2_strength = gr.Slider(visible=False)
+                    vace_stream_2_start_step = gr.Slider(visible=False)
+                    vace_stream_2_end_step = gr.Slider(visible=False)
+                    vace_stream_3_id = gr.Textbox(visible=False)
+                    vace_stream_3_video_guide = gr.Video(visible=False)
+                    vace_stream_3_video_mask = gr.Video(visible=False)
+                    vace_stream_3_image_refs = gr.Gallery(visible=False)
+                    vace_stream_3_keep_frames = gr.Text(visible=False)
+                    vace_stream_3_start_percent = gr.Slider(visible=False)
+                    vace_stream_3_end_percent = gr.Slider(visible=False)
+                    vace_stream_3_strength = gr.Slider(visible=False)
+                    vace_stream_3_start_step = gr.Slider(visible=False)
+                    vace_stream_3_end_step = gr.Slider(visible=False)
             audio_guide = gr.Audio(value= ui_defaults.get("audio_guide", None), type="filepath", label="Voice to follow", show_download_button= True, visible= fantasy or hunyuan_video_avatar )
 
             advanced_prompt = advanced_ui
@@ -4998,9 +5250,16 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                         single_hidden_trigger_btn = gr.Button("trigger_countdown", visible=False, elem_id="trigger_info_single_btn")
 
         extra_inputs = prompt_vars + [wizard_prompt, wizard_variables_var, wizard_prompt_activated_var, video_prompt_column, image_prompt_column,
-                                      prompt_column_advanced, prompt_column_wizard_vars, prompt_column_wizard, lset_name, advanced_row, speed_tab, quality_tab,
-                                      sliding_window_tab, misc_tab, prompt_enhancer_row, inference_steps_row, skip_layer_guidance_row,
-                                      video_prompt_type_video_guide, video_prompt_type_image_refs] # show_advanced presets_column,
+                                    prompt_column_advanced, prompt_column_wizard_vars, prompt_column_wizard, lset_name, advanced_row, speed_tab, quality_tab,
+                                    sliding_window_tab, misc_tab, prompt_enhancer_row, inference_steps_row, skip_layer_guidance_row,
+                                    video_prompt_type_video_guide, video_prompt_type_image_refs] + ([
+                                    vace_stream_1_enabled, vace_stream_1_id, vace_stream_1_video_guide, vace_stream_1_video_mask, vace_stream_1_image_refs,
+                                    vace_stream_1_keep_frames, vace_stream_1_start_percent, vace_stream_1_end_percent, vace_stream_1_strength, vace_stream_1_start_step, vace_stream_1_end_step,
+                                    vace_stream_2_enabled, vace_stream_2_id, vace_stream_2_video_guide, vace_stream_2_video_mask, vace_stream_2_image_refs,
+                                    vace_stream_2_keep_frames, vace_stream_2_start_percent, vace_stream_2_end_percent, vace_stream_2_strength, vace_stream_2_start_step, vace_stream_2_end_step,
+                                    vace_stream_3_enabled, vace_stream_3_id, vace_stream_3_video_guide, vace_stream_3_video_mask, vace_stream_3_image_refs,
+                                    vace_stream_3_keep_frames, vace_stream_3_start_percent, vace_stream_3_end_percent, vace_stream_3_strength, vace_stream_3_start_step, vace_stream_3_end_step
+                                    ] if vace else [])
         if update_form:
             locals_dict = locals()
             gen_inputs = [state_dict if k=="state" else locals_dict[k]  for k in inputs_names] + [state_dict] + extra_inputs

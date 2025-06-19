@@ -37,9 +37,9 @@ except ImportError as e:
     sys.exit(1)
 
 # --- Test Configuration ---
-MODEL_FILENAME = "ckpts/wan2.1_Vace_1.3B_mbf16.safetensors"
+MODEL_FILENAME = "ckpts/wan2.1_text2video_1.3B_bf16.safetensors"
 # The new model seems to bundle the text encoder, so we might not need this explicitly.
-TEXT_ENCODER_FILENAME = "ckpts/umt5-xxl/models_t5_umt5-xxl-enc-bf16.safetensors"
+TEXT_ENCODER_FILENAME = "ckpts/umt5-xxl/models_t5_umt5-xxl-enc-quanto_int8.safetensors"
 VAE_FILENAME = "ckpts/Wan2.1_VAE.safetensors"
 
 # Use smaller dimensions and fewer steps for faster testing
