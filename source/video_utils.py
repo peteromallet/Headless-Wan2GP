@@ -630,22 +630,21 @@ def create_guide_video_for_travel_segment(
                     if k_fill < total_frames_for_segment: frames_for_guide_list[k_fill] = end_anchor_frame_np.copy()
 
         elif path_to_previous_segment_video_output_for_guide: # Continued or Subsequent
-            # --- Robust previous-video frame extraction ---------------------------------
             prev_vid_total_frames, _ = get_video_frame_count_and_fps(path_to_previous_segment_video_output_for_guide)
 
-            if prev_vid_total_frames is None or prev_vid_total_frames == 0:
-                # Some codecs/container combinations return 0 via OpenCV – fall back to reading the full clip.
-                dprint(f"Seg {segment_idx_for_logging}: get_video_frame_count returned 0/None for '{path_to_previous_segment_video_output_for_guide}'. Falling back to full read then tail-slice.")
+            if not prev_vid_total_frames:  # Handles None or 0 (OpenCV quirk on freshly-encoded MP4s)
+                # Fallback: read all frames to determine length
                 all_prev_frames = extract_frames_from_video(path_to_previous_segment_video_output_for_guide)
                 prev_vid_total_frames = len(all_prev_frames)
+                if prev_vid_total_frames == 0:
+                    raise ValueError("Previous segment video appears to have zero frames – cannot build guide overlap.")
+                # Decide how many overlap frames we can reuse
                 actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
-                overlap_frames_raw = all_prev_frames[-actual_overlap_to_use:] if actual_overlap_to_use > 0 else []
+                overlap_frames_raw = all_prev_frames[-actual_overlap_to_use:]
             else:
                 actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
                 start_extraction_idx = max(0, prev_vid_total_frames - actual_overlap_to_use)
                 overlap_frames_raw = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, start_extraction_idx, actual_overlap_to_use)
-
-            dprint(f"Seg {segment_idx_for_logging}: Extracted {len(overlap_frames_raw)} overlap frames from prev video (expected {actual_overlap_to_use}).")
             
             frames_read_for_overlap = 0
             for k, frame_fp in enumerate(overlap_frames_raw):
