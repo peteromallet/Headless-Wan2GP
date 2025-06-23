@@ -631,6 +631,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         
         dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Effective prompt for WGP payload will be: '{prompt_for_wgp}'")
 
+        # Compute video_prompt_type for wgp: always include 'V' when a guide video is provided; add 'M' if a mask video is also attached.
+        video_prompt_type_str = "V" + ("M" if mask_video_path_for_wgp else "")
+        
         wgp_payload = {
             "task_id": wgp_inline_task_id, # ID for this specific WGP generation operation
             "model": full_orchestrator_payload["model_name"],
@@ -649,6 +652,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
             "image_refs_paths": safe_vace_image_ref_paths_for_wgp,
+            # Propagate video_prompt_type so VACE model correctly interprets guide and mask inputs
+            "video_prompt_type": video_prompt_type_str,
             # Attach mask video if available
             **({"video_mask": str(mask_video_path_for_wgp.resolve())} if mask_video_path_for_wgp else {}),
         }
