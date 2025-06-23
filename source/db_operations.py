@@ -685,15 +685,27 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
         def _get_op(conn):
             cursor = conn.cursor()
             sql_query = f"""
-                SELECT json_extract(params, '$.segment_index') AS segment_idx, output_location
-                FROM tasks
-                WHERE json_extract(params, '$.orchestrator_run_id') = ?
-                  AND task_type = 'travel_segment'
-                  AND status = ?
-                  AND output_location IS NOT NULL
-                ORDER BY CAST(segment_idx AS INTEGER) ASC
+                SELECT json_extract(t.params, '$.segment_index') AS segment_idx, t.output_location
+                FROM tasks t
+                INNER JOIN (
+                    SELECT 
+                        json_extract(params, '$.segment_index') AS segment_idx, 
+                        MAX(created_at) AS max_created_at
+                    FROM tasks
+                    WHERE json_extract(params, '$.orchestrator_run_id') = ?
+                      AND task_type = 'travel_segment'
+                      AND status = ?
+                      AND output_location IS NOT NULL
+                    GROUP BY segment_idx
+                ) AS latest_tasks
+                ON json_extract(t.params, '$.segment_index') = latest_tasks.segment_idx 
+                AND t.created_at = latest_tasks.max_created_at
+                WHERE json_extract(t.params, '$.orchestrator_run_id') = ?
+                  AND t.task_type = 'travel_segment'
+                  AND t.status = ?
+                ORDER BY CAST(json_extract(t.params, '$.segment_index') AS INTEGER) ASC
             """
-            cursor.execute(sql_query, (run_id, STATUS_COMPLETE))
+            cursor.execute(sql_query, (run_id, STATUS_COMPLETE, run_id, STATUS_COMPLETE))
             rows = cursor.fetchall()
             return rows
         return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_op)

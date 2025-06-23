@@ -591,9 +591,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             traceback.print_exc()
             actual_guide_video_path_for_wgp = None
         # --- Invoke WGP Generation directly ---
-        if actual_guide_video_path_for_wgp is None and not (is_first_segment_from_scratch or path_to_previous_segment_video_output_for_guide is not None and Path(path_to_previous_segment_video_output_for_guide).exists()):
-            # If guide creation failed AND it was essential (not first segment that could run guideless, or no prev video for subsequent)
-            msg = f"Task {segment_task_id_str}: Essential guide video failed or not possible. Cannot proceed with WGP processing."
+        if actual_guide_video_path_for_wgp is None and not is_first_segment_from_scratch:
+            # If guide creation failed AND it was essential (i.e., for any segment except the very first one from scratch)
+            msg = f"Task {segment_task_id_str}: Essential guide video failed to generate. Cannot proceed with WGP processing."
             print(f"[ERROR] {msg}")
             return False, msg
             
