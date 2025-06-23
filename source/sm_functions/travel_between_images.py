@@ -457,10 +457,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 if is_first_segment_val and not is_continue_scenario:
                     inactive_indices.add(0)
 
-                # 3) Last frame for segments that travel TO a target image (all except the final segment)
-                # Each segment ends at its target image, which should be kept (inactive/black)
-                if not segment_params.get("is_last_segment", False):
-                    inactive_indices.add(total_frames_for_segment - 1)
+                # 3) Last frame for ALL segments - each segment travels TO a target image
+                # Every segment ends at its target image, which should be kept (inactive/black)
+                inactive_indices.add(total_frames_for_segment - 1)
 
                 # Debug: Show the conditions that determined inactive indices
                 dprint(
