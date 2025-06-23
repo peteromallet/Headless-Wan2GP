@@ -88,6 +88,11 @@ def parse_args():
                                help="Apply the reward LoRA with a fixed strength of 0.5.")
     pgroup_server.add_argument("--colour-match-videos", action="store_true",
                                help="Apply colour matching to travel videos.")
+    # --- New flag: automatically generate and pass a video mask marking active/inactive frames ---
+    pgroup_server.add_argument("--mask-active-frames", dest="mask_active_frames", action="store_true", default=True,
+                               help="Generate and pass a mask video where frames that are re-used remain unmasked while new frames are masked (enabled by default).")
+    pgroup_server.add_argument("--no-mask-active-frames", dest="mask_active_frames", action="store_false",
+                               help="Disable automatic mask video generation.")
 
     # Advanced wgp.py Global Config Overrides (Optional) - Applied once at server start
     pgroup_wgp_globals = parser.add_argument_group("WGP Global Config Overrides (Applied at Server Start)")
@@ -416,7 +421,7 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
 # 6. Process a single task dictionary from the tasks.json list
 # -----------------------------------------------------------------------------
 
-def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False, colour_match_videos: bool = False):
+def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True):
     dprint(f"--- Entering process_single_task ---")
     dprint(f"Task Type: {task_type}")
     dprint(f"Project ID for task: {project_id_for_task}") # Added dprint for project_id
@@ -444,7 +449,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         print(f"[Task ID: {task_id}] Identified as 'travel_segment' task.")
         # This will call wgp_mod like a standard task but might have pre/post processing
         # based on orchestrator details passed in its params.
-        return tbi._handle_travel_segment_task(wgp_mod, task_params_dict, main_output_dir_base, task_id, apply_reward_lora, colour_match_videos, process_single_task=process_single_task, dprint=dprint)
+        return tbi._handle_travel_segment_task(wgp_mod, task_params_dict, main_output_dir_base, task_id, apply_reward_lora, colour_match_videos, mask_active_frames, process_single_task=process_single_task, dprint=dprint)
     elif task_type == "travel_stitch":
         print(f"[Task ID: {task_id}] Identified as 'travel_stitch' task.")
         return tbi._handle_travel_stitch_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, stitch_task_id_str=task_id, dprint=dprint)
@@ -1109,7 +1114,8 @@ def main():
                 wgp_mod, current_task_params, main_output_dir, current_task_type, current_project_id,
                 image_download_dir=segment_image_download_dir,
                 apply_reward_lora=cli_args.apply_reward_lora,
-                colour_match_videos=cli_args.colour_match_videos
+                colour_match_videos=cli_args.colour_match_videos,
+                mask_active_frames=cli_args.mask_active_frames
             )
 
             if task_succeeded:

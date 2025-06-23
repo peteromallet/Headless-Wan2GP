@@ -271,7 +271,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
     
     return generation_success, output_message_for_orchestrator_db
 
-def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str, apply_reward_lora: bool = False, colour_match_videos: bool = False, *, process_single_task, dprint):
+def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True, *, process_single_task, dprint):
     dprint(f"_handle_travel_segment_task: Starting for {segment_task_id_str}")
     dprint(f"Segment task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
     # task_params_from_db contains what was enqueued for this specific segment,
@@ -438,6 +438,30 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # Define gray_frame_bgr here for use in subsequent segment strength adjustment
         gray_frame_bgr = sm_create_color_frame(parsed_res_wh, (128, 128, 128))
 
+        # -------------------------------------------------------------
+        #   Generate mask video for active/inactive frames if enabled
+        # -------------------------------------------------------------
+        mask_video_path_for_wgp: Path | None = None  # default
+        if mask_active_frames:
+            try:
+                inactive_frames = max(0, int(frame_overlap_from_previous))
+                h_m, w_m = parsed_res_wh[1], parsed_res_wh[0]
+                mask_frames_buf: list[np.ndarray] = []
+                for f_idx_tmp in range(total_frames_for_segment):
+                    pix_val = 0 if f_idx_tmp < inactive_frames else 255
+                    mask_frames_buf.append(np.full((h_m, w_m, 3), pix_val, dtype=np.uint8))
+
+                mask_fname_tmp = f"s{segment_idx:02d}_mask_{segment_task_id_str[:8]}.mp4"
+                mask_out_path_tmp = segment_processing_dir / mask_fname_tmp
+                created_mask_vid = sm_create_video_from_frames_list(mask_frames_buf, mask_out_path_tmp, fps_helpers, parsed_res_wh)
+                if created_mask_vid and created_mask_vid.exists():
+                    mask_video_path_for_wgp = created_mask_vid
+                    dprint(f"Seg {segment_idx}: mask video generated at {mask_video_path_for_wgp}")
+                else:
+                    dprint(f"[WARNING] Seg {segment_idx}: Failed to generate mask video.")
+            except Exception as e_mask_gen2:
+                dprint(f"[WARNING] Seg {segment_idx}: Mask video generation error: {e_mask_gen2}")
+
         try: # Parsing fade params
             fade_in_p = json.loads(fade_in_duration_str)
             fi_low, fi_high, fi_curve, fi_factor = float(fade_in_p.get("low_point",0)), float(fade_in_p.get("high_point",1)), str(fade_in_p.get("curve_type","ease_in_out")), float(fade_in_p.get("duration_factor",0))
@@ -585,6 +609,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
             "image_refs_paths": safe_vace_image_ref_paths_for_wgp,
+            # Attach mask video if available
+            **({"video_mask": str(mask_video_path_for_wgp.resolve())} if mask_video_path_for_wgp else {}),
         }
         if additional_loras:
             wgp_payload["additional_loras"] = additional_loras
@@ -626,7 +652,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             current_wgp_engine,         # Task type for process_single_task (e.g., "wgp")
             project_id_for_task=segment_params.get("project_id"), # Added project_id
             image_download_dir=segment_image_download_dir, # Pass the determined download dir
-            apply_reward_lora=effective_apply_reward_lora
+            apply_reward_lora=effective_apply_reward_lora,
+            mask_active_frames=mask_active_frames
         )
 
         if generation_success:
