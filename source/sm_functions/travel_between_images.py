@@ -452,12 +452,21 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 inactive_indices.update(range(overlap_count))
 
                 # 2) First frame when this is the very first segment from scratch
-                if segment_params.get("is_first_segment", False) and not segment_params.get("is_first_new_segment_after_continue", False):
+                is_first_segment_val = segment_params.get("is_first_segment", False)
+                is_continue_scenario = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
+                if is_first_segment_val and not is_continue_scenario:
                     inactive_indices.add(0)
 
                 # 3) Last frame when this is the final segment in the entire run
                 if segment_params.get("is_last_segment", False):
                     inactive_indices.add(total_frames_for_segment - 1)
+
+                # Debug: Show the conditions that determined inactive indices
+                dprint(
+                    f"Seg {segment_idx}: Mask conditions - is_first_segment={is_first_segment_val}, "
+                    f"is_continue_scenario={is_continue_scenario}, is_last_segment={segment_params.get('is_last_segment', False)}, "
+                    f"overlap_count={overlap_count}"
+                )
 
                 h_m, w_m = parsed_res_wh[1], parsed_res_wh[0]
                 mask_frames_buf: list[np.ndarray] = [
