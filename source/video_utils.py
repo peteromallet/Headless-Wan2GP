@@ -99,7 +99,7 @@ def cross_fade_overlap_frames(
     
     return out_frames
 
-def extract_frames_from_video(video_path: str | Path, start_frame: int = 0, num_frames: int = None) -> list[np.ndarray]:
+def extract_frames_from_video(video_path: str | Path, start_frame: int = 0, num_frames: int = None, *, dprint_func=print) -> list[np.ndarray]:
     """
     Extracts frames from a video file as numpy arrays.
     
@@ -107,6 +107,7 @@ def extract_frames_from_video(video_path: str | Path, start_frame: int = 0, num_
         video_path: Path to the video file
         start_frame: Starting frame index (0-based)
         num_frames: Number of frames to extract (None = all remaining frames)
+        dprint_func: The function to use for printing debug messages
     
     Returns:
         List of frames as BGR numpy arrays
@@ -115,7 +116,7 @@ def extract_frames_from_video(video_path: str | Path, start_frame: int = 0, num_
     cap = cv2.VideoCapture(str(video_path))
     
     if not cap.isOpened():
-        dprint(f"Error: Could not open video {video_path}")
+        dprint_func(f"Error: Could not open video {video_path}")
         return frames
     
     total_frames_video = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -128,7 +129,7 @@ def extract_frames_from_video(video_path: str | Path, start_frame: int = 0, num_
     for i in range(frames_to_read):
         ret, frame = cap.read()
         if not ret:
-            dprint(f"Warning: Could not read frame {start_frame + i} from {video_path}")
+            dprint_func(f"Warning: Could not read frame {start_frame + i} from {video_path}")
             break
         frames.append(frame)
     
@@ -560,6 +561,8 @@ def create_guide_video_for_travel_segment(
     task_id_for_logging: str,
     full_orchestrator_payload: dict,
     segment_params: dict,
+    *,
+    dprint=print
 ) -> Path | None:
     """Creates the guide video for a travel segment with all fading and adjustments."""
     try:
@@ -640,7 +643,7 @@ def create_guide_video_for_travel_segment(
             if not prev_vid_total_frames:  # Handles None or 0 (OpenCV quirk on freshly-encoded MP4s)
                 dprint(f"GuideBuilder: Fallback triggered due to zero/None frame count. Manually reading frames.")
                 # Fallback: read all frames to determine length
-                all_prev_frames = extract_frames_from_video(path_to_previous_segment_video_output_for_guide)
+                all_prev_frames = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, dprint_func=dprint)
                 prev_vid_total_frames = len(all_prev_frames)
                 dprint(f"GuideBuilder: Manual frame count from fallback: {prev_vid_total_frames}")
                 if prev_vid_total_frames == 0:
@@ -652,7 +655,7 @@ def create_guide_video_for_travel_segment(
                 dprint(f"GuideBuilder: Using primary logic path with cv2 frame count.")
                 actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
                 start_extraction_idx = max(0, prev_vid_total_frames - actual_overlap_to_use)
-                overlap_frames_raw = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, start_extraction_idx, actual_overlap_to_use)
+                overlap_frames_raw = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, start_extraction_idx, actual_overlap_to_use, dprint_func=dprint)
             
             dprint(f"GuideBuilder: Calculated actual_overlap_to_use: {actual_overlap_to_use}")
             dprint(f"GuideBuilder: Extracted raw overlap frames count: {len(overlap_frames_raw)}")

@@ -584,7 +584,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 segment_image_download_dir=segment_image_download_dir,
                 task_id_for_logging=segment_task_id_str, # Corrected keyword argument
                 full_orchestrator_payload=full_orchestrator_payload,
-                segment_params=segment_params
+                segment_params=segment_params,
+                dprint=dprint
             )
         except Exception as e_guide:
             print(f"ERROR Task {segment_task_id_str} guide prep: {e_guide}")
@@ -1027,7 +1028,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
 
             if any_positive_overlap:
                 dprint(f"Stitch: Using cross-fade due to overlap values: {actual_overlaps_for_stitching}. Output to: {path_for_raw_stitched_video}")
-                all_segment_frames_lists = [sm_extract_frames_from_video(p) for p in segment_video_paths_for_stitch]
+                all_segment_frames_lists = [sm_extract_frames_from_video(p, dprint_func=dprint) for p in segment_video_paths_for_stitch]
                 if not all(f_list is not None and len(f_list)>0 for f_list in all_segment_frames_lists):
                     raise ValueError("Stitch: Frame extraction failed for one or more segments during cross-fade prep.")
                 
