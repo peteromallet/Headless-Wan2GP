@@ -444,13 +444,32 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         mask_video_path_for_wgp: Path | None = None  # default
         if mask_active_frames:
             try:
-                inactive_frames = max(0, int(frame_overlap_from_previous))
-                h_m, w_m = parsed_res_wh[1], parsed_res_wh[0]
-                mask_frames_buf: list[np.ndarray] = []
-                for f_idx_tmp in range(total_frames_for_segment):
-                    pix_val = 0 if f_idx_tmp < inactive_frames else 255
-                    mask_frames_buf.append(np.full((h_m, w_m, 3), pix_val, dtype=np.uint8))
+                # --- Determine which frame indices should be kept (inactive = black) ---
+                inactive_indices: set[int] = set()
 
+                # 1) Frames reused from the previous segment (overlap)
+                overlap_count = max(0, int(frame_overlap_from_previous))
+                inactive_indices.update(range(overlap_count))
+
+                # 2) First frame when this is the very first segment from scratch
+                if segment_params.get("is_first_segment", False) and not segment_params.get("is_first_new_segment_after_continue", False):
+                    inactive_indices.add(0)
+
+                # 3) Last frame when this is the final segment in the entire run
+                if segment_params.get("is_last_segment", False):
+                    inactive_indices.add(total_frames_for_segment - 1)
+
+                h_m, w_m = parsed_res_wh[1], parsed_res_wh[0]
+                mask_frames_buf: list[np.ndarray] = [
+                    np.full((h_m, w_m, 3), 0 if idx in inactive_indices else 255, dtype=np.uint8)
+                    for idx in range(total_frames_for_segment)
+                ]
+
+                dprint(
+                    f"Seg {segment_idx}: Building mask – inactive indices: {sorted(list(inactive_indices))[:10]}{'...' if len(inactive_indices) > 10 else ''}, "
+                    f"total_frames={total_frames_for_segment}, overlap={overlap_count}"
+                )
+                 
                 # Use the same target directory logic as guide videos for consistency
                 mask_video_target_dir: Path
                 if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
