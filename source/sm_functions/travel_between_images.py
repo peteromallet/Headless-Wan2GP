@@ -451,8 +451,19 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     pix_val = 0 if f_idx_tmp < inactive_frames else 255
                     mask_frames_buf.append(np.full((h_m, w_m, 3), pix_val, dtype=np.uint8))
 
+                # Use the same target directory logic as guide videos for consistency
+                mask_video_target_dir: Path
+                if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
+                    sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
+                    mask_video_target_dir = sqlite_db_parent / "public" / "files"
+                    mask_video_target_dir.mkdir(parents=True, exist_ok=True)
+                    dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Mask video (SQLite mode) will target {mask_video_target_dir}")
+                else:
+                    mask_video_target_dir = segment_processing_dir # Default to segment_processing_dir
+                    dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Mask video (Non-SQLite mode) will target {mask_video_target_dir}")
+
                 mask_fname_tmp = f"s{segment_idx:02d}_mask_{segment_task_id_str[:8]}.mp4"
-                mask_out_path_tmp = segment_processing_dir / mask_fname_tmp
+                mask_out_path_tmp = mask_video_target_dir / mask_fname_tmp
                 created_mask_vid = sm_create_video_from_frames_list(mask_frames_buf, mask_out_path_tmp, fps_helpers, parsed_res_wh)
                 if created_mask_vid and created_mask_vid.exists():
                     mask_video_path_for_wgp = created_mask_vid
