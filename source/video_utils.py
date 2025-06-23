@@ -630,21 +630,32 @@ def create_guide_video_for_travel_segment(
                     if k_fill < total_frames_for_segment: frames_for_guide_list[k_fill] = end_anchor_frame_np.copy()
 
         elif path_to_previous_segment_video_output_for_guide: # Continued or Subsequent
+            dprint(f"GuideBuilder (Seg {segment_idx_for_logging}): Subsequent segment logic started.")
+            dprint(f"GuideBuilder: Prev video path: {path_to_previous_segment_video_output_for_guide}")
+            dprint(f"GuideBuilder: Overlap from prev setting: {frame_overlap_from_previous}")
+
             prev_vid_total_frames, _ = get_video_frame_count_and_fps(path_to_previous_segment_video_output_for_guide)
+            dprint(f"GuideBuilder: Initial frame count from cv2: {prev_vid_total_frames}")
 
             if not prev_vid_total_frames:  # Handles None or 0 (OpenCV quirk on freshly-encoded MP4s)
+                dprint(f"GuideBuilder: Fallback triggered due to zero/None frame count. Manually reading frames.")
                 # Fallback: read all frames to determine length
                 all_prev_frames = extract_frames_from_video(path_to_previous_segment_video_output_for_guide)
                 prev_vid_total_frames = len(all_prev_frames)
+                dprint(f"GuideBuilder: Manual frame count from fallback: {prev_vid_total_frames}")
                 if prev_vid_total_frames == 0:
                     raise ValueError("Previous segment video appears to have zero frames – cannot build guide overlap.")
                 # Decide how many overlap frames we can reuse
                 actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
                 overlap_frames_raw = all_prev_frames[-actual_overlap_to_use:]
             else:
+                dprint(f"GuideBuilder: Using primary logic path with cv2 frame count.")
                 actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
                 start_extraction_idx = max(0, prev_vid_total_frames - actual_overlap_to_use)
                 overlap_frames_raw = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, start_extraction_idx, actual_overlap_to_use)
+            
+            dprint(f"GuideBuilder: Calculated actual_overlap_to_use: {actual_overlap_to_use}")
+            dprint(f"GuideBuilder: Extracted raw overlap frames count: {len(overlap_frames_raw)}")
             
             frames_read_for_overlap = 0
             for k, frame_fp in enumerate(overlap_frames_raw):
@@ -652,6 +663,8 @@ def create_guide_video_for_travel_segment(
                 if frame_fp.shape[1]!=parsed_res_wh[0] or frame_fp.shape[0]!=parsed_res_wh[1]: frame_fp = cv2.resize(frame_fp, parsed_res_wh, interpolation=cv2.INTER_AREA)
                 frames_for_guide_list[k] = frame_fp.copy()
                 frames_read_for_overlap += 1
+            
+            dprint(f"GuideBuilder: Frames copied into guide list: {frames_read_for_overlap}")
             
             if frames_read_for_overlap > 0:
                 if fo_factor > 0.0:
