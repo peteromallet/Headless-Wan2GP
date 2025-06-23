@@ -630,11 +630,23 @@ def create_guide_video_for_travel_segment(
                     if k_fill < total_frames_for_segment: frames_for_guide_list[k_fill] = end_anchor_frame_np.copy()
 
         elif path_to_previous_segment_video_output_for_guide: # Continued or Subsequent
+            # --- Robust previous-video frame extraction ---------------------------------
             prev_vid_total_frames, _ = get_video_frame_count_and_fps(path_to_previous_segment_video_output_for_guide)
-            if prev_vid_total_frames is None: raise ValueError("Could not get frame count of previous video for guide.")
-            actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
-            start_extraction_idx = max(0, prev_vid_total_frames - actual_overlap_to_use)
-            overlap_frames_raw = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, start_extraction_idx, actual_overlap_to_use)
+
+            if prev_vid_total_frames is None or prev_vid_total_frames == 0:
+                # Some codecs/container combinations return 0 via OpenCV – fall back to reading the full clip.
+                dprint(f"Seg {segment_idx_for_logging}: get_video_frame_count returned 0/None for '{path_to_previous_segment_video_output_for_guide}'. Falling back to full read then tail-slice.")
+                all_prev_frames = extract_frames_from_video(path_to_previous_segment_video_output_for_guide)
+                prev_vid_total_frames = len(all_prev_frames)
+                actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
+                overlap_frames_raw = all_prev_frames[-actual_overlap_to_use:] if actual_overlap_to_use > 0 else []
+            else:
+                actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
+                start_extraction_idx = max(0, prev_vid_total_frames - actual_overlap_to_use)
+                overlap_frames_raw = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, start_extraction_idx, actual_overlap_to_use)
+
+            dprint(f"Seg {segment_idx_for_logging}: Extracted {len(overlap_frames_raw)} overlap frames from prev video (expected {actual_overlap_to_use}).")
+            
             frames_read_for_overlap = 0
             for k, frame_fp in enumerate(overlap_frames_raw):
                 if k >= total_frames_for_segment: break
@@ -686,8 +698,8 @@ def create_guide_video_for_travel_segment(
                 idx_s = total_frames_for_segment - 1 - k_dup
                 if idx_s >= 0: frames_for_guide_list[idx_s] = end_anchor_frame_np.copy()
                 else: break
-        if is_first_segment_from_scratch and total_frames_for_segment > 0 and start_anchor_frame_np is not None:
-            frames_for_guide_list[0] = start_anchor_frame_np.copy()
+            if is_first_segment_from_scratch and total_frames_for_segment > 0 and start_anchor_frame_np is not None:
+                frames_for_guide_list[0] = start_anchor_frame_np.copy()
 
         if frames_for_guide_list:
             guide_video_file_path = create_video_from_frames_list(frames_for_guide_list, actual_guide_video_path, fps_helpers, parsed_res_wh)
