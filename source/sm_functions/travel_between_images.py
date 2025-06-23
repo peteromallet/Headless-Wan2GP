@@ -218,7 +218,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_segment {idx} (ID: {current_segment_task_id}) with payload (first 500 chars): {json.dumps(segment_payload, default=str)[:500]}... Depends on: {previous_segment_task_id}")
         
         # After loop, enqueue the stitch task
-        stitch_task_id = f"travel_stitch_{run_id}" # Deterministic ID
+        stitch_task_id = sm_generate_unique_task_id(f"travel_stitch_{run_id}_")
         final_stitched_video_name = f"travel_final_stitched_{run_id}.mp4"
         # Stitcher saves its final primary output directly under main_output_dir (e.g., ./steerable_motion_output/)
         # NOT under current_run_output_dir (which is .../travel_run_XYZ/)
