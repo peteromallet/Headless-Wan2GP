@@ -84,6 +84,8 @@ def parse_args():
                                help="Enable verbose debug logging (prints additional diagnostics)")
     pgroup_server.add_argument("--migrate-only", action="store_true",
                                help="Run database migrations and then exit.")
+    pgroup_server.add_argument("--delete-db", action="store_true",
+                               help="Delete the existing SQLite database file and recreate it (WARNING: This will permanently delete all tasks and data).")
     pgroup_server.add_argument("--apply-reward-lora", action="store_true",
                                help="Apply the reward LoRA with a fixed strength of 0.5.")
     pgroup_server.add_argument("--colour-match-videos", action="store_true",
@@ -918,8 +920,29 @@ def main():
         SQLITE_DB_PATH = db_ops.SQLITE_DB_PATH
     # --- End DB Type Configuration ---
 
+    # --- Handle --delete-db flag ---
+    if cli_args.delete_db:
+        if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
+            sqlite_db_path = Path(db_ops.SQLITE_DB_PATH)
+            if sqlite_db_path.exists():
+                print(f"WARNING: Deleting existing SQLite database: {sqlite_db_path}")
+                # Also delete WAL and SHM files if they exist
+                for suffix in ["", "-wal", "-shm"]:
+                    db_file = Path(f"{sqlite_db_path}{suffix}")
+                    if db_file.exists():
+                        try:
+                            db_file.unlink()
+                            print(f"Deleted: {db_file}")
+                        except Exception as e:
+                            print(f"Warning: Could not delete {db_file}: {e}")
+                print("Database deletion complete. A new database will be created.")
+            else:
+                print(f"SQLite database file {sqlite_db_path} does not exist. Nothing to delete.")
+        else:
+            print("--delete-db flag is only supported for SQLite databases. Ignoring for current DB configuration.")
+    # --- End --delete-db handler ---
+
     # --- Run DB Migrations ---
-    # Must be after DB type/config is determined but before DB schema is strictly enforced by init_db or heavy use.
     db_ops._run_db_migrations()
     # --- End DB Migrations ---
 
