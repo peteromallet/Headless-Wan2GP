@@ -73,6 +73,12 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
     if "image_refs_paths" in kwargs and "image_refs" not in kwargs:
         kwargs["image_refs"] = kwargs.pop("image_refs_paths")
 
+    # ------------------------------------------------------------------
+    # Special flags (popped early so they don't pollute **kwargs later)
+    # ------------------------------------------------------------------
+    use_causvid_lora: bool = bool(kwargs.pop("use_causvid_lora", False))
+    apply_reward_lora: bool = bool(kwargs.pop("apply_reward_lora", False))
+
     # Handle additional_loras parameter
     processed_additional_loras: Dict[str, str] = kwargs.pop("additional_loras", {})
     
@@ -125,9 +131,47 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
     )
     params = {**defaults, **kwargs}
 
-    # Override LoRA settings from processed_additional_loras
-    params["activated_loras"] = activated_loras
-    params["loras_multipliers"] = ','.join(loras_multipliers) if loras_multipliers else ""
+    # ------------------------------------------------------------
+    #  CausVid LoRA upstream fix – keep WGP happy
+    # ------------------------------------------------------------
+    # Running CausVid with the full 30-step schedule crashes the stock
+    # wgp.py implementation ("list index out of range").  The web UI
+    # that ships with WanGP forces 9 steps, 1.0 guidance-scale and
+    # 1.0 flow-shift when the CausVid LoRA is active.  We replicate the
+    # same guardrails here *before* we ever enter wgp.py so that headless
+    # tasks don't trigger the bug.
+
+    if use_causvid_lora:
+        # 1) Make sure the canonical CausVid LoRA is in the list.
+        causvid_lora_name = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
+        if causvid_lora_name not in activated_loras:
+            activated_loras.insert(0, causvid_lora_name)
+            loras_multipliers.insert(0, "1.0")
+
+        # 2) Clamp the schedule to 9 steps (UI default).
+        try:
+            steps_int = int(params.get("num_inference_steps", 30))
+        except (TypeError, ValueError):
+            steps_int = 30
+        if steps_int > 9 or steps_int <= 0:
+            dprint(f"{task_id}: CausVid active – overriding num_inference_steps {steps_int} → 9")
+            params["num_inference_steps"] = 9
+
+        # 3) Guidance / flow-shift tweaks used by the UI.
+        if float(params.get("guidance_scale", 5.0)) != 1.0:
+            dprint(f"{task_id}: CausVid active – setting guidance_scale → 1.0")
+            params["guidance_scale"] = 1.0
+        if float(params.get("flow_shift", 3.0)) != 1.0:
+            dprint(f"{task_id}: CausVid active – setting flow_shift → 1.0")
+            params["flow_shift"] = 1.0
+
+        # Push back the updated LoRA lists
+        params["activated_loras"] = activated_loras
+        params["loras_multipliers"] = ",".join(loras_multipliers) if loras_multipliers else ""
+
+    # Expose the flags to downstream logic (build_task_state & wgp)
+    params["use_causvid_lora"] = use_causvid_lora
+    params["apply_reward_lora"] = apply_reward_lora
 
     # Convert PIL images in image_start/image_end if any
     for key in ("image_start", "image_end"):
@@ -167,7 +211,7 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
                 "activated_loras": params["activated_loras"],
                 "loras_multipliers": params["loras_multipliers"],
                 # Expose the CausVid flag so that builder can apply its tweaks
-                "use_causvid_lora": "Wan21_CausVid" in " ".join(params["activated_loras"]),
+                "use_causvid_lora": use_causvid_lora,
             }
             # Merge any miscellaneous keys the caller already supplied – this
             # lets advanced features (video_guide, image_refs, etc.) propagate.
@@ -179,7 +223,7 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
                 task_params_for_state,
                 all_loras_for_model,
                 image_download_dir=None,
-                apply_reward_lora=False,
+                apply_reward_lora=apply_reward_lora,
             )
             params["state"] = state_built
         except Exception as e_state:
