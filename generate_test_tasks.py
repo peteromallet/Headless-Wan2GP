@@ -29,6 +29,9 @@ import subprocess
 import sys
 from pathlib import Path
 from datetime import datetime
+import sqlite3
+from typing import Dict, List, Tuple
+import time
 
 # ---------------------------------------------------------------------
 # Configuration helpers
@@ -155,6 +158,9 @@ def copy_results_for_comparison():
     
     print(f"[COMPARISON] Creating comparison directory: {comparison_dir}")
     
+    # Get task outputs from database
+    task_outputs = get_task_outputs_from_db()
+    
     # Copy inputs and outputs for each test
     for test_name in ["test_1_single_image", "test_2_three_images", "test_3_continue_plus_one", "test_4_continue_plus_two"]:
         test_dir = Path("tests") / test_name
@@ -182,22 +188,109 @@ def copy_results_for_comparison():
             shutil.copy2(task_json, comp_test_dir / "task_config.json")
             print(f"[COPY CONFIG] {task_json} -> {comp_test_dir / 'task_config.json'}")
         
-        # Copy output files (look in public/files for SQLite outputs)
+        # Copy output files from database paths
         outputs_dir = comp_test_dir / "outputs"
         outputs_dir.mkdir(exist_ok=True)
         
-        public_files = Path("public/files")
-        if public_files.exists():
-            # Look for files with the test run ID in their name
-            run_id_pattern = test_name.replace("test_", "").replace("_", ".*")
-            for output_file in public_files.glob("*"):
-                if run_id_pattern in output_file.name or test_name in output_file.name:
-                    dst = outputs_dir / f"{test_name}_{output_file.name}"
-                    shutil.copy2(output_file, dst)
-                    print(f"[COPY OUTPUT] {output_file} -> {dst}")
+        # Copy outputs for this test from database
+        test_pattern = test_name.replace("test_", "").replace("_", "")
+        copied_count = 0
+        for task_id, output_path, status in task_outputs:
+            if test_pattern in task_id and output_path and status == "Complete":
+                # Convert database path (files/xyz.mp4) to full path (public/files/xyz.mp4)
+                if output_path.startswith("files/"):
+                    full_output_path = Path("public") / output_path
+                else:
+                    full_output_path = Path(output_path)
+                
+                if full_output_path.exists():
+                    dst = outputs_dir / f"{test_name}_{full_output_path.name}"
+                    shutil.copy2(full_output_path, dst)
+                    print(f"[COPY OUTPUT] {full_output_path} -> {dst}")
+                    copied_count += 1
+                else:
+                    print(f"[WARNING] Output file not found: {full_output_path}")
+        
+        if copied_count == 0:
+            print(f"[INFO] No completed outputs found for {test_name}")
     
     print(f"[COMPARISON] Results comparison ready in: {comparison_dir}")
     return comparison_dir
+
+
+def get_task_outputs_from_db() -> List[Tuple[str, str, str]]:
+    """Query tasks.db for task outputs. Returns list of (task_id, output_location, status)."""
+    try:
+        conn = sqlite3.connect("tasks.db")
+        cursor = conn.cursor()
+        
+        # Get all tasks with their output locations and status
+        cursor.execute("""
+            SELECT id, output_location, status 
+            FROM tasks 
+            WHERE project_id = 'test_suite'
+            ORDER BY created_at DESC
+        """)
+        
+        results = cursor.fetchall()
+        conn.close()
+        
+        print(f"[DB] Found {len(results)} test suite tasks in database")
+        return results
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to query database: {e}")
+        return []
+
+
+def wait_for_task_completion(max_wait_minutes: int = 30) -> None:
+    """Wait for all test_suite tasks to complete."""
+    print(f"[WAIT] Monitoring task completion (max {max_wait_minutes} minutes)...")
+    
+    start_time = time.time()
+    max_wait_seconds = max_wait_minutes * 60
+    
+    while True:
+        try:
+            conn = sqlite3.connect("tasks.db")
+            cursor = conn.cursor()
+            
+            # Check for queued or in-progress test suite tasks
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM tasks 
+                WHERE project_id = 'test_suite' 
+                AND status IN ('Queued', 'In Progress')
+            """)
+            
+            pending_count = cursor.fetchone()[0]
+            
+            # Get completed/failed counts
+            cursor.execute("""
+                SELECT status, COUNT(*) 
+                FROM tasks 
+                WHERE project_id = 'test_suite' 
+                GROUP BY status
+            """)
+            
+            status_counts = dict(cursor.fetchall())
+            conn.close()
+            
+            if pending_count == 0:
+                print(f"[WAIT] All tasks completed! Status summary: {status_counts}")
+                break
+                
+            elapsed = time.time() - start_time
+            if elapsed > max_wait_seconds:
+                print(f"[WAIT] Timeout reached. Still pending: {pending_count}, Status: {status_counts}")
+                break
+                
+            print(f"[WAIT] {pending_count} tasks still pending... (elapsed: {elapsed/60:.1f}min)")
+            time.sleep(10)  # Check every 10 seconds
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to check task status: {e}")
+            break
 
 
 # ---------------------------------------------------------------------
@@ -221,6 +314,8 @@ def main(args) -> None:
     print("\nAll test cases generated under", TESTS_ROOT.resolve())
 
     if args.compare:
+        if args.wait:
+            wait_for_task_completion(args.wait_minutes)
         copy_results_for_comparison()
 
 
@@ -229,9 +324,13 @@ if __name__ == "__main__":
     parser.add_argument("--enqueue", action="store_true",
                         help="Actually call add_task.py for each generated test case")
     parser.add_argument("--compare", action="store_true", help="Copy results for comparison")
+    parser.add_argument("--wait", action="store_true", help="Wait for task completion before comparison")
+    parser.add_argument("--wait-minutes", type=int, default=30, help="Max minutes to wait for completion")
     args = parser.parse_args()
 
     if args.compare:
+        if args.wait:
+            wait_for_task_completion(args.wait_minutes)
         copy_results_for_comparison()
     else:
         main(args) 
