@@ -204,13 +204,7 @@ def copy_results_for_comparison():
 # Main CLI
 # ---------------------------------------------------------------------
 
-def main() -> None:
-    parser = argparse.ArgumentParser("generate_test_tasks")
-    parser.add_argument("--enqueue", action="store_true",
-                        help="Actually call add_task.py for each generated test case")
-    parser.add_argument("--compare", action="store_true", help="Copy results for comparison")
-    args = parser.parse_args()
-
+def main(args) -> None:
     TESTS_ROOT.mkdir(exist_ok=True)
 
     # --- scenario definitions ------------------------------------------------
@@ -231,4 +225,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main() 
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--enqueue", action="store_true",
+                        help="Actually call add_task.py for each generated test case")
+    parser.add_argument("--compare", action="store_true", help="Copy results for comparison")
+    args = parser.parse_args()
+
+    if args.compare:
+        copy_results_for_comparison()
+    else:
+        main(args) 
