@@ -405,54 +405,58 @@ def write_single_image_test_case(name: str,
 def main(args) -> None:
     TESTS_ROOT.mkdir(exist_ok=True)
 
-    # ------------------------------------------------------------
-    # 1) Travel orchestrator: 3 images → 512×512
-    # ------------------------------------------------------------
-    write_travel_test_case(
-        name="travel_3_images_512",
-        images=ASSET_IMAGES,
-        continue_video=None,
-        num_segments=3,
-        resolution="512x512",
-        enqueue=args.enqueue,
-    )
+    # Generate tasks according to requested --task-type
 
     # ------------------------------------------------------------
-    # 2) Continue-video + 1 image → 512×512
+    # travel_between_images
     # ------------------------------------------------------------
-    write_travel_test_case(
-        name="continue_video_1_image_512",
-        images=[ASSET_IMAGES[0]],
-        continue_video=ASSET_VIDEO,
-        num_segments=1,
-        resolution="512x512",
-        enqueue=args.enqueue,
-    )
+    if args.task_type == "travel_between_images":
+        # 1) Travel orchestrator: 3 images → 512×512
+        write_travel_test_case(
+            name="travel_3_images_512",
+            images=ASSET_IMAGES,
+            continue_video=None,
+            num_segments=3,
+            resolution="512x512",
+            enqueue=args.enqueue,
+        )
+
+        # 2) Continue-video + 1 image → 512×512
+        write_travel_test_case(
+            name="continue_video_1_image_512",
+            images=[ASSET_IMAGES[0]],
+            continue_video=ASSET_VIDEO,
+            num_segments=1,
+            resolution="512x512",
+            enqueue=args.enqueue,
+        )
 
     # ------------------------------------------------------------
-    # 3) Different-pose task from pose.png → 700×400
+    # different_pose
     # ------------------------------------------------------------
-    write_different_pose_test_case(
-        name="different_pose_700x400",
-        input_image=SAMPLES_DIR / "pose.png",
-        prompt="Person standing in a desert sunset, cinematic lighting",
-        resolution="700x400",
-        enqueue=args.enqueue,
-    )
+    elif args.task_type == "different_pose":
+        write_different_pose_test_case(
+            name="different_pose_700x400",
+            input_image=SAMPLES_DIR / "pose.png",
+            prompt="Person standing in a desert sunset, cinematic lighting",
+            resolution="700x400",
+            enqueue=args.enqueue,
+        )
 
     # ------------------------------------------------------------
-    # 4) Five single-image tasks – varied prompts & sizes
+    # single_image
     # ------------------------------------------------------------
-    single_image_specs = [
-        ("single_image_1", "A serene mountain landscape at sunset", "640x360"),
-        ("single_image_2", "A futuristic city skyline at night", "512x768"),
-        ("single_image_3", "A cute puppy in a field of flowers", "768x512"),
-        ("single_image_4", "A spaceship traveling through hyperspace", "720x1280"),
-        ("single_image_5", "A vibrant abstract painting of shapes and colours", "1024x576"),
-    ]
+    elif args.task_type == "single_image":
+        single_image_specs = [
+            ("single_image_1", "A serene mountain landscape at sunset", "640x360"),
+            ("single_image_2", "A futuristic city skyline at night", "512x768"),
+            ("single_image_3", "A cute puppy in a field of flowers", "768x512"),
+            ("single_image_4", "A spaceship traveling through hyperspace", "720x1280"),
+            ("single_image_5", "A vibrant abstract painting of shapes and colours", "1024x576"),
+        ]
 
-    for name, prompt, res in single_image_specs:
-        write_single_image_test_case(name, prompt, res, enqueue=args.enqueue)
+        for name, prompt, res in single_image_specs:
+            write_single_image_test_case(name, prompt, res, enqueue=args.enqueue)
 
     print("\nAll test cases generated under", TESTS_ROOT.resolve())
 
@@ -470,6 +474,17 @@ if __name__ == "__main__":
     parser.add_argument("--compare", action="store_true", help="Only create comparison directory (no new enqueue)")
     parser.add_argument("--no-wait", action="store_true", help="Skip waiting for task completion (compare immediately)")
     parser.add_argument("--wait-minutes", type=int, default=30, help="Max minutes to wait for completion when waiting is enabled")
+    parser.add_argument(
+        "--task-type",
+        choices=["different_pose", "travel_between_images", "single_image"],
+        default="different_pose",
+        help=(
+            "Select which kind of test task(s) to generate. "
+            "'different_pose' (default) creates the pose-variation task; "
+            "'travel_between_images' creates the orchestrator travel tasks; "
+            "'single_image' creates the five single-image tasks."
+        ),
+    )
     args = parser.parse_args()
 
     # -------------------------------------------------
