@@ -2,6 +2,7 @@
 
 import traceback
 import tempfile
+import shutil
 from pathlib import Path
 import numpy as np
 from PIL import Image
@@ -18,8 +19,7 @@ except ImportError:
     PoseBodyFaceVideoAnnotator = None
 
 from . import db_operations as db_ops
-from .common_utils import sm_get_unique_target_path
-from .common_utils import parse_resolution as sm_parse_resolution
+from .common_utils import sm_get_unique_target_path, parse_resolution as sm_parse_resolution, prepare_output_path
 from .video_utils import rife_interpolate_images_to_video as sm_rife_interpolate_images_to_video
 
 def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable):
@@ -52,19 +52,7 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
         print(f"[ERROR Task ID: {task_id}] Input image file not found: {input_image_path}")
         return False, f"Input image not found: {input_image_path}"
 
-    final_save_path = output_image_path
-    db_output_location = str(output_image_path.resolve())
-
-    if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
-        sqlite_db_file_path = Path(db_ops.SQLITE_DB_PATH).resolve()
-        target_files_dir = sqlite_db_file_path.parent / "public" / "files"
-        target_files_dir.mkdir(parents=True, exist_ok=True)
-
-        file_stem = f"{task_id}_openpose"
-        final_save_path = sm_get_unique_target_path(target_files_dir, file_stem, ".png")
-        final_save_path.parent.mkdir(parents=True, exist_ok=True)
-        db_output_location = f"files/{final_save_path.name}"
-        dprint(f"[Task ID: {task_id}] SQLite mode: OpenPose will be saved to {final_save_path} (DB: {db_output_location})")
+    final_save_path, db_output_location = prepare_output_path(task_id, f"{task_id}_openpose.png", main_output_dir_base, dprint=dprint)
 
     try:
         pil_input_image = Image.open(input_image_path).convert("RGB")
@@ -138,21 +126,9 @@ def handle_rife_interpolate_task(wgp_mod, task_params_dict: dict, main_output_di
     generation_success = False
     output_location_to_db = None
 
-    final_save_path_for_video = output_video_path
-    db_output_location_for_rife = str(output_video_path.resolve())
-
-    if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
-        sqlite_db_file_path = Path(db_ops.SQLITE_DB_PATH).resolve()
-        target_files_dir = sqlite_db_file_path.parent / "public" / "files"
-        target_files_dir.mkdir(parents=True, exist_ok=True)
-
-        file_stem = f"{task_id}_rife_interpolated"
-        final_save_path_for_video = sm_get_unique_target_path(target_files_dir, file_stem, ".mp4")
-        final_save_path_for_video.parent.mkdir(parents=True, exist_ok=True)
-        db_output_location_for_rife = f"files/{final_save_path_for_video.name}"
-        dprint(f"[Task ID: {task_id}] SQLite mode: RIFE video will be saved to {final_save_path_for_video} (DB: {db_output_location_for_rife})")
-    else:
-        output_video_path.parent.mkdir(parents=True, exist_ok=True)
+    final_save_path_for_video, db_output_location_for_rife = prepare_output_path(task_id, f"{task_id}_rife_interpolated.mp4", main_output_dir_base, dprint=dprint)
+    output_video_path = final_save_path_for_video
+    output_video_path.parent.mkdir(parents=True, exist_ok=True)
 
     dprint(f"[Task ID: {task_id}] Checking input image paths.")
     if not input_image1_path.is_file():

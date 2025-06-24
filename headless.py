@@ -47,10 +47,12 @@ from source.common_utils import (
     sm_get_unique_target_path,
     download_image_if_url as sm_download_image_if_url,
     download_file,
-    load_pil_images as sm_load_pil_images
+    load_pil_images as sm_load_pil_images,
+    build_task_state
 )
 from source.sm_functions import travel_between_images as tbi
 from source.sm_functions import different_pose as dp
+from source.sm_functions import single_image as si
 # --- End SM_RESTRUCTURE imports ---
 
 
@@ -162,263 +164,7 @@ def make_send_cmd(task_id):
 # -----------------------------------------------------------------------------
 # 4. State builder for a single task (same as before)
 # -----------------------------------------------------------------------------
-def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False):
-    state = {
-        "model_filename": model_filename,
-        "validate_success": 1,
-        "advanced": True,
-        "gen": {"queue": [], "file_list": [], "file_settings_list": [], "prompt_no": 1, "prompts_max": 1},
-        "loras": all_loras_for_model,
-    }
-    model_type_key = wgp_mod.get_model_type(model_filename)
-    ui_defaults = wgp_mod.get_default_settings(model_filename).copy()
-
-    # Override with task_params from JSON, but preserve some crucial ones if CausVid is used
-    causvid_active = task_params_dict.get("use_causvid_lora", False)
-
-    for key, value in task_params_dict.items():
-        if key not in ["output_sub_dir", "model", "task_id", "use_causvid_lora"]:
-            if causvid_active and key in ["steps", "guidance_scale", "flow_shift", "activated_loras", "loras_multipliers"]:
-                continue # These will be set by causvid logic if flag is true
-            ui_defaults[key] = value
-    
-    ui_defaults["prompt"] = task_params_dict.get("prompt", "Default prompt")
-    ui_defaults["resolution"] = task_params_dict.get("resolution", "832x480")
-    # Allow task to specify frames/video_length, steps, guidance_scale, flow_shift unless overridden by CausVid
-    if not causvid_active:
-        ui_defaults["video_length"] = task_params_dict.get("frames", task_params_dict.get("video_length", 81))
-        ui_defaults["num_inference_steps"] = task_params_dict.get("steps", task_params_dict.get("num_inference_steps", 30))
-        ui_defaults["guidance_scale"] = task_params_dict.get("guidance_scale", ui_defaults.get("guidance_scale", 5.0))
-        ui_defaults["flow_shift"] = task_params_dict.get("flow_shift", ui_defaults.get("flow_shift", 3.0))
-    else: # CausVid specific defaults if not touched by its logic yet
-        ui_defaults["video_length"] = task_params_dict.get("frames", task_params_dict.get("video_length", 81))
-        # steps, guidance_scale, flow_shift will be set below by causvid logic
-
-    ui_defaults["seed"] = task_params_dict.get("seed", -1)
-    ui_defaults["lset_name"] = "" 
-
-    current_task_id_for_log = task_params_dict.get('task_id', 'build_task_state_unknown')
-
-    if task_params_dict.get("image_start_paths"):
-        loaded = sm_load_pil_images(
-            task_params_dict["image_start_paths"],
-            wgp_mod.convert_image,
-            image_download_dir,
-            current_task_id_for_log,
-            dprint
-        )
-        if loaded: ui_defaults["image_start"] = loaded
-
-    if task_params_dict.get("image_end_paths"):
-        loaded = sm_load_pil_images(
-            task_params_dict["image_end_paths"],
-            wgp_mod.convert_image,
-            image_download_dir,
-            current_task_id_for_log,
-            dprint
-        )
-        if loaded: ui_defaults["image_end"] = loaded
-
-    if task_params_dict.get("image_refs_paths"):
-        loaded = sm_load_pil_images(
-            task_params_dict["image_refs_paths"],
-            wgp_mod.convert_image,
-            image_download_dir,
-            current_task_id_for_log,
-            dprint
-        )
-        if loaded: ui_defaults["image_refs"] = loaded
-    
-    for key in ["video_source_path", "video_guide_path", "video_mask_path", "audio_guide_path"]:
-        if task_params_dict.get(key):
-            ui_defaults[key.replace("_path","")] = task_params_dict[key]
-
-    if task_params_dict.get("prompt_enhancer_mode"):
-        ui_defaults["prompt_enhancer"] = task_params_dict["prompt_enhancer_mode"]
-        wgp_mod.server_config["enhancer_enabled"] = 1
-    elif "prompt_enhancer" not in task_params_dict:
-        ui_defaults["prompt_enhancer"] = ""
-        wgp_mod.server_config["enhancer_enabled"] = 0
-
-    # --- Custom LoRA Handling (e.g., from lora_name) ---
-    custom_lora_name_stem = task_params_dict.get("lora_name")
-    task_id_for_dprint = task_params_dict.get('task_id', 'N/A') # For logging
-
-    if custom_lora_name_stem:
-        custom_lora_filename = f"{custom_lora_name_stem}.safetensors"
-        dprint(f"[Task ID: {task_id_for_dprint}] Custom LoRA specified via lora_name: {custom_lora_filename}")
-
-        # Ensure activated_loras is a list
-        activated_loras_val = ui_defaults.get("activated_loras", [])
-        if isinstance(activated_loras_val, str):
-            # Handles comma-separated string from task_params or previous logic
-            current_activated_list = [str(item).strip() for item in activated_loras_val.split(',') if item.strip()]
-        elif isinstance(activated_loras_val, list):
-            current_activated_list = list(activated_loras_val) # Ensure it's a mutable copy
-        else:
-            dprint(f"[Task ID: {task_id_for_dprint}] Unexpected type for activated_loras: {type(activated_loras_val)}. Initializing as empty list.")
-            current_activated_list = []
-        
-        if custom_lora_filename not in current_activated_list:
-            current_activated_list.append(custom_lora_filename)
-            dprint(f"[Task ID: {task_id_for_dprint}] Added '{custom_lora_filename}' to activated_loras list: {current_activated_list}")
-
-            # Handle multipliers: Add a default "1.0" if a LoRA was added and multipliers are potentially mismatched
-            loras_multipliers_str = ui_defaults.get("loras_multipliers", "")
-            if isinstance(loras_multipliers_str, (list, tuple)):
-                loras_multipliers_list = [str(m).strip() for m in loras_multipliers_str if str(m).strip()] # Convert all to string and clean
-            elif isinstance(loras_multipliers_str, str):
-                loras_multipliers_list = [m.strip() for m in loras_multipliers_str.split(" ") if m.strip()] # Space-separated string
-            else:
-                dprint(f"[Task ID: {task_id_for_dprint}] Unexpected type for loras_multipliers: {type(loras_multipliers_str)}. Initializing as empty list.")
-                loras_multipliers_list = []
-
-            # If number of multipliers is less than activated LoRAs, pad with "1.0"
-            while len(loras_multipliers_list) < len(current_activated_list):
-                loras_multipliers_list.append("1.0")
-                dprint(f"[Task ID: {task_id_for_dprint}] Padded loras_multipliers with '1.0'. Now: {loras_multipliers_list}")
-            
-            ui_defaults["loras_multipliers"] = " ".join(loras_multipliers_list)
-        else:
-            dprint(f"[Task ID: {task_id_for_dprint}] Custom LoRA '{custom_lora_filename}' already in activated_loras list.")
-            
-        ui_defaults["activated_loras"] = current_activated_list # Update ui_defaults
-    # --- End Custom LoRA Handling ---
-
-    # Apply CausVid LoRA specific settings if the flag is true
-    if causvid_active:
-        print(f"[Task ID: {task_params_dict.get('task_id')}] Applying CausVid LoRA settings.")
-        
-        # If steps are specified in the task JSON for a CausVid task, use them; otherwise, default to 9.
-        if "steps" in task_params_dict:
-            ui_defaults["num_inference_steps"] = task_params_dict["steps"]
-            print(f"[Task ID: {task_params_dict.get('task_id')}] CausVid task using specified steps: {ui_defaults['num_inference_steps']}")
-        elif "num_inference_steps" in task_params_dict:
-            ui_defaults["num_inference_steps"] = task_params_dict["num_inference_steps"]
-            print(f"[Task ID: {task_params_dict.get('task_id')}] CausVid task using specified num_inference_steps: {ui_defaults['num_inference_steps']}")
-        else:
-            ui_defaults["num_inference_steps"] = 9 # Default for CausVid if not specified in task
-            print(f"[Task ID: {task_params_dict.get('task_id')}] CausVid task defaulting to steps: {ui_defaults['num_inference_steps']}")
-
-        ui_defaults["guidance_scale"] = 1.0 # Still overridden
-        ui_defaults["flow_shift"] = 1.0     # Still overridden
-        
-        causvid_lora_basename = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
-        current_activated = ui_defaults.get("activated_loras", [])
-        if not isinstance(current_activated, list):
-             try: current_activated = [str(item).strip() for item in str(current_activated).split(',') if item.strip()] 
-             except: current_activated = []
-
-        if causvid_lora_basename not in current_activated:
-            current_activated.append(causvid_lora_basename)
-        ui_defaults["activated_loras"] = current_activated
-
-        current_multipliers_str = ui_defaults.get("loras_multipliers", "")
-        # Basic handling: if multipliers exist, prepend; otherwise, set directly.
-        # More sophisticated merging might be needed if specific order or pairing is critical.
-        # This assumes multipliers are space-separated.
-        if current_multipliers_str:
-            multipliers_list = current_multipliers_str.split()
-            lora_names_list = [Path(lora_path).name for lora_path in all_loras_for_model 
-                               if Path(lora_path).name in current_activated and Path(lora_path).name != causvid_lora_basename]
-            
-            final_multipliers = []
-            final_loras = []
-
-            # Add CausVid first
-            final_loras.append(causvid_lora_basename)
-            final_multipliers.append("1.0")
-
-            # Add existing, ensuring no duplicate multiplier for already present CausVid (though it shouldn't be)
-            processed_other_loras = set()
-            for i, lora_name in enumerate(current_activated):
-                if lora_name == causvid_lora_basename: continue # Already handled
-                if lora_name not in processed_other_loras:
-                    final_loras.append(lora_name)
-                    if i < len(multipliers_list):
-                         final_multipliers.append(multipliers_list[i])
-                    else:
-                         final_multipliers.append("1.0") # Default if not enough multipliers
-                    processed_other_loras.add(lora_name)
-            
-            ui_defaults["activated_loras"] = final_loras # ensure order matches multipliers
-            ui_defaults["loras_multipliers"] = " ".join(final_multipliers)
-        else:
-            ui_defaults["loras_multipliers"] = "1.0"
-            ui_defaults["activated_loras"] = [causvid_lora_basename] # ensure only causvid if no others
-
-    if apply_reward_lora:
-        print(f"[Task ID: {task_params_dict.get('task_id')}] Applying Reward LoRA settings.")
-
-        reward_lora = {"filename": "Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors", "strength": "0.5"}
-
-        # Get current activated LoRAs
-        current_activated = ui_defaults.get("activated_loras", [])
-        if not isinstance(current_activated, list):
-            try:
-                current_activated = [str(item).strip() for item in str(current_activated).split(',') if item.strip()]
-            except:
-                current_activated = []
-
-        # Get current multipliers
-        current_multipliers_str = ui_defaults.get("loras_multipliers", "")
-        if isinstance(current_multipliers_str, (list, tuple)):
-            current_multipliers_list = [str(m).strip() for m in current_multipliers_str if str(m).strip()]
-        elif isinstance(current_multipliers_str, str):
-            current_multipliers_list = [m.strip() for m in current_multipliers_str.split(" ") if m.strip()]
-        else:
-            current_multipliers_list = []
-
-        # Pad multipliers to match activated LoRAs before creating map
-        while len(current_multipliers_list) < len(current_activated):
-            current_multipliers_list.append("1.0")
-
-        # Create a dictionary to map lora to multiplier for easy update (preserves order in Python 3.7+)
-        lora_mult_map = dict(zip(current_activated, current_multipliers_list))
-
-        # Add/update reward lora
-        lora_mult_map[reward_lora['filename']] = reward_lora['strength']
-
-        ui_defaults["activated_loras"] = list(lora_mult_map.keys())
-        ui_defaults["loras_multipliers"] = " ".join(list(lora_mult_map.values()))
-        dprint(f"Reward LoRA applied. Activated: {ui_defaults['activated_loras']}, Multipliers: {ui_defaults['loras_multipliers']}")
-
-    # Apply additional LoRAs that may have been passed via task params (e.g. from travel orchestrator)
-    processed_additional_loras = task_params_dict.get("processed_additional_loras", {})
-    if processed_additional_loras:
-        dprint(f"[Task ID: {task_id_for_dprint}] Applying processed additional LoRAs: {processed_additional_loras}")
-        
-        # Get current activated LoRAs and multipliers again, as they may have been modified by other logic.
-        current_activated = ui_defaults.get("activated_loras", [])
-        if not isinstance(current_activated, list):
-            try:
-                current_activated = [str(item).strip() for item in str(current_activated).split(',') if item.strip()]
-            except:
-                current_activated = []
-
-        current_multipliers_str = ui_defaults.get("loras_multipliers", "")
-        if isinstance(current_multipliers_str, (list, tuple)):
-            current_multipliers_list = [str(m).strip() for m in current_multipliers_str if str(m).strip()]
-        elif isinstance(current_multipliers_str, str):
-            current_multipliers_list = [m.strip() for m in current_multipliers_str.split(" ") if m.strip()]
-        else:
-            current_multipliers_list = []
-
-        # Pad multipliers to match activated LoRAs before creating map
-        while len(current_multipliers_list) < len(current_activated):
-            current_multipliers_list.append("1.0")
-
-        lora_mult_map = dict(zip(current_activated, current_multipliers_list))
-        
-        # Add/update additional loras - this will overwrite strength if lora was already present
-        lora_mult_map.update(processed_additional_loras)
-
-        ui_defaults["activated_loras"] = list(lora_mult_map.keys())
-        ui_defaults["loras_multipliers"] = " ".join(list(lora_mult_map.values()))
-        dprint(f"Additional LoRAs applied. Final Activated: {ui_defaults['activated_loras']}, Final Multipliers: {ui_defaults['loras_multipliers']}")
-
-    state[model_type_key] = ui_defaults
-    return state, ui_defaults
+# --- SM_RESTRUCTURE: This function has been moved to source/common_utils.py ---
 
 
 # -----------------------------------------------------------------------------
@@ -469,6 +215,20 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
             dprint=dprint
         )
     # --- End Different Pose ---
+
+    # --- Single Image Generation ---
+    elif task_type == "single_image":
+        print(f"[Task ID: {task_id}] Identified as 'single_image' task.")
+        return si._handle_single_image_task(
+            wgp_mod=wgp_mod,
+            task_params_from_db=task_params_dict,
+            main_output_dir_base=main_output_dir_base,
+            task_id=task_id,
+            image_download_dir=image_download_dir,
+            apply_reward_lora=apply_reward_lora,
+            dprint=dprint
+        )
+    # --- End Single Image ---
 
     # Default handling for standard wgp tasks (original logic)
     task_model_type_logical = task_params_dict.get("model", "t2v")

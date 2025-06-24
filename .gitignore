@@ -44,3 +44,12 @@ loras_i2v/
 _test*
 
 *.db
+
+# Test outputs and generated test files
+test_outputs/
+test_results_comparison/
+tests/
+
+# Task database files
+tasks.db-shm
+tasks.db-wal
