@@ -134,6 +134,50 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
         if key in params and isinstance(params[key], list):
             params[key] = [wgp_mod.convert_image(img) for img in params[key]]
 
+    # Ensure we have a valid `state` structure expected by wgp.py.  When callers
+    # (e.g. single-image or travel_segment helpers) invoke this wrapper they may
+    # omit the `state` argument entirely which causes wgp.py to raise a
+    # KeyError when it tries to access `state["gen"]["file_list"]`.
+    #
+    # If no state has been provided we construct a minimal, self-contained one
+    # based on the current invocation parameters.  This is intentionally kept
+    # lightweight – the full featured `build_task_state` helper is still used
+    # by complex callers like `different_pose` and standard WGP tasks.
+    if "state" not in params or not params["state"]:
+        minimal_state = {
+            "model_filename": model_filename,
+            "validate_success": 1,
+            "advanced": True,
+            # The UI logic inside wgp.py expects this nested structure to exist.
+            "gen": {
+                "queue": [],
+                "file_list": [],
+                "file_settings_list": [],
+                "prompt_no": 1,
+                "prompts_max": 1,
+            },
+            "loras": [],
+        }
+        # Add a per-model settings bucket so that wgp.py can read/write into it.
+        model_type_key = wgp_mod.get_model_type(model_filename)
+        minimal_state[model_type_key] = {
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "resolution": resolution,
+            "video_length": video_length,
+            "seed": seed,
+            "num_inference_steps": params["num_inference_steps"],
+            "guidance_scale": params["guidance_scale"],
+            "flow_shift": params["flow_shift"],
+            # Populate a few other common keys with sensible defaults so that
+            # internal validation does not fail if it attempts to access them.
+            "activated_loras": params["activated_loras"],
+            "loras_multipliers": params["loras_multipliers"],
+        }
+        params["state"] = minimal_state
+
+    # At this point we are guaranteed to have a usable state dict.
+
     # Build send_cmd for progress reporting
     def _send(cmd: str, data: Any = None) -> None:
         prefix = f"[Task ID: {task_id}]"
