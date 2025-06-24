@@ -199,6 +199,16 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
         elif cmd == "output":
             print(f"{prefix}[Output] video written.")
 
+    # Enforce a minimum video length – WGP's internal logic expects at least a
+    # handful of frames.  Empirically anything below ~4 frames can trigger
+    # index errors inside `wgp.py` (e.g. during keep-frame parsing).  When the
+    # caller requests fewer, silently promote it and log the adjustment so
+    # downstream logic (such as extracting the first frame only) can still
+    # proceed.
+    if video_length < 4:
+        dprint(f"{task_id}: Requested video_length={video_length} too small; bumping to 4 to satisfy WGP minimum.")
+        video_length = 4
+
     try:
         dprint(f"{task_id}: Calling wgp_mod.generate_video (centralized API)")
         wgp_mod.generate_video(
