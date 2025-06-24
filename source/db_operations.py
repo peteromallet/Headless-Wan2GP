@@ -725,20 +725,42 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
     return []
 
 def get_initial_task_counts() -> tuple[int, int] | None:
-    """Gets total and queued task counts. For SQLite only, used for diagnostics."""
-    if DB_TYPE == "sqlite" and SQLITE_DB_PATH:
-        def _get_op(conn):
-            cursor = conn.cursor()
-            cursor.execute(f"SELECT COUNT(*) FROM tasks")
-            total_tasks = cursor.fetchone()[0]
-            cursor.execute(f"SELECT COUNT(*) FROM tasks WHERE status = ?", (STATUS_QUEUED,))
-            queued_tasks = cursor.fetchone()[0]
-            return total_tasks, queued_tasks
-        try:
-            return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_op)
-        except Exception as e_diag:
-            dprint(f"SQLite Diagnostic Error: Could not get initial task counts: {e_diag}")
-    return None
+    """Gets the total and queued task counts from the SQLite DB. Returns (None, None) on failure."""
+    if DB_TYPE != "sqlite": return None
+    conn = _get_db_connection()
+    if not conn: return None
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE_NAME}")
+        total_tasks = cursor.fetchone()[0]
+        cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE_NAME} WHERE status = ?", (STATUS_QUEUED,))
+        queued_tasks = cursor.fetchone()[0]
+        return total_tasks, queued_tasks
+    except sqlite3.Error as e:
+        print(f"SQLite error getting task counts: {e}")
+        return None
+    finally:
+        if conn: conn.close()
+        
+def get_abs_path_from_db_path(db_path: str, dprint) -> Path | None:
+    """Helper to resolve a path from the DB (which might be relative) to a usable absolute path."""
+    if not db_path:
+        return None
+        
+    resolved_path = None
+    if DB_TYPE == "sqlite" and SQLITE_DB_PATH and isinstance(db_path, str) and db_path.startswith("files/"):
+        sqlite_db_parent = Path(SQLITE_DB_PATH).resolve().parent
+        resolved_path = (sqlite_db_parent / "public" / db_path).resolve()
+        dprint(f"Resolved SQLite relative path '{db_path}' to '{resolved_path}'")
+    else:
+        # Path from DB is already absolute (Supabase) or a non-standard path
+        resolved_path = Path(db_path).resolve()
+    
+    if resolved_path and resolved_path.exists():
+        return resolved_path
+    else:
+        dprint(f"Warning: Resolved path '{resolved_path}' from DB path '{db_path}' does not exist.")
+        return None
 
 def upload_to_supabase_storage(local_file_path: Path, supabase_object_name: str, bucket_name: str) -> str | None:
     """Uploads a file to Supabase storage and returns its public URL."""
