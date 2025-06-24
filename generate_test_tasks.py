@@ -347,7 +347,7 @@ def write_different_pose_test_case(name: str,
     print(f"[WRITE] {json_path}")
 
     if enqueue:
-        cmd = [sys.executable, "add_task.py", "--type", "different_pose",
+        cmd = [sys.executable, "add_task.py", "--type", "different_pose_orchestrator",
                "--params", f"@{json_path}"]
         print("[ENQUEUE]", " ".join(cmd))
         try:
