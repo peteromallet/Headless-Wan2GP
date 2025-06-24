@@ -77,6 +77,19 @@ def cross_fade_overlap_frames(
     if n <= 0:
         return []
 
+    # Determine target resolution from segment2 (the newer generated video)
+    if not segment2_frames:
+        return []
+    
+    target_height, target_width = segment2_frames[0].shape[:2]
+    target_resolution = (target_width, target_height)
+    
+    # Log dimension information for debugging
+    seg1_height, seg1_width = segment1_frames[0].shape[:2] if segment1_frames else (0, 0)
+    dprint(f"CrossFade: Segment1 resolution: {seg1_width}x{seg1_height}, Segment2 resolution: {target_width}x{target_height}")
+    dprint(f"CrossFade: Target resolution set to: {target_width}x{target_height} (from segment2)")
+    dprint(f"CrossFade: Processing {n} overlap frames")
+
     out_frames = []
     for i in range(n):
         t_linear = (i + 1) / float(n)
@@ -84,6 +97,20 @@ def cross_fade_overlap_frames(
 
         frame_a_np = segment1_frames[-n+i].astype(np.float32)
         frame_b_np = segment2_frames[i].astype(np.float32)
+        
+        # Log original shapes before any resizing
+        original_a_shape = frame_a_np.shape[:2]
+        original_b_shape = frame_b_np.shape[:2]
+        
+        # Ensure both frames have the same dimensions
+        if frame_a_np.shape[:2] != (target_height, target_width):
+            frame_a_np = cv2.resize(frame_a_np, target_resolution, interpolation=cv2.INTER_AREA).astype(np.float32)
+            if i == 0:  # Log only for first frame to avoid spam
+                dprint(f"CrossFade: Resized segment1 frame from {original_a_shape} to {frame_a_np.shape[:2]}")
+        if frame_b_np.shape[:2] != (target_height, target_width):
+            frame_b_np = cv2.resize(frame_b_np, target_resolution, interpolation=cv2.INTER_AREA).astype(np.float32)
+            if i == 0:  # Log only for first frame to avoid spam
+                dprint(f"CrossFade: Resized segment2 frame from {original_b_shape} to {frame_b_np.shape[:2]}")
 
         blended_float: np.ndarray
         if mode == "linear_sharp":
@@ -646,9 +673,25 @@ def create_guide_video_for_travel_segment(
             dprint(f"GuideBuilder (Seg {segment_idx_for_logging}): Subsequent segment logic started.")
             dprint(f"GuideBuilder: Prev video path: {path_to_previous_segment_video_output_for_guide}")
             dprint(f"GuideBuilder: Overlap from prev setting: {frame_overlap_from_previous}")
+            dprint(f"GuideBuilder: Prev video exists: {Path(path_to_previous_segment_video_output_for_guide).exists()}")
+            
+            if not Path(path_to_previous_segment_video_output_for_guide).exists():
+                raise ValueError(f"Previous video path does not exist: {path_to_previous_segment_video_output_for_guide}")
 
-            prev_vid_total_frames, _ = get_video_frame_count_and_fps(path_to_previous_segment_video_output_for_guide)
-            dprint(f"GuideBuilder: Initial frame count from cv2: {prev_vid_total_frames}")
+            prev_vid_total_frames, prev_vid_fps = get_video_frame_count_and_fps(path_to_previous_segment_video_output_for_guide)
+            dprint(f"GuideBuilder: Initial frame count from cv2: {prev_vid_total_frames}, fps: {prev_vid_fps}")
+
+            # Check video resolution to understand if it matches our target
+            cap = cv2.VideoCapture(str(path_to_previous_segment_video_output_for_guide))
+            if cap.isOpened():
+                prev_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                prev_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                cap.release()
+                dprint(f"GuideBuilder: Previous video resolution: {prev_width}x{prev_height} (target: {parsed_res_wh[0]}x{parsed_res_wh[1]})")
+                if prev_width != parsed_res_wh[0] or prev_height != parsed_res_wh[1]:
+                    dprint(f"GuideBuilder: WARNING - Resolution mismatch detected! Previous video will be resized during guide creation.")
+            else:
+                dprint(f"GuideBuilder: ERROR - Could not open previous video for resolution check")
 
             if not prev_vid_total_frames:  # Handles None or 0 (OpenCV quirk on freshly-encoded MP4s)
                 dprint(f"GuideBuilder: Fallback triggered due to zero/None frame count. Manually reading frames.")
@@ -661,23 +704,38 @@ def create_guide_video_for_travel_segment(
                 # Decide how many overlap frames we can reuse
                 actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
                 overlap_frames_raw = all_prev_frames[-actual_overlap_to_use:]
+                dprint(f"GuideBuilder: Using fallback - extracting last {actual_overlap_to_use} frames from {prev_vid_total_frames} total frames")
             else:
                 dprint(f"GuideBuilder: Using primary logic path with cv2 frame count.")
                 actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
                 start_extraction_idx = max(0, prev_vid_total_frames - actual_overlap_to_use)
+                dprint(f"GuideBuilder: Extracting {actual_overlap_to_use} frames starting from index {start_extraction_idx}")
                 overlap_frames_raw = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, start_extraction_idx, actual_overlap_to_use, dprint_func=dprint)
             
             dprint(f"GuideBuilder: Calculated actual_overlap_to_use: {actual_overlap_to_use}")
             dprint(f"GuideBuilder: Extracted raw overlap frames count: {len(overlap_frames_raw)}")
             
+            if overlap_frames_raw:
+                first_frame_shape = overlap_frames_raw[0].shape
+                dprint(f"GuideBuilder: First extracted frame shape: {first_frame_shape}")
+                dprint(f"GuideBuilder: Target guide shape should be: ({parsed_res_wh[1]}, {parsed_res_wh[0]}, 3)")
+            
             frames_read_for_overlap = 0
             for k, frame_fp in enumerate(overlap_frames_raw):
                 if k >= total_frames_for_segment: break
-                if frame_fp.shape[1]!=parsed_res_wh[0] or frame_fp.shape[0]!=parsed_res_wh[1]: frame_fp = cv2.resize(frame_fp, parsed_res_wh, interpolation=cv2.INTER_AREA)
+                original_shape = frame_fp.shape
+                if frame_fp.shape[1]!=parsed_res_wh[0] or frame_fp.shape[0]!=parsed_res_wh[1]: 
+                    frame_fp = cv2.resize(frame_fp, parsed_res_wh, interpolation=cv2.INTER_AREA)
+                    dprint(f"GuideBuilder: Resized frame {k} from {original_shape} to {frame_fp.shape}")
                 frames_for_guide_list[k] = frame_fp.copy()
                 frames_read_for_overlap += 1
             
             dprint(f"GuideBuilder: Frames copied into guide list: {frames_read_for_overlap}")
+            
+            # Log details about what frames were actually placed in the guide
+            if frames_read_for_overlap > 0:
+                dprint(f"GuideBuilder: Guide frames 0-{frames_read_for_overlap-1} now contain frames from previous video")
+                dprint(f"GuideBuilder: Guide frames {frames_read_for_overlap}-{total_frames_for_segment-1} are still gray frames (will be modified by fade logic)")
             
             if frames_read_for_overlap > 0:
                 if fo_factor > 0.0:
