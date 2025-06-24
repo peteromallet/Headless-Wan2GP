@@ -99,7 +99,7 @@ def cross_fade_overlap_frames(
     
     return out_frames
 
-def extract_frames_from_video(video_path: str | Path, start_frame: int = 0, num_frames: int = None) -> list[np.ndarray]:
+def extract_frames_from_video(video_path: str | Path, start_frame: int = 0, num_frames: int = None, *, dprint_func=print) -> list[np.ndarray]:
     """
     Extracts frames from a video file as numpy arrays.
     
@@ -107,6 +107,7 @@ def extract_frames_from_video(video_path: str | Path, start_frame: int = 0, num_
         video_path: Path to the video file
         start_frame: Starting frame index (0-based)
         num_frames: Number of frames to extract (None = all remaining frames)
+        dprint_func: The function to use for printing debug messages
     
     Returns:
         List of frames as BGR numpy arrays
@@ -115,7 +116,7 @@ def extract_frames_from_video(video_path: str | Path, start_frame: int = 0, num_
     cap = cv2.VideoCapture(str(video_path))
     
     if not cap.isOpened():
-        dprint(f"Error: Could not open video {video_path}")
+        dprint_func(f"Error: Could not open video {video_path}")
         return frames
     
     total_frames_video = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -128,7 +129,7 @@ def extract_frames_from_video(video_path: str | Path, start_frame: int = 0, num_
     for i in range(frames_to_read):
         ret, frame = cap.read()
         if not ret:
-            dprint(f"Warning: Could not read frame {start_frame + i} from {video_path}")
+            dprint_func(f"Warning: Could not read frame {start_frame + i} from {video_path}")
             break
         frames.append(frame)
     
@@ -560,6 +561,9 @@ def create_guide_video_for_travel_segment(
     task_id_for_logging: str,
     full_orchestrator_payload: dict,
     segment_params: dict,
+    single_image_journey: bool = False,
+    *,
+    dprint=print
 ) -> Path | None:
     """Creates the guide video for a travel segment with all fading and adjustments."""
     try:
@@ -583,14 +587,18 @@ def create_guide_video_for_travel_segment(
         dprint(f"Task {task_id_for_logging}: Interpolating guide video with {total_frames_for_segment} frames...")
         frames_for_guide_list = [sm_create_color_frame(parsed_res_wh, (128,128,128)).copy() for _ in range(total_frames_for_segment)]
         
-        end_anchor_img_path_str: str
-        if end_anchor_image_index < len(input_images_resolved_for_guide): # This logic might need adjustment based on call site context
-            end_anchor_img_path_str = input_images_resolved_for_guide[end_anchor_image_index]
-        else:
-             raise ValueError(f"Seg {segment_idx_for_logging}: End anchor index {end_anchor_image_index} out of bounds.")
+        end_anchor_frame_np = None
+
+        if not single_image_journey:
+            end_anchor_img_path_str: str
+            if end_anchor_image_index < len(input_images_resolved_for_guide):
+                end_anchor_img_path_str = input_images_resolved_for_guide[end_anchor_image_index]
+            else:
+                 raise ValueError(f"Seg {segment_idx_for_logging}: End anchor index {end_anchor_image_index} out of bounds for input images list ({len(input_images_resolved_for_guide)} images available).")
+            
+            end_anchor_frame_np = sm_image_to_frame(end_anchor_img_path_str, parsed_res_wh, task_id_for_logging=task_id_for_logging, image_download_dir=segment_image_download_dir)
+            if end_anchor_frame_np is None: raise ValueError(f"Failed to load end anchor image: {end_anchor_img_path_str}")
         
-        end_anchor_frame_np = sm_image_to_frame(end_anchor_img_path_str, parsed_res_wh, task_id_for_logging=task_id_for_logging, image_download_dir=segment_image_download_dir)
-        if end_anchor_frame_np is None: raise ValueError(f"Failed to load end anchor image: {end_anchor_img_path_str}")
         num_end_anchor_duplicates = 1
         start_anchor_frame_np = None
 
@@ -599,53 +607,68 @@ def create_guide_video_for_travel_segment(
             start_anchor_frame_np = sm_image_to_frame(start_anchor_img_path_str, parsed_res_wh, task_id_for_logging=task_id_for_logging, image_download_dir=segment_image_download_dir)
             if start_anchor_frame_np is None: raise ValueError(f"Failed to load start anchor: {start_anchor_img_path_str}")
             if frames_for_guide_list: frames_for_guide_list[0] = start_anchor_frame_np.copy()
-            pot_max_idx_start_fade = total_frames_for_segment - num_end_anchor_duplicates - 1
-            avail_frames_start_fade = max(0, pot_max_idx_start_fade)
-            num_start_fade_steps = int(avail_frames_start_fade * fo_factor)
-            if num_start_fade_steps > 0:
-                easing_fn_out = sm_get_easing_function(fo_curve)
-                for k_fo in range(num_start_fade_steps):
-                    idx_in_guide = 1 + k_fo
-                    if idx_in_guide >= total_frames_for_segment: break
-                    alpha_lin = 1.0 - ((k_fo + 1) / float(num_start_fade_steps))
-                    e_alpha = fo_low + (fo_high - fo_low) * easing_fn_out(alpha_lin)
-                    frames_for_guide_list[idx_in_guide] = cv2.addWeighted(frames_for_guide_list[idx_in_guide].astype(np.float32), 1.0 - e_alpha, start_anchor_frame_np.astype(np.float32), e_alpha, 0).astype(np.uint8)
-            
-            min_idx_end_fade = 1
-            max_idx_end_fade = total_frames_for_segment - num_end_anchor_duplicates - 1
-            avail_frames_end_fade = max(0, max_idx_end_fade - min_idx_end_fade + 1)
-            num_end_fade_steps = int(avail_frames_end_fade * fi_factor)
-            if num_end_fade_steps > 0:
-                actual_end_fade_start_idx = max(min_idx_end_fade, max_idx_end_fade - num_end_fade_steps + 1)
-                easing_fn_in = sm_get_easing_function(fi_curve)
-                for k_fi in range(num_end_fade_steps):
-                    idx_in_guide = actual_end_fade_start_idx + k_fi
-                    if idx_in_guide >= total_frames_for_segment: break
-                    alpha_lin = (k_fi + 1) / float(num_end_fade_steps)
-                    e_alpha = fi_low + (fi_high - fi_low) * easing_fn_in(alpha_lin)
-                    base_f = frames_for_guide_list[idx_in_guide]
-                    frames_for_guide_list[idx_in_guide] = cv2.addWeighted(base_f.astype(np.float32), 1.0 - e_alpha, end_anchor_frame_np.astype(np.float32), e_alpha, 0).astype(np.uint8)
-            elif fi_factor > 0 and avail_frames_end_fade > 0:
-                for k_fill in range(min_idx_end_fade, max_idx_end_fade + 1):
-                    if k_fill < total_frames_for_segment: frames_for_guide_list[k_fill] = end_anchor_frame_np.copy()
+
+            if single_image_journey:
+                dprint(f"Task {task_id_for_logging}: Guide video for single image journey. Only first frame is set.")
+            else:
+                # This is the original logic for fading between start and end.
+                pot_max_idx_start_fade = total_frames_for_segment - num_end_anchor_duplicates - 1
+                avail_frames_start_fade = max(0, pot_max_idx_start_fade)
+                num_start_fade_steps = int(avail_frames_start_fade * fo_factor)
+                if num_start_fade_steps > 0:
+                    easing_fn_out = sm_get_easing_function(fo_curve)
+                    for k_fo in range(num_start_fade_steps):
+                        idx_in_guide = 1 + k_fo
+                        if idx_in_guide >= total_frames_for_segment: break
+                        alpha_lin = 1.0 - ((k_fo + 1) / float(num_start_fade_steps))
+                        e_alpha = fo_low + (fo_high - fo_low) * easing_fn_out(alpha_lin)
+                        frames_for_guide_list[idx_in_guide] = cv2.addWeighted(frames_for_guide_list[idx_in_guide].astype(np.float32), 1.0 - e_alpha, start_anchor_frame_np.astype(np.float32), e_alpha, 0).astype(np.uint8)
+                
+                min_idx_end_fade = 1
+                max_idx_end_fade = total_frames_for_segment - num_end_anchor_duplicates - 1
+                avail_frames_end_fade = max(0, max_idx_end_fade - min_idx_end_fade + 1)
+                num_end_fade_steps = int(avail_frames_end_fade * fi_factor)
+                if num_end_fade_steps > 0:
+                    actual_end_fade_start_idx = max(min_idx_end_fade, max_idx_end_fade - num_end_fade_steps + 1)
+                    easing_fn_in = sm_get_easing_function(fi_curve)
+                    for k_fi in range(num_end_fade_steps):
+                        idx_in_guide = actual_end_fade_start_idx + k_fi
+                        if idx_in_guide >= total_frames_for_segment: break
+                        alpha_lin = (k_fi + 1) / float(num_end_fade_steps)
+                        e_alpha = fi_low + (fi_high - fi_low) * easing_fn_in(alpha_lin)
+                        base_f = frames_for_guide_list[idx_in_guide]
+                        frames_for_guide_list[idx_in_guide] = cv2.addWeighted(base_f.astype(np.float32), 1.0 - e_alpha, end_anchor_frame_np.astype(np.float32), e_alpha, 0).astype(np.uint8)
+                elif fi_factor > 0 and avail_frames_end_fade > 0:
+                    for k_fill in range(min_idx_end_fade, max_idx_end_fade + 1):
+                        if k_fill < total_frames_for_segment: frames_for_guide_list[k_fill] = end_anchor_frame_np.copy()
 
         elif path_to_previous_segment_video_output_for_guide: # Continued or Subsequent
-            # --- Robust previous-video frame extraction ---------------------------------
-            prev_vid_total_frames, _ = get_video_frame_count_and_fps(path_to_previous_segment_video_output_for_guide)
+            dprint(f"GuideBuilder (Seg {segment_idx_for_logging}): Subsequent segment logic started.")
+            dprint(f"GuideBuilder: Prev video path: {path_to_previous_segment_video_output_for_guide}")
+            dprint(f"GuideBuilder: Overlap from prev setting: {frame_overlap_from_previous}")
 
-            if prev_vid_total_frames is None or prev_vid_total_frames == 0:
-                # Some codecs/container combinations return 0 via OpenCV – fall back to reading the full clip.
-                dprint(f"Seg {segment_idx_for_logging}: get_video_frame_count returned 0/None for '{path_to_previous_segment_video_output_for_guide}'. Falling back to full read then tail-slice.")
-                all_prev_frames = extract_frames_from_video(path_to_previous_segment_video_output_for_guide)
+            prev_vid_total_frames, _ = get_video_frame_count_and_fps(path_to_previous_segment_video_output_for_guide)
+            dprint(f"GuideBuilder: Initial frame count from cv2: {prev_vid_total_frames}")
+
+            if not prev_vid_total_frames:  # Handles None or 0 (OpenCV quirk on freshly-encoded MP4s)
+                dprint(f"GuideBuilder: Fallback triggered due to zero/None frame count. Manually reading frames.")
+                # Fallback: read all frames to determine length
+                all_prev_frames = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, dprint_func=dprint)
                 prev_vid_total_frames = len(all_prev_frames)
+                dprint(f"GuideBuilder: Manual frame count from fallback: {prev_vid_total_frames}")
+                if prev_vid_total_frames == 0:
+                    raise ValueError("Previous segment video appears to have zero frames – cannot build guide overlap.")
+                # Decide how many overlap frames we can reuse
                 actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
-                overlap_frames_raw = all_prev_frames[-actual_overlap_to_use:] if actual_overlap_to_use > 0 else []
+                overlap_frames_raw = all_prev_frames[-actual_overlap_to_use:]
             else:
+                dprint(f"GuideBuilder: Using primary logic path with cv2 frame count.")
                 actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
                 start_extraction_idx = max(0, prev_vid_total_frames - actual_overlap_to_use)
-                overlap_frames_raw = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, start_extraction_idx, actual_overlap_to_use)
-
-            dprint(f"Seg {segment_idx_for_logging}: Extracted {len(overlap_frames_raw)} overlap frames from prev video (expected {actual_overlap_to_use}).")
+                overlap_frames_raw = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, start_extraction_idx, actual_overlap_to_use, dprint_func=dprint)
+            
+            dprint(f"GuideBuilder: Calculated actual_overlap_to_use: {actual_overlap_to_use}")
+            dprint(f"GuideBuilder: Extracted raw overlap frames count: {len(overlap_frames_raw)}")
             
             frames_read_for_overlap = 0
             for k, frame_fp in enumerate(overlap_frames_raw):
@@ -653,6 +676,8 @@ def create_guide_video_for_travel_segment(
                 if frame_fp.shape[1]!=parsed_res_wh[0] or frame_fp.shape[0]!=parsed_res_wh[1]: frame_fp = cv2.resize(frame_fp, parsed_res_wh, interpolation=cv2.INTER_AREA)
                 frames_for_guide_list[k] = frame_fp.copy()
                 frames_read_for_overlap += 1
+            
+            dprint(f"GuideBuilder: Frames copied into guide list: {frames_read_for_overlap}")
             
             if frames_read_for_overlap > 0:
                 if fo_factor > 0.0:
@@ -678,28 +703,30 @@ def create_guide_video_for_travel_segment(
                             if desat_factor>0: g=cv2.cvtColor(frames_for_guide_list[k_s_ol],cv2.COLOR_BGR2GRAY);gb=cv2.cvtColor(g,cv2.COLOR_GRAY2BGR);frames_for_guide_list[k_s_ol]=cv2.addWeighted(frames_for_guide_list[k_s_ol],1-desat_factor,gb,desat_factor,0)
                             if bright_adj!=0: frames_for_guide_list[k_s_ol]=sm_adjust_frame_brightness(frames_for_guide_list[k_s_ol],bright_adj)
             
-            min_idx_efs = frames_read_for_overlap; max_idx_efs = total_frames_for_segment - num_end_anchor_duplicates - 1
-            avail_f_efs = max(0, max_idx_efs - min_idx_efs + 1); num_efs_steps = int(avail_f_efs * fi_factor)
-            if num_efs_steps > 0:
-                actual_efs_start_idx = max(min_idx_efs, max_idx_efs - num_efs_steps + 1)
-                easing_fn_in_s = sm_get_easing_function(fi_curve)
-                for k_fi_s in range(num_efs_steps):
-                    idx = actual_efs_start_idx+k_fi_s
-                    if idx >= total_frames_for_segment: break
-                    if idx < min_idx_efs: continue
-                    alpha_l=(k_fi_s+1)/float(num_efs_steps);e_alpha=fi_low+(fi_high-fi_low)*easing_fn_in_s(alpha_l);e_alpha=np.clip(e_alpha,0,1)
-                    base_f=frames_for_guide_list[idx];frames_for_guide_list[idx]=cv2.addWeighted(base_f.astype(np.float32),1-e_alpha,end_anchor_frame_np.astype(np.float32),e_alpha,0).astype(np.uint8)
-            elif fi_factor > 0 and avail_f_efs > 0:
-                for k_fill in range(min_idx_efs, max_idx_efs + 1):
-                    if k_fill < total_frames_for_segment: frames_for_guide_list[k_fill] = end_anchor_frame_np.copy()
+            if not single_image_journey:
+                min_idx_efs = frames_read_for_overlap; max_idx_efs = total_frames_for_segment - num_end_anchor_duplicates - 1
+                avail_f_efs = max(0, max_idx_efs - min_idx_efs + 1); num_efs_steps = int(avail_f_efs * fi_factor)
+                if num_efs_steps > 0:
+                    actual_efs_start_idx = max(min_idx_efs, max_idx_efs - num_efs_steps + 1)
+                    easing_fn_in_s = sm_get_easing_function(fi_curve)
+                    for k_fi_s in range(num_efs_steps):
+                        idx = actual_efs_start_idx+k_fi_s
+                        if idx >= total_frames_for_segment: break
+                        if idx < min_idx_efs: continue
+                        alpha_l=(k_fi_s+1)/float(num_efs_steps);e_alpha=fi_low+(fi_high-fi_low)*easing_fn_in_s(alpha_l);e_alpha=np.clip(e_alpha,0,1)
+                        base_f=frames_for_guide_list[idx];frames_for_guide_list[idx]=cv2.addWeighted(base_f.astype(np.float32),1-e_alpha,end_anchor_frame_np.astype(np.float32),e_alpha,0).astype(np.uint8)
+                elif fi_factor > 0 and avail_f_efs > 0:
+                    for k_fill in range(min_idx_efs, max_idx_efs + 1):
+                        if k_fill < total_frames_for_segment: frames_for_guide_list[k_fill] = end_anchor_frame_np.copy()
         
-        if total_frames_for_segment > 0:
+        if not single_image_journey and total_frames_for_segment > 0 and end_anchor_frame_np is not None:
             for k_dup in range(min(num_end_anchor_duplicates, total_frames_for_segment)):
                 idx_s = total_frames_for_segment - 1 - k_dup
                 if idx_s >= 0: frames_for_guide_list[idx_s] = end_anchor_frame_np.copy()
                 else: break
-            if is_first_segment_from_scratch and total_frames_for_segment > 0 and start_anchor_frame_np is not None:
-                frames_for_guide_list[0] = start_anchor_frame_np.copy()
+
+        if is_first_segment_from_scratch and total_frames_for_segment > 0 and start_anchor_frame_np is not None:
+            frames_for_guide_list[0] = start_anchor_frame_np.copy()
 
         if frames_for_guide_list:
             guide_video_file_path = create_video_from_frames_list(frames_for_guide_list, actual_guide_video_path, fps_helpers, parsed_res_wh)

@@ -424,6 +424,17 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             print(f"[ERROR Task {segment_task_id_str}]: {msg}"); return False, msg
         dprint(f"Segment {segment_idx}: Parsed resolution (w,h): {parsed_res_wh}")
 
+        # --- Single Image Journey Detection ---
+        input_images_for_cm_check = full_orchestrator_payload.get("input_image_paths_resolved", [])
+        is_single_image_journey = (
+            len(input_images_for_cm_check) == 1
+            and full_orchestrator_payload.get("continue_from_video_resolved_path") is None
+            and segment_params.get("is_first_segment")
+            and segment_params.get("is_last_segment")
+        )
+        if is_single_image_journey:
+            dprint(f"Seg {segment_idx}: Detected a single-image journey. Adjusting guide and mask generation.")
+
         # Calculate total frames for this segment once and reuse
         base_duration = segment_params.get("segment_frames_target", full_orchestrator_payload["segment_frames_expanded"][segment_idx])
         frame_overlap_from_previous = segment_params.get("frame_overlap_from_previous", 0)
@@ -447,25 +458,32 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 # --- Determine which frame indices should be kept (inactive = black) ---
                 inactive_indices: set[int] = set()
 
-                # 1) Frames reused from the previous segment (overlap)
+                # Define overlap_count up front for consistent logging
                 overlap_count = max(0, int(frame_overlap_from_previous))
-                inactive_indices.update(range(overlap_count))
 
-                # 2) First frame when this is the very first segment from scratch
-                is_first_segment_val = segment_params.get("is_first_segment", False)
-                is_continue_scenario = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
-                if is_first_segment_val and not is_continue_scenario:
+                if is_single_image_journey:
+                    # For a single image journey, only the first frame is kept from the guide.
                     inactive_indices.add(0)
+                    dprint(f"Seg {segment_idx} Mask: Single image journey - keeping only frame 0 inactive.")
+                else:
+                    # 1) Frames reused from the previous segment (overlap)
+                    inactive_indices.update(range(overlap_count))
 
-                # 3) Last frame for ALL segments - each segment travels TO a target image
-                # Every segment ends at its target image, which should be kept (inactive/black)
-                inactive_indices.add(total_frames_for_segment - 1)
+                    # 2) First frame when this is the very first segment from scratch
+                    is_first_segment_val = segment_params.get("is_first_segment", False)
+                    is_continue_scenario = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
+                    if is_first_segment_val and not is_continue_scenario:
+                        inactive_indices.add(0)
+
+                    # 3) Last frame for ALL segments - each segment travels TO a target image
+                    # Every segment ends at its target image, which should be kept (inactive/black)
+                    inactive_indices.add(total_frames_for_segment - 1)
 
                 # Debug: Show the conditions that determined inactive indices
                 dprint(
-                    f"Seg {segment_idx}: Mask conditions - is_first_segment={is_first_segment_val}, "
-                    f"is_continue_scenario={is_continue_scenario}, is_last_segment={segment_params.get('is_last_segment', False)}, "
-                    f"overlap_count={overlap_count}"
+                    f"Seg {segment_idx}: Mask conditions - is_first_segment={segment_params.get('is_first_segment', False)}, "
+                    f"is_continue_scenario={full_orchestrator_payload.get('continue_from_video_resolved_path') is not None}, is_last_segment={segment_params.get('is_last_segment', False)}, "
+                    f"overlap_count={frame_overlap_from_previous}, is_single_image_journey={is_single_image_journey}"
                 )
 
                 h_m, w_m = parsed_res_wh[1], parsed_res_wh[0]
@@ -569,6 +587,10 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             end_anchor_img_path_str_idx = segment_idx + 1
             if full_orchestrator_payload.get("continue_from_video_resolved_path"):
                  end_anchor_img_path_str_idx = segment_idx
+            
+            # For a single image journey, there is no end anchor image.
+            if is_single_image_journey:
+                end_anchor_img_path_str_idx = -1 # Signal no end image to the creation function
 
             actual_guide_video_path_for_wgp = sm_create_guide_video_for_travel_segment(
                 segment_idx_for_logging=segment_idx,
@@ -584,7 +606,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 segment_image_download_dir=segment_image_download_dir,
                 task_id_for_logging=segment_task_id_str, # Corrected keyword argument
                 full_orchestrator_payload=full_orchestrator_payload,
-                segment_params=segment_params
+                segment_params=segment_params,
+                single_image_journey=is_single_image_journey,
+                dprint=dprint
             )
         except Exception as e_guide:
             print(f"ERROR Task {segment_task_id_str} guide prep: {e_guide}")
@@ -630,6 +654,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         
         dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Effective prompt for WGP payload will be: '{prompt_for_wgp}'")
 
+        # Compute video_prompt_type for wgp: always include 'V' when a guide video is provided; add 'M' if a mask video is also attached.
+        video_prompt_type_str = "V" + ("M" if mask_video_path_for_wgp else "")
+        
         wgp_payload = {
             "task_id": wgp_inline_task_id, # ID for this specific WGP generation operation
             "model": full_orchestrator_payload["model_name"],
@@ -648,6 +675,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
             "image_refs_paths": safe_vace_image_ref_paths_for_wgp,
+            # Propagate video_prompt_type so VACE model correctly interprets guide and mask inputs
+            "video_prompt_type": video_prompt_type_str,
             # Attach mask video if available
             **({"video_mask": str(mask_video_path_for_wgp.resolve())} if mask_video_path_for_wgp else {}),
         }
@@ -1027,7 +1056,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
 
             if any_positive_overlap:
                 dprint(f"Stitch: Using cross-fade due to overlap values: {actual_overlaps_for_stitching}. Output to: {path_for_raw_stitched_video}")
-                all_segment_frames_lists = [sm_extract_frames_from_video(p) for p in segment_video_paths_for_stitch]
+                all_segment_frames_lists = [sm_extract_frames_from_video(p, dprint_func=dprint) for p in segment_video_paths_for_stitch]
                 if not all(f_list is not None and len(f_list)>0 for f_list in all_segment_frames_lists):
                     raise ValueError("Stitch: Frame extraction failed for one or more segments during cross-fade prep.")
                 
