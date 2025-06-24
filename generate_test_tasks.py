@@ -40,7 +40,7 @@ PROJECT_ID = "test_suite"
 BASE_PROMPT = "Car driving through a city, sky morphing"
 NEG_PROMPT = "chaotic"
 MODEL_NAME = "vace_14B"
-RESOLUTION = "500x500"
+DEFAULT_RESOLUTION = "500x500"  # Fallback / default when not overridden
 FPS = 16
 SEGMENT_FRAMES_DEFAULT = 81  # will be quantised downstream (4n+1)
 FRAME_OVERLAP_DEFAULT = 12
@@ -62,12 +62,13 @@ TESTS_ROOT = Path("tests")
 def make_orchestrator_payload(*, run_id: str,
                               images: list[Path],
                               continue_video: Path | None,
-                              num_segments: int) -> dict:
+                              num_segments: int,
+                              resolution: str = DEFAULT_RESOLUTION) -> dict:
     """Create the orchestrator_details dict used by headless server."""
     payload: dict = {
         "run_id": run_id,
         "input_image_paths_resolved": [str(p) for p in images],
-        "parsed_resolution_wh": RESOLUTION,
+        "parsed_resolution_wh": resolution,
         "model_name": MODEL_NAME,
         "use_causvid_lora": True,
         "num_new_segments_to_generate": num_segments,
@@ -92,11 +93,12 @@ def make_orchestrator_payload(*, run_id: str,
     return payload
 
 
-def write_test_case(name: str,
-                    images: list[Path],
-                    continue_video: Path | None,
-                    num_segments: int,
-                    enqueue: bool) -> None:
+def write_travel_test_case(name: str,
+                           images: list[Path],
+                           continue_video: Path | None,
+                           num_segments: int,
+                           resolution: str,
+                           enqueue: bool) -> None:
     """Materialise a test folder with JSON and asset copies."""
     test_dir = TESTS_ROOT / name
     test_dir.mkdir(parents=True, exist_ok=True)
@@ -125,6 +127,7 @@ def write_test_case(name: str,
         images=copied_images,
         continue_video=continue_video_path,
         num_segments=num_segments,
+        resolution=resolution,
     )
     task_json: dict = {
         "project_id": PROJECT_ID,
@@ -162,7 +165,16 @@ def copy_results_for_comparison():
     task_outputs = get_task_outputs_from_db()
     
     # Copy inputs and outputs for each test
-    for test_name in ["test_1_single_image", "test_2_three_images", "test_3_continue_plus_one", "test_4_continue_plus_two"]:
+    for test_name in [
+        "travel_3_images_512",
+        "continue_video_1_image_512",
+        "different_pose_700x400",
+        "single_image_1",
+        "single_image_2",
+        "single_image_3",
+        "single_image_4",
+        "single_image_5",
+    ]:
         test_dir = Path("tests") / test_name
         if not test_dir.exists():
             print(f"[WARNING] Test directory not found: {test_dir}")
@@ -294,22 +306,153 @@ def wait_for_task_completion(max_wait_minutes: int = 30) -> None:
 
 
 # ---------------------------------------------------------------------
+# New helper: Different-pose test case
+# ---------------------------------------------------------------------
+
+
+def write_different_pose_test_case(name: str,
+                                   input_image: Path,
+                                   prompt: str,
+                                   resolution: str,
+                                   enqueue: bool) -> None:
+    """Generate a different_pose orchestrator task (single-image)."""
+    test_dir = TESTS_ROOT / name
+    test_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy input image into test dir for self-contained folder
+    dst_img = test_dir / f"{name}{input_image.suffix}"
+    if dst_img.exists():
+        dst_img.unlink()
+    shutil.copy2(input_image, dst_img)
+
+    run_id = f"{name}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}"
+
+    task_json: dict = {
+        "project_id": PROJECT_ID,
+        "run_id": run_id,
+        "input_image_path": str(dst_img),
+        "prompt": prompt,
+        "model_name": MODEL_NAME,
+        "resolution": resolution,
+        "fps_helpers": FPS,
+        "output_video_frames": 16,
+        "seed": SEED_BASE,
+        "use_causvid_lora": True,
+    }
+
+    json_path = test_dir / f"{name}_task.json"
+    with open(json_path, "w", encoding="utf-8") as fp:
+        json.dump(task_json, fp, indent=2)
+
+    print(f"[WRITE] {json_path}")
+
+    if enqueue:
+        cmd = [sys.executable, "add_task.py", "--type", "different_pose",
+               "--params", f"@{json_path}"]
+        print("[ENQUEUE]", " ".join(cmd))
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"[ERROR] add_task failed: {e}")
+
+
+# ---------------------------------------------------------------------
+# New helper: Single-image test case
+# ---------------------------------------------------------------------
+
+
+def write_single_image_test_case(name: str,
+                                 prompt: str,
+                                 resolution: str,
+                                 enqueue: bool) -> None:
+    """Create a single-image generation task (wgp single frame)."""
+    test_dir = TESTS_ROOT / name
+    test_dir.mkdir(parents=True, exist_ok=True)
+
+    run_id = f"{name}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}"
+
+    task_json: dict = {
+        "project_id": PROJECT_ID,
+        "run_id": run_id,
+        "prompt": prompt,
+        "model": MODEL_NAME,  # 'single_image' handler expects key 'model'
+        "resolution": resolution,
+        "seed": SEED_BASE,
+        "negative_prompt": NEG_PROMPT,
+        "use_causvid_lora": True,
+    }
+
+    json_path = test_dir / f"{name}_task.json"
+    with open(json_path, "w", encoding="utf-8") as fp:
+        json.dump(task_json, fp, indent=2)
+
+    print(f"[WRITE] {json_path}")
+
+    if enqueue:
+        cmd = [sys.executable, "add_task.py", "--type", "single_image",
+               "--params", f"@{json_path}"]
+        print("[ENQUEUE]", " ".join(cmd))
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"[ERROR] add_task failed: {e}")
+
+
+# ---------------------------------------------------------------------
 # Main CLI
 # ---------------------------------------------------------------------
 
 def main(args) -> None:
     TESTS_ROOT.mkdir(exist_ok=True)
 
-    # --- scenario definitions ------------------------------------------------
-    scenarios = [
-        ("test_1_single_image",          [ASSET_IMAGES[0]],                 None,                 1),
-        ("test_2_three_images",          ASSET_IMAGES,                      None,                 3),
-        ("test_3_continue_plus_one",     [ASSET_IMAGES[0]],                 ASSET_VIDEO,          1),
-        ("test_4_continue_plus_two",     ASSET_IMAGES[:2],                  ASSET_VIDEO,          2),
+    # ------------------------------------------------------------
+    # 1) Travel orchestrator: 3 images → 512×512
+    # ------------------------------------------------------------
+    write_travel_test_case(
+        name="travel_3_images_512",
+        images=ASSET_IMAGES,
+        continue_video=None,
+        num_segments=3,
+        resolution="512x512",
+        enqueue=args.enqueue,
+    )
+
+    # ------------------------------------------------------------
+    # 2) Continue-video + 1 image → 512×512
+    # ------------------------------------------------------------
+    write_travel_test_case(
+        name="continue_video_1_image_512",
+        images=[ASSET_IMAGES[0]],
+        continue_video=ASSET_VIDEO,
+        num_segments=1,
+        resolution="512x512",
+        enqueue=args.enqueue,
+    )
+
+    # ------------------------------------------------------------
+    # 3) Different-pose task from pose.png → 700×400
+    # ------------------------------------------------------------
+    write_different_pose_test_case(
+        name="different_pose_700x400",
+        input_image=SAMPLES_DIR / "pose.png",
+        prompt="Person standing in a desert sunset, cinematic lighting",
+        resolution="700x400",
+        enqueue=args.enqueue,
+    )
+
+    # ------------------------------------------------------------
+    # 4) Five single-image tasks – varied prompts & sizes
+    # ------------------------------------------------------------
+    single_image_specs = [
+        ("single_image_1", "A serene mountain landscape at sunset", "640x360"),
+        ("single_image_2", "A futuristic city skyline at night", "512x768"),
+        ("single_image_3", "A cute puppy in a field of flowers", "768x512"),
+        ("single_image_4", "A spaceship traveling through hyperspace", "720x1280"),
+        ("single_image_5", "A vibrant abstract painting of shapes and colours", "1024x576"),
     ]
 
-    for name, imgs, cont_vid, segments in scenarios:
-        write_test_case(name, imgs, cont_vid, segments, enqueue=args.enqueue)
+    for name, prompt, res in single_image_specs:
+        write_single_image_test_case(name, prompt, res, enqueue=args.enqueue)
 
     print("\nAll test cases generated under", TESTS_ROOT.resolve())
 
