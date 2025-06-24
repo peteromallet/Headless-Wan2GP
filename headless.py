@@ -82,8 +82,8 @@ def parse_args():
                                help="How often (in seconds) to check tasks.json for new tasks.")
     pgroup_server.add_argument("--debug", action="store_true",
                                help="Enable verbose debug logging (prints additional diagnostics)")
-    pgroup_server.add_argument("--save-logging", type=str, default=None,
-                               help="Save all logging output to the specified file path (in addition to console output)")
+    pgroup_server.add_argument("--save-logging", type=str, nargs='?', const='logs/headless.log', default=None,
+                               help="Save all logging output to a file (in addition to console output). Optionally specify path, defaults to 'logs/headless.log'")
     pgroup_server.add_argument("--migrate-only", action="store_true",
                                help="Run database migrations and then exit.")
     pgroup_server.add_argument("--apply-reward-lora", action="store_true",
