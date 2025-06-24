@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 import numpy as np
 from PIL import Image
+import cv2
 
 # Add the parent directory to Python path to allow Wan2GP module import
 import sys
@@ -19,7 +20,7 @@ except ImportError:
     PoseBodyFaceVideoAnnotator = None
 
 from . import db_operations as db_ops
-from .common_utils import sm_get_unique_target_path, parse_resolution as sm_parse_resolution, prepare_output_path
+from .common_utils import sm_get_unique_target_path, parse_resolution as sm_parse_resolution, prepare_output_path, save_frame_from_video
 from .video_utils import rife_interpolate_images_to_video as sm_rife_interpolate_images_to_video
 
 def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable):
@@ -94,6 +95,58 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
         traceback.print_exc()
         return False, f"OpenPose generation exception: {e}"
 
+def handle_extract_frame_task(task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable):
+    """Handles the 'extract_frame' task."""
+    print(f"[Task ID: {task_id}] Handling 'extract_frame' task.")
+    
+    input_video_task_id = task_params_dict.get("input_video_task_id")
+    frame_index = task_params_dict.get("frame_index", 0) # Default to first frame
+    
+    if not input_video_task_id:
+        return False, f"Task {task_id}: Missing 'input_video_task_id' in payload."
+
+    try:
+        # Get the output path of the dependency task
+        video_path_from_db = db_ops.get_task_output_location_from_db(input_video_task_id)
+        if not video_path_from_db:
+            return False, f"Task {task_id}: Could not find output location for dependency task {input_video_task_id}."
+
+        video_abs_path = db_ops.get_abs_path_from_db_path(video_path_from_db, dprint)
+        if not video_abs_path:
+            return False, f"Task {task_id}: Could not resolve or find video file from DB path '{video_path_from_db}'."
+
+        # Use prepare_output_path to determine the correct save location
+        output_filename = f"{task_id}_frame_{frame_index}.png"
+        final_save_path, db_output_location = prepare_output_path(task_id, output_filename, main_output_dir_base, dprint=dprint)
+
+        # The resolution for save_frame_from_video can be inferred from the video itself
+        # Or passed in the payload if a specific resize is needed. For now, we don't resize.
+        cap = cv2.VideoCapture(str(video_abs_path))
+        if not cap.isOpened():
+             return False, f"Task {task_id}: Could not open video file {video_abs_path}"
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.release()
+        
+        # Now use the save_frame_from_video utility
+        success = save_frame_from_video(
+            video_path=video_abs_path,
+            frame_index=frame_index,
+            output_image_path=final_save_path,
+            resolution=(width, height) # Use native resolution
+        )
+        
+        if success:
+            print(f"[Task ID: {task_id}] Successfully extracted frame {frame_index} to: {final_save_path}")
+            return True, db_output_location
+        else:
+            return False, f"Task {task_id}: save_frame_from_video utility failed for video {video_abs_path}."
+
+    except Exception as e:
+        error_msg = f"Task {task_id}: Failed during frame extraction: {e}"
+        print(f"[ERROR] {error_msg}")
+        traceback.print_exc()
+        return False, str(e)
 
 def handle_rife_interpolate_task(wgp_mod, task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable):
     """Handles the 'rife_interpolate_images' task."""

@@ -41,7 +41,8 @@ if wan2gp_path not in sys.path:
 from source import db_operations as db_ops
 from source.specialized_handlers import (
     handle_generate_openpose_task,
-    handle_rife_interpolate_task
+    handle_rife_interpolate_task,
+    handle_extract_frame_task
 )
 from source.common_utils import (
     sm_get_unique_target_path,
@@ -201,6 +202,9 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
             orchestrator_task_id_str=task_id,
             dprint=dprint
         )
+    elif task_type == "dp_final_gen":
+        print(f"[Task ID: {task_id}] Identified as 'dp_final_gen' task.")
+        return dp._handle_dp_final_gen_task(task_params_from_db=task_params_dict, dprint=dprint)
     elif task_type == "single_image":
         print(f"[Task ID: {task_id}] Identified as 'single_image' task.")
         return si._handle_single_image_task(
@@ -220,25 +224,11 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
     if task_type == "generate_openpose":
         print(f"[Task ID: {task_id}] Identified as 'generate_openpose' task.")
         generation_success, output_location_to_db = handle_generate_openpose_task(task_params_dict, main_output_dir_base, task_id, dprint)
-        # --- SM_RESTRUCTURE_FIX: Manually trigger chaining for different_pose after this specialized task ---
-        if generation_success and task_params_dict.get("different_pose_chain_details"):
-            dprint(f"Task {task_id} (generate_openpose) is part of a different_pose sequence. Manually attempting to chain.")
-            chain_success, chain_message, final_path_from_chaining = dp._handle_different_pose_chaining(
-                completed_task_params=task_params_dict, 
-                task_output_path=output_location_to_db,
-                dprint=dprint
-            )
-            if chain_success:
-                # The chaining function handles DB updates for the orchestrator task.
-                # The generate_openpose task itself is complete.
-                dprint(f"Task {task_id}: Different Pose chaining initiated successfully after generate_openpose. Message: {chain_message}")
-                # We can consider the original task complete and let the chain continue.
-                # The 'output_location_to_db' for this task is still its direct output.
-                # The chaining function will handle the next steps.
-            else:
-                print(f"[ERROR Task ID: {task_id}] Different Pose sequence chaining failed after generate_openpose step: {chain_message}. This may halt the sequence.")
-        # --- END SM_RESTRUCTURE_FIX ---
-    
+
+    elif task_type == "extract_frame":
+        print(f"[Task ID: {task_id}] Identified as 'extract_frame' task.")
+        generation_success, output_location_to_db = handle_extract_frame_task(task_params_dict, main_output_dir_base, task_id, dprint)
+
     elif task_type == "rife_interpolate_images":
         print(f"[Task ID: {task_id}] Identified as 'rife_interpolate_images' task.")
         generation_success, output_location_to_db = handle_rife_interpolate_task(wgp_mod, task_params_dict, main_output_dir_base, task_id, dprint)
