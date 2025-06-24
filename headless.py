@@ -220,6 +220,24 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
     if task_type == "generate_openpose":
         print(f"[Task ID: {task_id}] Identified as 'generate_openpose' task.")
         generation_success, output_location_to_db = handle_generate_openpose_task(task_params_dict, main_output_dir_base, task_id, dprint)
+        # --- SM_RESTRUCTURE_FIX: Manually trigger chaining for different_pose after this specialized task ---
+        if generation_success and task_params_dict.get("different_pose_chain_details"):
+            dprint(f"Task {task_id} (generate_openpose) is part of a different_pose sequence. Manually attempting to chain.")
+            chain_success, chain_message, final_path_from_chaining = dp._handle_different_pose_chaining(
+                completed_task_params=task_params_dict, 
+                task_output_path=output_location_to_db,
+                dprint=dprint
+            )
+            if chain_success:
+                # The chaining function handles DB updates for the orchestrator task.
+                # The generate_openpose task itself is complete.
+                dprint(f"Task {task_id}: Different Pose chaining initiated successfully after generate_openpose. Message: {chain_message}")
+                # We can consider the original task complete and let the chain continue.
+                # The 'output_location_to_db' for this task is still its direct output.
+                # The chaining function will handle the next steps.
+            else:
+                print(f"[ERROR Task ID: {task_id}] Different Pose sequence chaining failed after generate_openpose step: {chain_message}. This may halt the sequence.")
+        # --- END SM_RESTRUCTURE_FIX ---
     
     elif task_type == "rife_interpolate_images":
         print(f"[Task ID: {task_id}] Identified as 'rife_interpolate_images' task.")
@@ -559,18 +577,21 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                 print(f"[ERROR Task ID: {task_id}] Travel sequence chaining failed after WGP completion: {chain_message}. The raw WGP output '{output_location_to_db}' will be used for this task's DB record.")
         
         elif task_params_dict.get("different_pose_chain_details"):
-            dprint(f"Task {task_id} is part of a different_pose sequence. Attempting to chain.")
-            
-            chain_success, chain_message, final_path_from_chaining = dp._handle_different_pose_chaining(
-                completed_task_params=task_params_dict, 
-                task_output_path=output_location_to_db,
-                dprint=dprint
-            )
-            if chain_success:
-                chaining_result_path_override = final_path_from_chaining
-                dprint(f"Task {task_id}: Different Pose chaining successful. Message: {chain_message}")
-            else:
-                print(f"[ERROR Task ID: {task_id}] Different Pose sequence chaining failed: {chain_message}. This may halt the sequence.")
+            # SM_RESTRUCTURE_FIX: Prevent double-chaining. This is now handled in the 'generate_openpose' block.
+            # The only other task type that can have these details is 'wgp', which is the intended target for this block.
+            if task_type != 'generate_openpose':
+                dprint(f"Task {task_id} is part of a different_pose sequence. Attempting to chain.")
+                
+                chain_success, chain_message, final_path_from_chaining = dp._handle_different_pose_chaining(
+                    completed_task_params=task_params_dict, 
+                    task_output_path=output_location_to_db,
+                    dprint=dprint
+                )
+                if chain_success:
+                    chaining_result_path_override = final_path_from_chaining
+                    dprint(f"Task {task_id}: Different Pose chaining successful. Message: {chain_message}")
+                else:
+                    print(f"[ERROR Task ID: {task_id}] Different Pose sequence chaining failed: {chain_message}. This may halt the sequence.")
 
 
         if chaining_result_path_override:
