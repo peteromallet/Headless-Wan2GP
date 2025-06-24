@@ -913,36 +913,40 @@ def main():
     # --- End delete-db handling ---
 
     # --- Setup logging to file if requested ---
-    log_file = None
     if cli_args.save_logging:
         import logging
+        import sys
+        
         log_file_path = Path(cli_args.save_logging)
         log_file_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Setup file handler for logging
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_file_path, mode='a', encoding='utf-8'),
-                logging.StreamHandler()  # Also keep console output
-            ]
-        )
+        # Create a custom stream that writes to both console and file
+        class DualWriter:
+            def __init__(self, log_file_path):
+                self.terminal = sys.stdout
+                self.log_file = open(log_file_path, 'w', encoding='utf-8')
+                
+            def write(self, message):
+                self.terminal.write(message)
+                self.log_file.write(message)
+                self.log_file.flush()  # Ensure immediate write
+                
+            def flush(self):
+                self.terminal.flush()
+                self.log_file.flush()
+                
+            def close(self):
+                if hasattr(self, 'log_file'):
+                    self.log_file.close()
         
-        # Redirect print statements to also log to file
-        original_print = print
-        def enhanced_print(*args, **kwargs):
-            # Call original print for console output
-            original_print(*args, **kwargs)
-            # Also log to file
-            message = ' '.join(str(arg) for arg in args)
-            logging.info(message)
-        
-        # Override print globally
-        import builtins
-        builtins.print = enhanced_print
+        # Redirect stdout to our dual writer
+        sys.stdout = DualWriter(log_file_path)
         
         print(f"[LOGGING] All output will be saved to: {log_file_path.resolve()}")
+        
+        # Ensure cleanup on exit
+        import atexit
+        atexit.register(lambda: hasattr(sys.stdout, 'close') and sys.stdout.close())
     # --- End logging setup ---
 
     # --- Configure DB Type and Connection Globals ---
