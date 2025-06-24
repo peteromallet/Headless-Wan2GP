@@ -97,12 +97,14 @@ def write_test_case(name: str,
     test_dir = TESTS_ROOT / name
     test_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy / link assets with descriptive names
+    # Copy / link assets with descriptive names and record new paths
+    copied_images: list[Path] = []
     for idx, img in enumerate(images):
         dst = test_dir / f"{name}_image{idx+1}{img.suffix}"
         if dst.exists():
             dst.unlink()
         shutil.copy2(img, dst)
+        copied_images.append(dst)
     if continue_video is not None:
         dst_vid = test_dir / f"{name}_continue_video{continue_video.suffix}"
         if dst_vid.exists():
@@ -116,7 +118,7 @@ def write_test_case(name: str,
     run_id = f"{name}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}"
     orch_payload = make_orchestrator_payload(
         run_id=run_id,
-        images=[test_dir / p.name for p in images],
+        images=copied_images,
         continue_video=continue_video_path,
         num_segments=num_segments,
     )
@@ -129,7 +131,11 @@ def write_test_case(name: str,
     with open(json_path, "w", encoding="utf-8") as fp:
         json.dump(task_json, fp, indent=2)
 
-    print(f"[WRITE] {json_path.relative_to(Path.cwd())}")
+    try:
+        print(f"[WRITE] {json_path.resolve().relative_to(Path.cwd().resolve())}")
+    except ValueError:
+        # Fallback if paths are on different drives or unrelated
+        print(f"[WRITE] {json_path.resolve()}")
 
     if enqueue:
         cmd = [sys.executable, "add_task.py", "--type", "travel_orchestrator",
