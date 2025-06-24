@@ -705,7 +705,11 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         processed_additional_loras = {}
         if additional_loras:
             dprint(f"Seg {segment_idx}: Processing additional LoRAs using shared function")
-            model_filename_for_task = full_orchestrator_payload["model_name"]
+            model_filename_for_task = wgp_mod.get_model_filename(
+                full_orchestrator_payload["model_name"],
+                wgp_mod.transformer_quantization,
+                wgp_mod.transformer_dtype_policy,
+            )
             processed_additional_loras = process_additional_loras_shared(
                 additional_loras, 
                 wgp_mod, 
@@ -723,7 +727,14 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
              resolution=f"{parsed_res_wh[0]}x{parsed_res_wh[1]}",
              video_length=final_frames_for_wgp_generation,
              seed=segment_params["seed_to_use"],
-             model_filename=full_orchestrator_payload["model_name"],
+             # Resolve the actual model .safetensors file that WGP expects – the
+             # orchestrator payload only contains the shorthand model alias
+             # (e.g. "vace_14B").
+             model_filename=wgp_mod.get_model_filename(
+                 full_orchestrator_payload["model_name"],
+                 wgp_mod.transformer_quantization,
+                 wgp_mod.transformer_dtype_policy,
+             ),
              video_guide=str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
              video_mask=str(mask_video_path_for_wgp.resolve()) if mask_video_path_for_wgp else None,
              image_refs=safe_vace_image_ref_paths_for_wgp,
