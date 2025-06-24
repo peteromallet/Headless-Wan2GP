@@ -25,13 +25,12 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import subprocess
+import sqlite3
+import time
 import sys
 from pathlib import Path
 from datetime import datetime
-import sqlite3
 from typing import Dict, List, Tuple
-import time
 
 # ---------------------------------------------------------------------
 # Configuration helpers
@@ -323,16 +322,41 @@ def main(args) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--enqueue", action="store_true",
-                        help="Actually call add_task.py for each generated test case")
-    parser.add_argument("--compare", action="store_true", help="Copy results for comparison")
+                        help="Only generate tests and enqueue them (no comparison)")
+    parser.add_argument("--compare", action="store_true", help="Only create comparison directory (no new enqueue)")
     parser.add_argument("--no-wait", action="store_true", help="Skip waiting for task completion (compare immediately)")
-    parser.add_argument("--wait-minutes", type=int, default=30, help="Max minutes to wait for completion")
+    parser.add_argument("--wait-minutes", type=int, default=30, help="Max minutes to wait for completion when waiting is enabled")
     args = parser.parse_args()
 
-    if args.compare:
+    # -------------------------------------------------
+    # 1. Explicit --enqueue only
+    # -------------------------------------------------
+    if args.enqueue and not args.compare:
+        main(args)  # generate & enqueue only
+        print("[INFO] Enqueue-only mode complete. No comparison requested.")
+        sys.exit(0)
+
+    # -------------------------------------------------
+    # 2. Explicit --compare only
+    # -------------------------------------------------
+    if args.compare and not args.enqueue:
         if not args.no_wait:
             print("[INFO] Waiting for task completion before comparison (use --no-wait to skip)")
             wait_for_task_completion(args.wait_minutes)
         copy_results_for_comparison()
+        sys.exit(0)
+
+    # -------------------------------------------------
+    # 3. DEFAULT / combined path: enqueue + wait + compare
+    #    (Triggered when no flags or both flags given.)
+    # -------------------------------------------------
+    print("[INFO] Running full cycle: generate/enqueue tests, wait for completion, then compare results.")
+    main(args)  # generate and enqueue tests
+
+    if not args.no_wait:
+        wait_for_task_completion(args.wait_minutes)
     else:
-        main(args) 
+        print("[INFO] --no-wait specified: skipping wait phase.")
+
+    copy_results_for_comparison()
+    print("[INFO] Full test cycle complete.") 
