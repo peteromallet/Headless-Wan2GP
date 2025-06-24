@@ -480,6 +480,11 @@ def save_frame_from_video(video_path: Path, frame_index: int, output_image_path:
         return False
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # Allow Python‐style negative indexing (e.g. -1 for last frame)
+    if frame_index < 0:
+        frame_index = total_frames + frame_index  # Convert to positive index
+
     if frame_index < 0 or frame_index >= total_frames:
         print(f"Error: Frame index {frame_index} is out of bounds for video {video_path} (total frames: {total_frames}).")
         cap.release()
