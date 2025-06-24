@@ -234,26 +234,67 @@ def create_video_from_frames_list(
     resolution: tuple[int, int] # width, height
 ):
     """Creates an MP4 video from a list of NumPy BGR frames."""
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = None
-    try:
-        out = cv2.VideoWriter(str(output_path), fourcc, float(fps), resolution)
-        if not out.isOpened():
-            raise IOError(f"Could not open video writer for {output_path}")
+    output_path_obj = Path(output_path)
+    output_path_mp4 = output_path_obj.with_suffix('.mp4')
+    output_path_mp4.parent.mkdir(parents=True, exist_ok=True)
 
-        for frame_np in frames_list:
-            if frame_np.shape[1] != resolution[0] or frame_np.shape[0] != resolution[1]:
-                frame_np_resized = cv2.resize(frame_np, resolution, interpolation=cv2.INTER_AREA)
-                out.write(frame_np_resized)
-            else:
-                out.write(frame_np)
-        print(f"Generated video: {output_path} ({len(frames_list)} frames)")
-    finally:
-        if out:
-            out.release()
+    ffmpeg_cmd = [
+        "ffmpeg", "-y",
+        "-loglevel", "error",
+        "-f", "rawvideo",
+        "-vcodec", "rawvideo",
+        "-pix_fmt", "bgr24",
+        "-s", f"{resolution[0]}x{resolution[1]}",
+        "-r", str(fps),
+        "-i", "-",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-preset", "veryfast",
+        "-crf", "23",
+        "-vf", "format=yuv420p,colorspace=bt709:iall=bt709:fast=1",
+        "-color_primaries", "bt709",
+        "-color_trc", "bt709",
+        "-colorspace", "bt709",
+        str(output_path_mp4.resolve())
+    ]
+
+    processed_frames = []
+    for frame_idx, frame_np in enumerate(frames_list):
+        if frame_np is None or not isinstance(frame_np, np.ndarray):
+            continue
+        if frame_np.dtype != np.uint8:
+            frame_np = frame_np.astype(np.uint8)
+        if frame_np.shape[0] != resolution[1] or frame_np.shape[1] != resolution[0] or frame_np.shape[2] != 3:
+            try:
+                frame_np = cv2.resize(frame_np, resolution, interpolation=cv2.INTER_AREA)
+            except Exception:
+                continue
+        processed_frames.append(frame_np)
+
+    if not processed_frames:
+        print(f"No valid frames to write for {output_path_mp4}")
+        return None
+
+    try:
+        raw_video_data = b''.join(frame.tobytes() for frame in processed_frames)
+    except Exception as e:
+        print(f"Error preparing video data: {e}")
+        return None
+
+    if not raw_video_data:
+        print(f"No video data to write for {output_path_mp4}")
+        return None
+
+    try:
+        process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+        process.communicate(input=raw_video_data)
+        if process.returncode != 0:
+            print(f"FFmpeg failed with return code {process.returncode}")
+            return None
+        return output_path_mp4
+    except Exception as e:
+        print(f"Error during FFmpeg encoding: {e}")
+        return None
 
 def add_task_to_db(task_payload: dict, db_path: str | Path, task_type_str: str, dependant_on: str | None = None):
     conn = sqlite3.connect(str(db_path))
