@@ -314,7 +314,8 @@ def main(args) -> None:
     print("\nAll test cases generated under", TESTS_ROOT.resolve())
 
     if args.compare:
-        if args.wait:
+        if not args.no_wait:
+            print("[INFO] Waiting for task completion before comparison (use --no-wait to skip)")
             wait_for_task_completion(args.wait_minutes)
         copy_results_for_comparison()
 
@@ -324,12 +325,13 @@ if __name__ == "__main__":
     parser.add_argument("--enqueue", action="store_true",
                         help="Actually call add_task.py for each generated test case")
     parser.add_argument("--compare", action="store_true", help="Copy results for comparison")
-    parser.add_argument("--wait", action="store_true", help="Wait for task completion before comparison")
+    parser.add_argument("--no-wait", action="store_true", help="Skip waiting for task completion (compare immediately)")
     parser.add_argument("--wait-minutes", type=int, default=30, help="Max minutes to wait for completion")
     args = parser.parse_args()
 
     if args.compare:
-        if args.wait:
+        if not args.no_wait:
+            print("[INFO] Waiting for task completion before comparison (use --no-wait to skip)")
             wait_for_task_completion(args.wait_minutes)
         copy_results_for_comparison()
     else:
