@@ -47,6 +47,12 @@ def _handle_different_pose_orchestrator_task(task_params_from_db: dict, main_out
     dprint(f"Orchestrator Task Params: {task_params_from_db}")
 
     try:
+        # Override the output directory to use 'public/files'
+        # This assumes the script is run from the project root directory.
+        public_files_dir = Path.cwd() / "public" / "files"
+        public_files_dir.mkdir(parents=True, exist_ok=True)
+        main_output_dir_base = public_files_dir
+
         run_id = generate_unique_task_id("dp_run_")
         work_dir = main_output_dir_base / f"different_pose_run_{run_id}"
         work_dir.mkdir(parents=True, exist_ok=True)
