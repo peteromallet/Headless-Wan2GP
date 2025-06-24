@@ -469,15 +469,15 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     # 1) Frames reused from the previous segment (overlap)
                     inactive_indices.update(range(overlap_count))
 
-                    # 2) First frame when this is the very first segment from scratch
-                    is_first_segment_val = segment_params.get("is_first_segment", False)
-                    is_continue_scenario = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
-                    if is_first_segment_val and not is_continue_scenario:
-                        inactive_indices.add(0)
+                # 2) First frame when this is the very first segment from scratch
+                is_first_segment_val = segment_params.get("is_first_segment", False)
+                is_continue_scenario = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
+                if is_first_segment_val and not is_continue_scenario:
+                    inactive_indices.add(0)
 
-                    # 3) Last frame for ALL segments - each segment travels TO a target image
-                    # Every segment ends at its target image, which should be kept (inactive/black)
-                    inactive_indices.add(total_frames_for_segment - 1)
+                # 3) Last frame for ALL segments - each segment travels TO a target image
+                # Every segment ends at its target image, which should be kept (inactive/black)
+                inactive_indices.add(total_frames_for_segment - 1)
 
                 # Debug: Show the conditions that determined inactive indices
                 dprint(
@@ -962,6 +962,19 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         segment_video_paths_for_stitch = []
         if initial_continued_video_path_str and Path(initial_continued_video_path_str).exists():
             dprint(f"Stitch: Prepending initial continued video: {initial_continued_video_path_str}")
+            # Check the continue video properties
+            cap = cv2.VideoCapture(str(initial_continued_video_path_str))
+            if cap.isOpened():
+                continue_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                continue_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                continue_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                cap.release()
+                dprint(f"Stitch: Continue video properties - Resolution: {continue_width}x{continue_height}, Frames: {continue_frame_count}")
+                dprint(f"Stitch: Target resolution for stitching: {parsed_res_wh[0]}x{parsed_res_wh[1]}")
+                if continue_width != parsed_res_wh[0] or continue_height != parsed_res_wh[1]:
+                    dprint(f"Stitch: WARNING - Continue video resolution mismatch! Will need resizing during crossfade.")
+            else:
+                dprint(f"Stitch: ERROR - Could not open continue video for property check")
             segment_video_paths_for_stitch.append(str(Path(initial_continued_video_path_str).resolve()))
         
         # Query DB for all completed generation sub-tasks for this run_id
