@@ -50,7 +50,7 @@ ASSET_IMAGES = [
     SAMPLES_DIR / "2.png",
     SAMPLES_DIR / "3.png",
 ]
-ASSET_VIDEO = SAMPLES_DIR / "test.test.mp4"
+ASSET_VIDEO = SAMPLES_DIR / "test.mp4"
 
 TESTS_ROOT = Path("tests")
 
@@ -148,6 +148,58 @@ def write_test_case(name: str,
             print(f"[ERROR] add_task failed: {e}")
 
 
+def copy_results_for_comparison():
+    """Copy all test inputs and outputs to a single comparison directory."""
+    comparison_dir = Path("test_results_comparison")
+    comparison_dir.mkdir(exist_ok=True)
+    
+    print(f"[COMPARISON] Creating comparison directory: {comparison_dir}")
+    
+    # Copy inputs and outputs for each test
+    for test_name in ["test_1_single_image", "test_2_three_images", "test_3_continue_plus_one", "test_4_continue_plus_two"]:
+        test_dir = Path("tests") / test_name
+        if not test_dir.exists():
+            print(f"[WARNING] Test directory not found: {test_dir}")
+            continue
+            
+        # Create test-specific comparison subdirectory
+        comp_test_dir = comparison_dir / test_name
+        comp_test_dir.mkdir(exist_ok=True)
+        
+        # Copy input files
+        inputs_dir = comp_test_dir / "inputs"
+        inputs_dir.mkdir(exist_ok=True)
+        
+        for input_file in test_dir.glob("*"):
+            if input_file.is_file() and not input_file.name.endswith("_task.json"):
+                dst = inputs_dir / input_file.name
+                shutil.copy2(input_file, dst)
+                print(f"[COPY INPUT] {input_file} -> {dst}")
+        
+        # Copy task JSON for reference
+        task_json = test_dir / f"{test_name}_task.json"
+        if task_json.exists():
+            shutil.copy2(task_json, comp_test_dir / "task_config.json")
+            print(f"[COPY CONFIG] {task_json} -> {comp_test_dir / 'task_config.json'}")
+        
+        # Copy output files (look in public/files for SQLite outputs)
+        outputs_dir = comp_test_dir / "outputs"
+        outputs_dir.mkdir(exist_ok=True)
+        
+        public_files = Path("public/files")
+        if public_files.exists():
+            # Look for files with the test run ID in their name
+            run_id_pattern = test_name.replace("test_", "").replace("_", ".*")
+            for output_file in public_files.glob("*"):
+                if run_id_pattern in output_file.name or test_name in output_file.name:
+                    dst = outputs_dir / f"{test_name}_{output_file.name}"
+                    shutil.copy2(output_file, dst)
+                    print(f"[COPY OUTPUT] {output_file} -> {dst}")
+    
+    print(f"[COMPARISON] Results comparison ready in: {comparison_dir}")
+    return comparison_dir
+
+
 # ---------------------------------------------------------------------
 # Main CLI
 # ---------------------------------------------------------------------
@@ -156,6 +208,7 @@ def main() -> None:
     parser = argparse.ArgumentParser("generate_test_tasks")
     parser.add_argument("--enqueue", action="store_true",
                         help="Actually call add_task.py for each generated test case")
+    parser.add_argument("--compare", action="store_true", help="Copy results for comparison")
     args = parser.parse_args()
 
     TESTS_ROOT.mkdir(exist_ok=True)
@@ -172,6 +225,9 @@ def main() -> None:
         write_test_case(name, imgs, cont_vid, segments, enqueue=args.enqueue)
 
     print("\nAll test cases generated under", TESTS_ROOT.resolve())
+
+    if args.compare:
+        copy_results_for_comparison()
 
 
 if __name__ == "__main__":
