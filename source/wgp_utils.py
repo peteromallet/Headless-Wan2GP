@@ -137,13 +137,58 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
     # Ensure we have a valid `state` structure expected by wgp.py.  When callers
     # (e.g. single-image or travel_segment helpers) invoke this wrapper they may
     # omit the `state` argument entirely which causes wgp.py to raise a
-    # KeyError when it tries to access `state["gen"]["file_list"]`.
-    #
-    # If no state has been provided we construct a minimal, self-contained one
-    # based on the current invocation parameters.  This is intentionally kept
-    # lightweight – the full featured `build_task_state` helper is still used
-    # by complex callers like `different_pose` and standard WGP tasks.
+    # KeyError or, later on, a mysterious `list index out of range` when it
+    # tries to access nested lists inside the state dict.  We therefore attempt
+    # to build a **fully-featured** state using the same helper that headless.py
+    # relies on.  If that fails for any reason we gracefully fall back to the
+    # minimal stub so that the previous behaviour is preserved.
     if "state" not in params or not params["state"]:
+        try:
+            # --- Prefer the robust builder used by headless.py ---
+            from source.common_utils import build_task_state  # Local import to avoid circular deps
+
+            # Obtain the full list of LoRAs available for this model so that
+            # build_task_state can resolve `activated_loras` correctly.
+            lora_dir_for_model = wgp_mod.get_lora_dir(model_filename)
+            all_loras_for_model, *_ = wgp_mod.setup_loras(
+                model_filename, None, lora_dir_for_model, "", None
+            )
+
+            task_params_for_state = {
+                "task_id": task_id,
+                "prompt": prompt,
+                "negative_prompt": negative_prompt,
+                "resolution": resolution,
+                "video_length": video_length,
+                "seed": seed,
+                "num_inference_steps": params["num_inference_steps"],
+                "guidance_scale": params["guidance_scale"],
+                "flow_shift": params["flow_shift"],
+                "activated_loras": params["activated_loras"],
+                "loras_multipliers": params["loras_multipliers"],
+                # Expose the CausVid flag so that builder can apply its tweaks
+                "use_causvid_lora": "Wan21_CausVid" in " ".join(params["activated_loras"]),
+            }
+            # Merge any miscellaneous keys the caller already supplied – this
+            # lets advanced features (video_guide, image_refs, etc.) propagate.
+            task_params_for_state.update({k: v for k, v in kwargs.items()})
+
+            state_built, _ = build_task_state(
+                wgp_mod,
+                model_filename,
+                task_params_for_state,
+                all_loras_for_model,
+                image_download_dir=None,
+                apply_reward_lora=False,
+            )
+            params["state"] = state_built
+        except Exception as e_state:
+            # Fall back to the lightweight stub built below
+            dprint(f"{task_id}: Failed to build full task state ({e_state}); falling back to minimal stub.")
+            params["state"] = None  # Will be replaced a few lines later
+
+    if not params["state"]:
+        # --- Minimal fallback (previous behaviour) ---
         minimal_state = {
             "model_filename": model_filename,
             "validate_success": 1,
@@ -169,8 +214,6 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
             "num_inference_steps": params["num_inference_steps"],
             "guidance_scale": params["guidance_scale"],
             "flow_shift": params["flow_shift"],
-            # Populate a few other common keys with sensible defaults so that
-            # internal validation does not fail if it attempts to access them.
             "activated_loras": params["activated_loras"],
             "loras_multipliers": params["loras_multipliers"],
         }
