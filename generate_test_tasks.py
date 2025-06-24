@@ -39,7 +39,7 @@ from typing import Dict, List, Tuple
 PROJECT_ID = "test_suite"
 BASE_PROMPT = "Car driving through a city, sky morphing"
 NEG_PROMPT = "chaotic"
-MODEL_NAME = "vace_14B"
+MODEL_NAME = "t2v"
 DEFAULT_RESOLUTION = "500x500"  # Fallback / default when not overridden
 FPS = 16
 SEGMENT_FRAMES_DEFAULT = 81  # will be quantised downstream (4n+1)
