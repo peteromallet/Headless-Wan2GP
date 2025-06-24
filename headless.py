@@ -176,36 +176,23 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
     dprint(f"Task Type: {task_type}")
     dprint(f"Project ID for task: {project_id_for_task}") # Added dprint for project_id
     dprint(f"Task Params (first 1000 chars): {json.dumps(task_params_dict, default=str, indent=2)[:1000]}...")
-    # dprint(f"PROCESS_SINGLE_TASK received task_params_dict: {json.dumps(task_params_dict)}") # DEBUG ADDED - Now covered by above
     task_id = task_params_dict.get("task_id", "unknown_task_" + str(time.time()))
     print(f"--- Processing task ID: {task_id} of type: {task_type} ---")
     output_location_to_db = None # Will store the final path/URL for the DB
+    generation_success = False
 
-    # --- Check for new task type ---
-    if task_type == "generate_openpose":
-        print(f"[Task ID: {task_id}] Identified as 'generate_openpose' task.")
-        # This handler might need access to wgp_mod for some utilities, so pass it along.
-        # It's better to pass dependencies explicitly than rely on globals.
-        return handle_generate_openpose_task(task_params_dict, main_output_dir_base, task_id, dprint)
-    elif task_type == "rife_interpolate_images":
-        print(f"[Task ID: {task_id}] Identified as 'rife_interpolate_images' task.")
-        return handle_rife_interpolate_task(wgp_mod, task_params_dict, main_output_dir_base, task_id, dprint)
-
-    # --- SM_RESTRUCTURE: Add new travel task handlers ---
-    elif task_type == "travel_orchestrator":
+    # --- Orchestrator & Self-Contained Task Handlers ---
+    # These tasks manage their own sub-task queuing and can return directly, as they
+    # are either the start of a chain or a self-contained unit.
+    if task_type == "travel_orchestrator":
         print(f"[Task ID: {task_id}] Identified as 'travel_orchestrator' task.")
         return tbi._handle_travel_orchestrator_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, orchestrator_task_id_str=task_id, orchestrator_project_id=project_id_for_task, dprint=dprint)
     elif task_type == "travel_segment":
         print(f"[Task ID: {task_id}] Identified as 'travel_segment' task.")
-        # This will call wgp_mod like a standard task but might have pre/post processing
-        # based on orchestrator details passed in its params.
         return tbi._handle_travel_segment_task(wgp_mod, task_params_dict, main_output_dir_base, task_id, apply_reward_lora, colour_match_videos, mask_active_frames, process_single_task=process_single_task, dprint=dprint)
     elif task_type == "travel_stitch":
         print(f"[Task ID: {task_id}] Identified as 'travel_stitch' task.")
         return tbi._handle_travel_stitch_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, stitch_task_id_str=task_id, dprint=dprint)
-    # --- End SM_RESTRUCTURE ---
-    
-    # --- Different Pose Orchestrator ---
     elif task_type == "different_pose_orchestrator":
         print(f"[Task ID: {task_id}] Identified as 'different_pose_orchestrator' task.")
         return dp._handle_different_pose_orchestrator_task(
@@ -214,9 +201,6 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
             orchestrator_task_id_str=task_id,
             dprint=dprint
         )
-    # --- End Different Pose ---
-
-    # --- Single Image Generation ---
     elif task_type == "single_image":
         print(f"[Task ID: {task_id}] Identified as 'single_image' task.")
         return si._handle_single_image_task(
@@ -228,343 +212,334 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
             apply_reward_lora=apply_reward_lora,
             dprint=dprint
         )
-    # --- End Single Image ---
+
+    # --- Primitive Task Execution Block ---
+    # These tasks (openpose, rife, wgp) might be part of a chain.
+    # They set generation_success and output_location_to_db, then execution
+    # falls through to the chaining logic at the end of this function.
+    if task_type == "generate_openpose":
+        print(f"[Task ID: {task_id}] Identified as 'generate_openpose' task.")
+        generation_success, output_location_to_db = handle_generate_openpose_task(task_params_dict, main_output_dir_base, task_id, dprint)
+    
+    elif task_type == "rife_interpolate_images":
+        print(f"[Task ID: {task_id}] Identified as 'rife_interpolate_images' task.")
+        generation_success, output_location_to_db = handle_rife_interpolate_task(wgp_mod, task_params_dict, main_output_dir_base, task_id, dprint)
 
     # Default handling for standard wgp tasks (original logic)
-    task_model_type_logical = task_params_dict.get("model", "t2v")
-    # Determine the actual model filename before checking/downloading LoRA, as LoRA path depends on it
-    model_filename_for_task = wgp_mod.get_model_filename(task_model_type_logical,
-                                                         wgp_mod.transformer_quantization,
-                                                         wgp_mod.transformer_dtype_policy)
-    
-    if apply_reward_lora:
-        print(f"[Task ID: {task_id}] --apply-reward-lora flag is active. Checking and downloading reward LoRA.")
-        reward_lora_data = {
-            "url": "https://huggingface.co/peteromallet/Wan2.1-Fun-14B-InP-MPS_reward_lora_diffusers/resolve/main/Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors",
-            "filename": "Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors"
-        }
+    else:
+        task_model_type_logical = task_params_dict.get("model", "t2v")
+        model_filename_for_task = wgp_mod.get_model_filename(task_model_type_logical,
+                                                             wgp_mod.transformer_quantization,
+                                                             wgp_mod.transformer_dtype_policy)
         
-        base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
-        download_file(reward_lora_data['url'], base_lora_dir_for_model, reward_lora_data['filename'])
-
-    effective_image_download_dir = image_download_dir # Use passed-in dir if available
-
-    if effective_image_download_dir is None: # Not passed, so determine for this standard/individual task
-        if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH: # SQLITE_DB_PATH is global
-            try:
-                sqlite_db_path_obj = Path(db_ops.SQLITE_DB_PATH).resolve()
-                if sqlite_db_path_obj.is_file():
-                    sqlite_db_parent_dir = sqlite_db_path_obj.parent
-                    candidate_download_dir = sqlite_db_parent_dir / "public" / "data" / "image_downloads" / task_id
-                    candidate_download_dir.mkdir(parents=True, exist_ok=True)
-                    effective_image_download_dir = str(candidate_download_dir.resolve())
-                    dprint(f"Task {task_id}: Determined SQLite-based image_download_dir for standard task: {effective_image_download_dir}")
-                else:
-                    dprint(f"Task {task_id}: SQLITE_DB_PATH '{db_ops.SQLITE_DB_PATH}' is not a file. Cannot determine parent for image_download_dir.")        
-            except Exception as e_idir_sqlite:
-                dprint(f"Task {task_id}: Could not create SQLite-based image_download_dir for standard task: {e_idir_sqlite}.")
-        # Add similar logic for Supabase if a writable shared path convention exists.
-
-    use_causvid = task_params_dict.get("use_causvid_lora", False)
-    causvid_lora_basename = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
-    causvid_lora_url = "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
-
-    if use_causvid:
-        base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
-        target_causvid_lora_dir = base_lora_dir_for_model
-        
-        if "14B" in model_filename_for_task and "t2v" in model_filename_for_task.lower():
-             pass 
-        elif "14B" in model_filename_for_task:
-             pass 
-
-        if not Path(target_causvid_lora_dir / causvid_lora_basename).exists():
-            print(f"[Task ID: {task_id}] CausVid LoRA not found. Attempting download...")
-            if not download_file(causvid_lora_url, target_causvid_lora_dir, causvid_lora_basename):
-                print(f"[WARNING Task ID: {task_id}] Failed to download CausVid LoRA. Proceeding without it or with default settings.")
-                task_params_dict["use_causvid_lora"] = False
-            else:
-                 pass 
-        if not "14B" in model_filename_for_task or not "t2v" in model_filename_for_task.lower():
-            print(f"[WARNING Task ID: {task_id}] CausVid LoRA is intended for 14B T2V models. Current model is {model_filename_for_task}. Results may vary.")
-
-    # Handle additional LoRAs from task params, which may be passed by travel orchestrator
-    additional_loras = task_params_dict.get("additional_loras", {})
-    if additional_loras:
-        dprint(f"[Task ID: {task_id}] Processing additional LoRAs: {additional_loras}")
-        base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
-        processed_loras = {}
-        for lora_path, lora_strength in additional_loras.items():
-            try:
-                lora_filename = Path(urllib.parse.urlparse(lora_path).path).name
-                
-                if lora_path.startswith("http://") or lora_path.startswith("https://"):
-                    # URL case: download the LoRA to central Wan2GP/loras directory
-                    wan2gp_loras_dir = Path("Wan2GP/loras")
-                    wan2gp_loras_dir.mkdir(parents=True, exist_ok=True)
-                    dprint(f"Task {task_id}: Downloading LoRA from {lora_path} to {wan2gp_loras_dir}")
-                    download_file(lora_path, wan2gp_loras_dir, lora_filename)
-                    
-                    # Now copy from Wan2GP/loras to model-specific directory if needed
-                    downloaded_lora_path = wan2gp_loras_dir / lora_filename
-                    target_path = base_lora_dir_for_model / lora_filename
-                    if not target_path.exists() or downloaded_lora_path.resolve() != target_path.resolve():
-                        shutil.copy(str(downloaded_lora_path), str(target_path))
-                        dprint(f"Copied downloaded LoRA from {downloaded_lora_path} to {target_path}")
-                    else:
-                        dprint(f"Downloaded LoRA already exists at target: {target_path}")
-                else:
-                    # Local file case: check multiple locations
-                    source_path = Path(lora_path)
-                    target_path = base_lora_dir_for_model / lora_filename
-                    
-                    if source_path.is_absolute() and source_path.exists():
-                        # Full absolute path that exists
-                        if not target_path.exists() or source_path.resolve() != target_path.resolve():
-                            shutil.copy(str(source_path), str(target_path))
-                            dprint(f"Copied local LoRA from {source_path} to {target_path}")
-                        else:
-                            dprint(f"LoRA already exists at target: {target_path}")
-                    elif (base_lora_dir_for_model / lora_path).exists():
-                        # Relative path within LoRA directory (e.g., "my_lora.safetensors" or "subfolder/my_lora.safetensors")
-                        existing_lora_path = base_lora_dir_for_model / lora_path
-                        lora_filename = existing_lora_path.name  # Update filename to actual file
-                        dprint(f"Found existing LoRA in directory: {existing_lora_path}")
-                        # No need to copy, it's already in the right place
-                    elif (Path("Wan2GP/loras") / lora_path).exists():
-                        # Check standard Wan2GP/loras directory
-                        wan2gp_lora_path = Path("Wan2GP/loras") / lora_path
-                        target_path = base_lora_dir_for_model / wan2gp_lora_path.name
-                        if not target_path.exists() or wan2gp_lora_path.resolve() != target_path.resolve():
-                            shutil.copy(str(wan2gp_lora_path), str(target_path))
-                            dprint(f"Copied LoRA from Wan2GP/loras: {wan2gp_lora_path} to {target_path}")
-                        else:
-                            dprint(f"LoRA from Wan2GP/loras already exists at target: {target_path}")
-                        lora_filename = wan2gp_lora_path.name
-                    elif source_path.exists():
-                        # Relative path from current working directory
-                        if not target_path.exists() or source_path.resolve() != target_path.resolve():
-                            shutil.copy(str(source_path), str(target_path))
-                            dprint(f"Copied local LoRA from {source_path} to {target_path}")
-                        else:
-                            dprint(f"LoRA already exists at target: {target_path}")
-                    else:
-                        dprint(f"[WARNING Task ID: {task_id}] LoRA not found at any location: '{lora_path}'. Checked: full path, LoRA directory, and relative path. Skipping.")
-                        continue # Skip this lora
-                
-                processed_loras[lora_filename] = str(lora_strength)
-            except Exception as e_lora:
-                print(f"[ERROR Task ID: {task_id}] Failed to process additional LoRA {lora_path}: {e_lora}")
-        
-        task_params_dict["processed_additional_loras"] = processed_loras
-
-    print(f"[Task ID: {task_id}] Using model file: {model_filename_for_task}")
-
-    # Use a temporary directory for wgp.py to save its output
-    # This temporary directory will be created under the system's temp location
-    temp_output_dir = tempfile.mkdtemp(prefix=f"wgp_headless_{task_id}_")
-    dprint(f"[Task ID: {task_id}] Using temporary output directory: {temp_output_dir}")
-
-    original_wgp_save_path = wgp_mod.save_path
-    wgp_mod.save_path = str(temp_output_dir) # wgp.py saves here
-
-    lora_dir_for_active_model = wgp_mod.get_lora_dir(model_filename_for_task)
-    all_loras_for_active_model, _, _, _, _, _, _ = wgp_mod.setup_loras(
-        model_filename_for_task, None, lora_dir_for_active_model, "", None
-    )
-
-    state, ui_params = build_task_state(wgp_mod, model_filename_for_task, task_params_dict, all_loras_for_active_model, image_download_dir, apply_reward_lora=apply_reward_lora)
-    
-    gen_task_placeholder = {"id": 1, "prompt": ui_params.get("prompt"), "params": {"model_filename_from_gui_state": model_filename_for_task, "model": task_model_type_logical}}
-    send_cmd = make_send_cmd(task_id)
-
-    # Adjust resolution in ui_params to be multiples of 16 for consistency with image processing
-    if "resolution" in ui_params:
-        try:
-            width, height = map(int, ui_params["resolution"].split("x"))
-            new_width, new_height = (width // 16) * 16, (height // 16) * 16
-            ui_params["resolution"] = f"{new_width}x{new_height}"
-            dprint(f"Adjusted resolution in ui_params to {ui_params['resolution']}")
-        except Exception as err:
-            dprint(f"Error adjusting resolution: {err}")
-    
-    tea_cache_value = ui_params.get("tea_cache_setting", ui_params.get("tea_cache", 0.0))
-
-    print(f"[Task ID: {task_id}] Starting generation with effective params: {json.dumps(ui_params, default=lambda o: 'Unserializable' if isinstance(o, Image.Image) else o.__dict__ if hasattr(o, '__dict__') else str(o), indent=2)}")
-    generation_success = False
-
-    # --- Determine frame_num for wgp.py --- 
-    requested_frames_from_task = ui_params.get("video_length", 81)
-    frame_num_for_wgp = requested_frames_from_task
-    dprint(f"[Task ID: {task_id}] Using requested frame count: {frame_num_for_wgp}")
-    # --- End frame_num determination ---
-
-    ui_params["video_length"] = frame_num_for_wgp
-
-    try:
-        dprint(f"[Task ID: {task_id}] Calling wgp_mod.generate_video with effective ui_params (first 1000 chars): {json.dumps(ui_params, default=lambda o: 'Unserializable' if isinstance(o, Image.Image) else o.__dict__ if hasattr(o, '__dict__') else str(o), indent=2)[:1000]}...")
-        wgp_mod.generate_video(
-            task=gen_task_placeholder, send_cmd=send_cmd,
-            prompt=ui_params["prompt"],
-            negative_prompt=ui_params.get("negative_prompt", ""),
-            resolution=ui_params["resolution"],
-            video_length=ui_params.get("video_length", 81),
-            seed=ui_params["seed"],
-            num_inference_steps=ui_params.get("num_inference_steps", 30),
-            guidance_scale=ui_params.get("guidance_scale", 5.0),
-            audio_guidance_scale=ui_params.get("audio_guidance_scale", 5.0),
-            flow_shift=ui_params.get("flow_shift", wgp_mod.get_default_flow(model_filename_for_task, wgp_mod.test_class_i2v(model_filename_for_task))),
-            embedded_guidance_scale=ui_params.get("embedded_guidance_scale", 6.0),
-            repeat_generation=ui_params.get("repeat_generation", 1),
-            multi_images_gen_type=ui_params.get("multi_images_gen_type", 0),
-            tea_cache_setting=tea_cache_value,
-            tea_cache_start_step_perc=ui_params.get("tea_cache_start_step_perc", 0),
-            activated_loras=ui_params.get("activated_loras", []),
-            loras_multipliers=ui_params.get("loras_multipliers", ""),
-            image_prompt_type=ui_params.get("image_prompt_type", "T"),
-            image_start=[wgp_mod.convert_image(img) for img in ui_params.get("image_start", [])],
-            image_end=[wgp_mod.convert_image(img) for img in ui_params.get("image_end", [])],
-            model_mode=ui_params.get("model_mode", 0),
-            video_source=ui_params.get("video_source", None),
-            keep_frames_video_source=ui_params.get("keep_frames_video_source", ""),
+        if apply_reward_lora:
+            print(f"[Task ID: {task_id}] --apply-reward-lora flag is active. Checking and downloading reward LoRA.")
+            reward_lora_data = {
+                "url": "https://huggingface.co/peteromallet/Wan2.1-Fun-14B-InP-MPS_reward_lora_diffusers/resolve/main/Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors",
+                "filename": "Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors"
+            }
             
-            video_prompt_type=ui_params.get("video_prompt_type", ""),
-            image_refs=ui_params.get("image_refs", None),
-            video_guide=ui_params.get("video_guide", None),
-            keep_frames_video_guide=ui_params.get("keep_frames_video_guide", ""),
-            video_mask=ui_params.get("video_mask", None),
-            audio_guide=ui_params.get("audio_guide", None),
-            sliding_window_size=ui_params.get("sliding_window_size", 81),
-            sliding_window_overlap=ui_params.get("sliding_window_overlap", 5),
-            sliding_window_overlap_noise=ui_params.get("sliding_window_overlap_noise", 20),
-            sliding_window_discard_last_frames=ui_params.get("sliding_window_discard_last_frames", 0),
-            remove_background_images_ref=ui_params.get("remove_background_images_ref", False),
-            temporal_upsampling=ui_params.get("temporal_upsampling", ""),
-            spatial_upsampling=ui_params.get("spatial_upsampling", ""),
-            RIFLEx_setting=ui_params.get("RIFLEx_setting", 0),
-            slg_switch=ui_params.get("slg_switch", 0),
-            slg_layers=ui_params.get("slg_layers", [9]),
-            slg_start_perc=ui_params.get("slg_start_perc", 10),
-            slg_end_perc=ui_params.get("slg_end_perc", 90),
-            cfg_star_switch=ui_params.get("cfg_star_switch", 0),
-            cfg_zero_step=ui_params.get("cfg_zero_step", -1),
-            prompt_enhancer=ui_params.get("prompt_enhancer", ""),
-            state=state,
-            model_filename=model_filename_for_task
-        )
-        print(f"[Task ID: {task_id}] Generation completed to temporary directory: {wgp_mod.save_path}")
-        generation_success = True
-    except Exception as e:
-        print(f"[ERROR] Task ID {task_id} failed during generation: {e}")
-        traceback.print_exc()
-        # generation_success remains False
-    finally:
-        wgp_mod.save_path = original_wgp_save_path # Restore original save path
+            base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
+            download_file(reward_lora_data['url'], base_lora_dir_for_model, reward_lora_data['filename'])
 
-    if generation_success:
-        # Find the generated video file(s)
-        generated_video_files = sorted([
-            item for item in Path(temp_output_dir).iterdir()
-            if item.is_file() and item.suffix.lower() == ".mp4"
-        ])
-        
-        generated_video_file = None
-        if not generated_video_files:
-            print(f"[WARNING Task ID: {task_id}] Generation reported success, but no .mp4 files found in {temp_output_dir}")
-            generation_success = False
-        elif len(generated_video_files) == 1:
-            generated_video_file = generated_video_files[0]
-            dprint(f"[Task ID: {task_id}] Found a single generated video: {generated_video_file}")
-        else:
-            dprint(f"[Task ID: {task_id}] Found {len(generated_video_files)} video segments to stitch: {generated_video_files}")
-            # Stitch the videos together
-            stitched_video_path = Path(temp_output_dir) / f"{task_id}_stitched.mp4"
-            
-            # Ensure the stitching utility is available
-            if 'sm_stitch_videos_ffmpeg' not in globals() and 'sm_stitch_videos_ffmpeg' not in locals():
-                try:
-                    from sm_functions.common_utils import stitch_videos_ffmpeg as sm_stitch_videos_ffmpeg
-                except ImportError:
-                    print(f"[CRITICAL ERROR Task ID: {task_id}] Failed to import 'stitch_videos_ffmpeg'. Cannot proceed with stitching.")
-                    generation_success = False # Cannot proceed
-            
-            if generation_success: # Check if import was successful before proceeding
-                try:
-                    # The function expects a list of strings
-                    video_paths_str = [str(p.resolve()) for p in generated_video_files]
-                    sm_stitch_videos_ffmpeg(video_paths_str, str(stitched_video_path.resolve()))
-                    
-                    if stitched_video_path.exists() and stitched_video_path.stat().st_size > 0:
-                        generated_video_file = stitched_video_path
-                        dprint(f"[Task ID: {task_id}] Successfully stitched video segments to: {generated_video_file}")
-                        # Optional: clean up the original segments now
-                        for segment_file in generated_video_files:
-                            try:
-                                segment_file.unlink()
-                            except OSError as e_clean:
-                                print(f"[WARNING Task ID: {task_id}] Could not delete segment file {segment_file}: {e_clean}")
-                    else:
-                        print(f"[ERROR Task ID: {task_id}] Stitching failed. Output file '{stitched_video_path}' not created or is empty.")
-                        generation_success = False
-                except Exception as e_stitch:
-                    print(f"[ERROR Task ID: {task_id}] An exception occurred during video stitching: {e_stitch}")
-                    traceback.print_exc()
-                    generation_success = False
+        effective_image_download_dir = image_download_dir
 
-        if generated_video_file and generation_success:
-            dprint(f"[Task ID: {task_id}] Processing final video: {generated_video_file}")
+        if effective_image_download_dir is None:
             if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
-                sqlite_db_file_path = Path(db_ops.SQLITE_DB_PATH).resolve()
-                target_files_dir = sqlite_db_file_path.parent / "public" / "files"
-                target_files_dir.mkdir(parents=True, exist_ok=True)
-                
-                final_video_path = sm_get_unique_target_path(
-                    target_files_dir, 
-                    task_id, # name_stem
-                    generated_video_file.suffix # suffix (e.g., ".mp4")
-                )
-                output_location_to_db = f"files/{final_video_path.name}"
                 try:
-                    shutil.move(str(generated_video_file), str(final_video_path))
-                    print(f"[Task ID: {task_id}] Output video saved to: {final_video_path.resolve()} (DB location: {output_location_to_db})")
-    
-                    if task_params_dict.get("output_path"):
-                        default_dir_to_clean = (main_output_dir_base / task_id)
-                        if default_dir_to_clean.exists() and default_dir_to_clean.is_dir() and default_dir_to_clean != final_video_path.parent:
-                            try:
-                                shutil.rmtree(default_dir_to_clean)
-                                dprint(f"[Task ID: {task_id}] Cleaned up auxiliary task directory: {default_dir_to_clean}")
-                            except Exception as e_cleanup_aux:
-                                print(f"[WARNING Task ID: {task_id}] Could not clean up auxiliary task directory {default_dir_to_clean}: {e_cleanup_aux}")
-                except Exception as e_move:
-                    print(f"[ERROR Task ID: {task_id}] Failed to move video to final local destination: {e_move}")
-                    generation_success = False
-            elif db_ops.DB_TYPE == "supabase" and db_ops.SUPABASE_CLIENT:
-                encoded_file_name = urllib.parse.quote(generated_video_file.name)
-                object_name = f"{task_id}/{encoded_file_name}"
-                dprint(f"[Task ID: {task_id}] Original filename: {generated_video_file.name}")
-                dprint(f"[Task ID: {task_id}] Encoded filename for Supabase object: {encoded_file_name}")
-                dprint(f"[Task ID: {task_id}] Final Supabase object_name: {object_name}")
-                
-                public_url = db_ops.upload_to_supabase_storage(generated_video_file, object_name, db_ops.SUPABASE_VIDEO_BUCKET)
-                if public_url:
-                    output_location_to_db = public_url
+                    sqlite_db_path_obj = Path(db_ops.SQLITE_DB_PATH).resolve()
+                    if sqlite_db_path_obj.is_file():
+                        sqlite_db_parent_dir = sqlite_db_path_obj.parent
+                        candidate_download_dir = sqlite_db_parent_dir / "public" / "data" / "image_downloads" / task_id
+                        candidate_download_dir.mkdir(parents=True, exist_ok=True)
+                        effective_image_download_dir = str(candidate_download_dir.resolve())
+                        dprint(f"Task {task_id}: Determined SQLite-based image_download_dir for standard task: {effective_image_download_dir}")
+                    else:
+                        dprint(f"Task {task_id}: SQLITE_DB_PATH '{db_ops.SQLITE_DB_PATH}' is not a file. Cannot determine parent for image_download_dir.")        
+                except Exception as e_idir_sqlite:
+                    dprint(f"Task {task_id}: Could not create SQLite-based image_download_dir for standard task: {e_idir_sqlite}.")
+
+        use_causvid = task_params_dict.get("use_causvid_lora", False)
+        causvid_lora_basename = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
+        causvid_lora_url = "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
+
+        if use_causvid:
+            base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
+            target_causvid_lora_dir = base_lora_dir_for_model
+            
+            if "14B" in model_filename_for_task and "t2v" in model_filename_for_task.lower():
+                 pass 
+            elif "14B" in model_filename_for_task:
+                 pass 
+
+            if not Path(target_causvid_lora_dir / causvid_lora_basename).exists():
+                print(f"[Task ID: {task_id}] CausVid LoRA not found. Attempting download...")
+                if not download_file(causvid_lora_url, target_causvid_lora_dir, causvid_lora_basename):
+                    print(f"[WARNING Task ID: {task_id}] Failed to download CausVid LoRA. Proceeding without it or with default settings.")
+                    task_params_dict["use_causvid_lora"] = False
                 else:
-                    print(f"[WARNING Task ID: {task_id}] Supabase upload failed or no URL returned. No output location will be saved.")
+                     pass 
+            if not "14B" in model_filename_for_task or not "t2v" in model_filename_for_task.lower():
+                print(f"[WARNING Task ID: {task_id}] CausVid LoRA is intended for 14B T2V models. Current model is {model_filename_for_task}. Results may vary.")
+
+        additional_loras = task_params_dict.get("additional_loras", {})
+        if additional_loras:
+            dprint(f"[Task ID: {task_id}] Processing additional LoRAs: {additional_loras}")
+            base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
+            processed_loras = {}
+            for lora_path, lora_strength in additional_loras.items():
+                try:
+                    lora_filename = Path(urllib.parse.urlparse(lora_path).path).name
+                    
+                    if lora_path.startswith("http://") or lora_path.startswith("https://"):
+                        wan2gp_loras_dir = Path("Wan2GP/loras")
+                        wan2gp_loras_dir.mkdir(parents=True, exist_ok=True)
+                        dprint(f"Task {task_id}: Downloading LoRA from {lora_path} to {wan2gp_loras_dir}")
+                        download_file(lora_path, wan2gp_loras_dir, lora_filename)
+                        
+                        downloaded_lora_path = wan2gp_loras_dir / lora_filename
+                        target_path = base_lora_dir_for_model / lora_filename
+                        if not target_path.exists() or downloaded_lora_path.resolve() != target_path.resolve():
+                            shutil.copy(str(downloaded_lora_path), str(target_path))
+                            dprint(f"Copied downloaded LoRA from {downloaded_lora_path} to {target_path}")
+                        else:
+                            dprint(f"Downloaded LoRA already exists at target: {target_path}")
+                    else:
+                        source_path = Path(lora_path)
+                        target_path = base_lora_dir_for_model / lora_filename
+                        
+                        if source_path.is_absolute() and source_path.exists():
+                            if not target_path.exists() or source_path.resolve() != target_path.resolve():
+                                shutil.copy(str(source_path), str(target_path))
+                                dprint(f"Copied local LoRA from {source_path} to {target_path}")
+                            else:
+                                dprint(f"LoRA already exists at target: {target_path}")
+                        elif (base_lora_dir_for_model / lora_path).exists():
+                            existing_lora_path = base_lora_dir_for_model / lora_path
+                            lora_filename = existing_lora_path.name
+                            dprint(f"Found existing LoRA in directory: {existing_lora_path}")
+                        elif (Path("Wan2GP/loras") / lora_path).exists():
+                            wan2gp_lora_path = Path("Wan2GP/loras") / lora_path
+                            target_path = base_lora_dir_for_model / wan2gp_lora_path.name
+                            if not target_path.exists() or wan2gp_lora_path.resolve() != target_path.resolve():
+                                shutil.copy(str(wan2gp_lora_path), str(target_path))
+                                dprint(f"Copied LoRA from Wan2GP/loras: {wan2gp_lora_path} to {target_path}")
+                            else:
+                                dprint(f"LoRA from Wan2GP/loras already exists at target: {target_path}")
+                            lora_filename = wan2gp_lora_path.name
+                        elif source_path.exists():
+                            if not target_path.exists() or source_path.resolve() != target_path.resolve():
+                                shutil.copy(str(source_path), str(target_path))
+                                dprint(f"Copied local LoRA from {source_path} to {target_path}")
+                            else:
+                                dprint(f"LoRA already exists at target: {target_path}")
+                        else:
+                            dprint(f"[WARNING Task ID: {task_id}] LoRA not found at any location: '{lora_path}'. Checked: full path, LoRA directory, and relative path. Skipping.")
+                            continue
+                    
+                    processed_loras[lora_filename] = str(lora_strength)
+                except Exception as e_lora:
+                    print(f"[ERROR Task ID: {task_id}] Failed to process additional LoRA {lora_path}: {e_lora}")
+            
+            task_params_dict["processed_additional_loras"] = processed_loras
+
+        print(f"[Task ID: {task_id}] Using model file: {model_filename_for_task}")
+
+        temp_output_dir = tempfile.mkdtemp(prefix=f"wgp_headless_{task_id}_")
+        dprint(f"[Task ID: {task_id}] Using temporary output directory: {temp_output_dir}")
+
+        original_wgp_save_path = wgp_mod.save_path
+        wgp_mod.save_path = str(temp_output_dir)
+
+        lora_dir_for_active_model = wgp_mod.get_lora_dir(model_filename_for_task)
+        all_loras_for_active_model, _, _, _, _, _, _ = wgp_mod.setup_loras(
+            model_filename_for_task, None, lora_dir_for_active_model, "", None
+        )
+
+        state, ui_params = build_task_state(wgp_mod, model_filename_for_task, task_params_dict, all_loras_for_active_model, image_download_dir, apply_reward_lora=apply_reward_lora)
+        
+        gen_task_placeholder = {"id": 1, "prompt": ui_params.get("prompt"), "params": {"model_filename_from_gui_state": model_filename_for_task, "model": task_model_type_logical}}
+        send_cmd = make_send_cmd(task_id)
+
+        if "resolution" in ui_params:
+            try:
+                width, height = map(int, ui_params["resolution"].split("x"))
+                new_width, new_height = (width // 16) * 16, (height // 16) * 16
+                ui_params["resolution"] = f"{new_width}x{new_height}"
+                dprint(f"Adjusted resolution in ui_params to {ui_params['resolution']}")
+            except Exception as err:
+                dprint(f"Error adjusting resolution: {err}")
+        
+        tea_cache_value = ui_params.get("tea_cache_setting", ui_params.get("tea_cache", 0.0))
+
+        print(f"[Task ID: {task_id}] Starting generation with effective params: {json.dumps(ui_params, default=lambda o: 'Unserializable' if isinstance(o, Image.Image) else o.__dict__ if hasattr(o, '__dict__') else str(o), indent=2)}")
+
+        requested_frames_from_task = ui_params.get("video_length", 81)
+        frame_num_for_wgp = requested_frames_from_task
+        dprint(f"[Task ID: {task_id}] Using requested frame count: {frame_num_for_wgp}")
+
+        ui_params["video_length"] = frame_num_for_wgp
+
+        try:
+            dprint(f"[Task ID: {task_id}] Calling wgp_mod.generate_video with effective ui_params (first 1000 chars): {json.dumps(ui_params, default=lambda o: 'Unserializable' if isinstance(o, Image.Image) else o.__dict__ if hasattr(o, '__dict__') else str(o), indent=2)[:1000]}...")
+            wgp_mod.generate_video(
+                task=gen_task_placeholder, send_cmd=send_cmd,
+                prompt=ui_params["prompt"],
+                negative_prompt=ui_params.get("negative_prompt", ""),
+                resolution=ui_params["resolution"],
+                video_length=ui_params.get("video_length", 81),
+                seed=ui_params["seed"],
+                num_inference_steps=ui_params.get("num_inference_steps", 30),
+                guidance_scale=ui_params.get("guidance_scale", 5.0),
+                audio_guidance_scale=ui_params.get("audio_guidance_scale", 5.0),
+                flow_shift=ui_params.get("flow_shift", wgp_mod.get_default_flow(model_filename_for_task, wgp_mod.test_class_i2v(model_filename_for_task))),
+                embedded_guidance_scale=ui_params.get("embedded_guidance_scale", 6.0),
+                repeat_generation=ui_params.get("repeat_generation", 1),
+                multi_images_gen_type=ui_params.get("multi_images_gen_type", 0),
+                tea_cache_setting=tea_cache_value,
+                tea_cache_start_step_perc=ui_params.get("tea_cache_start_step_perc", 0),
+                activated_loras=ui_params.get("activated_loras", []),
+                loras_multipliers=ui_params.get("loras_multipliers", ""),
+                image_prompt_type=ui_params.get("image_prompt_type", "T"),
+                image_start=[wgp_mod.convert_image(img) for img in ui_params.get("image_start", [])],
+                image_end=[wgp_mod.convert_image(img) for img in ui_params.get("image_end", [])],
+                model_mode=ui_params.get("model_mode", 0),
+                video_source=ui_params.get("video_source", None),
+                keep_frames_video_source=ui_params.get("keep_frames_video_source", ""),
+                
+                video_prompt_type=ui_params.get("video_prompt_type", ""),
+                image_refs=ui_params.get("image_refs", None),
+                video_guide=ui_params.get("video_guide", None),
+                keep_frames_video_guide=ui_params.get("keep_frames_video_guide", ""),
+                video_mask=ui_params.get("video_mask", None),
+                audio_guide=ui_params.get("audio_guide", None),
+                sliding_window_size=ui_params.get("sliding_window_size", 81),
+                sliding_window_overlap=ui_params.get("sliding_window_overlap", 5),
+                sliding_window_overlap_noise=ui_params.get("sliding_window_overlap_noise", 20),
+                sliding_window_discard_last_frames=ui_params.get("sliding_window_discard_last_frames", 0),
+                remove_background_images_ref=ui_params.get("remove_background_images_ref", False),
+                temporal_upsampling=ui_params.get("temporal_upsampling", ""),
+                spatial_upsampling=ui_params.get("spatial_upsampling", ""),
+                RIFLEx_setting=ui_params.get("RIFLEx_setting", 0),
+                slg_switch=ui_params.get("slg_switch", 0),
+                slg_layers=ui_params.get("slg_layers", [9]),
+                slg_start_perc=ui_params.get("slg_start_perc", 10),
+                slg_end_perc=ui_params.get("slg_end_perc", 90),
+                cfg_star_switch=ui_params.get("cfg_star_switch", 0),
+                cfg_zero_step=ui_params.get("cfg_zero_step", -1),
+                prompt_enhancer=ui_params.get("prompt_enhancer", ""),
+                state=state,
+                model_filename=model_filename_for_task
+            )
+            print(f"[Task ID: {task_id}] Generation completed to temporary directory: {wgp_mod.save_path}")
+            generation_success = True
+        except Exception as e:
+            print(f"[ERROR] Task ID {task_id} failed during generation: {e}")
+            traceback.print_exc()
+        finally:
+            wgp_mod.save_path = original_wgp_save_path
+
+        if generation_success:
+            generated_video_files = sorted([
+                item for item in Path(temp_output_dir).iterdir()
+                if item.is_file() and item.suffix.lower() == ".mp4"
+            ])
+            
+            generated_video_file = None
+            if not generated_video_files:
+                print(f"[WARNING Task ID: {task_id}] Generation reported success, but no .mp4 files found in {temp_output_dir}")
+                generation_success = False
+            elif len(generated_video_files) == 1:
+                generated_video_file = generated_video_files[0]
+                dprint(f"[Task ID: {task_id}] Found a single generated video: {generated_video_file}")
+            else:
+                dprint(f"[Task ID: {task_id}] Found {len(generated_video_files)} video segments to stitch: {generated_video_files}")
+                stitched_video_path = Path(temp_output_dir) / f"{task_id}_stitched.mp4"
+                
+                if 'sm_stitch_videos_ffmpeg' not in globals() and 'sm_stitch_videos_ffmpeg' not in locals():
+                    try:
+                        from sm_functions.common_utils import stitch_videos_ffmpeg as sm_stitch_videos_ffmpeg
+                    except ImportError:
+                        print(f"[CRITICAL ERROR Task ID: {task_id}] Failed to import 'stitch_videos_ffmpeg'. Cannot proceed with stitching.")
+                        generation_success = False
+                
+                if generation_success:
+                    try:
+                        video_paths_str = [str(p.resolve()) for p in generated_video_files]
+                        sm_stitch_videos_ffmpeg(video_paths_str, str(stitched_video_path.resolve()))
+                        
+                        if stitched_video_path.exists() and stitched_video_path.stat().st_size > 0:
+                            generated_video_file = stitched_video_path
+                            dprint(f"[Task ID: {task_id}] Successfully stitched video segments to: {generated_video_file}")
+                            for segment_file in generated_video_files:
+                                try:
+                                    segment_file.unlink()
+                                except OSError as e_clean:
+                                    print(f"[WARNING Task ID: {task_id}] Could not delete segment file {segment_file}: {e_clean}")
+                        else:
+                            print(f"[ERROR Task ID: {task_id}] Stitching failed. Output file '{stitched_video_path}' not created or is empty.")
+                            generation_success = False
+                    except Exception as e_stitch:
+                        print(f"[ERROR Task ID: {task_id}] An exception occurred during video stitching: {e_stitch}")
+                        traceback.print_exc()
+                        generation_success = False
+
+            if generated_video_file and generation_success:
+                dprint(f"[Task ID: {task_id}] Processing final video: {generated_video_file}")
+                if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
+                    sqlite_db_file_path = Path(db_ops.SQLITE_DB_PATH).resolve()
+                    target_files_dir = sqlite_db_file_path.parent / "public" / "files"
+                    target_files_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    final_video_path = sm_get_unique_target_path(
+                        target_files_dir, 
+                        task_id,
+                        generated_video_file.suffix
+                    )
+                    output_location_to_db = f"files/{final_video_path.name}"
+                    try:
+                        shutil.move(str(generated_video_file), str(final_video_path))
+                        print(f"[Task ID: {task_id}] Output video saved to: {final_video_path.resolve()} (DB location: {output_location_to_db})")
+        
+                        if task_params_dict.get("output_path"):
+                            default_dir_to_clean = (main_output_dir_base / task_id)
+                            if default_dir_to_clean.exists() and default_dir_to_clean.is_dir() and default_dir_to_clean != final_video_path.parent:
+                                try:
+                                    shutil.rmtree(default_dir_to_clean)
+                                    dprint(f"[Task ID: {task_id}] Cleaned up auxiliary task directory: {default_dir_to_clean}")
+                                except Exception as e_cleanup_aux:
+                                    print(f"[WARNING Task ID: {task_id}] Could not clean up auxiliary task directory {default_dir_to_clean}: {e_cleanup_aux}")
+                    except Exception as e_move:
+                        print(f"[ERROR Task ID: {task_id}] Failed to move video to final local destination: {e_move}")
+                        generation_success = False
+                elif db_ops.DB_TYPE == "supabase" and db_ops.SUPABASE_CLIENT:
+                    encoded_file_name = urllib.parse.quote(generated_video_file.name)
+                    object_name = f"{task_id}/{encoded_file_name}"
+                    dprint(f"[Task ID: {task_id}] Original filename: {generated_video_file.name}")
+                    dprint(f"[Task ID: {task_id}] Encoded filename for Supabase object: {encoded_file_name}")
+                    dprint(f"[Task ID: {task_id}] Final Supabase object_name: {object_name}")
+                    
+                    public_url = db_ops.upload_to_supabase_storage(generated_video_file, object_name, db_ops.SUPABASE_VIDEO_BUCKET)
+                    if public_url:
+                        output_location_to_db = public_url
+                    else:
+                        print(f"[WARNING Task ID: {task_id}] Supabase upload failed or no URL returned. No output location will be saved.")
+                        generation_success = False
+                else:
+                    print(f"[WARNING Task ID: {task_id}] Output generated but DB_TYPE ({db_ops.DB_TYPE}) is not sqlite or Supabase client is not configured for upload.")
                     generation_success = False
             else:
-                print(f"[WARNING Task ID: {task_id}] Output generated but DB_TYPE ({db_ops.DB_TYPE}) is not sqlite or Supabase client is not configured for upload.")
+                print(f"[WARNING Task ID: {task_id}] Generation reported success, but no .mp4 file found in {temp_output_dir}")
                 generation_success = False
-        else:
-            print(f"[WARNING Task ID: {task_id}] Generation reported success, but no .mp4 file found in {temp_output_dir}")
-            generation_success = False
-    
-    try:
-        shutil.rmtree(temp_output_dir)
-        dprint(f"[Task ID: {task_id}] Cleaned up temporary directory: {temp_output_dir}")
-    except Exception as e_clean:
-        print(f"[WARNING Task ID: {task_id}] Failed to clean up temporary directory {temp_output_dir}: {e_clean}")
+        
+        try:
+            shutil.rmtree(temp_output_dir)
+            dprint(f"[Task ID: {task_id}] Cleaned up temporary directory: {temp_output_dir}")
+        except Exception as e_clean:
+            print(f"[WARNING Task ID: {task_id}] Failed to clean up temporary directory {temp_output_dir}: {e_clean}")
 
+    # --- Chaining Logic ---
+    # This block is now executed for any successful primitive task that doesn't return early.
     if generation_success:
         chaining_result_path_override = None
 
@@ -586,16 +561,12 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         elif task_params_dict.get("different_pose_chain_details"):
             dprint(f"Task {task_id} is part of a different_pose sequence. Attempting to chain.")
             
-            # This call will enqueue the next task in the sequence.
-            # It may return a new path if post-processing occurred on the current task's output.
             chain_success, chain_message, final_path_from_chaining = dp._handle_different_pose_chaining(
                 completed_task_params=task_params_dict, 
                 task_output_path=output_location_to_db,
                 dprint=dprint
             )
             if chain_success:
-                # The final path of the *entire* sequence is what matters for the orchestrator task,
-                # but for this intermediate step, we just need to know if the output path was modified.
                 chaining_result_path_override = final_path_from_chaining
                 dprint(f"Task {task_id}: Different Pose chaining successful. Message: {chain_message}")
             else:
@@ -603,26 +574,21 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
 
 
         if chaining_result_path_override:
-            # This logic handles if the chaining function (travel or other) returned a new, modified path for the output.
-            # E.g., a path to a color-corrected video.
             path_to_check_existence: Path | None = None
             if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and isinstance(chaining_result_path_override, str) and chaining_result_path_override.startswith("files/"):
                 sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
                 path_to_check_existence = (sqlite_db_parent / "public" / chaining_result_path_override).resolve()
                 dprint(f"Task {task_id}: Chaining returned SQLite relative path '{chaining_result_path_override}'. Resolved to '{path_to_check_existence}' for existence check.")
             elif chaining_result_path_override:
-                # It could be an absolute path from Supabase or other non-SQLite setups
                 path_to_check_existence = Path(chaining_result_path_override).resolve()
                 dprint(f"Task {task_id}: Chaining returned absolute-like path '{chaining_result_path_override}'. Resolved to '{path_to_check_existence}' for existence check.")
 
             if path_to_check_existence and path_to_check_existence.exists() and path_to_check_existence.is_file():
-                # A crude check to see if the path changed, for logging purposes.
                 is_output_path_different = str(chaining_result_path_override) != str(output_location_to_db)
                 if is_output_path_different:
                     dprint(f"Task {task_id}: Chaining modified output path for DB. Original: {output_location_to_db}, New: {chaining_result_path_override} (Checked file: {path_to_check_existence})")
                 output_location_to_db = chaining_result_path_override
             elif chaining_result_path_override is not None:
-                # A path was returned but it's not valid. This is a warning. The original output will be used.
                 print(f"[WARNING Task ID: {task_id}] Chaining reported success, but final path '{chaining_result_path_override}' (checked as '{path_to_check_existence}') is invalid or not a file. Using original WGP output '{output_location_to_db}' for DB.")
 
 
