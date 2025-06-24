@@ -84,6 +84,8 @@ def parse_args():
                                help="Enable verbose debug logging (prints additional diagnostics)")
     pgroup_server.add_argument("--save-logging", type=str, nargs='?', const='logs/headless.log', default=None,
                                help="Save all logging output to a file (in addition to console output). Optionally specify path, defaults to 'logs/headless.log'")
+    pgroup_server.add_argument("--delete-db", action="store_true",
+                               help="Delete existing database files before starting (fresh start)")
     pgroup_server.add_argument("--migrate-only", action="store_true",
                                help="Run database migrations and then exit.")
     pgroup_server.add_argument("--apply-reward-lora", action="store_true",
@@ -885,6 +887,30 @@ def main():
     env_sqlite_db_path = os.getenv("SQLITE_DB_PATH_ENV") # Read SQLite DB path from .env
 
     cli_args = parse_args()
+
+    # --- Handle --delete-db flag ---
+    if cli_args.delete_db:
+        db_file_to_delete = cli_args.db_file
+        env_sqlite_db_path = os.getenv("SQLITE_DB_PATH_ENV")
+        if env_sqlite_db_path:
+            db_file_to_delete = env_sqlite_db_path
+        
+        db_files_to_remove = [
+            db_file_to_delete,
+            f"{db_file_to_delete}-wal",
+            f"{db_file_to_delete}-shm"
+        ]
+        
+        for db_file in db_files_to_remove:
+            if Path(db_file).exists():
+                try:
+                    Path(db_file).unlink()
+                    print(f"[DELETE-DB] Removed: {db_file}")
+                except Exception as e:
+                    print(f"[DELETE-DB ERROR] Could not remove {db_file}: {e}")
+        
+        print("[DELETE-DB] Database cleanup complete. Starting fresh.")
+    # --- End delete-db handling ---
 
     # --- Setup logging to file if requested ---
     log_file = None
