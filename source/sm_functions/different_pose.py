@@ -14,7 +14,8 @@ from ..common_utils import (
     DEBUG_MODE, dprint, generate_unique_task_id, add_task_to_db, poll_task_status,
     save_frame_from_video, create_pose_interpolated_guide_video,
     generate_different_pose_debug_video_summary,
-    parse_resolution as sm_parse_resolution
+    parse_resolution as sm_parse_resolution,
+    create_simple_first_frame_mask_video
 )
 
 def _handle_different_pose_orchestrator_task(task_params_from_db: dict, main_output_dir_base: Path, orchestrator_task_id_str: str, dprint):
@@ -166,7 +167,7 @@ def _handle_dp_final_gen_task(task_params_from_db: dict, dprint):
         )
         print(f"DP Final Gen: Successfully created pose-interpolated guide video: {custom_guide_video_path}")
 
-        final_video_task_id = task_ids["final_gen"]
+        final_video_task_id = generate_unique_task_id("dp_final_video_")
         final_video_payload = {
             "task_id": final_video_task_id,
             "prompt": original_params.get("prompt"),
@@ -179,6 +180,27 @@ def _handle_dp_final_gen_task(task_params_from_db: dict, dprint):
             "image_prompt_type": "IV",
             "use_causvid_lora": original_params.get("use_causvid_lora", False),
         }
+        
+        # Optional: Create mask video to keep first frame unchanged
+        if original_params.get("use_mask_for_first_frame", True):
+            dprint("DP Final Gen: Creating mask video to preserve first frame...")
+            mask_video_path = work_dir / f"{generate_unique_task_id('dp_mask_')}.mp4"
+            
+            created_mask = create_simple_first_frame_mask_video(
+                total_frames=original_params.get("output_video_frames", 16),
+                resolution_wh=sm_parse_resolution(original_params.get("resolution")),
+                output_path=mask_video_path,
+                fps=original_params.get("fps_helpers", 16),
+                task_id_for_logging=final_video_task_id,
+                dprint=dprint
+            )
+            
+            if created_mask:
+                final_video_payload["video_mask_path"] = str(created_mask.resolve())
+                final_video_payload["video_prompt_type"] = "IVM"  # Image + Video guide + Mask
+                dprint(f"DP Final Gen: Mask video created at {created_mask}")
+            else:
+                dprint("DP Final Gen: Warning - Failed to create mask video, proceeding without mask")
         
         db_ops.add_task_to_db(final_video_payload, "wgp")
         
