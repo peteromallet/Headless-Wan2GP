@@ -45,7 +45,25 @@ FPS = 16
 SEGMENT_FRAMES_DEFAULT = 81  # will be quantised downstream (4n+1)
 FRAME_OVERLAP_DEFAULT = 12
 SEED_BASE = 11111
-OUTPUT_DIR_DEFAULT = "./outputs"
+
+# Determine output directory based on database type
+def get_output_dir_default():
+    """Get the appropriate output directory based on DB configuration."""
+    try:
+        # Import DB config to check type
+        from source import db_operations as db_ops
+        if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
+            # For SQLite, use public/files to match the system convention
+            sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
+            return str(sqlite_db_parent / "public" / "files")
+        else:
+            # For other DB types or when SQLite isn't configured, use outputs
+            return "./outputs"
+    except Exception:
+        # Fallback if DB config isn't available
+        return "./outputs"
+
+OUTPUT_DIR_DEFAULT = get_output_dir_default()
 
 SAMPLES_DIR = Path("samples")
 ASSET_IMAGES = [
