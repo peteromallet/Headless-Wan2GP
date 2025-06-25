@@ -338,6 +338,8 @@ def write_different_pose_test_case(name: str,
         "output_video_frames": 16,
         "seed": SEED_BASE,
         "use_causvid_lora": True,
+        "debug_mode": True,
+        "skip_cleanup": True,
     }
 
     json_path = test_dir / f"{name}_task.json"
