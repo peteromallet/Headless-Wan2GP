@@ -6,6 +6,7 @@ import json
 import time
 from pathlib import Path
 from typing import Any, Tuple, Dict, Optional, Union, Callable
+from PIL import Image
 
 
 def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
@@ -177,6 +178,19 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
     for key in ("image_start", "image_end"):
         if key in params and isinstance(params[key], list):
             params[key] = [wgp_mod.convert_image(img) for img in params[key]]
+
+    # Convert image_refs paths to PIL images if provided as paths/strings
+    if "image_refs" in params and isinstance(params["image_refs"], list):
+        refs_list = params["image_refs"]
+        if refs_list and isinstance(refs_list[0], (str, Path)):
+            converted_refs = []
+            for ref_path in refs_list:
+                try:
+                    img_pil = Image.open(str(ref_path)).convert("RGB")
+                    converted_refs.append([wgp_mod.convert_image(img_pil)])
+                except Exception as e_img:
+                    dprint(f"{task_id}: WARNING – failed to load reference image '{ref_path}': {e_img}")
+            params["image_refs"] = converted_refs if converted_refs else None
 
     # Ensure we have a valid `state` structure expected by wgp.py.  When callers
     # (e.g. single-image or travel_segment helpers) invoke this wrapper they may
