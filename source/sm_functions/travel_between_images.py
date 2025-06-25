@@ -740,6 +740,21 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 dprint
             )
 
+        # ------------------------------------------------------------------
+        # Ensure sensible defaults for critical generation params
+        # ------------------------------------------------------------------
+        num_inference_steps = (
+            segment_params.get("num_inference_steps")
+            or full_orchestrator_payload.get("num_inference_steps")
+            or (9 if full_orchestrator_payload.get("use_causvid_lora", False) else 30)
+        )
+        if full_orchestrator_payload.get("use_causvid_lora", False):
+            guidance_scale_default = 1.0
+            flow_shift_default = 1.0
+        else:
+            guidance_scale_default = full_orchestrator_payload.get("guidance_scale", 5.0)
+            flow_shift_default = full_orchestrator_payload.get("flow_shift", 3.0)
+
         # Use the centralized WGP wrapper instead of process_single_task
         generation_success, wgp_output_path_or_msg = generate_single_video(
              wgp_mod=wgp_mod,
@@ -749,6 +764,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
              resolution=f"{parsed_res_wh[0]}x{parsed_res_wh[1]}",
              video_length=final_frames_for_wgp_generation,
              seed=segment_params["seed_to_use"],
+             num_inference_steps=num_inference_steps,
+             guidance_scale=guidance_scale_default,
+             flow_shift=flow_shift_default,
              # Resolve the actual model .safetensors file that WGP expects – the
              # orchestrator payload only contains the shorthand model alias
              # (e.g. "vace_14B").
@@ -768,7 +786,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
              **({k: v for k, v in wgp_payload.items() if k not in [
                  'task_id', 'prompt', 'negative_prompt', 'resolution', 'frames', 'seed',
                  'model', 'model_filename', 'video_guide', 'video_mask', 'image_refs',
-                 'use_causvid_lora', 'apply_reward_lora', 'additional_loras', 'video_prompt_type'
+                 'use_causvid_lora', 'apply_reward_lora', 'additional_loras', 'video_prompt_type',
+                 'num_inference_steps', 'guidance_scale', 'flow_shift'
              ]})
          )
 
