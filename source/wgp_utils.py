@@ -267,6 +267,37 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
 
     if not params["state"]:
         # --- Minimal fallback (previous behaviour) ---
+        
+        # Ensure activated_loras is a list and loras_multipliers is a string
+        activated_loras_for_minimal = params.get("activated_loras", [])
+        if isinstance(activated_loras_for_minimal, str):
+            if activated_loras_for_minimal.strip():
+                activated_loras_for_minimal = [s.strip() for s in activated_loras_for_minimal.replace(',', ' ').split() if s.strip()]
+            else:
+                activated_loras_for_minimal = []
+        elif not isinstance(activated_loras_for_minimal, list):
+            activated_loras_for_minimal = []
+            
+        loras_multipliers_for_minimal = params.get("loras_multipliers", "")
+        if isinstance(loras_multipliers_for_minimal, (list, tuple)):
+            loras_multipliers_for_minimal = " ".join(str(m) for m in loras_multipliers_for_minimal)
+        elif not isinstance(loras_multipliers_for_minimal, str):
+            loras_multipliers_for_minimal = ""
+            
+        # Ensure multipliers match LoRA count
+        if loras_multipliers_for_minimal.strip():
+            multiplier_list = loras_multipliers_for_minimal.strip().split()
+        else:
+            multiplier_list = []
+            
+        while len(multiplier_list) < len(activated_loras_for_minimal):
+            multiplier_list.append("1.0")
+            
+        if len(multiplier_list) > len(activated_loras_for_minimal):
+            multiplier_list = multiplier_list[:len(activated_loras_for_minimal)]
+            
+        loras_multipliers_for_minimal = " ".join(multiplier_list)
+        
         minimal_state = {
             "model_filename": model_filename,
             "validate_success": 1,
@@ -292,8 +323,8 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
             "num_inference_steps": params["num_inference_steps"],
             "guidance_scale": params["guidance_scale"],
             "flow_shift": params["flow_shift"],
-            "activated_loras": params["activated_loras"],
-            "loras_multipliers": params["loras_multipliers"],
+            "activated_loras": activated_loras_for_minimal,
+            "loras_multipliers": loras_multipliers_for_minimal,
         }
         params["state"] = minimal_state
 
@@ -325,8 +356,60 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
         dprint(f"{task_id}: Requested video_length={video_length} too small; bumping to 4 to satisfy WGP minimum (except when exactly 1 frame is desired).")
         video_length = 4
 
+    # CRITICAL FIX: Ensure activated_loras and loras_multipliers are properly formatted lists
+    # This prevents the "list index out of range" error in wgp.py
+    final_state = params["state"]
+    model_type_key = wgp_mod.get_model_type(model_filename)
+    
+    if model_type_key in final_state:
+        state_section = final_state[model_type_key]
+        
+        # Ensure activated_loras is a list
+        activated_loras_val = state_section.get("activated_loras", [])
+        if isinstance(activated_loras_val, str):
+            if activated_loras_val.strip():
+                # Handle comma-separated or space-separated string
+                activated_loras_val = [s.strip() for s in activated_loras_val.replace(',', ' ').split() if s.strip()]
+            else:
+                activated_loras_val = []
+        elif not isinstance(activated_loras_val, list):
+            activated_loras_val = []
+        
+        # Ensure loras_multipliers is properly formatted
+        loras_multipliers_val = state_section.get("loras_multipliers", "")
+        if isinstance(loras_multipliers_val, (list, tuple)):
+            # Convert list/tuple to space-separated string
+            loras_multipliers_val = " ".join(str(m) for m in loras_multipliers_val)
+        elif not isinstance(loras_multipliers_val, str):
+            loras_multipliers_val = ""
+        
+        # Ensure we have the right number of multipliers for the activated LoRAs
+        if loras_multipliers_val.strip():
+            multiplier_list = loras_multipliers_val.strip().split()
+        else:
+            multiplier_list = []
+        
+        # Pad or trim multipliers to match activated LoRAs count
+        while len(multiplier_list) < len(activated_loras_val):
+            multiplier_list.append("1.0")
+        
+        # Trim excess multipliers if any
+        if len(multiplier_list) > len(activated_loras_val):
+            multiplier_list = multiplier_list[:len(activated_loras_val)]
+        
+        # Update the state with corrected values
+        state_section["activated_loras"] = activated_loras_val
+        state_section["loras_multipliers"] = " ".join(multiplier_list)
+        
+        dprint(f"{task_id}: Fixed state - activated_loras: {activated_loras_val}, loras_multipliers: '{' '.join(multiplier_list)}'")
+
     try:
         dprint(f"{task_id}: Calling wgp_mod.generate_video (centralized API)")
+        
+        # Use the corrected values from the state to ensure consistency
+        corrected_activated_loras = final_state[model_type_key]["activated_loras"] if model_type_key in final_state else params["activated_loras"]
+        corrected_loras_multipliers = final_state[model_type_key]["loras_multipliers"] if model_type_key in final_state else params["loras_multipliers"]
+        
         wgp_mod.generate_video(
             task={"id": 1, "prompt": prompt,
                   "params": {"model_filename_from_gui_state": model_filename}},
@@ -345,8 +428,8 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
             multi_images_gen_type=params["multi_images_gen_type"],
             tea_cache_setting=params["tea_cache_setting"],
             tea_cache_start_step_perc=params["tea_cache_start_step_perc"],
-            activated_loras=params["activated_loras"],
-            loras_multipliers=params["loras_multipliers"],
+            activated_loras=corrected_activated_loras,
+            loras_multipliers=corrected_loras_multipliers,
             image_prompt_type=params["image_prompt_type"],
             image_start=params["image_start"],
             image_end=params["image_end"],
