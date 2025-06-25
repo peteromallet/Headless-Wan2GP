@@ -727,20 +727,20 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
 def get_initial_task_counts() -> tuple[int, int] | None:
     """Gets the total and queued task counts from the SQLite DB. Returns (None, None) on failure."""
     if DB_TYPE != "sqlite": return None
-    conn = _get_db_connection()
-    if not conn: return None
-    try:
+    
+    def _get_counts_op(conn):
         cursor = conn.cursor()
         cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE_NAME}")
         total_tasks = cursor.fetchone()[0]
         cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE_NAME} WHERE status = ?", (STATUS_QUEUED,))
         queued_tasks = cursor.fetchone()[0]
         return total_tasks, queued_tasks
-    except sqlite3.Error as e:
+    
+    try:
+        return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_counts_op)
+    except Exception as e:
         print(f"SQLite error getting task counts: {e}")
         return None
-    finally:
-        if conn: conn.close()
         
 def get_abs_path_from_db_path(db_path: str, dprint) -> Path | None:
     """Helper to resolve a path from the DB (which might be relative) to a usable absolute path."""
