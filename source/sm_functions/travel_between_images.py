@@ -493,25 +493,26 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     f"overlap_count={frame_overlap_from_previous}, is_single_image_journey={is_single_image_journey}"
                 )
 
-                h_m, w_m = parsed_res_wh[1], parsed_res_wh[0]
-                mask_frames_buf: list[np.ndarray] = [
-                    np.full((h_m, w_m, 3), 0 if idx in inactive_indices else 255, dtype=np.uint8)
-                    for idx in range(total_frames_for_segment)
-                ]
-
-                dprint(
-                    f"Seg {segment_idx}: Building mask – inactive indices: {sorted(list(inactive_indices))[:10]}{'...' if len(inactive_indices) > 10 else ''}, "
-                    f"total_frames={total_frames_for_segment}, overlap={overlap_count}"
-                )
-                 
                 mask_filename = f"s{segment_idx:02d}_mask_{segment_task_id_str[:8]}.mp4"
                 mask_out_path_tmp, _ = prepare_output_path(
                     task_id=segment_task_id_str,
                     filename=mask_filename,
                     main_output_dir_base=segment_processing_dir
                 )
-                created_mask_vid = sm_create_video_from_frames_list(mask_frames_buf, mask_out_path_tmp, fps_helpers, parsed_res_wh)
-                if created_mask_vid and created_mask_vid.exists():
+                
+                # Use the generalized mask creation function
+                from ..common_utils import create_mask_video_from_inactive_indices
+                created_mask_vid = create_mask_video_from_inactive_indices(
+                    total_frames=total_frames_for_segment,
+                    resolution_wh=parsed_res_wh,
+                    inactive_frame_indices=inactive_indices,
+                    output_path=mask_out_path_tmp,
+                    fps=fps_helpers,
+                    task_id_for_logging=segment_task_id_str,
+                    dprint=dprint
+                )
+                
+                if created_mask_vid:
                     mask_video_path_for_wgp = created_mask_vid
                     dprint(f"Seg {segment_idx}: mask video generated at {mask_video_path_for_wgp}")
                 else:

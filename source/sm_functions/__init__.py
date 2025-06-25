@@ -46,7 +46,9 @@ from ..common_utils import (
     extract_specific_frame_ffmpeg,
     concatenate_videos_ffmpeg,
     get_video_frame_count_and_fps,
-    get_image_dimensions_pil
+    get_image_dimensions_pil,
+    create_mask_video_from_inactive_indices,
+    create_simple_first_frame_mask_video
 )
 
 # --- Make video_utils directly importable --- 
@@ -75,6 +77,8 @@ __all__ = [
     "get_image_dimensions_pil", 
     "draw_multiline_text",
     "generate_different_pose_debug_video_summary",
+    "create_mask_video_from_inactive_indices",
+    "create_simple_first_frame_mask_video",
     # travel_between_images exports
     # different_pose exports
     # video_utils exports
