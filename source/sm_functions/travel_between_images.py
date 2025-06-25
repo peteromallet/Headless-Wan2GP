@@ -657,7 +657,15 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Effective prompt for WGP: '{prompt_for_wgp}'")
 
         # Compute video_prompt_type for wgp: always include 'V' when a guide video is provided; add 'M' if a mask video is also attached.
-        video_prompt_type_str = "V" + ("M" if mask_video_path_for_wgp else "")
+        # Additionally, include 'I' when reference images are supplied so that VACE models
+        # properly process the `image_refs` list.  Passing image refs without the 'I'
+        # flag causes Wan2GP to attempt to pre-process the paths as PIL images and
+        # raises AttributeError ('str' object has no attribute size').
+        video_prompt_type_str = (
+            "V" +
+            ("M" if mask_video_path_for_wgp else "") +
+            ("I" if safe_vace_image_ref_paths_for_wgp else "")
+        )
         
         wgp_payload = {
             "task_id": wgp_inline_task_id, # ID for this specific WGP generation operation

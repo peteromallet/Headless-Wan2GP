@@ -2,7 +2,8 @@
 
 ```
 <repo-root>
-├── steerable_motion.py
+├── add_task.py
+├── generate_test_tasks.py
 ├── headless.py
 ├── source/
 │   ├── __init__.py
@@ -10,17 +11,26 @@
 │   ├── db_operations.py
 │   ├── specialized_handlers.py
 │   ├── video_utils.py
+│   ├── wgp_utils.py
 │   └── sm_functions/
 │       ├── __init__.py
 │       ├── travel_between_images.py
-│       └── different_pose.py
+│       ├── different_pose.py
+│       └── single_image.py
+├── logs/               # runtime logs (git-ignored)
+├── outputs/            # generated videos/images (git-ignored)
+├── samples/            # example inputs for docs & tests
+├── tests/              # pytest suite
+├── test_outputs/       # artefacts written by tests (git-ignored)
 ├── Wan2GP/  ← third-party video-generation engine (keep high-level only)
 └── STRUCTURE.md  (this file)
 ```
 
 ## Top-level scripts
 
-**headless.py** – Headless server that continuously polls the `tasks` database, claims work, and drives the Wan2GP generator (`wgp.py`). Includes extra handlers for OpenPose and RIFE interpolation tasks and can upload outputs to Supabase storage.
+* **headless.py** – Headless service that polls the `tasks` database, claims work, and drives the Wan2GP generator (`wgp.py`). Includes extra handlers for OpenPose and RIFE interpolation tasks and can upload outputs to Supabase storage.
+* **add_task.py** – Lightweight CLI helper to queue a single new task into SQLite/Supabase. Accepts a JSON payload (or file) and inserts it into the `tasks` table.
+* **generate_test_tasks.py** – Developer utility that back-fills the database with synthetic images/prompts for integration testing and local benchmarking.
 
 ## source/ package
 
@@ -28,16 +38,27 @@ This is the main application package.
 
 * **common_utils.py** – Reusable helpers (file downloads, ffmpeg helpers, MediaPipe keypoint interpolation, debug utilities, etc.)
 * **db_operations.py** – Handles all database interactions for both SQLite and Supabase.
-* **specialized_handlers.py** - Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation.
-* **video_utils.py** - Provides utilities for video manipulation like cross-fading, frame extraction, and color matching.
+* **specialized_handlers.py** – Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation.
+* **video_utils.py** – Provides utilities for video manipulation like cross-fading, frame extraction, and color matching.
+* **wgp_utils.py** – Thin wrapper around `Wan2GP.wgp` that standardises parameter names, handles LoRA quirks (e.g. CausVid), and exposes the single `generate_single_video` helper used by every task handler.
 
 ### source/sm_functions/ sub-package
 
-A light-weight, testable wrapper around the bulky `steerable_motion.py` logic.  It holds task-specific handlers:
+Task-specific wrappers around the bulky upstream logic. These are imported by `headless.py` (and potentially by notebooks/unit tests) without dragging in the interactive Gradio UI shipped with Wan2GP.
 
-* **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images.  Builds guide videos, queues generation tasks, stitches outputs.
+* **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images. Builds guide videos, queues generation tasks, stitches outputs.
 * **different_pose.py** – Generates a new pose for a single image using an OpenPose-driven guide video plus optional RIFE interpolation for smoothness.
-* **__init__.py** – Re-exports public APIs (`run_travel_between_images_task`, `run_different_pose_task`) and common utilities for convenient importing.
+* **single_image.py** – Minimal handler for one-off image-to-video generation without travel or pose manipulation.
+* **__init__.py** – Re-exports public APIs (`run_travel_between_images_task`, `run_single_image_task`, `run_different_pose_task`) and common utilities for convenient importing.
+
+## Additional runtime artefacts & folders
+
+* **logs/** – Rolling log files captured by `headless.py` and unit tests. The directory is git-ignored.
+* **outputs/** – Default location for final video/image results when not explicitly overridden by a task payload.
+* **samples/** – A handful of small images shipped inside the repo that are referenced in the README and tests.
+* **tests/** – Pytest-based regression and smoke tests covering both low-level helpers and full task workflows.
+* **test_outputs/** – Artefacts produced by the test-suite; kept out of version control via `.gitignore`.
+* **tasks.db** – SQLite database created on-demand by the orchestrator to track queued, running, and completed tasks.
 
 ## Wan2GP/
 
