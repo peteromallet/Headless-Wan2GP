@@ -1846,34 +1846,52 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
     state[model_type_key] = ui_defaults
     return state, ui_defaults
 
-def prepare_output_path(task_id: str, filename: str, main_output_dir_base: Path, *, dprint=lambda *_: None) -> tuple[Path, str]:
-    """Return a tuple (final_output_path, db_output_location).
-
-    If DB_TYPE is sqlite, the file is placed in <sqlite_parent>/public/files/ and the db_output_location
-    is returned in the "files/<filename>" format expected by existing code.
-    Otherwise the file is placed under main_output_dir_base / task_id.
+def prepare_output_path(
+    task_id: str, 
+    filename: str, 
+    main_output_dir_base: Path, 
+    *, 
+    dprint=lambda *_: None,
+    custom_output_dir: str | Path | None = None
+) -> tuple[Path, str]:
     """
-    try:
-        from .. import db_operations as db_ops  # Local import to avoid circular dependency
-    except ImportError:
-        # If relative import fails (e.g., in tests), try absolute import
-        import source.db_operations as db_ops
+    Prepares the output path for a task's artifact.
 
-    filename = Path(filename).name  # Ensure just the name
+    If `custom_output_dir` is provided, it's used as the base. Otherwise,
+    the output is placed in a directory named after the task_id inside
+    `main_output_dir_base`.
 
-    if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
-        sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
-        target_dir = sqlite_db_parent / "public" / "files"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        final_output_path = target_dir / filename
-        db_output_location = f"files/{filename}"
-        dprint(f"prepare_output_path: SQLite mode – saving to {final_output_path} (DB: {db_output_location})")
+    Args:
+        task_id: The ID of the task.
+        filename: The desired filename for the output.
+        main_output_dir_base: The default base directory for all outputs.
+        dprint: A debug printing function.
+        custom_output_dir: An optional specific directory to save the output in.
+
+    Returns:
+        A tuple containing:
+        - The absolute Path object for the final save location.
+        - The string representation of the path to be stored in the database.
+          This will be relative to the project root if inside it, otherwise absolute.
+    """
+    if custom_output_dir:
+        output_dir_for_task = Path(custom_output_dir)
+        dprint(f"Task {task_id}: Using custom output directory: {output_dir_for_task}")
     else:
-        # Default (supabase or other): save under main_output_dir_base / task_id
-        target_dir = main_output_dir_base / task_id
-        target_dir.mkdir(parents=True, exist_ok=True)
-        final_output_path = target_dir / filename
-        db_output_location = str(final_output_path.resolve())
-        dprint(f"prepare_output_path: Non-SQLite mode – saving to {final_output_path}")
-
-    return final_output_path, db_output_location
+        # Fallback to old behavior: create a subdir for the task
+        output_dir_for_task = main_output_dir_base / task_id
+        dprint(f"Task {task_id}: Using default task-specific output directory: {output_dir_for_task}")
+    
+    output_dir_for_task.mkdir(parents=True, exist_ok=True)
+    
+    final_save_path = output_dir_for_task / filename
+    
+    # For the DB, we want a path relative to the CWD if possible, for portability.
+    try:
+        db_output_location = str(final_save_path.relative_to(Path.cwd()))
+    except ValueError:
+        db_output_location = str(final_save_path.resolve())
+        
+    dprint(f"Task {task_id}: final_save_path='{final_save_path}', db_output_location='{db_output_location}'")
+    
+    return final_save_path, db_output_location

@@ -65,6 +65,7 @@ def _handle_different_pose_orchestrator_task(task_params_from_db: dict, main_out
             "task_id": task_id_user_pose,
             "input_image_path": task_params_from_db['input_image_path'],
             "dp_orchestrator_payload": orchestrator_payload,
+            "output_dir": str(work_dir.resolve()),
         }
         db_ops.add_task_to_db(payload_user_pose, "generate_openpose", dependant_on=previous_task_id)
         dprint(f"Orchestrator {orchestrator_task_id_str} enqueued user_pose_gen ({task_id_user_pose})")
@@ -79,6 +80,7 @@ def _handle_different_pose_orchestrator_task(task_params_from_db: dict, main_out
             "seed": task_params_from_db.get("seed", -1),
             "use_causvid_lora": task_params_from_db.get("use_causvid_lora", False),
             "dp_orchestrator_payload": orchestrator_payload,
+            "output_dir": str(work_dir.resolve()),
         }
         db_ops.add_task_to_db(payload_t2i, "wgp", dependant_on=previous_task_id)
         dprint(f"Orchestrator {orchestrator_task_id_str} enqueued t2i_gen ({task_id_t2i})")
@@ -89,6 +91,7 @@ def _handle_different_pose_orchestrator_task(task_params_from_db: dict, main_out
             "input_video_task_id": task_id_t2i,
             "frame_index": 0,
             "dp_orchestrator_payload": orchestrator_payload,
+            "output_dir": str(work_dir.resolve()),
         }
         db_ops.add_task_to_db(payload_extract, "extract_frame", dependant_on=previous_task_id)
         dprint(f"Orchestrator {orchestrator_task_id_str} enqueued extract_frame ({task_id_extract})")
@@ -98,6 +101,7 @@ def _handle_different_pose_orchestrator_task(task_params_from_db: dict, main_out
             "task_id": task_id_t2i_pose,
             "input_image_task_id": task_id_extract,
             "dp_orchestrator_payload": orchestrator_payload,
+            "output_dir": str(work_dir.resolve()),
         }
         db_ops.add_task_to_db(payload_t2i_pose, "generate_openpose", dependant_on=previous_task_id)
         dprint(f"Orchestrator {orchestrator_task_id_str} enqueued t2i_pose_gen ({task_id_t2i_pose})")
