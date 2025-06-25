@@ -52,7 +52,7 @@ from source.common_utils import (
     build_task_state
 )
 from source.sm_functions import travel_between_images as tbi
-from source.sm_functions import different_pose as dp
+from source.sm_functions import different_perspective as dp
 from source.sm_functions import single_image as si
 # --- End SM_RESTRUCTURE imports ---
 
@@ -194,9 +194,9 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
     elif task_type == "travel_stitch":
         print(f"[Task ID: {task_id}] Identified as 'travel_stitch' task.")
         return tbi._handle_travel_stitch_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, stitch_task_id_str=task_id, dprint=dprint)
-    elif task_type == "different_pose_orchestrator":
-        print(f"[Task ID: {task_id}] Identified as 'different_pose_orchestrator' task.")
-        return dp._handle_different_pose_orchestrator_task(
+    elif task_type == "different_perspective_orchestrator":
+        print(f"[Task ID: {task_id}] Identified as 'different_perspective_orchestrator' task.")
+        return dp._handle_different_perspective_orchestrator_task(
             task_params_from_db=task_params_dict,
             main_output_dir_base=main_output_dir_base,
             orchestrator_task_id_str=task_id,
@@ -589,22 +589,22 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
             else:
                 print(f"[ERROR Task ID: {task_id}] Travel sequence chaining failed after WGP completion: {chain_message}. The raw WGP output '{output_location_to_db}' will be used for this task's DB record.")
         
-        elif task_params_dict.get("different_pose_chain_details"):
+        elif task_params_dict.get("different_perspective_chain_details"):
             # SM_RESTRUCTURE_FIX: Prevent double-chaining. This is now handled in the 'generate_openpose' block.
             # The only other task type that can have these details is 'wgp', which is the intended target for this block.
             if task_type != 'generate_openpose':
-                dprint(f"Task {task_id} is part of a different_pose sequence. Attempting to chain.")
+                dprint(f"Task {task_id} is part of a different_perspective sequence. Attempting to chain.")
                 
-                chain_success, chain_message, final_path_from_chaining = dp._handle_different_pose_chaining(
+                chain_success, chain_message, final_path_from_chaining = dp._handle_different_perspective_chaining(
                     completed_task_params=task_params_dict, 
                     task_output_path=output_location_to_db,
                     dprint=dprint
                 )
                 if chain_success:
                     chaining_result_path_override = final_path_from_chaining
-                    dprint(f"Task {task_id}: Different Pose chaining successful. Message: {chain_message}")
+                    dprint(f"Task {task_id}: Different Perspective chaining successful. Message: {chain_message}")
                 else:
-                    print(f"[ERROR Task ID: {task_id}] Different Pose sequence chaining failed: {chain_message}. This may halt the sequence.")
+                    print(f"[ERROR Task ID: {task_id}] Different Perspective sequence chaining failed: {chain_message}. This may halt the sequence.")
 
 
         if chaining_result_path_override:

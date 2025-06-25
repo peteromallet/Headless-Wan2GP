@@ -57,7 +57,19 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         dprint(f"Orchestrator payload for {orchestrator_task_id_str} (first 500 chars): {json.dumps(orchestrator_payload, indent=2, default=str)[:500]}...")
 
         run_id = orchestrator_payload.get("run_id", orchestrator_task_id_str)
-        base_dir_for_this_run_str = orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
+        
+        # Override output directory for SQLite to ensure files go to public/files
+        if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
+            try:
+                sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
+                base_dir_for_this_run_str = str(sqlite_db_parent / "public" / "files")
+                dprint(f"Orchestrator {orchestrator_task_id_str}: Using SQLite public/files directory: {base_dir_for_this_run_str}")
+            except Exception as e_sqlite_dir:
+                dprint(f"Orchestrator {orchestrator_task_id_str}: Could not determine SQLite public directory: {e_sqlite_dir}. Using orchestrator payload default.")
+                base_dir_for_this_run_str = orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
+        else:
+            base_dir_for_this_run_str = orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
+        
         current_run_output_dir = Path(base_dir_for_this_run_str) / f"travel_run_{run_id}"
         current_run_output_dir.mkdir(parents=True, exist_ok=True)
         dprint(f"Orchestrator {orchestrator_task_id_str}: Base output directory for this run: {current_run_output_dir.resolve()}")
@@ -228,9 +240,19 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         final_stitched_video_name = f"travel_final_stitched_{run_id}.mp4"
         # Stitcher saves its final primary output directly under main_output_dir (e.g., ./steerable_motion_output/)
         # NOT under current_run_output_dir (which is .../travel_run_XYZ/)
-        # The main_output_dir_base is the one passed to headless.py (e.g. server's ./outputs or steerable_motion's ./steerable_motion_output)
-        # The orchestrator_payload["main_output_dir_for_run"] is this main_output_dir_base.
-        final_stitched_output_path = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))) / final_stitched_video_name
+        # For SQLite, ensure final output goes to public/files
+        if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
+            try:
+                sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
+                final_stitched_output_dir = sqlite_db_parent / "public" / "files"
+                dprint(f"Orchestrator {orchestrator_task_id_str}: Final stitch output will go to SQLite public/files: {final_stitched_output_dir}")
+            except Exception as e_sqlite_final:
+                dprint(f"Orchestrator {orchestrator_task_id_str}: Could not determine SQLite public directory for final output: {e_sqlite_final}. Using orchestrator payload default.")
+                final_stitched_output_dir = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve())))
+        else:
+            final_stitched_output_dir = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve())))
+        
+        final_stitched_output_path = final_stitched_output_dir / final_stitched_video_name
 
         stitch_payload = {
             "task_id": stitch_task_id,

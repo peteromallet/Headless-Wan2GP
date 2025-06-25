@@ -185,7 +185,7 @@ def _migrate_sqlite_schema(db_path_str: str):
                         # For instance, if 'model' field implied the task type for older tasks.
                         # This part is highly dependent on previous conventions.
                         # As a simple default, if not found, it will remain NULL unless a default is set.
-                        # For 'travel_between_images' and 'different_pose', these are typically set by steerable_motion.py
+                        # For 'travel_between_images' and 'different_perspective', these are typically set by steerable_motion.py
                         # and wouldn't exist as 'task_type' inside params for headless.py's default processing.
                         # Headless tasks like 'generate_openpose' *did* use task_type in params.
                         dprint(f"SQLite Migration: No 'task_type' key in params for task_id {task_id}. It will remain NULL or needs manual/specific migration logic if it was inferred differently.")
