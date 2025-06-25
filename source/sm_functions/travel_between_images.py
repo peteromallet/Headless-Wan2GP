@@ -150,12 +150,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         for idx in range(num_segments):
             current_segment_task_id = sm_generate_unique_task_id(f"travel_seg_{run_id}_{idx:02d}_")
             
-            # Define where this segment's specific processing assets will go and its final output
-            # Segment handler will create this directory.
-            segment_processing_dir_name = f"segment_{idx:02d}_{current_segment_task_id[:8]}"
-            # Define where the segment's final output video should be placed by the segment handler itself
-            # This path needs to be absolute for the segment handler.
-            final_video_output_path_for_segment = current_run_output_dir / segment_processing_dir_name / f"s{idx}_final_output.mp4"
+            # Note: segment handler now manages its own output paths using prepare_output_path()
 
             # Determine frame_overlap_from_previous for current segment `idx`
             current_frame_overlap_from_previous = 0
@@ -181,7 +176,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "is_last_segment": (idx == num_segments - 1),
                 
                 "current_run_base_output_dir": str(current_run_output_dir.resolve()), # Base for segment's own output folder creation
-                "final_video_output_path_for_segment": str(final_video_output_path_for_segment.resolve()),
 
                 "base_prompt": expanded_base_prompts[idx],
                 "negative_prompt": expanded_negative_prompts[idx],
@@ -858,6 +852,37 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
         is_subsequent_segment_val = chain_details.get("is_subsequent_segment", False)
 
         dprint(f"Chaining for WGP task {wgp_task_id} (segment {segment_idx_completed} of run {orchestrator_run_id}). Initial video: {video_to_process_abs_path}")
+
+        # --- Always move WGP output to proper location first ---
+        # For SQLite, this moves the file from outputs/ to public/files/
+        # For other DBs, this ensures consistent file management
+        moved_filename = f"{orchestrator_run_id}_seg{segment_idx_completed:02d}_output{video_to_process_abs_path.suffix}"
+        moved_video_abs_path, moved_db_path = prepare_output_path(
+            task_id=wgp_task_id,
+            filename=moved_filename,
+            main_output_dir_base=Path(segment_processing_dir_for_saturation_str)
+        )
+        
+        # Copy the WGP output to the proper location
+        try:
+            shutil.copy2(video_to_process_abs_path, moved_video_abs_path)
+            dprint(f"Chain (Seg {segment_idx_completed}): Moved WGP output from {video_to_process_abs_path} to {moved_video_abs_path}")
+            
+            # Update paths for further processing
+            video_to_process_abs_path = moved_video_abs_path
+            final_video_path_for_db = moved_db_path
+            
+            # Clean up original WGP output if not in debug mode
+            if not full_orchestrator_payload.get("skip_cleanup_enabled", False) and \
+               not full_orchestrator_payload.get("debug_mode_enabled", False):
+                try:
+                    Path(actual_wgp_output_video_path).unlink()
+                    dprint(f"Chain (Seg {segment_idx_completed}): Cleaned up original WGP output {actual_wgp_output_video_path}")
+                except Exception as e_cleanup:
+                    dprint(f"Chain (Seg {segment_idx_completed}): Warning - could not clean up original WGP output: {e_cleanup}")
+                    
+        except Exception as e_move:
+            dprint(f"Chain (Seg {segment_idx_completed}): Warning - could not move WGP output to proper location: {e_move}. Using original path.")
 
         # --- Post-generation Processing Chain ---
         # Saturation and Brightness are only applied to segments AFTER the first one.
