@@ -98,6 +98,9 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         expanded_frame_overlap = orchestrator_payload["frame_overlap_expanded"]
         vace_refs_instructions_all = orchestrator_payload.get("vace_image_refs_to_prepare_by_headless", [])
 
+        # Preserve a copy of the original overlap list in case we need it later
+        _orig_frame_overlap = list(expanded_frame_overlap)  # shallow copy
+
         # --- SM_QUANTIZE_FRAMES_AND_OVERLAPS ---
         # Adjust all segment lengths to match model constraints (4*N+1 format).
         # Then, adjust overlap values to be even and not exceed the length of the
@@ -146,6 +149,13 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         expanded_segment_frames = quantized_segment_frames
         expanded_frame_overlap = quantized_frame_overlap
         # --- END SM_QUANTIZE_FRAMES_AND_OVERLAPS ---
+
+        # If quantisation resulted in an empty overlap list (e.g. single-segment run) but the
+        # original payload DID contain an overlap value, restore that so the first segment
+        # can still reuse frames from the previous/continued video.  This is crucial for
+        # continue-video journeys where we expect `frame_overlap_from_previous` > 0.
+        if (not expanded_frame_overlap) and _orig_frame_overlap:
+            expanded_frame_overlap = _orig_frame_overlap
 
         for idx in range(num_segments):
             current_segment_task_id = sm_generate_unique_task_id(f"travel_seg_{run_id}_{idx:02d}_")
@@ -595,6 +605,12 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             end_anchor_img_path_str_idx = segment_idx + 1
             if full_orchestrator_payload.get("continue_from_video_resolved_path"):
                  end_anchor_img_path_str_idx = segment_idx
+            
+            # SAFETY: If this is the last segment (i.e. there is no subsequent image),
+            # the "+1" logic above will be out of range.  When that happens we
+            # signal the guide-creator that there is *no* end anchor by passing -1.
+            if end_anchor_img_path_str_idx >= len(input_images_resolved_for_guide):
+                end_anchor_img_path_str_idx = -1  # No end anchor image available.
             
             # For a single image journey, there is no end anchor image.
             if is_single_image_journey:
@@ -1334,9 +1350,41 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         cleanup_stitch_sub_workspace = stitch_success and not skip_cleanup
 
         if cleanup_stitch_sub_workspace and 'stitch_processing_dir' in locals() and stitch_processing_dir.exists():
-            dprint(f"Stitch: Cleaning up stitch processing sub-workspace: {stitch_processing_dir}")
-            try: shutil.rmtree(stitch_processing_dir)
-            except Exception as e_c1: dprint(f"Stitch: Error cleaning up {stitch_processing_dir}: {e_c1}")
+            # If the processing dir is the same as the public files root (or any shared
+            # directory that also contains the FINAL output), we must **not** remove the
+            # whole directory.  Instead, delete only the intermediate artefacts that were
+            # created for *this* run.  Otherwise we would wipe the final video and any
+            # other unrelated outputs.
+
+            if "final_video_path" in locals() and final_video_path.parent.resolve() == stitch_processing_dir.resolve():
+                # Safe, selective clean-up: remove any file (or directory) that belongs
+                # to the current run but is **not** the final stitched video.
+                dprint(
+                    f"Stitch: Cleaning up intermediate files for run {orchestrator_run_id} in shared dir: {stitch_processing_dir}"
+                )
+
+                for item in stitch_processing_dir.iterdir():
+                    # Skip the final stitched video (and potential upscaled version)
+                    if item.resolve() == final_video_path.resolve():
+                        continue
+
+                    # Only touch artefacts whose names include the unique run_id
+                    if orchestrator_run_id in item.name:
+                        try:
+                            if item.is_file() or item.is_symlink():
+                                item.unlink()
+                            else:
+                                shutil.rmtree(item)
+                            dprint(f"Stitch: Removed intermediate artefact {item}")
+                        except Exception as e_rm:
+                            dprint(f"Stitch: Warning – could not remove {item}: {e_rm}")
+            else:
+                # The processing dir is a run-specific subfolder – safe to delete entirely.
+                dprint(f"Stitch: Cleaning up stitch processing sub-workspace: {stitch_processing_dir}")
+                try:
+                    shutil.rmtree(stitch_processing_dir)
+                except Exception as e_c1:
+                    dprint(f"Stitch: Error cleaning up {stitch_processing_dir}: {e_c1}")
         elif 'stitch_processing_dir' in locals() and stitch_processing_dir.exists(): # Not cleaning it up, state why
             dprint(f"Stitch: Skipping cleanup of stitch processing sub-workspace: {stitch_processing_dir} (stitch_success:{stitch_success}, skip_cleanup:{skip_cleanup})")
 

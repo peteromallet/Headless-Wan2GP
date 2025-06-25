@@ -20,6 +20,7 @@ import numpy as np # pip install numpy
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance # pip install Pillow, ensure ImageEnhance is imported
 import requests # Added for downloads
 from urllib.parse import urlparse # Added for URL parsing
+import urllib.parse
 
 # --- Global Debug Mode ---
 # This will be set by the main script (steerable_motion.py)
@@ -114,33 +115,69 @@ def process_additional_loras_shared(
         return processed_additional_loras
     
     try:
+        import urllib.parse
         base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
+        base_lora_dir_for_model.mkdir(parents=True, exist_ok=True)
+        wan2gp_lora_root = Path("Wan2GP/loras")
+        wan2gp_lora_root.mkdir(parents=True, exist_ok=True)
         
         for lora_path, lora_strength in additional_loras.items():
             try:
-                lora_filename = Path(lora_path).name
-                if lora_path.startswith("http"):
-                    # URL LoRA handling - could be expanded for download logic
-                    dprint(f"Task {task_id}: URL LoRA download not implemented yet: {lora_path}")
-                    continue
+                # Derive filename
+                if lora_path.startswith("http://") or lora_path.startswith("https://"):
+                    lora_filename = Path(urllib.parse.urlparse(lora_path).path).name
                 else:
-                    # Local file handling
-                    lora_path_obj = Path(lora_path)
-                    if lora_path_obj.exists():
-                        processed_additional_loras[lora_filename] = str(lora_strength)
-                        dprint(f"Task {task_id}: Added LoRA {lora_filename} with strength {lora_strength}")
+                    lora_filename = Path(lora_path).name
+                
+                target_path_in_model_dir = base_lora_dir_for_model / lora_filename
+                
+                # --------------------------------------------------
+                # 1) Handle remote URL – download if not already cached
+                # --------------------------------------------------
+                if lora_path.startswith("http://") or lora_path.startswith("https://"):
+                    dl_target_path = wan2gp_lora_root / lora_filename
+                    if not dl_target_path.exists():
+                        dprint(f"Task {task_id}: Downloading LoRA from {lora_path} to {dl_target_path}")
+                        try:
+                            download_file(lora_path, wan2gp_lora_root, lora_filename)
+                        except Exception as e_dl:
+                            dprint(f"Task {task_id}: ERROR – failed to download LoRA {lora_path}: {e_dl}")
+                            continue  # Skip this LoRA
                     else:
-                        # Try relative to model LoRA directory
-                        relative_path = base_lora_dir_for_model / lora_filename
-                        if relative_path.exists():
-                            processed_additional_loras[lora_filename] = str(lora_strength)
-                            dprint(f"Task {task_id}: Added LoRA {lora_filename} from model dir with strength {lora_strength}")
-                        else:
-                            dprint(f"Task {task_id}: LoRA file not found: {lora_path} (also tried {relative_path})")
-            except Exception as e_lora:
-                dprint(f"Task {task_id}: Error processing LoRA {lora_path}: {e_lora}")
-    except Exception as e_lora_dir:
-        dprint(f"Task {task_id}: Error getting LoRA directory for model {model_filename_for_task}: {e_lora_dir}")
+                        dprint(f"Task {task_id}: LoRA already downloaded at {dl_target_path}")
+                    
+                    # Copy into model-specific dir if needed
+                    if not target_path_in_model_dir.exists():
+                        try:
+                            shutil.copy(str(dl_target_path), str(target_path_in_model_dir))
+                            dprint(f"Task {task_id}: Copied LoRA to model dir {target_path_in_model_dir}")
+                        except Exception as e_cp:
+                            dprint(f"Task {task_id}: WARNING – could not copy LoRA to model dir: {e_cp}")
+                else:
+                    # --------------------------------------------------
+                    # 2) Handle local / relative path
+                    # --------------------------------------------------
+                    src_path = Path(lora_path)
+                    if not src_path.is_absolute():
+                        # Try relative to CWD
+                        src_path = Path.cwd() / src_path
+                    if not src_path.exists():
+                        dprint(f"Task {task_id}: WARNING – local LoRA path not found: {src_path}")
+                        continue
+                    # Ensure LoRA is available inside model dir
+                    if not target_path_in_model_dir.exists() or src_path.resolve() != target_path_in_model_dir.resolve():
+                        try:
+                            shutil.copy(str(src_path), str(target_path_in_model_dir))
+                            dprint(f"Task {task_id}: Copied local LoRA {src_path} to {target_path_in_model_dir}")
+                        except Exception as e_cploc:
+                            dprint(f"Task {task_id}: WARNING – could not copy local LoRA to model dir: {e_cploc}")
+                
+                # Register for WGP payload
+                processed_additional_loras[lora_filename] = str(lora_strength)
+            except Exception as e_lora_iter:
+                dprint(f"Task {task_id}: Error processing LoRA entry '{lora_path}': {e_lora_iter}")
+    except Exception as e_outer:
+        dprint(f"Task {task_id}: Error during additional LoRA processing: {e_outer}")
     
     return processed_additional_loras
 
