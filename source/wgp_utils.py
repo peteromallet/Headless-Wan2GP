@@ -187,7 +187,13 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
             for ref_path in refs_list:
                 try:
                     img_pil = Image.open(str(ref_path)).convert("RGB")
-                    converted_refs.append([wgp_mod.convert_image(img_pil)])
+                    # Store the converted PIL image directly instead of wrapping it in an extra list.  
+                    # The downstream logic in wgp.py already adds the required outer wrapper
+                    # when it passes `image_refs` to `prepare_source`, so an additional level
+                    # causes the objects inside resize / VACE preprocessing to be plain Python
+                    # lists rather than `PIL.Image` or `torch.Tensor`, which in turn triggers
+                    # runtime errors like  "'list' object has no attribute 'size'".
+                    converted_refs.append(wgp_mod.convert_image(img_pil))
                 except Exception as e_img:
                     dprint(f"{task_id}: WARNING – failed to load reference image '{ref_path}': {e_img}")
             params["image_refs"] = converted_refs if converted_refs else None
