@@ -147,7 +147,17 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
         causvid_lora_name = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
         if causvid_lora_name not in activated_loras:
             activated_loras.insert(0, causvid_lora_name)
-            loras_multipliers.insert(0, "1.0")
+            # Handle loras_multipliers as either list or string
+            if isinstance(loras_multipliers, list):
+                loras_multipliers.insert(0, "1.0")
+            elif isinstance(loras_multipliers, str):
+                # Convert comma-separated string back to list, add new multiplier, then rejoin
+                mult_list = [m.strip() for m in loras_multipliers.split(",") if m.strip()] if loras_multipliers else []
+                mult_list.insert(0, "1.0")
+                loras_multipliers = ",".join(mult_list)
+            else:
+                # Fallback: treat as empty and create new list
+                loras_multipliers = ["1.0"]
 
         # 2) Clamp the schedule to 9 steps (UI default).
         try:
@@ -168,7 +178,11 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
 
         # Push back the updated LoRA lists
         params["activated_loras"] = activated_loras
-        params["loras_multipliers"] = ",".join(loras_multipliers) if loras_multipliers else ""
+        # Handle loras_multipliers as either list or string
+        if isinstance(loras_multipliers, list):
+            params["loras_multipliers"] = ",".join(loras_multipliers) if loras_multipliers else ""
+        else:
+            params["loras_multipliers"] = loras_multipliers if loras_multipliers else ""
 
     # Expose the flags to downstream logic (build_task_state & wgp)
     params["use_causvid_lora"] = use_causvid_lora
