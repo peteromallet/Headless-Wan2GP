@@ -529,26 +529,22 @@ def main(args) -> None:
             ("single_image_5", "A vibrant abstract painting of shapes and colours", "1024x576"),
         ]
 
-        for name, prompt, res in single_image_specs:
-            write_single_image_test_case(name, prompt, res, enqueue=args.enqueue, additional_loras=additional_loras_global)
-
-        # -----------------------------------------------------------------
-        # Always add an extra single-image test that explicitly uses the
-        # Studio-Ghibli LoRA (strength 1.0).  If the caller supplied
-        # --loras we merge that dict so both sets are applied.
-        # -----------------------------------------------------------------
         ghibli_lora_url = "https://huggingface.co/peteromallet/ad_motion_loras/resolve/main/studio_ghibli_wan14b_t2v_v01.safetensors"
-        combined_loras = {ghibli_lora_url: 1.0}
-        if additional_loras_global:
-            combined_loras.update(additional_loras_global)
 
-        write_single_image_test_case(
-            name="single_image_ghibli_lora",
-            prompt="A lush landscape in the whimsical Studio Ghibli style, highly detailed, vibrant colors",
-            resolution="512x512",
-            enqueue=args.enqueue,
-            additional_loras=combined_loras,
-        )
+        for name, prompt, res in single_image_specs:
+            # Ensure every single-image task applies the Studio-Ghibli LoRA (strength 1.0)
+            loras_to_use = {ghibli_lora_url: 1.0}
+            # Merge any global --loras values (caller-supplied) so they stack as well
+            if additional_loras_global:
+                loras_to_use.update(additional_loras_global)
+
+            write_single_image_test_case(
+                name=name,
+                prompt=prompt,
+                resolution=res,
+                enqueue=args.enqueue,
+                additional_loras=loras_to_use,
+            )
 
     print("\nAll test cases generated under", TESTS_ROOT.resolve())
 
