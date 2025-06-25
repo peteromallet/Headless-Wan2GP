@@ -161,8 +161,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 current_frame_overlap_from_previous = expanded_frame_overlap[idx-1] if len(expanded_frame_overlap) > (idx-1) else 0
             
             # VACE refs for this specific segment
+            # Ensure vace_refs_instructions_all is a list, default to empty list if None
+            vace_refs_safe = vace_refs_instructions_all if vace_refs_instructions_all is not None else []
             vace_refs_for_this_segment = [
-                ref_instr for ref_instr in vace_refs_instructions_all
+                ref_instr for ref_instr in vace_refs_safe
                 if ref_instr.get("segment_idx_for_naming") == idx
             ]
 
