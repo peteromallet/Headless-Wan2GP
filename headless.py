@@ -204,7 +204,13 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         )
     elif task_type == "dp_final_gen":
         print(f"[Task ID: {task_id}] Identified as 'dp_final_gen' task.")
-        return dp._handle_dp_final_gen_task(task_params_from_db=task_params_dict, dprint=dprint)
+        return dp._handle_dp_final_gen_task(
+            wgp_mod=wgp_mod,
+            main_output_dir_base=main_output_dir_base,
+            process_single_task=process_single_task,
+            task_params_from_db=task_params_dict,
+            dprint=dprint
+        )
     elif task_type == "single_image":
         print(f"[Task ID: {task_id}] Identified as 'single_image' task.")
         return si._handle_single_image_task(
