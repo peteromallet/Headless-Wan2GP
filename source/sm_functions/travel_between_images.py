@@ -377,6 +377,10 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # Get the list of VACE ref instructions from the full orchestrator payload
         vace_ref_instructions_from_orchestrator = full_orchestrator_payload.get("vace_image_refs_to_prepare_by_headless", [])
         
+        # Ensure vace_ref_instructions_from_orchestrator is a list, default to empty list if None
+        if vace_ref_instructions_from_orchestrator is None:
+            vace_ref_instructions_from_orchestrator = []
+        
         # Filter instructions for the current segment_idx
         # The segment_idx_for_naming in the instruction should match the current segment_idx
         relevant_vace_instructions = [
