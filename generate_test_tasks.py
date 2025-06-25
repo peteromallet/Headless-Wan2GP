@@ -85,7 +85,7 @@ def make_orchestrator_payload(*, run_id: str,
     """Create the orchestrator_details dict used by headless server."""
     
     # No VACE image references by default - images are used for guide video creation only
-    vace_image_refs = []
+    vace_image_refs = None
     
     payload: dict = {
         "run_id": run_id,
@@ -99,7 +99,7 @@ def make_orchestrator_payload(*, run_id: str,
         "segment_frames_expanded": [SEGMENT_FRAMES_DEFAULT] * num_segments,
         "frame_overlap_expanded": [FRAME_OVERLAP_DEFAULT] * num_segments,
         "fps_helpers": FPS,
-        "vace_image_refs_to_prepare_by_headless": vace_image_refs,  # Empty by default
+        "vace_image_refs_to_prepare_by_headless": vace_image_refs,  # None instead of empty list
         "fade_in_params_json_str": json.dumps({
             "low_point": 0.0, "high_point": 1.0,
             "curve_type": "ease_in_out", "duration_factor": 0.0
