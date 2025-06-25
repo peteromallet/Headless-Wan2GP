@@ -239,6 +239,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         model_filename_for_task = wgp_mod.get_model_filename(task_model_type_logical,
                                                              wgp_mod.transformer_quantization,
                                                              wgp_mod.transformer_dtype_policy)
+        custom_output_dir = task_params_dict.get("output_dir")
         
         if apply_reward_lora:
             print(f"[Task ID: {task_id}] --apply-reward-lora flag is active. Checking and downloading reward LoRA.")
@@ -390,57 +391,22 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
 
         try:
             dprint(f"[Task ID: {task_id}] Calling wgp_mod.generate_video with effective ui_params (first 1000 chars): {json.dumps(ui_params, default=lambda o: 'Unserializable' if isinstance(o, Image.Image) else o.__dict__ if hasattr(o, '__dict__') else str(o), indent=2)[:1000]}...")
-            wgp_mod.generate_video(
-                task=gen_task_placeholder, send_cmd=send_cmd,
-                prompt=ui_params["prompt"],
-                negative_prompt=ui_params.get("negative_prompt", ""),
-                resolution=ui_params["resolution"],
-                video_length=ui_params.get("video_length", 81),
-                seed=ui_params["seed"],
-                num_inference_steps=ui_params.get("num_inference_steps", 30),
-                guidance_scale=ui_params.get("guidance_scale", 5.0),
-                audio_guidance_scale=ui_params.get("audio_guidance_scale", 5.0),
-                flow_shift=ui_params.get("flow_shift", wgp_mod.get_default_flow(model_filename_for_task, wgp_mod.test_class_i2v(model_filename_for_task))),
-                embedded_guidance_scale=ui_params.get("embedded_guidance_scale", 6.0),
-                repeat_generation=ui_params.get("repeat_generation", 1),
-                multi_images_gen_type=ui_params.get("multi_images_gen_type", 0),
-                tea_cache_setting=tea_cache_value,
-                tea_cache_start_step_perc=ui_params.get("tea_cache_start_step_perc", 0),
-                activated_loras=ui_params.get("activated_loras", []),
-                loras_multipliers=ui_params.get("loras_multipliers", ""),
-                image_prompt_type=ui_params.get("image_prompt_type", "T"),
-                image_start=[wgp_mod.convert_image(img) for img in ui_params.get("image_start", [])],
-                image_end=[wgp_mod.convert_image(img) for img in ui_params.get("image_end", [])],
-                model_mode=ui_params.get("model_mode", 0),
-                video_source=ui_params.get("video_source", None),
-                keep_frames_video_source=ui_params.get("keep_frames_video_source", ""),
+            output_video_path, generation_success = wgp_mod.main(state, send_cmd)
+
+            if generation_success and output_video_path:
+                output_path_obj = Path(output_video_path)
                 
-                video_prompt_type=ui_params.get("video_prompt_type", ""),
-                image_refs=ui_params.get("image_refs", None),
-                video_guide=ui_params.get("video_guide", None),
-                keep_frames_video_guide=ui_params.get("keep_frames_video_guide", ""),
-                video_mask=ui_params.get("video_mask", None),
-                audio_guide=ui_params.get("audio_guide", None),
-                sliding_window_size=ui_params.get("sliding_window_size", 81),
-                sliding_window_overlap=ui_params.get("sliding_window_overlap", 5),
-                sliding_window_overlap_noise=ui_params.get("sliding_window_overlap_noise", 20),
-                sliding_window_discard_last_frames=ui_params.get("sliding_window_discard_last_frames", 0),
-                remove_background_images_ref=ui_params.get("remove_background_images_ref", False),
-                temporal_upsampling=ui_params.get("temporal_upsampling", ""),
-                spatial_upsampling=ui_params.get("spatial_upsampling", ""),
-                RIFLEx_setting=ui_params.get("RIFLEx_setting", 0),
-                slg_switch=ui_params.get("slg_switch", 0),
-                slg_layers=ui_params.get("slg_layers", [9]),
-                slg_start_perc=ui_params.get("slg_start_perc", 10),
-                slg_end_perc=ui_params.get("slg_end_perc", 90),
-                cfg_star_switch=ui_params.get("cfg_star_switch", 0),
-                cfg_zero_step=ui_params.get("cfg_zero_step", -1),
-                prompt_enhancer=ui_params.get("prompt_enhancer", ""),
-                state=state,
-                model_filename=model_filename_for_task
-            )
-            print(f"[Task ID: {task_id}] Generation completed to temporary directory: {wgp_mod.save_path}")
-            generation_success = True
+                # Use the custom output directory if provided, otherwise default to the main output base.
+                target_dir = Path(custom_output_dir) if custom_output_dir else main_output_dir_base
+                
+                final_save_path, db_output_location = sm_get_unique_target_path(target_dir, output_path_obj.stem, output_path_obj.suffix)
+                
+                shutil.move(str(output_path_obj), str(final_save_path))
+                output_location_to_db = db_output_location
+                print(f"--- Task {task_id} complete. Output at: {final_save_path.resolve()} ---")
+            else:
+                print(f"[WARNING Task ID: {task_id}] Generation reported success, but no .mp4 file found in {temp_output_dir}")
+                generation_success = False
         except Exception as e:
             print(f"[ERROR] Task ID {task_id} failed during generation: {e}")
             traceback.print_exc()

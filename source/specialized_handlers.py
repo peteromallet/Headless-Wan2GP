@@ -27,7 +27,7 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
     """Handles the 'generate_openpose' task."""
     print(f"[Task ID: {task_id}] Handling 'generate_openpose' task.")
     input_image_path_str = task_params_dict.get("input_image_path")
-    suggested_output_image_path_str = task_params_dict.get("output_path")
+    custom_output_dir = task_params_dict.get("output_dir")
 
     if PoseBodyFaceVideoAnnotator is None:
         msg = "PoseBodyFaceVideoAnnotator not imported. Cannot process 'generate_openpose' task."
@@ -38,22 +38,19 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
         print(f"[ERROR Task ID: {task_id}] 'input_image_path' not specified for generate_openpose task.")
         return False, "Missing input_image_path"
 
-    if not suggested_output_image_path_str:
-        default_output_dir = main_output_dir_base / task_id
-        default_output_dir.mkdir(parents=True, exist_ok=True)
-        output_image_path = default_output_dir / f"{task_id}_openpose.png"
-        print(f"[WARNING Task ID: {task_id}] 'output_path' not specified. Defaulting to {output_image_path}")
-    else:
-        output_image_path = Path(suggested_output_image_path_str)
-
     input_image_path = Path(input_image_path_str)
-    output_image_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not input_image_path.is_file():
         print(f"[ERROR Task ID: {task_id}] Input image file not found: {input_image_path}")
         return False, f"Input image not found: {input_image_path}"
 
-    final_save_path, db_output_location = prepare_output_path(task_id, f"{task_id}_openpose.png", main_output_dir_base, dprint=dprint)
+    final_save_path, db_output_location = prepare_output_path(
+        task_id,
+        f"{task_id}_openpose.png",
+        main_output_dir_base,
+        dprint=dprint,
+        custom_output_dir=custom_output_dir
+    )
 
     try:
         pil_input_image = Image.open(input_image_path).convert("RGB")
@@ -101,6 +98,7 @@ def handle_extract_frame_task(task_params_dict: dict, main_output_dir_base: Path
     
     input_video_task_id = task_params_dict.get("input_video_task_id")
     frame_index = task_params_dict.get("frame_index", 0) # Default to first frame
+    custom_output_dir = task_params_dict.get("output_dir")
     
     if not input_video_task_id:
         return False, f"Task {task_id}: Missing 'input_video_task_id' in payload."
@@ -117,7 +115,13 @@ def handle_extract_frame_task(task_params_dict: dict, main_output_dir_base: Path
 
         # Use prepare_output_path to determine the correct save location
         output_filename = f"{task_id}_frame_{frame_index}.png"
-        final_save_path, db_output_location = prepare_output_path(task_id, output_filename, main_output_dir_base, dprint=dprint)
+        final_save_path, db_output_location = prepare_output_path(
+            task_id,
+            output_filename,
+            main_output_dir_base,
+            dprint=dprint,
+            custom_output_dir=custom_output_dir
+        )
 
         # The resolution for save_frame_from_video can be inferred from the video itself
         # Or passed in the payload if a specific resize is needed. For now, we don't resize.
@@ -157,6 +161,7 @@ def handle_rife_interpolate_task(wgp_mod, task_params_dict: dict, main_output_di
     output_video_path_str = task_params_dict.get("output_path")
     num_rife_frames = task_params_dict.get("frames")
     resolution_str = task_params_dict.get("resolution")
+    custom_output_dir = task_params_dict.get("output_dir")
 
     required_params = {
         "input_image_path1": input_image_path1_str,
@@ -179,7 +184,13 @@ def handle_rife_interpolate_task(wgp_mod, task_params_dict: dict, main_output_di
     generation_success = False
     output_location_to_db = None
 
-    final_save_path_for_video, db_output_location_for_rife = prepare_output_path(task_id, f"{task_id}_rife_interpolated.mp4", main_output_dir_base, dprint=dprint)
+    final_save_path_for_video, db_output_location_for_rife = prepare_output_path(
+        task_id,
+        f"{task_id}_rife_interpolated.mp4",
+        main_output_dir_base,
+        dprint=dprint,
+        custom_output_dir=custom_output_dir
+    )
     output_video_path = final_save_path_for_video
     output_video_path.parent.mkdir(parents=True, exist_ok=True)
 
