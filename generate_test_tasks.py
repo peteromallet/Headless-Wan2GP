@@ -81,7 +81,8 @@ def make_orchestrator_payload(*, run_id: str,
                               images: list[Path],
                               continue_video: Path | None,
                               num_segments: int,
-                              resolution: str = DEFAULT_RESOLUTION) -> dict:
+                              resolution: str = DEFAULT_RESOLUTION,
+                              additional_loras: dict | None = None) -> dict:
     """Create the orchestrator_details dict used by headless server."""
     
     # No VACE image references by default - images are used for guide video creation only
@@ -110,9 +111,15 @@ def make_orchestrator_payload(*, run_id: str,
         }),
         "seed_base": SEED_BASE,
         "main_output_dir_for_run": OUTPUT_DIR_DEFAULT,
+        "debug_mode_enabled": True,
+        "skip_cleanup_enabled": True,
     }
     if continue_video is not None:
         payload["continue_from_video_resolved_path"] = str(continue_video)
+
+    # Attach additional LoRAs if provided
+    if additional_loras:
+        payload["additional_loras"] = additional_loras
     return payload
 
 
@@ -121,7 +128,8 @@ def write_travel_test_case(name: str,
                            continue_video: Path | None,
                            num_segments: int,
                            resolution: str,
-                           enqueue: bool) -> None:
+                           enqueue: bool,
+                           additional_loras: dict | None = None) -> None:
     """Materialise a test folder with JSON and asset copies."""
     test_dir = TESTS_ROOT / name
     test_dir.mkdir(parents=True, exist_ok=True)
@@ -151,6 +159,7 @@ def write_travel_test_case(name: str,
         continue_video=continue_video_path,
         num_segments=num_segments,
         resolution=resolution,
+        additional_loras=additional_loras,
     )
     task_json: dict = {
         "project_id": PROJECT_ID,
@@ -339,7 +348,8 @@ def write_different_perspective_test_case(name: str,
                                           prompt: str,
                                           resolution: str,
                                           perspective_type: str = "pose",
-                                          enqueue: bool = False) -> None:
+                                          enqueue: bool = False,
+                                          additional_loras: dict | None = None) -> None:
     """Generate a different_perspective orchestrator task (single-image)."""
     test_dir = TESTS_ROOT / name
     test_dir.mkdir(parents=True, exist_ok=True)
@@ -368,6 +378,9 @@ def write_different_perspective_test_case(name: str,
         "perspective_type": perspective_type,
     }
 
+    if additional_loras:
+        task_json["additional_loras"] = additional_loras
+
     json_path = test_dir / f"{name}_task.json"
     with open(json_path, "w", encoding="utf-8") as fp:
         json.dump(task_json, fp, indent=2)
@@ -392,7 +405,8 @@ def write_different_perspective_test_case(name: str,
 def write_single_image_test_case(name: str,
                                  prompt: str,
                                  resolution: str,
-                                 enqueue: bool) -> None:
+                                 enqueue: bool,
+                                 additional_loras: dict | None = None) -> None:
     """Create a single-image generation task (wgp single frame)."""
     test_dir = TESTS_ROOT / name
     test_dir.mkdir(parents=True, exist_ok=True)
@@ -409,6 +423,9 @@ def write_single_image_test_case(name: str,
         "negative_prompt": NEG_PROMPT,
         "use_causvid_lora": True,
     }
+
+    if additional_loras:
+        task_json["additional_loras"] = additional_loras
 
     json_path = test_dir / f"{name}_task.json"
     with open(json_path, "w", encoding="utf-8") as fp:
@@ -433,24 +450,24 @@ def write_single_image_test_case(name: str,
 def main(args) -> None:
     TESTS_ROOT.mkdir(exist_ok=True)
 
+    # Parse --loras JSON string into dict if provided
+    additional_loras_global: dict | None = None
+    if hasattr(args, "loras") and args.loras:
+        try:
+            additional_loras_global = json.loads(args.loras)
+        except Exception as e_l_json:
+            print(f"[ERROR] Failed to parse --loras JSON: {e_l_json}")
+            sys.exit(1)
+
     # Generate tasks according to requested --task-type
 
     # ------------------------------------------------------------
     # travel_between_images
     # ------------------------------------------------------------
     if args.task_type == "travel_between_images":
-        # 1) Travel orchestrator: 3 images → 512×512
-        write_travel_test_case(
-            name="travel_3_images_512",
-            images=ASSET_IMAGES,
-            continue_video=None,
-            num_segments=3,
-            resolution="512x512",
-            enqueue=args.enqueue,
-        )
-
-        # 2) Continue-video + 1 image → 512×512
-        '''
+        
+        # 1) Continue-video + 1 image → 512×512
+        
         write_travel_test_case(
             name="continue_video_1_image_512",
             images=[ASSET_IMAGES[0]],
@@ -458,8 +475,22 @@ def main(args) -> None:
             num_segments=1,
             resolution="512x512",
             enqueue=args.enqueue,
+            additional_loras=additional_loras_global,
         )
-        '''
+
+        # 2) Travel orchestrator: 3 images → 512×512
+        write_travel_test_case(
+            name="travel_3_images_512",
+            images=ASSET_IMAGES,
+            continue_video=None,
+            num_segments=3,
+            resolution="512x512",
+            enqueue=args.enqueue,
+            additional_loras=additional_loras_global,
+        )
+
+
+    
     # ------------------------------------------------------------
     # different_perspective
     # ------------------------------------------------------------
@@ -472,6 +503,7 @@ def main(args) -> None:
             resolution="700x400",
             perspective_type="pose",
             enqueue=args.enqueue,
+            additional_loras=additional_loras_global,
         )
         
         # Test depth-based perspective change
@@ -482,6 +514,7 @@ def main(args) -> None:
             resolution="640x480",
             perspective_type="depth",
             enqueue=args.enqueue,
+            additional_loras=additional_loras_global,
         )
 
     # ------------------------------------------------------------
@@ -497,7 +530,25 @@ def main(args) -> None:
         ]
 
         for name, prompt, res in single_image_specs:
-            write_single_image_test_case(name, prompt, res, enqueue=args.enqueue)
+            write_single_image_test_case(name, prompt, res, enqueue=args.enqueue, additional_loras=additional_loras_global)
+
+        # -----------------------------------------------------------------
+        # Always add an extra single-image test that explicitly uses the
+        # Studio-Ghibli LoRA (strength 1.0).  If the caller supplied
+        # --loras we merge that dict so both sets are applied.
+        # -----------------------------------------------------------------
+        ghibli_lora_url = "https://huggingface.co/peteromallet/ad_motion_loras/resolve/main/studio_ghibli_wan14b_t2v_v01.safetensors"
+        combined_loras = {ghibli_lora_url: 1.0}
+        if additional_loras_global:
+            combined_loras.update(additional_loras_global)
+
+        write_single_image_test_case(
+            name="single_image_ghibli_lora",
+            prompt="A lush landscape in the whimsical Studio Ghibli style, highly detailed, vibrant colors",
+            resolution="512x512",
+            enqueue=args.enqueue,
+            additional_loras=combined_loras,
+        )
 
     print("\nAll test cases generated under", TESTS_ROOT.resolve())
 
@@ -525,6 +576,11 @@ if __name__ == "__main__":
             "'travel_between_images' creates the orchestrator travel tasks; "
             "'single_image' creates the five single-image tasks."
         ),
+    )
+    parser.add_argument(
+        "--loras",
+        type=str,
+        help="JSON dictionary mapping LoRA URLs/paths to strength values to attach to generated tasks (e.g. '{\"path_or_url\": 0.8}')",
     )
     args = parser.parse_args()
 
