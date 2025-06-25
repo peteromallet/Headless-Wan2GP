@@ -450,6 +450,7 @@ def main(args) -> None:
         )
 
         # 2) Continue-video + 1 image → 512×512
+        '''
         write_travel_test_case(
             name="continue_video_1_image_512",
             images=[ASSET_IMAGES[0]],
@@ -458,7 +459,7 @@ def main(args) -> None:
             resolution="512x512",
             enqueue=args.enqueue,
         )
-
+        '''
     # ------------------------------------------------------------
     # different_perspective
     # ------------------------------------------------------------

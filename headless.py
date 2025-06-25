@@ -16,15 +16,16 @@ generation work.
 """
 
 import argparse
+import json
+import logging
 import sys
 import os
-import json
 import time
 import traceback
 import urllib.parse
 import tempfile
 import shutil
-
+from datetime import datetime, timezone
 from pathlib import Path
 from PIL import Image
 from dotenv import load_dotenv
