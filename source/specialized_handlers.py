@@ -27,6 +27,7 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
     """Handles the 'generate_openpose' task."""
     print(f"[Task ID: {task_id}] Handling 'generate_openpose' task.")
     input_image_path_str = task_params_dict.get("input_image_path")
+    input_image_task_id = task_params_dict.get("input_image_task_id")
     custom_output_dir = task_params_dict.get("output_dir")
 
     if PoseBodyFaceVideoAnnotator is None:
@@ -34,9 +35,29 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
         print(f"[ERROR Task ID: {task_id}] {msg}")
         return False, "PoseBodyFaceVideoAnnotator module not available."
 
+    # If direct path is not given, try to resolve it from a dependency task ID
     if not input_image_path_str:
-        print(f"[ERROR Task ID: {task_id}] 'input_image_path' not specified for generate_openpose task.")
-        return False, "Missing input_image_path"
+        dprint(f"Task {task_id}: 'input_image_path' not found, trying 'input_image_task_id': {input_image_task_id}")
+        if not input_image_task_id:
+            msg = "Task requires either 'input_image_path' or 'input_image_task_id'."
+            print(f"[ERROR Task ID: {task_id}] {msg}")
+            return False, msg
+        
+        try:
+            path_from_db = db_ops.get_task_output_location_from_db(input_image_task_id)
+            if not path_from_db:
+                return False, f"Task {task_id}: Could not find output location for dependency task {input_image_task_id}."
+
+            abs_path = db_ops.get_abs_path_from_db_path(path_from_db, dprint)
+            if not abs_path:
+                return False, f"Task {task_id}: Could not resolve or find image file from DB path '{path_from_db}'."
+            input_image_path_str = str(abs_path)
+            dprint(f"Task {task_id}: Resolved input image path from task ID to '{input_image_path_str}'")
+        except Exception as e:
+            error_msg = f"Task {task_id}: Failed during input image path resolution from task ID: {e}"
+            print(f"[ERROR] {error_msg}")
+            traceback.print_exc()
+            return False, str(e)
 
     input_image_path = Path(input_image_path_str)
 
