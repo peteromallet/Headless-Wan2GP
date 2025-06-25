@@ -184,7 +184,8 @@ def copy_results_for_comparison():
     for test_name in [
         "travel_3_images_512",
         "continue_video_1_image_512",
-        "different_pose_700x400",
+        "different_perspective_pose_700x400",
+        "different_perspective_depth_640x480",
         "single_image_1",
         "single_image_2",
         "single_image_3",
@@ -326,12 +327,13 @@ def wait_for_task_completion(max_wait_minutes: int = 30) -> None:
 # ---------------------------------------------------------------------
 
 
-def write_different_pose_test_case(name: str,
-                                   input_image: Path,
-                                   prompt: str,
-                                   resolution: str,
-                                   enqueue: bool) -> None:
-    """Generate a different_pose orchestrator task (single-image)."""
+def write_different_perspective_test_case(name: str,
+                                          input_image: Path,
+                                          prompt: str,
+                                          resolution: str,
+                                          perspective_type: str = "pose",
+                                          enqueue: bool = False) -> None:
+    """Generate a different_perspective orchestrator task (single-image)."""
     test_dir = TESTS_ROOT / name
     test_dir.mkdir(parents=True, exist_ok=True)
 
@@ -356,6 +358,7 @@ def write_different_pose_test_case(name: str,
         "use_causvid_lora": True,
         "debug_mode": True,
         "skip_cleanup": True,
+        "perspective_type": perspective_type,
     }
 
     json_path = test_dir / f"{name}_task.json"
@@ -365,7 +368,7 @@ def write_different_pose_test_case(name: str,
     print(f"[WRITE] {json_path}")
 
     if enqueue:
-        cmd = [sys.executable, "add_task.py", "--type", "different_pose_orchestrator",
+        cmd = [sys.executable, "add_task.py", "--type", "different_perspective_orchestrator",
                "--params", f"@{json_path}"]
         print("[ENQUEUE]", " ".join(cmd))
         try:
@@ -450,14 +453,26 @@ def main(args) -> None:
         )
 
     # ------------------------------------------------------------
-    # different_pose
+    # different_perspective
     # ------------------------------------------------------------
-    elif args.task_type == "different_pose":
-        write_different_pose_test_case(
-            name="different_pose_700x400",
+    elif args.task_type == "different_perspective":
+        # Test pose-based perspective change
+        write_different_perspective_test_case(
+            name="different_perspective_pose_700x400",
             input_image=SAMPLES_DIR / "pose.png",
             prompt="Person standing in a desert sunset, cinematic lighting",
             resolution="700x400",
+            perspective_type="pose",
+            enqueue=args.enqueue,
+        )
+        
+        # Test depth-based perspective change
+        write_different_perspective_test_case(
+            name="different_perspective_depth_640x480",
+            input_image=SAMPLES_DIR / "1.png",
+            prompt="Cinematic view from a different angle, dramatic lighting",
+            resolution="640x480",
+            perspective_type="depth",
             enqueue=args.enqueue,
         )
 
@@ -494,11 +509,11 @@ if __name__ == "__main__":
     parser.add_argument("--wait-minutes", type=int, default=30, help="Max minutes to wait for completion when waiting is enabled")
     parser.add_argument(
         "--task-type",
-        choices=["different_pose", "travel_between_images", "single_image"],
-        default="different_pose",
+        choices=["different_perspective", "travel_between_images", "single_image"],
+        default="different_perspective",
         help=(
             "Select which kind of test task(s) to generate. "
-            "'different_pose' (default) creates the pose-variation task; "
+            "'different_perspective' (default) creates both pose and depth perspective-variation tasks; "
             "'travel_between_images' creates the orchestrator travel tasks; "
             "'single_image' creates the five single-image tasks."
         ),

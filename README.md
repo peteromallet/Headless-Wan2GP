@@ -15,7 +15,7 @@ It currently provides two main sub-commands:
 | Sub-command             | Purpose                                                                                                                                                                                             | Typical use-case                                                                    |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | `travel_between_images` | Generates a video that smoothly "travels" between a list of anchor images. It enqueues an orchestrator task, which `headless.py` then uses to manage individual segment generations and final stitching. | Timelapse-like transitions between concept art frames, architectural visualizations.  |
-| `different_pose`        | Takes a single reference image plus a target prompt and produces a new video of that character in a *different pose*. Internally, it queues tasks for OpenPose extraction and guided video generation. | Turning a static portrait into an animated motion, gesture, or expression change. |
+| `different_perspective` | Takes a single reference image plus a target prompt and produces a new video of that character in a *different perspective*. Internally, it queues tasks for OpenPose/depth extraction and guided video generation. | Turning a static portrait into an animated motion, gesture, or expression change. |
 
 All common flags such as `--resolution`, `--seed`, `--debug`, `--use_causvid_lora` are accepted by `steerable_motion.py` and forwarded appropriately within the task payloads it creates. The script also ensures the local SQLite database (default: `tasks.db`) and the necessary `tasks` table exist before queuing work.
 
@@ -398,10 +398,10 @@ python steerable_motion.py travel_between_images \\
     --debug
 ```
 
-**B. Example `different_pose` with a Sample Image:**
+**B. Example `different_perspective` with a Sample Image:**
 
 ```bash
-python steerable_motion.py different_pose \\
+python steerable_motion.py different_perspective \\
     --input_image samples/image_1.png \\
     --prompt "A red square, now animated and waving" \\
     --resolution "700x460" \\

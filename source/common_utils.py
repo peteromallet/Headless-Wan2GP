@@ -1212,14 +1212,14 @@ def generate_debug_summary_video(segments_data: list[dict], output_path: str | P
         dprint("GENERATE_DEBUG_SUMMARY_VIDEO: Video writer released.")
 
 
-def generate_different_pose_debug_video_summary(
+def generate_different_perspective_debug_video_summary(
     video_stage_data: list[dict], 
     output_path: Path, 
     fps: int, 
     target_resolution: tuple[int, int] # width, height
 ):
     if not DEBUG_MODE: return # Only run if debug mode is on
-    dprint(f"Generating different_pose DEBUG VIDEO summary at {output_path} ({fps} FPS, {target_resolution[0]}x{target_resolution[1]})")
+    dprint(f"Generating different_perspective DEBUG VIDEO summary at {output_path} ({fps} FPS, {target_resolution[0]}x{target_resolution[1]})")
     
     all_output_frames = [] 
     font_pil = None
@@ -1317,7 +1317,7 @@ def generate_different_pose_debug_video_summary(
 
     print(f"[Debug Video] Creating final video with {len(all_output_frames)} frames.")
     create_video_from_frames_list(all_output_frames, output_path, fps, target_resolution)
-    print(f"Debug video summary for 'different_pose' saved to: {output_path.resolve()}") 
+    print(f"Debug video summary for 'different_perspective' saved to: {output_path.resolve()}") 
 
 def download_file(url, dest_folder, filename):
     dest_path = Path(dest_folder) / filename
@@ -1969,7 +1969,7 @@ def create_simple_first_frame_mask_video(
 ) -> Path | None:
     """
     Convenience function to create a mask video where only the first frame is inactive (black).
-    This is useful for workflows like different_pose where you want to keep the first frame unchanged
+    This is useful for workflows like different_perspective where you want to keep the first frame unchanged
     and generate the rest.
     
     Returns:

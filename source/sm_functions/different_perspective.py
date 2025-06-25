@@ -1,4 +1,4 @@
-"""Different-pose task handler."""
+"""Different-perspective task handler."""
 
 import json
 import shutil
@@ -13,18 +13,19 @@ from .. import db_operations as db_ops
 from ..common_utils import (
     DEBUG_MODE, dprint, generate_unique_task_id, add_task_to_db, poll_task_status,
     save_frame_from_video, create_pose_interpolated_guide_video,
-    generate_different_pose_debug_video_summary,
+    generate_different_perspective_debug_video_summary,
     parse_resolution as sm_parse_resolution,
     create_simple_first_frame_mask_video
 )
+from ..video_utils import rife_interpolate_images_to_video  # For depth guide interpolation
 
-def _handle_different_pose_orchestrator_task(task_params_from_db: dict, main_output_dir_base: Path, orchestrator_task_id_str: str, dprint):
+def _handle_different_perspective_orchestrator_task(task_params_from_db: dict, main_output_dir_base: Path, orchestrator_task_id_str: str, dprint):
     """
-    This is the entry point for a 'different_pose' job.
+    This is the entry point for a 'different_perspective' job.
     It sets up the environment and enqueues all necessary child tasks with
     database-level dependencies.
     """
-    print(f"--- Orchestrating Task: Different Pose (ID: {orchestrator_task_id_str}) ---")
+    print(f"--- Orchestrating Task: Different Perspective (ID: {orchestrator_task_id_str}) ---")
     dprint(f"Orchestrator Task Params: {task_params_from_db}")
 
     try:
@@ -33,9 +34,9 @@ def _handle_different_pose_orchestrator_task(task_params_from_db: dict, main_out
         main_output_dir_base = public_files_dir
 
         run_id = generate_unique_task_id("dp_run_")
-        work_dir = main_output_dir_base / f"different_pose_run_{run_id}"
+        work_dir = main_output_dir_base / f"different_perspective_run_{run_id}"
         work_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Working directory for this 'different_pose' run: {work_dir.resolve()}")
+        print(f"Working directory for this 'different_perspective' run: {work_dir.resolve()}")
 
         task_id_user_pose = generate_unique_task_id("dp_user_pose_")
         task_id_t2i = generate_unique_task_id("dp_t2i_")
@@ -43,17 +44,20 @@ def _handle_different_pose_orchestrator_task(task_params_from_db: dict, main_out
         task_id_t2i_pose = generate_unique_task_id("dp_t2i_pose_")
         task_id_final_gen = generate_unique_task_id("dp_final_gen_")
 
+        perspective_type = task_params_from_db.get("perspective_type", "pose").lower()
+
         orchestrator_payload = {
             "run_id": run_id,
             "orchestrator_task_id": orchestrator_task_id_str,
             "work_dir": str(work_dir.resolve()),
             "main_output_dir": str(main_output_dir_base.resolve()),
             "original_params": task_params_from_db,
+            "perspective_type": perspective_type,
             "task_ids": {
-                "user_pose": task_id_user_pose,
+                "user_persp": task_id_user_pose,
                 "t2i": task_id_t2i,
                 "extract": task_id_extract,
-                "t2i_pose": task_id_t2i_pose,
+                "t2i_persp": task_id_t2i_pose,
                 "final_gen": task_id_final_gen,
             },
             "debug_mode": task_params_from_db.get("debug_mode", False),
@@ -62,14 +66,15 @@ def _handle_different_pose_orchestrator_task(task_params_from_db: dict, main_out
 
         previous_task_id = None
 
-        payload_user_pose = {
+        payload_user_persp = {
             "task_id": task_id_user_pose,
             "input_image_path": task_params_from_db['input_image_path'],
             "dp_orchestrator_payload": orchestrator_payload,
             "output_dir": str(work_dir.resolve()),
         }
-        db_ops.add_task_to_db(payload_user_pose, "generate_openpose", dependant_on=previous_task_id)
-        dprint(f"Orchestrator {orchestrator_task_id_str} enqueued user_pose_gen ({task_id_user_pose})")
+        user_gen_task_type = "generate_openpose" if perspective_type == "pose" else "generate_depth"
+        db_ops.add_task_to_db(payload_user_persp, user_gen_task_type, dependant_on=previous_task_id)
+        dprint(f"Orchestrator {orchestrator_task_id_str} enqueued {user_gen_task_type} ({task_id_user_pose})")
         previous_task_id = task_id_user_pose
 
         payload_t2i = {
@@ -98,14 +103,14 @@ def _handle_different_pose_orchestrator_task(task_params_from_db: dict, main_out
         dprint(f"Orchestrator {orchestrator_task_id_str} enqueued extract_frame ({task_id_extract})")
         previous_task_id = task_id_extract
 
-        payload_t2i_pose = {
+        payload_t2i_persp = {
             "task_id": task_id_t2i_pose,
             "input_image_task_id": task_id_extract,
             "dp_orchestrator_payload": orchestrator_payload,
             "output_dir": str(work_dir.resolve()),
         }
-        db_ops.add_task_to_db(payload_t2i_pose, "generate_openpose", dependant_on=previous_task_id)
-        dprint(f"Orchestrator {orchestrator_task_id_str} enqueued t2i_pose_gen ({task_id_t2i_pose})")
+        db_ops.add_task_to_db(payload_t2i_persp, user_gen_task_type, dependant_on=previous_task_id)
+        dprint(f"Orchestrator {orchestrator_task_id_str} enqueued {user_gen_task_type} ({task_id_t2i_pose})")
         previous_task_id = task_id_t2i_pose
 
         payload_final_gen = {
@@ -115,9 +120,9 @@ def _handle_different_pose_orchestrator_task(task_params_from_db: dict, main_out
         db_ops.add_task_to_db(payload_final_gen, "dp_final_gen", dependant_on=previous_task_id)
         dprint(f"Orchestrator {orchestrator_task_id_str} enqueued dp_final_gen ({task_id_final_gen})")
 
-        return True, f"Successfully enqueued different_pose job graph with run_id {run_id}."
+        return True, f"Successfully enqueued different_perspective job graph with run_id {run_id}."
     except Exception as e:
-        error_msg = f"Different Pose orchestration failed: {e}"
+        error_msg = f"Different Perspective orchestration failed: {e}"
         print(f"[ERROR] {error_msg}")
         traceback.print_exc()
         return False, error_msg
@@ -145,7 +150,7 @@ def _handle_dp_final_gen_task(
     dprint,
 ):
     """
-    Handles the final step of the 'different_pose' process. It gathers all
+    Handles the final step of the 'different_perspective' process. It gathers all
     the required artifacts generated by previous tasks in the dependency graph,
     creates the final guide video, runs the last generation, extracts the
     final image, and performs cleanup.
@@ -163,29 +168,55 @@ def _handle_dp_final_gen_task(
     dprint("DP Final Gen: Starting final generation step.")
 
     try:
-        user_pose_path_db = db_ops.get_task_output_location_from_db(task_ids["user_pose"])
-        t2i_pose_path_db = db_ops.get_task_output_location_from_db(task_ids["t2i_pose"])
-        t2i_image_path_db = db_ops.get_task_output_location_from_db(task_ids["extract"])
+        perspective_type = orchestrator_payload.get("perspective_type", "pose").lower()
 
-        user_pose_image_path = db_ops.get_abs_path_from_db_path(user_pose_path_db, dprint)
-        t2i_pose_image_path = db_ops.get_abs_path_from_db_path(t2i_pose_path_db, dprint)
-        t2i_image_path = db_ops.get_abs_path_from_db_path(t2i_image_path_db, dprint)
+        user_persp_id = task_ids["user_persp"]
+        t2i_persp_id = task_ids["t2i_persp"]
 
-        if not all([user_pose_image_path, t2i_pose_image_path, t2i_image_path]):
+        user_persp_path_db = db_ops.get_task_output_location_from_db(user_persp_id)
+        t2i_persp_path_db = db_ops.get_task_output_location_from_db(t2i_persp_id)
+
+        user_persp_image_path = db_ops.get_abs_path_from_db_path(user_persp_path_db, dprint)
+        t2i_persp_image_path = db_ops.get_abs_path_from_db_path(t2i_persp_path_db, dprint)
+
+        if not all([user_persp_image_path, t2i_persp_image_path, t2i_image_path]):
             return False, "Could not resolve one or more required image paths from previous tasks.", None
 
-        print("\nDP Final Gen: Creating custom guide video...")
+        print("\nDP Final Gen: Creating custom guide video…")
         custom_guide_video_path = work_dir / f"{generate_unique_task_id('dp_custom_guide_')}.mp4"
         
-        create_pose_interpolated_guide_video(
-            output_video_path=custom_guide_video_path,
-            resolution=sm_parse_resolution(original_params.get("resolution")),
-            total_frames=original_params.get("output_video_frames", 16),
-            start_image_path=Path(original_params['input_image_path']),
-            end_image_path=t2i_image_path,
-            fps=original_params.get("fps_helpers", 16),
-        )
-        print(f"DP Final Gen: Successfully created pose-interpolated guide video: {custom_guide_video_path}")
+        if perspective_type == "pose":
+            create_pose_interpolated_guide_video(
+                output_video_path=custom_guide_video_path,
+                resolution=sm_parse_resolution(original_params.get("resolution")),
+                total_frames=original_params.get("output_video_frames", 16),
+                start_image_path=Path(original_params['input_image_path']),
+                end_image_path=t2i_image_path,
+                fps=original_params.get("fps_helpers", 16),
+            )
+            print(f"DP Final Gen: Pose guide video created: {custom_guide_video_path}")
+        else:  # depth
+            # Use RIFE to interpolate between depth maps
+            try:
+                img_start = Image.open(user_persp_image_path).convert("RGB")
+                img_end = Image.open(t2i_persp_image_path).convert("RGB")
+
+                rife_success = rife_interpolate_images_to_video(
+                    image1=img_start,
+                    image2=img_end,
+                    num_frames=original_params.get("output_video_frames", 16),
+                    resolution_wh=sm_parse_resolution(original_params.get("resolution")),
+                    output_path=custom_guide_video_path,
+                    fps=original_params.get("fps_helpers", 16),
+                    dprint_func=dprint,
+                )
+                if not rife_success:
+                    return False, "Failed to create depth interpolated guide video via RIFE", None
+                print(f"DP Final Gen: Depth guide video created: {custom_guide_video_path}")
+            except Exception as e_gv:
+                print(f"[ERROR] DP Final Gen: Depth guide video creation failed: {e_gv}")
+                traceback.print_exc()
+                return False, f"Guide video creation failed: {e_gv}", None
 
         # ------------------------------------------------------------------
         # 2. Prepare WGP inline generation payload
@@ -260,7 +291,7 @@ def _handle_dp_final_gen_task(
         if not save_frame_from_video(final_video_path, -1, final_posed_image_output_path, sm_parse_resolution(original_params.get("resolution"))):
              return False, f"Failed to extract final posed image from {final_video_path}", None
         
-        print(f"Successfully completed 'different_pose' task! Final image: {final_posed_image_output_path.resolve()}")
+        print(f"Successfully completed 'different_perspective' task! Final image: {final_posed_image_output_path.resolve()}")
         final_path_for_db = str(final_posed_image_output_path.resolve())
 
         if not orchestrator_payload.get("skip_cleanup") and not orchestrator_payload.get("debug_mode"):

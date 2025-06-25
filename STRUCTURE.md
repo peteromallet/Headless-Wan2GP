@@ -15,7 +15,7 @@
 │   └── sm_functions/
 │       ├── __init__.py
 │       ├── travel_between_images.py
-│       ├── different_pose.py
+│       ├── different_perspective.py
 │       └── single_image.py
 ├── logs/               # runtime logs (git-ignored)
 ├── outputs/            # generated videos/images (git-ignored)
@@ -47,9 +47,9 @@ This is the main application package.
 Task-specific wrappers around the bulky upstream logic. These are imported by `headless.py` (and potentially by notebooks/unit tests) without dragging in the interactive Gradio UI shipped with Wan2GP.
 
 * **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images. Builds guide videos, queues generation tasks, stitches outputs.
-* **different_pose.py** – Generates a new pose for a single image using an OpenPose-driven guide video plus optional RIFE interpolation for smoothness.
+* **different_perspective.py** – Generates a new perspective for a single image using an OpenPose or depth-driven guide video plus optional RIFE interpolation for smoothness.
 * **single_image.py** – Minimal handler for one-off image-to-video generation without travel or pose manipulation.
-* **__init__.py** – Re-exports public APIs (`run_travel_between_images_task`, `run_single_image_task`, `run_different_pose_task`) and common utilities for convenient importing.
+* **__init__.py** – Re-exports public APIs (`run_travel_between_images_task`, `run_single_image_task`, `run_different_perspective_task`) and common utilities for convenient importing.
 
 ## Additional runtime artefacts & folders
 
@@ -112,7 +112,7 @@ The submodule is currently pinned to commit `6706709` ("optimization for i2v wit
 | Travel segment       | `_handle_travel_segment_task`      | " " |
 | Travel stitch        | `_handle_travel_stitch_task`       | " " |
 | Single image video   | `run_single_image_task`            | `sm_functions/single_image.py` |
-| Different pose       | `run_different_pose_task`          | `sm_functions/different_pose.py` |
+| Different perspective | `run_different_perspective_task`   | `sm_functions/different_perspective.py` |
 | OpenPose mask video  | `handle_openpose_task`             | `specialized_handlers.py` |
 | RIFE interpolation   | `handle_rife_task`                 | `specialized_handlers.py` |
 

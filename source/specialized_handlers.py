@@ -19,6 +19,11 @@ try:
 except ImportError:
     PoseBodyFaceVideoAnnotator = None
 
+try:
+    from preprocessing.midas.depth import DepthAnnotator
+except ImportError:
+    DepthAnnotator = None
+
 from . import db_operations as db_ops
 from .common_utils import sm_get_unique_target_path, parse_resolution as sm_parse_resolution, prepare_output_path, save_frame_from_video
 from .video_utils import rife_interpolate_images_to_video as sm_rife_interpolate_images_to_video
@@ -273,3 +278,79 @@ def handle_rife_interpolate_task(wgp_mod, task_params_dict: dict, main_output_di
 
 
     return generation_success, output_location_to_db 
+
+def handle_generate_depth_task(task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable):
+    """Handles the 'generate_depth' task – produces a MiDaS depth‐map PNG from an image."""
+    print(f"[Task ID: {task_id}] Handling 'generate_depth' task.")
+
+    input_image_path_str = task_params_dict.get("input_image_path")
+    input_image_task_id = task_params_dict.get("input_image_task_id")
+    custom_output_dir = task_params_dict.get("output_dir")
+
+    if DepthAnnotator is None:
+        msg = "DepthAnnotator not available. Ensure MiDaS preprocessing module is installed."
+        print(f"[ERROR Task ID: {task_id}] {msg}")
+        return False, msg
+
+    # Resolve image path from dependency task if direct path is missing
+    if not input_image_path_str:
+        dprint(f"Task {task_id}: 'input_image_path' missing, trying 'input_image_task_id': {input_image_task_id}")
+        if not input_image_task_id:
+            msg = "Task requires either 'input_image_path' or 'input_image_task_id'."
+            print(f"[ERROR Task ID: {task_id}] {msg}")
+            return False, msg
+        try:
+            path_from_db = db_ops.get_task_output_location_from_db(input_image_task_id)
+            if not path_from_db:
+                return False, f"Task {task_id}: Could not find output location for dependency task {input_image_task_id}."
+            abs_path = db_ops.get_abs_path_from_db_path(path_from_db, dprint)
+            if not abs_path:
+                return False, f"Task {task_id}: Could not resolve or find image file from DB path '{path_from_db}'."
+            input_image_path_str = str(abs_path)
+            dprint(f"Task {task_id}: Resolved input image path from task ID to '{input_image_path_str}'")
+        except Exception as e:
+            error_msg = f"Task {task_id}: Failed during input image path resolution: {e}"
+            print(f"[ERROR] {error_msg}")
+            traceback.print_exc()
+            return False, str(e)
+
+    input_image_path = Path(input_image_path_str)
+    if not input_image_path.is_file():
+        print(f"[ERROR Task ID: {task_id}] Input image file not found: {input_image_path}")
+        return False, f"Input image not found: {input_image_path}"
+
+    # Prepare save path for depth PNG
+    final_save_path, db_output_location = prepare_output_path(
+        task_id,
+        f"{task_id}_depth.png",
+        main_output_dir_base,
+        dprint=dprint,
+        custom_output_dir=custom_output_dir,
+    )
+
+    try:
+        pil_input_image = Image.open(input_image_path).convert("RGB")
+        depth_cfg = {"PRETRAINED_MODEL": "ckpts/depth/dpt_hybrid-midas-501f0c75.pt"}
+        depth_annotator = DepthAnnotator(depth_cfg)
+
+        depth_np = depth_annotator.forward(pil_input_image)  # Returns RGB depth map as numpy array
+        if depth_np is None:
+            return False, "Depth generation returned no data."
+
+        depth_pil = Image.fromarray(depth_np.astype(np.uint8))
+        depth_pil.save(final_save_path)
+        print(f"[Task ID: {task_id}] Successfully generated depth map: {final_save_path.resolve()}")
+        return True, db_output_location
+
+    except ImportError as ie:
+        print(f"[ERROR Task ID: {task_id}] Import error during depth generation: {ie}")
+        traceback.print_exc()
+        return False, f"Import error: {ie}"
+    except FileNotFoundError as fnfe:
+        print(f"[ERROR Task ID: {task_id}] Model file not found for MiDaS depth: {fnfe}")
+        traceback.print_exc()
+        return False, f"Model not found: {fnfe}"
+    except Exception as e:
+        print(f"[ERROR Task ID: {task_id}] Failed during depth map generation: {e}")
+        traceback.print_exc()
+        return False, f"Depth generation exception: {e}" 
