@@ -1745,29 +1745,30 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         # This assumes multipliers are space-separated.
         if current_multipliers_str:
             multipliers_list = current_multipliers_str.split()
-            lora_names_list = [Path(lora_path).name for lora_path in all_loras_for_model 
-                               if Path(lora_path).name in current_activated and Path(lora_path).name != causvid_lora_basename]
+            
+            # Create a mapping from the original LoRA list to multipliers
+            # Handle the case where there might be fewer multipliers than LoRAs
+            original_lora_to_multiplier = {}
+            for i, lora_name in enumerate(current_activated):
+                if i < len(multipliers_list):
+                    original_lora_to_multiplier[lora_name] = multipliers_list[i]
+                else:
+                    original_lora_to_multiplier[lora_name] = "1.0"  # Default for missing multipliers
             
             final_multipliers = []
             final_loras = []
 
-            # Add CausVid first
+            # Add CausVid first with its multiplier (always "1.0" for CausVid)
             final_loras.append(causvid_lora_basename)
             final_multipliers.append("1.0")
 
-            # Add existing, ensuring no duplicate multiplier for already present CausVid (though it shouldn't be)
-            processed_other_loras = set()
-            for i, lora_name in enumerate(current_activated):
-                if lora_name == causvid_lora_basename: continue # Already handled
-                if lora_name not in processed_other_loras:
+            # Add all other LoRAs (excluding CausVid since it's already added)
+            for lora_name in current_activated:
+                if lora_name != causvid_lora_basename:  # Don't duplicate CausVid
                     final_loras.append(lora_name)
-                    if i < len(multipliers_list):
-                         final_multipliers.append(multipliers_list[i])
-                    else:
-                         final_multipliers.append("1.0") # Default if not enough multipliers
-                    processed_other_loras.add(lora_name)
+                    final_multipliers.append(original_lora_to_multiplier.get(lora_name, "1.0"))
             
-            ui_defaults["activated_loras"] = final_loras # ensure order matches multipliers
+            ui_defaults["activated_loras"] = final_loras
             ui_defaults["loras_multipliers"] = " ".join(final_multipliers)
         else:
             ui_defaults["loras_multipliers"] = "1.0"
