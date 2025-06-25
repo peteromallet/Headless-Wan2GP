@@ -380,5 +380,8 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
         out_candidates = sorted(Path(wgp_mod.save_path).glob("*.mp4"))
         return True, str(out_candidates[-1]) if out_candidates else None
     except Exception as e:
+        import traceback
+        print(f"\n[FULL TRACEBACK] {task_id}: generate_single_video failed:")
+        traceback.print_exc()
         dprint(f"{task_id}: generate_single_video failed: {e}")
         return False, None 
