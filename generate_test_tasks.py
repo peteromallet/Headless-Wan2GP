@@ -84,19 +84,8 @@ def make_orchestrator_payload(*, run_id: str,
                               resolution: str = DEFAULT_RESOLUTION) -> dict:
     """Create the orchestrator_details dict used by headless server."""
     
-    # Create VACE image references for each segment
+    # No VACE image references by default - images are used for guide video creation only
     vace_image_refs = []
-    for segment_idx in range(num_segments):
-        # Use the first image as a reference for all segments
-        # This provides the VACE model with the visual context it needs
-        if images:
-            vace_ref = {
-                "type": "guide",
-                "original_path": str(images[0]),  # Use first image as reference
-                "strength_to_apply": 0.8,  # Moderate strength
-                "segment_idx_for_naming": segment_idx
-            }
-            vace_image_refs.append(vace_ref)
     
     payload: dict = {
         "run_id": run_id,
@@ -110,7 +99,7 @@ def make_orchestrator_payload(*, run_id: str,
         "segment_frames_expanded": [SEGMENT_FRAMES_DEFAULT] * num_segments,
         "frame_overlap_expanded": [FRAME_OVERLAP_DEFAULT] * num_segments,
         "fps_helpers": FPS,
-        "vace_image_refs_to_prepare_by_headless": vace_image_refs,  # Add VACE image references
+        "vace_image_refs_to_prepare_by_headless": vace_image_refs,  # Empty by default
         "fade_in_params_json_str": json.dumps({
             "low_point": 0.0, "high_point": 1.0,
             "curve_type": "ease_in_out", "duration_factor": 0.0
