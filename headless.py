@@ -16,16 +16,15 @@ generation work.
 """
 
 import argparse
-import json
-import logging
 import sys
 import os
+import json
 import time
 import traceback
 import urllib.parse
 import tempfile
 import shutil
-from datetime import datetime, timezone
+
 from pathlib import Path
 from PIL import Image
 from dotenv import load_dotenv
@@ -676,7 +675,6 @@ def main():
     # --- Setup logging to file if requested ---
     if cli_args.save_logging:
         import logging
-        import sys
         
         log_file_path = Path(cli_args.save_logging)
         log_file_path.parent.mkdir(parents=True, exist_ok=True)
