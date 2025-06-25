@@ -57,20 +57,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         dprint(f"Orchestrator payload for {orchestrator_task_id_str} (first 500 chars): {json.dumps(orchestrator_payload, indent=2, default=str)[:500]}...")
 
         run_id = orchestrator_payload.get("run_id", orchestrator_task_id_str)
+        base_dir_for_this_run_str = orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
         
-        # Override output directory for SQLite to ensure files go to public/files
-        if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
-            try:
-                sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
-                base_dir_for_this_run_str = str(sqlite_db_parent / "public" / "files")
-                dprint(f"Orchestrator {orchestrator_task_id_str}: Using SQLite public/files directory: {base_dir_for_this_run_str}")
-            except Exception as e_sqlite_dir:
-                dprint(f"Orchestrator {orchestrator_task_id_str}: Could not determine SQLite public directory: {e_sqlite_dir}. Using orchestrator payload default.")
-                base_dir_for_this_run_str = orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
-        else:
-            base_dir_for_this_run_str = orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
-        
-        current_run_output_dir = Path(base_dir_for_this_run_str) / f"travel_run_{run_id}"
+        # Use the base directory directly without creating run-specific subdirectories
+        current_run_output_dir = Path(base_dir_for_this_run_str)
         current_run_output_dir.mkdir(parents=True, exist_ok=True)
         dprint(f"Orchestrator {orchestrator_task_id_str}: Base output directory for this run: {current_run_output_dir.resolve()}")
 
@@ -240,19 +230,9 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         final_stitched_video_name = f"travel_final_stitched_{run_id}.mp4"
         # Stitcher saves its final primary output directly under main_output_dir (e.g., ./steerable_motion_output/)
         # NOT under current_run_output_dir (which is .../travel_run_XYZ/)
-        # For SQLite, ensure final output goes to public/files
-        if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
-            try:
-                sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
-                final_stitched_output_dir = sqlite_db_parent / "public" / "files"
-                dprint(f"Orchestrator {orchestrator_task_id_str}: Final stitch output will go to SQLite public/files: {final_stitched_output_dir}")
-            except Exception as e_sqlite_final:
-                dprint(f"Orchestrator {orchestrator_task_id_str}: Could not determine SQLite public directory for final output: {e_sqlite_final}. Using orchestrator payload default.")
-                final_stitched_output_dir = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve())))
-        else:
-            final_stitched_output_dir = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve())))
-        
-        final_stitched_output_path = final_stitched_output_dir / final_stitched_video_name
+        # The main_output_dir_base is the one passed to headless.py (e.g. server's ./outputs or steerable_motion's ./steerable_motion_output)
+        # The orchestrator_payload["main_output_dir_for_run"] is this main_output_dir_base.
+        final_stitched_output_path = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))) / final_stitched_video_name
 
         stitch_payload = {
             "task_id": stitch_task_id,
@@ -359,7 +339,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             current_run_base_output_dir_str = str(Path(current_run_base_output_dir_str) / f"travel_run_{orchestrator_run_id}")
 
         current_run_base_output_dir = Path(current_run_base_output_dir_str)
-        segment_processing_dir = current_run_base_output_dir / f"segment_{segment_idx:02d}_{segment_task_id_str[:8]}"
+        # Use the base directory directly without creating segment-specific subdirectories
+        segment_processing_dir = current_run_base_output_dir
         segment_processing_dir.mkdir(parents=True, exist_ok=True)
         dprint(f"Segment {segment_idx} (Task {segment_task_id_str}): Processing in {segment_processing_dir.resolve()}")
 
@@ -525,7 +506,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     f"overlap_count={frame_overlap_from_previous}, is_single_image_journey={is_single_image_journey}"
                 )
 
-                mask_filename = f"s{segment_idx:02d}_mask_{segment_task_id_str[:8]}.mp4"
+                mask_filename = f"{orchestrator_run_id}_seg{segment_idx:02d}_mask.mp4"
                 mask_out_path_tmp, _ = prepare_output_path(
                     task_id=segment_task_id_str,
                     filename=mask_filename,
@@ -600,7 +581,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 print(f"[ERROR Task {segment_task_id_str}]: {msg}"); return False, msg
         
         try: # Guide Video Creation Block
-            guide_video_base_name = f"s{segment_idx}_guide_vid"
+            guide_video_base_name = f"{orchestrator_run_id}_seg{segment_idx:02d}_guide"
             input_images_resolved_original = full_orchestrator_payload["input_image_paths_resolved"]
             
             # Guide video path will be handled by sm_create_guide_video_for_travel_segment using centralized logic
@@ -664,7 +645,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # Define the absolute final output path for the WGP generation by process_single_task.
         # If DB_TYPE is SQLite, process_single_task will ignore this and save to public/files, returning a relative path.
         # If not SQLite, process_single_task will use this path (or its default construction) and return an absolute path.
-        wgp_video_filename = f"s{segment_idx}_{wgp_inline_task_id}_seg_output.mp4"
+        wgp_video_filename = f"{orchestrator_run_id}_seg{segment_idx:02d}_output.mp4"
         # For non-SQLite, wgp_final_output_path_for_this_segment is a suggestion for process_single_task
         # For SQLite, this specific path isn't strictly used by process_single_task for its *final* save, but can be logged.
         wgp_final_output_path_for_this_segment = segment_processing_dir / wgp_video_filename 
@@ -1005,11 +986,9 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         current_run_base_output_dir_str = stitch_params.get("current_run_base_output_dir", 
                                                             full_orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve())))
         current_run_base_output_dir = Path(current_run_base_output_dir_str)
-        # If current_run_base_output_dir was the generic one, ensure it includes the run_id subfolder.
-        if not str(current_run_base_output_dir.name).endswith(orchestrator_run_id):
-            current_run_base_output_dir = current_run_base_output_dir / f"travel_run_{orchestrator_run_id}"
         
-        stitch_processing_dir = current_run_base_output_dir / f"stitch_final_output_{stitch_task_id_str[:8]}"
+        # Use the base directory directly without creating stitch-specific subdirectories
+        stitch_processing_dir = current_run_base_output_dir
         stitch_processing_dir.mkdir(parents=True, exist_ok=True)
         dprint(f"Stitch Task {stitch_task_id_str}: Processing in {stitch_processing_dir.resolve()}")
 
@@ -1104,7 +1083,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         if len(segment_video_paths_for_stitch) == 1:
             # If only one video, copy it directly using prepare_output_path
             source_single_video_path = Path(segment_video_paths_for_stitch[0])
-            single_video_filename = f"stitched_single_{orchestrator_run_id}{source_single_video_path.suffix}"
+            single_video_filename = f"{orchestrator_run_id}_final{source_single_video_path.suffix}"
             
             current_stitched_video_path, _ = prepare_output_path(
                 task_id=stitch_task_id_str,
@@ -1122,7 +1101,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 actual_overlaps_for_stitching = expanded_frame_overlaps[:num_stitch_points]
             any_positive_overlap = any(o > 0 for o in actual_overlaps_for_stitching)
 
-            raw_stitched_video_filename = f"stitched_raw_{orchestrator_run_id}.mp4"
+            raw_stitched_video_filename = f"{orchestrator_run_id}_stitched.mp4"
             path_for_raw_stitched_video, _ = prepare_output_path(
                 task_id=stitch_task_id_str,
                 filename=raw_stitched_video_filename,
@@ -1260,9 +1239,9 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             dprint(f"Stitch: Upscale factor {upscale_factor} > 1.0 but no upscale_model_name provided. Skipping upscale.")
 
         # Use prepare_output_path to handle final video location consistently
-        final_video_filename = f"travel_final_{orchestrator_run_id}{video_path_after_optional_upscale.suffix}"
+        final_video_filename = f"{orchestrator_run_id}_final{video_path_after_optional_upscale.suffix}"
         if upscale_factor > 1.0:
-            final_video_filename = f"travel_final_upscaled_{upscale_factor:.1f}x_{orchestrator_run_id}{video_path_after_optional_upscale.suffix}"
+            final_video_filename = f"{orchestrator_run_id}_final_upscaled_{upscale_factor:.1f}x{video_path_after_optional_upscale.suffix}"
         
         final_video_path, final_video_location_for_db = prepare_output_path(
             task_id=stitch_task_id_str,

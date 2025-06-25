@@ -89,7 +89,8 @@ The submodule is currently pinned to commit `6706709` ("optimization for i2v wit
 ## Runtime artefacts
 
 * **tasks.db** – SQLite database created on-demand by the orchestrator/server to track queued, running, and completed tasks.
-* Intermediate segment folders under `steerable_motion_output/` (or user-provided directory) – automatically cleaned unless `--debug`/`--skip_cleanup` is set.
+* **public/files/** – For SQLite mode, all final video outputs are saved directly here with descriptive filenames (e.g., `{run_id}_seg00_output.mp4`, `{run_id}_final.mp4`). No nested subdirectories are created.
+* **outputs/** – For non-SQLite modes or when explicitly configured, videos are saved here with task-specific subdirectories.
 
 ## End-to-End task lifecycle (1-minute read)
 

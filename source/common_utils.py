@@ -1874,7 +1874,7 @@ def prepare_output_path(
     else:
         if db_ops and db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
             sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
-            output_dir_for_task = sqlite_db_parent / "public" / "files" / task_id
+            output_dir_for_task = sqlite_db_parent / "public" / "files"
             dprint(f"Task {task_id}: Using SQLite public files directory: {output_dir_for_task}")
         else:
             output_dir_for_task = main_output_dir_base / task_id
