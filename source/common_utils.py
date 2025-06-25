@@ -1860,40 +1860,42 @@ def prepare_output_path(
     If `custom_output_dir` is provided, it's used as the base. Otherwise,
     the output is placed in a directory named after the task_id inside
     `main_output_dir_base`.
-
-    Args:
-        task_id: The ID of the task.
-        filename: The desired filename for the output.
-        main_output_dir_base: The default base directory for all outputs.
-        dprint: A debug printing function.
-        custom_output_dir: An optional specific directory to save the output in.
-
-    Returns:
-        A tuple containing:
-        - The absolute Path object for the final save location.
-        - The string representation of the path to be stored in the database.
-          This will be relative to the project root if inside it, otherwise absolute.
     """
+    # Import DB configuration lazily to avoid circular dependencies.
+    try:
+        from source import db_operations as db_ops  # type: ignore
+    except Exception:  # pragma: no cover
+        db_ops = None
+
+    # Decide base directory for the file
     if custom_output_dir:
         output_dir_for_task = Path(custom_output_dir)
         dprint(f"Task {task_id}: Using custom output directory: {output_dir_for_task}")
     else:
-        # Fallback to old behavior: create a subdir for the task
-        output_dir_for_task = main_output_dir_base / task_id
-        dprint(f"Task {task_id}: Using default task-specific output directory: {output_dir_for_task}")
-    
+        if db_ops and db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
+            sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
+            output_dir_for_task = sqlite_db_parent / "public" / "files" / task_id
+            dprint(f"Task {task_id}: Using SQLite public files directory: {output_dir_for_task}")
+        else:
+            output_dir_for_task = main_output_dir_base / task_id
+            dprint(f"Task {task_id}: Using default task-specific output directory: {output_dir_for_task}")
+
     output_dir_for_task.mkdir(parents=True, exist_ok=True)
-    
+
     final_save_path = output_dir_for_task / filename
-    
-    # For the DB, we want a path relative to the CWD if possible, for portability.
+
+    # Build DB path string
     try:
-        db_output_location = str(final_save_path.relative_to(Path.cwd()))
+        if db_ops and db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
+            sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
+            db_output_location = str(final_save_path.relative_to(sqlite_db_parent / "public"))
+        else:
+            db_output_location = str(final_save_path.relative_to(Path.cwd()))
     except ValueError:
         db_output_location = str(final_save_path.resolve())
-        
+
     dprint(f"Task {task_id}: final_save_path='{final_save_path}', db_output_location='{db_output_location}'")
-    
+
     return final_save_path, db_output_location
 
 def create_mask_video_from_inactive_indices(
