@@ -652,6 +652,10 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         
         safe_vace_image_ref_paths_for_wgp = [str(p.resolve()) if p else None for p in actual_vace_image_ref_paths_for_wgp]
         safe_vace_image_ref_paths_for_wgp = [p for p in safe_vace_image_ref_paths_for_wgp if p is not None]
+        
+        # If no image refs, pass None instead of empty list to avoid WGP VAE encoder issues
+        if not safe_vace_image_ref_paths_for_wgp:
+            safe_vace_image_ref_paths_for_wgp = None
 
         current_segment_base_prompt = segment_params.get("base_prompt", " ")
         prompt_for_wgp = ensure_valid_prompt(current_segment_base_prompt)
