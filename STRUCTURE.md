@@ -91,6 +91,56 @@ The submodule is currently pinned to commit `6706709` ("optimization for i2v wit
 * **tasks.db** – SQLite database created on-demand by the orchestrator/server to track queued, running, and completed tasks.
 * Intermediate segment folders under `steerable_motion_output/` (or user-provided directory) – automatically cleaned unless `--debug`/`--skip_cleanup` is set.
 
+## End-to-End task lifecycle (1-minute read)
+
+1. **Task injection** – A CLI, API, or test script calls `add_task.py`, which inserts a new row into the `tasks` table (SQLite or Supabase).  Payload JSON is stored in `params`, `status` is set to `pending`.
+2. **Worker pickup** – `headless.py` runs in a loop, atomically updates a `pending` row to `running`, and inspects `task_type` to choose the correct handler.
+3. **Handler execution**
+   * Standard tasks live in `source/sm_functions/…` (see table below).
+   * Special one-offs (OpenPose, RIFE, etc.) live in `specialized_handlers.py`.
+   * Handlers may queue **sub-tasks** (e.g. travel → N segments + 1 stitch) by inserting new rows with `dependant_on` set, forming a DAG.
+4. **Video generation** – Every handler eventually calls `wgp_utils.generate_single_video` which wraps **Wan2GP/wgp.py** and returns a path to the rendered MP4.
+5. **Post-processing** – Optional saturation / brightness / colour-match (`video_utils.py`) or upscaling tasks.
+6. **DB update** – Handler stores `output_location` (relative in SQLite, absolute otherwise) and marks the row `completed` (or `failed`).  Dependants are now eligible to start.
+7. **Cleanup** – Intermediate folders are deleted unless `debug_mode_enabled` or `skip_cleanup_enabled` flags are set in the payload.
+
+## Quick task-to-file reference
+
+| Task type / sub-task | Entrypoint function | File |
+|----------------------|---------------------|------|
+| Travel orchestrator  | `_handle_travel_orchestrator_task` | `sm_functions/travel_between_images.py` |
+| Travel segment       | `_handle_travel_segment_task`      | " " |
+| Travel stitch        | `_handle_travel_stitch_task`       | " " |
+| Single image video   | `run_single_image_task`            | `sm_functions/single_image.py` |
+| Different pose       | `run_different_pose_task`          | `sm_functions/different_pose.py` |
+| OpenPose mask video  | `handle_openpose_task`             | `specialized_handlers.py` |
+| RIFE interpolation   | `handle_rife_task`                 | `specialized_handlers.py` |
+
+All of the above eventually call `wgp_utils.generate_single_video`, which is the single **shared** bridge into Wan2GP.
+
+## Database cheat-sheet
+
+Column | Purpose
+-------|---------
+`id` | UUID primary key (task_id)
+`task_type` | e.g. `travel_segment`, `wgp`, `travel_stitch`
+`dependant_on` | Optional FK forming execution DAG
+`params` | JSON payload saved by the enqueuer
+`status` | `pending` → `running` → `completed`/`failed`
+`output_location` | Where the final artefact lives (string)
+`updated_at` | Heartbeat & ordering
+
+SQLite keeps the DB at `tasks.db`; Supabase uses the same columns with RLS policies.
+
+## Environment & config knobs (non-exhaustive)
+
+Variable / flag | Effect
+----------------|-------
+`SUPABASE_URL / SUPABASE_KEY` | Switches DB operations to Supabase mode.
+`WAN2GP_CACHE` | Where Wan2GP caches model weights.
+`--debug` | Prevents cleanup of temp folders, extra logs.
+`--skip_cleanup` | Keeps all intermediate artefacts even outside debug.
+
 ---
 
-This document is auto-generated to give newcomers a concise map of the codebase; update it when new modules or packages are added. 
+Keep this file **brief** – for in-depth developer docs see the `docs/` folder and inline module docstrings. 
