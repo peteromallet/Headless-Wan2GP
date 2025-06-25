@@ -266,7 +266,7 @@ def get_oldest_queued_task_sqlite(db_path_str: str):
             LIMIT  1
         """
         query_params = (STATUS_QUEUED, STATUS_COMPLETE)
-        dprint(f"SQLite: Executing get_oldest_queued_task with query: {sql_query.strip()} AND params: {query_params}")
+        
         cursor.execute(sql_query, query_params)
         task_row = cursor.fetchone()
         if task_row:
