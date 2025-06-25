@@ -39,7 +39,7 @@ from typing import Dict, List, Tuple
 PROJECT_ID = "test_suite"
 BASE_PROMPT = "Car driving through a city, sky morphing"
 NEG_PROMPT = "chaotic"
-MODEL_NAME = "t2v"
+MODEL_NAME = "vace_14B"  # Keeping VACE 14B model and will add proper image references
 DEFAULT_RESOLUTION = "500x500"  # Fallback / default when not overridden
 FPS = 16
 SEGMENT_FRAMES_DEFAULT = 81  # will be quantised downstream (4n+1)
@@ -65,6 +65,21 @@ def make_orchestrator_payload(*, run_id: str,
                               num_segments: int,
                               resolution: str = DEFAULT_RESOLUTION) -> dict:
     """Create the orchestrator_details dict used by headless server."""
+    
+    # Create VACE image references for each segment
+    vace_image_refs = []
+    for segment_idx in range(num_segments):
+        # Use the first image as a reference for all segments
+        # This provides the VACE model with the visual context it needs
+        if images:
+            vace_ref = {
+                "type": "guide",
+                "original_path": str(images[0]),  # Use first image as reference
+                "strength_to_apply": 0.8,  # Moderate strength
+                "segment_idx_for_naming": segment_idx
+            }
+            vace_image_refs.append(vace_ref)
+    
     payload: dict = {
         "run_id": run_id,
         "input_image_paths_resolved": [str(p) for p in images],
@@ -77,6 +92,7 @@ def make_orchestrator_payload(*, run_id: str,
         "segment_frames_expanded": [SEGMENT_FRAMES_DEFAULT] * num_segments,
         "frame_overlap_expanded": [FRAME_OVERLAP_DEFAULT] * num_segments,
         "fps_helpers": FPS,
+        "vace_image_refs_to_prepare_by_headless": vace_image_refs,  # Add VACE image references
         "fade_in_params_json_str": json.dumps({
             "low_point": 0.0, "high_point": 1.0,
             "curve_type": "ease_in_out", "duration_factor": 0.0
@@ -335,7 +351,7 @@ def write_different_pose_test_case(name: str,
         "model_name": MODEL_NAME,
         "resolution": resolution,
         "fps_helpers": FPS,
-        "output_video_frames": 16,
+        "output_video_frames": 30,
         "seed": SEED_BASE,
         "use_causvid_lora": True,
         "debug_mode": True,

@@ -389,6 +389,16 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         if relevant_vace_instructions:
             # Ensure parsed_res_wh is available
             current_parsed_res_wh = full_orchestrator_payload.get("parsed_resolution_wh")
+            # If resolution is provided as string (e.g., "512x512"), convert it to tuple[int, int]
+            if isinstance(current_parsed_res_wh, str):
+                try:
+                    parsed_tuple = sm_parse_resolution(current_parsed_res_wh)
+                    if parsed_tuple is not None:
+                        current_parsed_res_wh = parsed_tuple
+                    else:
+                        dprint(f"[WARNING] Segment {segment_idx}: Failed to parse resolution string '{current_parsed_res_wh}'. Proceeding with original value.")
+                except Exception as e_par:
+                    dprint(f"[WARNING] Segment {segment_idx}: Error parsing resolution '{current_parsed_res_wh}': {e_par}. Proceeding with string value (may cause errors).")
             if not current_parsed_res_wh:
                 # Fallback or error if resolution not found; for now, dprint and proceed (helper might handle None resolution)
                 dprint(f"[WARNING] Segment {segment_idx}: parsed_resolution_wh not found in full_orchestrator_payload. VACE refs might not be resized correctly.")
