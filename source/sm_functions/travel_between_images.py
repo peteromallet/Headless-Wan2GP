@@ -1408,56 +1408,10 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             dprint(f"Stitch Task {stitch_task_id_str}: Video already at final destination {final_video_path}")
         
         print(f"Stitch Task {stitch_task_id_str}: Final video saved to: {final_video_path} (DB location: {final_video_location_for_db})")
-
-        # ------------------------------------------------------------------
-        #  Optional banner overlay for the FINAL stitched video
-        # ------------------------------------------------------------------
-        if full_orchestrator_payload.get("show_input_images"):
-            try:
-                input_imgs = full_orchestrator_payload.get("input_image_paths_resolved", [])
-                if len(input_imgs) >= 2:
-                    banner_start_img = input_imgs[0]
-                    banner_end_img = input_imgs[-1]
-
-                    # Download if URLs so overlay utility can access them
-                    banner_start_img = sm_download_image_if_url(banner_start_img, stitch_processing_dir, stitch_task_id_str)
-                    banner_end_img = sm_download_image_if_url(banner_end_img, stitch_processing_dir, stitch_task_id_str)
-
-                    if banner_start_img and banner_end_img:
-                        banner_filename = final_video_path.stem + "_with_inputs" + final_video_path.suffix
-                        banner_output_abs, banner_db_path = prepare_output_path(
-                            task_id=stitch_task_id_str,
-                            filename=banner_filename,
-                            main_output_dir_base=stitch_processing_dir
-                        )
-
-                        overlay_ok = sm_overlay_start_end_images_above_video(
-                            start_image_path=banner_start_img,
-                            end_image_path=banner_end_img,
-                            input_video_path=final_video_path,
-                            output_video_path=banner_output_abs,
-                            dprint=dprint,
-                        )
-
-                        if overlay_ok and banner_output_abs.exists():
-                            dprint(f"Stitch: Banner overlay successful for final video. New path: {banner_output_abs}")
-
-                            # Replace final_video_path reference and clean up old video
-                            if not full_orchestrator_payload.get("debug_mode_enabled", False):
-                                try:
-                                    final_video_path.unlink()
-                                except Exception as e_rm_old:
-                                    dprint(f"Stitch: Warning – could not remove pre-banner final video: {e_rm_old}")
-
-                            final_video_path = banner_output_abs
-                            final_video_location_for_db = banner_db_path
-                        else:
-                            dprint("[WARNING] Stitch: Banner overlay for final video failed – keeping original video.")
-                else:
-                    dprint("[WARNING] Stitch: Not enough input images to build banner for final video.")
-            except Exception as e_banner_final:
-                dprint(f"[WARNING] Stitch: Exception while creating banner for final video: {e_banner_final}")
- 
+        
+        # Note: Individual segments already have banner overlays applied when show_input_images is enabled,
+        # so the stitched video will automatically include them. No additional overlay needed here.
+        
         stitch_success = True
 
     except Exception as e_stitch_main:
