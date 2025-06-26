@@ -1830,10 +1830,13 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         _apply_special_lora_settings(
             current_task_id_for_log, "LightI2X",
             "wan_lcm_r16_fp32_comfy.safetensors", 
-            default_steps=5, guidance_scale=1.0, flow_shift=5.0,
+            default_steps=4, guidance_scale=1.0, flow_shift=5.0,
             ui_defaults=ui_defaults, task_params_dict=task_params_dict,
             tea_cache_setting=0.0
         )
+        # Additional LightI2X-specific settings
+        ui_defaults["sample_solver"] = "unipc"
+        ui_defaults["denoise_strength"] = 1.0
 
     if apply_reward_lora:
         print(f"[Task ID: {task_params_dict.get('task_id')}] Applying Reward LoRA settings.")
