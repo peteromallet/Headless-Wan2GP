@@ -634,6 +634,21 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                         end_image_for_banner = input_images_resolved_original[end_anchor_img_path_str_idx]
                     elif end_ref_path_for_cm:
                         end_image_for_banner = end_ref_path_for_cm
+
+                    # Ensure both banner images are local paths (download if URL)
+                    if start_image_for_banner:
+                        start_image_for_banner = sm_download_image_if_url(
+                            start_image_for_banner,
+                            segment_processing_dir,
+                            segment_task_id_str,
+                        )
+                    if end_image_for_banner:
+                        end_image_for_banner = sm_download_image_if_url(
+                            end_image_for_banner,
+                            segment_processing_dir,
+                            segment_task_id_str,
+                        )
+
                 except Exception as e_banner_sel:
                     dprint(f"Seg {segment_idx}: Error selecting banner images for show_input_images: {e_banner_sel}")
             # ------------------------------------------------------------------
