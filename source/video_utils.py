@@ -935,3 +935,138 @@ def extract_last_frame_as_image(video_path: str | Path, output_dir: Path, task_i
         dprint(f"[ERROR Task {task_id_for_log}] extract_last_frame_as_image: Exception extracting frame from {video_path}: {e}")
         traceback.print_exc()
         return None
+
+# --- New utility: Overlay input images above video (Start & End side-by-side) ---
+
+def overlay_start_end_images_above_video(
+    start_image_path: str | Path,
+    end_image_path: str | Path,
+    input_video_path: str | Path,
+    output_video_path: str | Path,
+    *,
+    dprint=print,
+) -> bool:
+    """Creates a composite video that shows *start_image* (left) and *end_image* (right)
+    on a row above the *input_video*.
+
+    Layout:
+        START | END  (static images, full video duration)
+        ----------------------
+               VIDEO           (original video frames)
+
+    The resulting video keeps the original width of *input_video*.  Each image is
+    scaled to exactly half that width and the same height as the video to ensure
+    perfect alignment.  The final output therefore has a height of
+    ``video_height * 2`` and a width equal to ``video_width``.
+
+    Args:
+        start_image_path: Path to the starting image.
+        end_image_path:   Path to the ending image.
+        input_video_path: Source video that was generated.
+        output_video_path: Desired path for the composite video.
+        dprint: Debug print function.
+
+    Returns:
+        True if the composite video was created successfully, else False.
+    """
+    try:
+        start_image_path = Path(start_image_path)
+        end_image_path = Path(end_image_path)
+        input_video_path = Path(input_video_path)
+        output_video_path = Path(output_video_path)
+
+        if not (start_image_path.exists() and end_image_path.exists() and input_video_path.exists()):
+            dprint(
+                f"overlay_start_end_images_above_video: One or more input paths are missing.\n"
+                f"  start_image_path = {start_image_path}\n"
+                f"  end_image_path   = {end_image_path}\n"
+                f"  input_video_path = {input_video_path}"
+            )
+            return False
+
+        # ---------------------------------------------------------
+        #   Determine the resolution of the **input video**
+        # ---------------------------------------------------------
+        cap = cv2.VideoCapture(str(input_video_path))
+        if not cap.isOpened():
+            dprint(f"overlay_start_end_images_above_video: Could not open video {input_video_path}")
+            return False
+        video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.release()
+
+        if video_width == 0 or video_height == 0:
+            dprint(
+                f"overlay_start_end_images_above_video: Failed to read resolution from {input_video_path}"
+            )
+            return False
+
+        half_width = video_width // 2  # Integer division for even-pixel alignment
+
+        # Ensure output directory exists
+        output_video_path = output_video_path.with_suffix('.mp4')
+        output_video_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # ---------------------------------------------------------
+        #   Build & run ffmpeg command
+        # ---------------------------------------------------------
+        # 1) Scale both images to half width / full height
+        # 2) hstack -> side-by-side static banner (labelled [top])
+        # 3) vstack banner with original video (labelled [vid])
+        # NOTE: We explicitly scale the *video* as well into label [vid]
+        #       to guarantee width/height match.  This is mostly defensive –
+        #       if the video is already the desired size the scale is a NOP.
+
+        filter_complex = (
+            f"[1:v]scale={half_width}:{video_height}[left];"  # scale start img
+            f"[2:v]scale={half_width}:{video_height}[right];"  # scale end img
+            f"[left][right]hstack=inputs=2[top];"              # combine images
+            f"[0:v]scale={video_width}:{video_height}[vid];"   # ensure video size
+            f"[top][vid]vstack=inputs=2[output]"              # stack banner + video
+        )
+
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",  # overwrite output
+            "-loglevel", "error",
+            "-i", str(input_video_path),
+            "-loop", "1", "-i", str(start_image_path),
+            "-loop", "1", "-i", str(end_image_path),
+            "-filter_complex", filter_complex,
+            "-map", "[output]",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            str(output_video_path.resolve()),
+        ]
+
+        dprint(f"overlay_start_end_images_above_video: Running ffmpeg to create composite video.\nCommand: {' '.join(ffmpeg_cmd)}")
+
+        proc = subprocess.run(ffmpeg_cmd, capture_output=True)
+        if proc.returncode != 0:
+            dprint(
+                f"overlay_start_end_images_above_video: ffmpeg failed (returncode={proc.returncode}).\n"
+                f"stderr: {proc.stderr.decode(errors='ignore')[:500]}"
+            )
+            # Clean up partially written file if any
+            if output_video_path.exists():
+                try:
+                    output_video_path.unlink()
+                except Exception:
+                    pass
+            return False
+
+        if not output_video_path.exists() or output_video_path.stat().st_size == 0:
+            dprint(
+                f"overlay_start_end_images_above_video: Output video not created or empty at {output_video_path}"
+            )
+            return False
+
+        return True
+
+    except Exception as e_ov:
+        dprint(f"overlay_start_end_images_above_video: Exception – {e_ov}")
+        traceback.print_exc()
+        try:
+            if output_video_path and output_video_path.exists():
+                output_video_path.unlink()
+        except Exception:
+            pass
+        return False

@@ -36,6 +36,7 @@ from ..video_utils import (
     create_guide_video_for_travel_segment as sm_create_guide_video_for_travel_segment,
     apply_color_matching_to_video as sm_apply_color_matching_to_video,
     extract_last_frame_as_image as sm_extract_last_frame_as_image,
+    overlay_start_end_images_above_video as sm_overlay_start_end_images_above_video,
 )
 from ..wgp_utils import generate_single_video
 
@@ -613,6 +614,30 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             if is_single_image_journey:
                 end_anchor_img_path_str_idx = -1 # Signal no end image to the creation function
 
+            # ------------------------------------------------------------------
+            #  Show-input-images (banner) – determine start/end images now so the
+            #  information can be propagated downstream to the chaining stage.
+            # ------------------------------------------------------------------
+            show_input_images_enabled = bool(full_orchestrator_payload.get("show_input_images", False))
+            start_image_for_banner = None
+            end_image_for_banner = None
+            if show_input_images_enabled:
+                try:
+                    # Prefer the explicit input images list when indices are valid
+                    if segment_idx < len(input_images_resolved_original):
+                        start_image_for_banner = input_images_resolved_original[segment_idx]
+                    elif start_ref_path_for_cm:
+                        # Fallback – e.g. continue-video first segment uses extracted frame
+                        start_image_for_banner = start_ref_path_for_cm
+
+                    if end_anchor_img_path_str_idx != -1 and end_anchor_img_path_str_idx < len(input_images_resolved_original):
+                        end_image_for_banner = input_images_resolved_original[end_anchor_img_path_str_idx]
+                    elif end_ref_path_for_cm:
+                        end_image_for_banner = end_ref_path_for_cm
+                except Exception as e_banner_sel:
+                    dprint(f"Seg {segment_idx}: Error selecting banner images for show_input_images: {e_banner_sel}")
+            # ------------------------------------------------------------------
+
             actual_guide_video_path_for_wgp = sm_create_guide_video_for_travel_segment(
                 segment_idx_for_logging=segment_idx,
                 end_anchor_image_index=end_anchor_img_path_str_idx,
@@ -736,6 +761,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             "colour_match_videos": effective_colour_match_enabled,
             "cm_start_ref_path": start_ref_path_for_cm,
             "cm_end_ref_path": end_ref_path_for_cm,
+            "show_input_images": show_input_images_enabled,
+            "start_image_path": start_image_for_banner,
+            "end_image_path": end_image_for_banner,
         }
 
         dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Invoking WGP generation via centralized wrapper (task_id for WGP op: {wgp_inline_task_id})")
@@ -1016,6 +1044,34 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
             else:
                 dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Skipping color matching due to missing or invalid reference image paths.")
 
+        # --- 4. Optional: Overlay start/end images above the video ---
+        if chain_details.get("show_input_images"):
+            banner_start = chain_details.get("start_image_path")
+            banner_end = chain_details.get("end_image_path")
+            if banner_start and banner_end and Path(banner_start).exists() and Path(banner_end).exists():
+                banner_filename = f"s{segment_idx_completed}_with_inputs{video_to_process_abs_path.suffix}"
+                banner_video_abs_path, new_db_path = prepare_output_path(
+                    task_id=wgp_task_id,
+                    filename=banner_filename,
+                    main_output_dir_base=Path(segment_processing_dir_for_saturation_str)
+                )
+
+                if sm_overlay_start_end_images_above_video(
+                    start_image_path=banner_start,
+                    end_image_path=banner_end,
+                    input_video_path=str(video_to_process_abs_path),
+                    output_video_path=str(banner_video_abs_path),
+                    dprint=dprint,
+                ):
+                    dprint(f"Chain (Seg {segment_idx_completed}): Banner overlay successful. New path: {new_db_path}")
+                    _cleanup_intermediate_video(full_orchestrator_payload, video_to_process_abs_path, segment_idx_completed, "pre-banner", dprint)
+
+                    video_to_process_abs_path = banner_video_abs_path
+                    final_video_path_for_db = new_db_path
+                else:
+                    dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Banner overlay failed. Keeping previous video version.")
+            else:
+                dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): show_input_images enabled but valid start/end images not found.")
 
         # The orchestrator has already enqueued all segment and stitch tasks.
         msg = f"Chain (Seg {segment_idx_completed}): Post-WGP processing complete. Final path for this WGP task's output: {final_video_path_for_db}"
