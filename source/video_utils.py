@@ -995,7 +995,7 @@ def overlay_start_end_images_above_video(
             try:
                 video_clip = mpe.VideoFileClip(str(input_video_path))
 
-                half_width_px = int(video_clip.width / 2)
+                half_width_px = int(video_clip.w / 2)
 
                 img1_clip = mpe.ImageClip(str(start_image_path)).resize(width=half_width_px).set_duration(video_clip.duration)
                 img2_clip = mpe.ImageClip(str(end_image_path)).resize(width=half_width_px).set_duration(video_clip.duration)
@@ -1008,7 +1008,7 @@ def overlay_start_end_images_above_video(
                 composite = mpe.CompositeVideoClip([
                     top_row.set_position((0, 0)),
                     video_clip.set_position((0, top_row.h))
-                ], size=(video_clip.width, final_h))
+                ], size=(video_clip.w, final_h))
 
                 # Write video
                 composite.write_videofile(
