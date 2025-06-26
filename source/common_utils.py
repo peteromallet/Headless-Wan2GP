@@ -2049,3 +2049,25 @@ def create_simple_first_frame_mask_video(
         task_id_for_logging=task_id_for_logging,
         dprint=dprint
     )
+
+def wait_for_file_stable(path: Path | str, checks: int = 3, interval: float = 1.0, *, dprint=print) -> bool:
+    """Return True when the file size stays constant for a few consecutive checks.
+    Useful to make sure long-running encoders have finished writing before we
+    copy/move the file.
+    """
+    p = Path(path)
+    if not p.exists():
+        return False
+    last_size = p.stat().st_size
+    stable_count = 0
+    for _ in range(checks):
+        time.sleep(interval)
+        new_size = p.stat().st_size
+        if new_size == last_size and new_size > 0:
+            stable_count += 1
+            if stable_count >= checks - 1:
+                return True
+        else:
+            stable_count = 0
+            last_size = new_size
+    return False

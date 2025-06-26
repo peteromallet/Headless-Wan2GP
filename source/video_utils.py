@@ -6,12 +6,16 @@ import os
 import sys
 import json
 
-_COLOR_MATCH_DEPS_AVAILABLE = False
 try:
     import cv2  # pip install opencv-python
     import numpy as np
     from PIL import Image
     import torch
+    try:
+        import moviepy.editor as mpe  # pip install moviepy
+        _MOVIEPY_AVAILABLE = True
+    except ImportError:
+        _MOVIEPY_AVAILABLE = False
     _COLOR_MATCH_DEPS_AVAILABLE = True
 
     # Add project root to path to allow absolute imports from source
@@ -985,96 +989,145 @@ def overlay_start_end_images_above_video(
             return False
 
         # ---------------------------------------------------------
-        #   Determine the resolution of the **input video**
+        #   Preferred implementation: MoviePy (simpler, robust)
         # ---------------------------------------------------------
-        cap = cv2.VideoCapture(str(input_video_path))
-        if not cap.isOpened():
-            dprint(f"overlay_start_end_images_above_video: Could not open video {input_video_path}")
-            return False
-        video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        cap.release()
+        if _MOVIEPY_AVAILABLE:
+            try:
+                video_clip = mpe.VideoFileClip(str(input_video_path))
 
-        if video_width == 0 or video_height == 0:
-            dprint(
-                f"overlay_start_end_images_above_video: Failed to read resolution from {input_video_path}"
-            )
-            return False
+                half_width_px = int(video_clip.width / 2)
 
-        half_width = video_width // 2  # Integer division for even-pixel alignment
+                img1_clip = mpe.ImageClip(str(start_image_path)).resize(width=half_width_px).set_duration(video_clip.duration)
+                img2_clip = mpe.ImageClip(str(end_image_path)).resize(width=half_width_px).set_duration(video_clip.duration)
 
-        # Ensure output directory exists
-        output_video_path = output_video_path.with_suffix('.mp4')
-        output_video_path.parent.mkdir(parents=True, exist_ok=True)
+                # top row (images side-by-side)
+                top_row = mpe.clips_array([[img1_clip, img2_clip]])
+
+                # Build composite video
+                final_h = top_row.h + video_clip.h
+                composite = mpe.CompositeVideoClip([
+                    top_row.set_position((0, 0)),
+                    video_clip.set_position((0, top_row.h))
+                ], size=(video_clip.width, final_h))
+
+                # Write video
+                composite.write_videofile(
+                    str(output_video_path.with_suffix('.mp4')),
+                    codec="libx264",
+                    audio=False,
+                    fps=video_clip.fps or fps,
+                    preset="veryfast",
+                )
+
+                video_clip.close(); img1_clip.close(); img2_clip.close(); composite.close()
+
+                if output_video_path.exists() and output_video_path.stat().st_size > 0:
+                    return True
+                else:
+                    dprint("overlay_start_end_images_above_video: MoviePy output missing after write.")
+            except Exception as e_mov:
+                dprint(f"overlay_start_end_images_above_video: MoviePy path failed – {e_mov}. Falling back to ffmpeg.")
 
         # ---------------------------------------------------------
-        #   Build & run ffmpeg command
+        #   Fallback: FFmpeg filter_complex (no MoviePy or MoviePy failed)
         # ---------------------------------------------------------
-        # 1) Scale both images to half width / full height
-        # 2) hstack -> side-by-side static banner (labelled [top])
-        # 3) vstack banner with original video (labelled [vid])
-        # NOTE: We explicitly scale the *video* as well into label [vid]
-        #       to guarantee width/height match.  This is mostly defensive –
-        #       if the video is already the desired size the scale is a NOP.
+        if not _MOVIEPY_AVAILABLE:
+            try:
+                # ---------------------------------------------------------
+                #   Determine the resolution of the **input video**
+                # ---------------------------------------------------------
+                cap = cv2.VideoCapture(str(input_video_path))
+                if not cap.isOpened():
+                    dprint(f"overlay_start_end_images_above_video: Could not open video {input_video_path}")
+                    return False
+                video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                cap.release()
 
-        filter_complex = (
-            f"[1:v]scale={half_width}:{video_height}[left];"  # scale start img
-            f"[2:v]scale={half_width}:{video_height}[right];"  # scale end img
-            f"[left][right]hstack=inputs=2[top];"              # combine images
-            f"[0:v]scale={video_width}:{video_height}[vid];"   # ensure video size
-            f"[top][vid]vstack=inputs=2[output]"              # stack banner + video
-        )
+                if video_width == 0 or video_height == 0:
+                    dprint(
+                        f"overlay_start_end_images_above_video: Failed to read resolution from {input_video_path}"
+                    )
+                    return False
 
-        # Determine FPS from the input video for consistent output
-        fps = 0.0
-        try:
-            cap2 = cv2.VideoCapture(str(input_video_path))
-            if cap2.isOpened():
-                fps = cap2.get(cv2.CAP_PROP_FPS)
-            cap2.release()
-        except Exception:
-            fps = 0.0
-        if fps is None or fps <= 0.1:
-            fps = 16  # sensible default
+                half_width = video_width // 2  # Integer division for even-pixel alignment
 
-        ffmpeg_cmd = [
-            "ffmpeg", "-y",  # overwrite output
-            "-loglevel", "error",
-            "-i", str(input_video_path),
-            "-loop", "1", "-i", str(start_image_path),
-            "-loop", "1", "-i", str(end_image_path),
-            "-filter_complex", filter_complex,
-            "-map", "[output]",
-            "-r", str(int(round(fps))),  # set output fps
-            "-shortest",  # stop when primary video stream ends
-            "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
-            str(output_video_path.resolve()),
-        ]
+                # Ensure output directory exists
+                output_video_path = output_video_path.with_suffix('.mp4')
+                output_video_path.parent.mkdir(parents=True, exist_ok=True)
 
-        dprint(f"overlay_start_end_images_above_video: Running ffmpeg to create composite video.\nCommand: {' '.join(ffmpeg_cmd)}")
+                # ---------------------------------------------------------
+                #   Build & run ffmpeg command
+                # ---------------------------------------------------------
+                # 1) Scale both images to half width / full height
+                # 2) hstack -> side-by-side static banner (labelled [top])
+                # 3) vstack banner with original video (labelled [vid])
+                # NOTE: We explicitly scale the *video* as well into label [vid]
+                #       to guarantee width/height match.  This is mostly defensive –
+                #       if the video is already the desired size the scale is a NOP.
 
-        proc = subprocess.run(ffmpeg_cmd, capture_output=True)
-        if proc.returncode != 0:
-            dprint(
-                f"overlay_start_end_images_above_video: ffmpeg failed (returncode={proc.returncode}).\n"
-                f"stderr: {proc.stderr.decode(errors='ignore')[:500]}"
-            )
-            # Clean up partially written file if any
-            if output_video_path.exists():
+                filter_complex = (
+                    f"[1:v]scale={half_width}:{video_height}[left];"  # scale start img
+                    f"[2:v]scale={half_width}:{video_height}[right];"  # scale end img
+                    f"[left][right]hstack=inputs=2[top];"              # combine images
+                    f"[0:v]scale={video_width}:{video_height}[vid];"   # ensure video size
+                    f"[top][vid]vstack=inputs=2[output]"              # stack banner + video
+                )
+
+                # Determine FPS from the input video for consistent output
+                fps = 0.0
                 try:
-                    output_video_path.unlink()
+                    cap2 = cv2.VideoCapture(str(input_video_path))
+                    if cap2.isOpened():
+                        fps = cap2.get(cv2.CAP_PROP_FPS)
+                    cap2.release()
                 except Exception:
-                    pass
-            return False
+                    fps = 0.0
+                if fps is None or fps <= 0.1:
+                    fps = 16  # sensible default
 
-        if not output_video_path.exists() or output_video_path.stat().st_size == 0:
-            dprint(
-                f"overlay_start_end_images_above_video: Output video not created or empty at {output_video_path}"
-            )
-            return False
+                ffmpeg_cmd = [
+                    "ffmpeg", "-y",  # overwrite output
+                    "-loglevel", "error",
+                    "-i", str(input_video_path),
+                    "-loop", "1", "-i", str(start_image_path),
+                    "-loop", "1", "-i", str(end_image_path),
+                    "-filter_complex", filter_complex,
+                    "-map", "[output]",
+                    "-r", str(int(round(fps))),  # set output fps
+                    "-shortest",  # stop when primary video stream ends
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-movflags", "+faststart",
+                    str(output_video_path.resolve()),
+                ]
 
-        return True
+                dprint(f"overlay_start_end_images_above_video: Running ffmpeg to create composite video.\nCommand: {' '.join(ffmpeg_cmd)}")
+
+                proc = subprocess.run(ffmpeg_cmd, capture_output=True)
+                if proc.returncode != 0:
+                    dprint(
+                        f"overlay_start_end_images_above_video: ffmpeg failed (returncode={proc.returncode}).\n"
+                        f"stderr: {proc.stderr.decode(errors='ignore')[:500]}"
+                    )
+                    # Clean up partially written file if any
+                    if output_video_path.exists():
+                        try:
+                            output_video_path.unlink()
+                        except Exception:
+                            pass
+                    return False
+
+                if not output_video_path.exists() or output_video_path.stat().st_size == 0:
+                    dprint(
+                        f"overlay_start_end_images_above_video: Output video not created or empty at {output_video_path}"
+                    )
+                    return False
+
+                return True
+
+            except Exception as e_ffmpeg:
+                dprint(f"overlay_start_end_images_above_video: ffmpeg failed – {e_ffmpeg}. Falling back to MoviePy.")
+                return False
 
     except Exception as e_ov:
         dprint(f"overlay_start_end_images_above_video: Exception – {e_ov}")
