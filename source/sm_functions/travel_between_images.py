@@ -200,7 +200,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "parsed_resolution_wh": orchestrator_payload["parsed_resolution_wh"],
                 "model_name": orchestrator_payload["model_name"],
                 "seed_to_use": orchestrator_payload.get("seed_base", 12345) + idx,
-                "use_causvid_lora": orchestrator_payload.get("use_causvid_lora", False),
+                "use_causvid_lora": orchestrator_payload.get("apply_causvid", False),
                 "apply_reward_lora": orchestrator_payload.get("apply_reward_lora", False),
                 "cfg_star_switch": orchestrator_payload.get("cfg_star_switch", 0),
                 "cfg_zero_step": orchestrator_payload.get("cfg_zero_step", -1),
@@ -517,11 +517,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 )
 
                 mask_filename = f"{orchestrator_run_id}_seg{segment_idx:02d}_mask.mp4"
-                mask_out_path_tmp, _ = prepare_output_path(
-                    task_id=segment_task_id_str,
-                    filename=mask_filename,
-                    main_output_dir_base=segment_processing_dir
-                )
+                # Create mask video in the same directory as guide video for consistency
+                mask_out_path_tmp = segment_processing_dir / mask_filename
                 
                 # Use the generalized mask creation function
                 from ..common_utils import create_mask_video_from_inactive_indices
@@ -703,7 +700,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             # - If not SQLite, this suggested path (or process_single_task's default) is used, and an absolute path is returned.
             "output_path": str(wgp_final_output_path_for_this_segment.resolve()), 
             "video_guide_path": str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
-            "use_causvid_lora": full_orchestrator_payload.get("use_causvid_lora", False),
+            "use_causvid_lora": full_orchestrator_payload.get("apply_causvid", False),
             "apply_reward_lora": full_orchestrator_payload.get("apply_reward_lora", False),
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
@@ -798,7 +795,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
              video_guide=str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
              video_mask=str(mask_video_path_for_wgp.resolve()) if mask_video_path_for_wgp else None,
              image_refs=safe_vace_image_ref_paths_for_wgp,
-             use_causvid_lora=full_orchestrator_payload.get("use_causvid_lora", False),
+             use_causvid_lora=full_orchestrator_payload.get("apply_causvid", False),
              apply_reward_lora=effective_apply_reward_lora,
              additional_loras=processed_additional_loras,
              video_prompt_type=video_prompt_type_str,

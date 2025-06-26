@@ -1,11 +1,63 @@
-# Headless server specific dependencies:
-python-dotenv  # For .env file management    
-supabase        # For Supabase DB (via RPC) and Storage
-requests        # For downloading LoRAs
-Pillow          # For image processing in headless tasks
+# Combined requirements for Headless-Wan2GP project
+# Includes both headless server dependencies and Wan2GP model dependencies
+
+# ===== Core ML/AI Dependencies =====
+torch>=2.4.0
+torchvision>=0.19.0
+transformers==4.51.3
+tokenizers>=0.20.3
+diffusers>=0.31.0
+accelerate>=1.1.1
+peft>=0.15.0  # Updated from 0.14.0 to fix compatibility with diffusers
+timm
+einops
+numpy>=1.23.5,<2
+
+# ===== Computer Vision Dependencies =====
+opencv-python>=4.9.0.80
+opencv-python-headless  # For headless environments
+segment-anything
+rembg[gpu]==2.0.65
+
+# ===== Media Processing =====
+imageio
+imageio-ffmpeg
+moviepy==1.0.3
+av
+librosa
+mutagen
+decord
+Pillow  # For image processing in headless tasks
 mediapipe
-requests        # For downloading videos from URLs in travel_between_images
-gradio          # For the web UI
-dotenv
-supabase
-mediapipe
+
+# ===== Web UI and API =====
+gradio==5.23.0
+fastapi  # Often needed for gradio apps
+python-multipart  # For file uploads
+
+# ===== Database and Storage =====
+supabase  # For Supabase DB (via RPC) and Storage
+python-dotenv  # For .env file management
+
+# ===== Utilities =====
+requests  # For downloading LoRAs and videos
+tqdm
+easydict
+ftfy
+dashscope
+omegaconf
+hydra-core
+loguru
+sentencepiece
+pydantic==2.10.6
+
+# ===== GPU/Performance Dependencies =====
+onnxruntime-gpu
+mmgp==3.4.8
+# flash_attn  # Uncomment if needed for flash attention
+
+# ===== Visualization =====
+matplotlib
+
+# ===== Legacy/Compatibility =====
+dotenv  # Older dotenv package (consider removing if python-dotenv works)
