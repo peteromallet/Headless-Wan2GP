@@ -132,15 +132,21 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
                 dprint(f"Single image task {task_id}: Calling generate_single_video with new flexible API")
                 
                 # Use the new flexible keyword-style API
+                use_causvid = task_params_from_db.get("use_causvid_lora", False)
+                use_lighti2x = task_params_from_db.get("use_lighti2x_lora", False)
+
                 num_inference_steps = (
                     task_params_from_db.get("steps")
                     or task_params_from_db.get("num_inference_steps")
-                    or (9 if task_params_from_db.get("use_causvid_lora", False) else 30)
+                    or (9 if use_causvid else (5 if use_lighti2x else 30))
                 )
-                # CausVid LoRA works best with lower guidance/flow; apply safe defaults when not explicitly set.
-                if task_params_from_db.get("use_causvid_lora", False):
+
+                if use_causvid:
                     default_guidance = 1.0
                     default_flow_shift = 1.0
+                elif use_lighti2x:
+                    default_guidance = 1.0
+                    default_flow_shift = 5.0
                 else:
                     default_guidance = task_params_from_db.get("guidance_scale", 5.0)
                     default_flow_shift = task_params_from_db.get("flow_shift", 3.0)
@@ -154,7 +160,8 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
                     video_length=1,  # Single frame
                     seed=seed,
                     model_filename=model_filename_for_task,
-                    use_causvid_lora=task_params_from_db.get("use_causvid_lora", False),
+                    use_causvid_lora=use_causvid,
+                    use_lighti2x_lora=use_lighti2x,
                     apply_reward_lora=apply_reward_lora,
                     additional_loras=processed_additional_loras,
                     image_refs=image_refs_paths,

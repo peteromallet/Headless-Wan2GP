@@ -1656,24 +1656,25 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
 
     # Override with task_params from JSON, but preserve some crucial ones if CausVid is used
     causvid_active = task_params_dict.get("use_causvid_lora", False)
+    lighti2x_active = task_params_dict.get("use_lighti2x_lora", False)
 
     for key, value in task_params_dict.items():
-        if key not in ["output_sub_dir", "model", "task_id", "use_causvid_lora"]:
-            if causvid_active and key in ["steps", "guidance_scale", "flow_shift", "activated_loras", "loras_multipliers"]:
-                continue # These will be set by causvid logic if flag is true
+        if key not in ["output_sub_dir", "model", "task_id", "use_causvid_lora", "use_lighti2x_lora"]:
+            if (causvid_active or lighti2x_active) and key in ["steps", "guidance_scale", "flow_shift", "activated_loras", "loras_multipliers"]:
+                continue # These will be set by causvid/lighti2x logic if flag is true
             ui_defaults[key] = value
     
     ui_defaults["prompt"] = task_params_dict.get("prompt", "Default prompt")
     ui_defaults["resolution"] = task_params_dict.get("resolution", "832x480")
     # Allow task to specify frames/video_length, steps, guidance_scale, flow_shift unless overridden by CausVid
-    if not causvid_active:
+    if not (causvid_active or lighti2x_active):
         ui_defaults["video_length"] = task_params_dict.get("frames", task_params_dict.get("video_length", 81))
         ui_defaults["num_inference_steps"] = task_params_dict.get("steps", task_params_dict.get("num_inference_steps", 30))
         ui_defaults["guidance_scale"] = task_params_dict.get("guidance_scale", ui_defaults.get("guidance_scale", 5.0))
         ui_defaults["flow_shift"] = task_params_dict.get("flow_shift", ui_defaults.get("flow_shift", 3.0))
-    else: # CausVid specific defaults if not touched by its logic yet
+    else: # CausVid or LightI2X specific defaults if not touched by their logic yet
         ui_defaults["video_length"] = task_params_dict.get("frames", task_params_dict.get("video_length", 81))
-        # steps, guidance_scale, flow_shift will be set below by causvid logic
+        # steps, guidance_scale, flow_shift will be set below by specialised logic
 
     ui_defaults["seed"] = task_params_dict.get("seed", -1)
     ui_defaults["lset_name"] = "" 
@@ -1828,6 +1829,41 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         else:
             ui_defaults["loras_multipliers"] = "1.0"
             ui_defaults["activated_loras"] = [causvid_lora_basename] # ensure only causvid if no others
+
+    if lighti2x_active:
+        print(f"[Task ID: {task_params_dict.get('task_id')}] Applying LightI2X LoRA settings.")
+
+        if "steps" in task_params_dict:
+            ui_defaults["num_inference_steps"] = task_params_dict["steps"]
+            print(f"[Task ID: {task_params_dict.get('task_id')}] LightI2X task using specified steps: {ui_defaults['num_inference_steps']}")
+        elif "num_inference_steps" in task_params_dict:
+            ui_defaults["num_inference_steps"] = task_params_dict["num_inference_steps"]
+            print(f"[Task ID: {task_params_dict.get('task_id')}] LightI2X task using specified num_inference_steps: {ui_defaults['num_inference_steps']}")
+        else:
+            ui_defaults["num_inference_steps"] = 5
+            print(f"[Task ID: {task_params_dict.get('task_id')}] LightI2X task defaulting to steps: {ui_defaults['num_inference_steps']}")
+
+        ui_defaults["guidance_scale"] = 1.0
+        ui_defaults["flow_shift"] = 5.0
+        ui_defaults["tea_cache_setting"] = 0.0
+
+        lighti2x_lora_basename = "wan_lcm_r16_fp32_comfy.safetensors"
+        current_activated = ui_defaults.get("activated_loras", [])
+        if not isinstance(current_activated, list):
+            try:
+                current_activated = [str(item).strip() for item in str(current_activated).split(',') if item.strip()]
+            except Exception:
+                current_activated = []
+
+        if lighti2x_lora_basename not in current_activated:
+            current_activated.append(lighti2x_lora_basename)
+        ui_defaults["activated_loras"] = current_activated
+
+        current_multipliers_str = ui_defaults.get("loras_multipliers", "")
+        multipliers_list = [m.strip() for m in current_multipliers_str.split(" ") if m.strip()] if current_multipliers_str else []
+        while len(multipliers_list) < len(current_activated):
+            multipliers_list.insert(0, "1.0")
+        ui_defaults["loras_multipliers"] = " ".join(multipliers_list)
 
     if apply_reward_lora:
         print(f"[Task ID: {task_params_dict.get('task_id')}] Applying Reward LoRA settings.")

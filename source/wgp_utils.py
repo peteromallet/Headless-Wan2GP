@@ -78,6 +78,8 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
     # Special flags (popped early so they don't pollute **kwargs later)
     # ------------------------------------------------------------------
     use_causvid_lora: bool = bool(kwargs.pop("use_causvid_lora", False))
+    # New: Lightweight I2X LoRA (self-forcing) support
+    use_lighti2x_lora: bool = bool(kwargs.pop("use_lighti2x_lora", False))
     apply_reward_lora: bool = bool(kwargs.pop("apply_reward_lora", False))
 
     # Handle additional_loras parameter
@@ -184,8 +186,56 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
         else:
             params["loras_multipliers"] = loras_multipliers if loras_multipliers else ""
 
+    # ------------------------------------------------------------
+    #  Light I2X LoRA tweaks – fast 5-step schedule
+    # ------------------------------------------------------------
+    if use_lighti2x_lora:
+        lighti2x_lora_name = "wan_lcm_r16_fp32_comfy.safetensors"
+
+        # Ensure the LoRA is activated with multiplier 1.0 (self-forcing)
+        if lighti2x_lora_name not in activated_loras:
+            activated_loras.insert(0, lighti2x_lora_name)
+            if isinstance(loras_multipliers, list):
+                loras_multipliers.insert(0, "1.0")
+            elif isinstance(loras_multipliers, str):
+                mult_list = [m.strip() for m in loras_multipliers.split(",") if m.strip()] if loras_multipliers else []
+                mult_list.insert(0, "1.0")
+                loras_multipliers = ",".join(mult_list)
+            else:
+                loras_multipliers = ["1.0"]
+
+        # Force a very short schedule & mild guidance as recommended
+        try:
+            steps_int = int(params.get("num_inference_steps", 30))
+        except (TypeError, ValueError):
+            steps_int = 30
+        if steps_int != 5:
+            dprint(f"{task_id}: LightI2X active – overriding num_inference_steps {steps_int} → 5")
+            params["num_inference_steps"] = 5
+
+        if float(params.get("guidance_scale", 5.0)) != 1.0:
+            dprint(f"{task_id}: LightI2X active – setting guidance_scale → 1.0")
+            params["guidance_scale"] = 1.0
+
+        if float(params.get("flow_shift", 3.0)) != 5.0:
+            dprint(f"{task_id}: LightI2X active – setting flow_shift → 5.0")
+            params["flow_shift"] = 5.0
+
+        # Disable Tea Cache explicitly (even though default is 0.0)
+        if float(params.get("tea_cache_setting", 0.0)) != 0.0:
+            dprint(f"{task_id}: LightI2X active – disabling Tea Cache (tea_cache_setting → 0.0)")
+            params["tea_cache_setting"] = 0.0
+
+        # Push back the updated lists
+        params["activated_loras"] = activated_loras
+        if isinstance(loras_multipliers, list):
+            params["loras_multipliers"] = ",".join(loras_multipliers) if loras_multipliers else ""
+        else:
+            params["loras_multipliers"] = loras_multipliers if loras_multipliers else ""
+
     # Expose the flags to downstream logic (build_task_state & wgp)
     params["use_causvid_lora"] = use_causvid_lora
+    params["use_lighti2x_lora"] = use_lighti2x_lora
     params["apply_reward_lora"] = apply_reward_lora
 
     # Convert PIL images in image_start/image_end if any
@@ -245,6 +295,7 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
                 "loras_multipliers": params["loras_multipliers"],
                 # Expose the CausVid flag so that builder can apply its tweaks
                 "use_causvid_lora": use_causvid_lora,
+                "use_lighti2x_lora": use_lighti2x_lora,
             }
             # Merge any miscellaneous keys the caller already supplied – this
             # lets advanced features (video_guide, image_refs, etc.) propagate.

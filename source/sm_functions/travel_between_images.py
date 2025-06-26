@@ -761,16 +761,20 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # Ensure sensible defaults for critical generation params
         # ------------------------------------------------------------------
         causvid_enabled = bool(segment_params.get("use_causvid_lora", False) or full_orchestrator_payload.get("apply_causvid", False))
+        lighti2x_enabled = bool(segment_params.get("use_lighti2x_lora", False) or full_orchestrator_payload.get("apply_lighti2x", False))
 
         num_inference_steps = (
             segment_params.get("num_inference_steps")
             or full_orchestrator_payload.get("num_inference_steps")
-            or (9 if causvid_enabled else 30)
+            or (9 if causvid_enabled else (5 if lighti2x_enabled else 30))
         )
 
         if causvid_enabled:
             guidance_scale_default = 1.0
             flow_shift_default = 1.0
+        elif lighti2x_enabled:
+            guidance_scale_default = 1.0
+            flow_shift_default = 5.0
         else:
             guidance_scale_default = full_orchestrator_payload.get("guidance_scale", 5.0)
             flow_shift_default = full_orchestrator_payload.get("flow_shift", 3.0)
@@ -799,6 +803,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
              video_mask=str(mask_video_path_for_wgp.resolve()) if mask_video_path_for_wgp else None,
              image_refs=safe_vace_image_ref_paths_for_wgp,
              use_causvid_lora=full_orchestrator_payload.get("apply_causvid", False),
+             use_lighti2x_lora=full_orchestrator_payload.get("apply_lighti2x", False) or segment_params.get("use_lighti2x_lora", False),
              apply_reward_lora=effective_apply_reward_lora,
              additional_loras=processed_additional_loras,
              video_prompt_type=video_prompt_type_str,
@@ -807,6 +812,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                  'task_id', 'prompt', 'negative_prompt', 'resolution', 'frames', 'seed',
                  'model', 'model_filename', 'video_guide', 'video_mask', 'image_refs',
                  'use_causvid_lora', 'apply_reward_lora', 'additional_loras', 'video_prompt_type',
+                 'use_lighti2x_lora',
                  'num_inference_steps', 'guidance_scale', 'flow_shift'
              ]})
          )
