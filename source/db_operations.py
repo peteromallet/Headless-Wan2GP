@@ -47,7 +47,7 @@ debug_mode = False
 def dprint(msg: str):
     """Print a debug message if debug_mode is enabled."""
     if debug_mode:
-        print(f"[DEBUG {time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+        print(f"[DEBUG {datetime.datetime.now().isoformat()}] {msg}")
 
 # -----------------------------------------------------------------------------
 # Internal Helpers
@@ -512,7 +512,7 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
 
         def _add_op(conn):
             cursor = conn.cursor()
-            current_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            current_timestamp = datetime.datetime.now().isoformat()
             cursor.execute(
                 f"INSERT INTO tasks (id, params, task_type, status, created_at, project_id, dependant_on) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (task_id, params_json_str, task_type_str, STATUS_QUEUED, current_timestamp, project_id, dependant_on)
