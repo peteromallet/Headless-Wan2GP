@@ -1025,6 +1025,18 @@ def overlay_start_end_images_above_video(
             f"[top][vid]vstack=inputs=2[output]"              # stack banner + video
         )
 
+        # Determine FPS from the input video for consistent output
+        fps = 0.0
+        try:
+            cap2 = cv2.VideoCapture(str(input_video_path))
+            if cap2.isOpened():
+                fps = cap2.get(cv2.CAP_PROP_FPS)
+            cap2.release()
+        except Exception:
+            fps = 0.0
+        if fps is None or fps <= 0.1:
+            fps = 16  # sensible default
+
         ffmpeg_cmd = [
             "ffmpeg", "-y",  # overwrite output
             "-loglevel", "error",
@@ -1033,7 +1045,10 @@ def overlay_start_end_images_above_video(
             "-loop", "1", "-i", str(end_image_path),
             "-filter_complex", filter_complex,
             "-map", "[output]",
+            "-r", str(int(round(fps))),  # set output fps
+            "-shortest",  # stop when primary video stream ends
             "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
             str(output_video_path.resolve()),
         ]
 
