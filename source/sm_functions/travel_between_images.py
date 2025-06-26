@@ -760,12 +760,15 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # ------------------------------------------------------------------
         # Ensure sensible defaults for critical generation params
         # ------------------------------------------------------------------
+        causvid_enabled = bool(segment_params.get("use_causvid_lora", False) or full_orchestrator_payload.get("apply_causvid", False))
+
         num_inference_steps = (
             segment_params.get("num_inference_steps")
             or full_orchestrator_payload.get("num_inference_steps")
-            or (9 if full_orchestrator_payload.get("use_causvid_lora", False) else 30)
+            or (9 if causvid_enabled else 30)
         )
-        if full_orchestrator_payload.get("use_causvid_lora", False):
+
+        if causvid_enabled:
             guidance_scale_default = 1.0
             flow_shift_default = 1.0
         else:
