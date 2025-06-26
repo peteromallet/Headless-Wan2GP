@@ -136,15 +136,33 @@ def process_additional_loras_shared(
                 # --------------------------------------------------
                 if lora_path.startswith("http://") or lora_path.startswith("https://"):
                     dl_target_path = wan2gp_lora_root / lora_filename
-                    if not dl_target_path.exists():
-                        dprint(f"Task {task_id}: Downloading LoRA from {lora_path} to {dl_target_path}")
-                        try:
-                            download_file(lora_path, wan2gp_lora_root, lora_filename)
-                        except Exception as e_dl:
-                            dprint(f"Task {task_id}: ERROR – failed to download LoRA {lora_path}: {e_dl}")
-                            continue  # Skip this LoRA
+
+                    # Some LoRA hubs publish weights under extremely generic
+                    # names (e.g. "pytorch_model.bin", "model.safetensors").
+                    # If we already have a file with that generic name cached
+                    # in Wan2GP/loras **we reuse it** instead of downloading a
+                    # potentially different LoRA into the same filename which
+                    # would be ambiguous.
+                    GENERIC_NAMES = {
+                        "pytorch_model.bin",
+                        "pytorch.bin",
+                        "model.safetensors",
+                        "pytorch_model.safetensors",
+                        "diffusion_pytorch_model.safetensors",
+                    }
+
+                    if lora_filename in GENERIC_NAMES and dl_target_path.exists():
+                        dprint(f"Task {task_id}: Generic-named LoRA '{lora_filename}' already present – using cached copy {dl_target_path} instead of re-downloading.")
                     else:
-                        dprint(f"Task {task_id}: LoRA already downloaded at {dl_target_path}")
+                        if not dl_target_path.exists():
+                            dprint(f"Task {task_id}: Downloading LoRA from {lora_path} to {dl_target_path}")
+                            try:
+                                download_file(lora_path, wan2gp_lora_root, lora_filename)
+                            except Exception as e_dl:
+                                dprint(f"Task {task_id}: ERROR – failed to download LoRA {lora_path}: {e_dl}")
+                                continue  # Skip this LoRA
+                        else:
+                            dprint(f"Task {task_id}: LoRA already downloaded at {dl_target_path}")
                     
                     # Copy into model-specific dir if needed
                     if not target_path_in_model_dir.exists():

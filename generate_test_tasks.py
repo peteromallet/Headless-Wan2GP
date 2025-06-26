@@ -522,11 +522,11 @@ def main(args) -> None:
     # ------------------------------------------------------------
     elif args.task_type == "single_image":
         single_image_specs = [
-            ("single_image_1", "A serene mountain landscape at sunset", "640x360"),
-            ("single_image_2", "A futuristic city skyline at night", "512x768"),
-            ("single_image_3", "A cute puppy in a field of flowers", "768x512"),
-            ("single_image_4", "A spaceship traveling through hyperspace", "720x1280"),
-            ("single_image_5", "A vibrant abstract painting of shapes and colours", "1024x576"),
+            ("single_image_1", "studio ghibli style: A serene mountain landscape at sunset", "640x360"),
+            ("single_image_2", "studio ghibli style: A futuristic city skyline at night", "512x768"),
+            ("single_image_3", "studio ghibli style: A cute puppy in a field of flowers", "768x512"),
+            ("single_image_4", "studio ghibli style: A spaceship traveling through hyperspace", "720x1280"),
+            ("single_image_5", "studio ghibli style: A vibrant abstract painting of shapes and colours", "1024x576"),
         ]
 
         ghibli_lora_url = "https://huggingface.co/peteromallet/ad_motion_loras/resolve/main/studio_ghibli_wan14b_t2v_v01.safetensors"
