@@ -941,7 +941,7 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
 
             # --- 1. Saturation ---
             sat_level = full_orchestrator_payload.get("after_first_post_generation_saturation")
-            if sat_level is not None and isinstance(sat_level, (float, int)) and sat_level >= 0.0:
+            if sat_level is not None and isinstance(sat_level, (float, int)) and sat_level >= 0.0 and abs(sat_level - 1.0) > 1e-6:
                 dprint(f"Chain (Seg {segment_idx_completed}): Applying post-gen saturation {sat_level} to {video_to_process_abs_path}")
 
                 sat_filename = f"s{segment_idx_completed}_sat_{sat_level:.2f}{video_to_process_abs_path.suffix}"

@@ -20,6 +20,7 @@ import sys
 import os
 import json
 import time
+import datetime
 import traceback
 import urllib.parse
 import tempfile
@@ -67,7 +68,7 @@ def dprint(msg: str):
     """Print a debug message if --debug flag is enabled."""
     if debug_mode:
         # Prefix with timestamp for easier tracing
-        print(f"[DEBUG {time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+        print(f"[DEBUG {datetime.datetime.now().isoformat()}] {msg}")
 
 # -----------------------------------------------------------------------------
 # 1. Parse arguments for the server
