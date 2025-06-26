@@ -193,15 +193,17 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
         _set_param_if_different(params, "flow_shift", 1.0, task_id, "CausVid", dprint)
 
     # ------------------------------------------------------------
-    #  Light I2X LoRA tweaks – fast 5-step schedule
+    #  Light I2X LoRA tweaks – fast 4-step schedule with unipc sampler
     # ------------------------------------------------------------
     if use_lighti2x_lora:
         lighti2x_lora_name = "wan_lcm_r16_fp32_comfy.safetensors"
         activated_loras, loras_multipliers = _ensure_lora_in_lists(lighti2x_lora_name, "1.0", activated_loras, loras_multipliers)
-        _set_param_if_different(params, "num_inference_steps", 5, task_id, "LightI2X", dprint)
+        _set_param_if_different(params, "num_inference_steps", 4, task_id, "LightI2X", dprint)
         _set_param_if_different(params, "guidance_scale", 1.0, task_id, "LightI2X", dprint)
         _set_param_if_different(params, "flow_shift", 5.0, task_id, "LightI2X", dprint)
         _set_param_if_different(params, "tea_cache_setting", 0.0, task_id, "LightI2X", dprint)
+        _set_param_if_different(params, "sample_solver", "unipc", task_id, "LightI2X", dprint)
+        _set_param_if_different(params, "denoise_strength", 1.0, task_id, "LightI2X", dprint)
 
     # Apply LoRA changes to params if any special LoRAs were configured
     if use_causvid_lora or use_lighti2x_lora:
