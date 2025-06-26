@@ -275,8 +275,12 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                     dprint(f"Task {task_id}: Could not create SQLite-based image_download_dir for standard task: {e_idir_sqlite}.")
 
         use_causvid = task_params_dict.get("use_causvid_lora", False)
+        # New LightI2X LoRA flag handling
+        use_lighti2x = task_params_dict.get("use_lighti2x_lora", False)
         causvid_lora_basename = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
         causvid_lora_url = "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
+        lighti2x_lora_basename = "wan_lcm_r16_fp32_comfy.safetensors"
+        lighti2x_lora_url = "https://huggingface.co/peteromallet/ad_motion_loras/resolve/main/wan_lcm_r16_fp32_comfy.safetensors"
 
         if use_causvid:
             base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
@@ -296,6 +300,17 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                      pass 
             if not "14B" in model_filename_for_task or not "t2v" in model_filename_for_task.lower():
                 print(f"[WARNING Task ID: {task_id}] CausVid LoRA is intended for 14B T2V models. Current model is {model_filename_for_task}. Results may vary.")
+
+        # Ensure LightI2X LoRA is present if requested
+        if use_lighti2x:
+            base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
+            target_lighti2x_path = base_lora_dir_for_model / lighti2x_lora_basename
+
+            if not target_lighti2x_path.exists():
+                print(f"[Task ID: {task_id}] LightI2X LoRA not found. Attempting download...")
+                if not download_file(lighti2x_lora_url, base_lora_dir_for_model, lighti2x_lora_basename):
+                    print(f"[WARNING Task ID: {task_id}] Failed to download LightI2X LoRA. Proceeding without it.")
+                    task_params_dict["use_lighti2x_lora"] = False
 
         additional_loras = task_params_dict.get("additional_loras", {})
         if additional_loras:

@@ -40,7 +40,7 @@ This is the main application package.
 * **db_operations.py** – Handles all database interactions for both SQLite and Supabase.
 * **specialized_handlers.py** – Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation.
 * **video_utils.py** – Provides utilities for video manipulation like cross-fading, frame extraction, and color matching.
-* **wgp_utils.py** – Thin wrapper around `Wan2GP.wgp` that standardises parameter names, handles LoRA quirks (e.g. CausVid), and exposes the single `generate_single_video` helper used by every task handler.
+* **wgp_utils.py** – Thin wrapper around `Wan2GP.wgp` that standardises parameter names, handles LoRA quirks (e.g. CausVid, LightI2X), and exposes the single `generate_single_video` helper used by every task handler.
 
 ### source/sm_functions/ sub-package
 
@@ -132,6 +132,15 @@ Column | Purpose
 `updated_at` | Heartbeat & ordering
 
 SQLite keeps the DB at `tasks.db`; Supabase uses the same columns with RLS policies.
+
+## LoRA Support
+
+### Special LoRA Flags
+
+* **`use_causvid_lora`** – Enables CausVid LoRA with 9 steps, guidance 1.0, flow-shift 1.0. Auto-downloads from HuggingFace if missing.
+* **`use_lighti2x_lora`** – Enables LightI2X LoRA with 5 steps, guidance 1.0, flow-shift 5.0, Tea Cache disabled. Auto-downloads from HuggingFace if missing.
+
+Both flags automatically configure optimal generation parameters and handle LoRA downloads/activation.
 
 ## Environment & config knobs (non-exhaustive)
 
