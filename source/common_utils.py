@@ -1642,6 +1642,56 @@ def load_pil_images(
             
     return images if images else None
 
+def _normalize_activated_loras_list(current_activated) -> list:
+    """Helper to ensure activated_loras is a proper list."""
+    if not isinstance(current_activated, list):
+        try:
+            return [str(item).strip() for item in str(current_activated).split(',') if item.strip()]
+        except Exception:
+            return []
+    return current_activated
+
+def _apply_special_lora_settings(task_id: str, lora_type: str, lora_basename: str, default_steps: int, 
+                                 guidance_scale: float, flow_shift: float, ui_defaults: dict, 
+                                 task_params_dict: dict, tea_cache_setting: float = None):
+    """
+    Shared helper to apply special LoRA settings (CausVid, LightI2X, etc.) to ui_defaults.
+    """
+    print(f"[Task ID: {task_id}] Applying {lora_type} LoRA settings.")
+    
+    # Handle steps logic
+    if "steps" in task_params_dict:
+        ui_defaults["num_inference_steps"] = task_params_dict["steps"]
+        print(f"[Task ID: {task_id}] {lora_type} task using specified steps: {ui_defaults['num_inference_steps']}")
+    elif "num_inference_steps" in task_params_dict:
+        ui_defaults["num_inference_steps"] = task_params_dict["num_inference_steps"]
+        print(f"[Task ID: {task_id}] {lora_type} task using specified num_inference_steps: {ui_defaults['num_inference_steps']}")
+    else:
+        ui_defaults["num_inference_steps"] = default_steps
+        print(f"[Task ID: {task_id}] {lora_type} task defaulting to steps: {ui_defaults['num_inference_steps']}")
+    
+    # Set guidance and flow shift
+    ui_defaults["guidance_scale"] = guidance_scale
+    ui_defaults["flow_shift"] = flow_shift
+    
+    # Set tea cache if specified
+    if tea_cache_setting is not None:
+        ui_defaults["tea_cache_setting"] = tea_cache_setting
+    
+    # Handle LoRA activation
+    current_activated = _normalize_activated_loras_list(ui_defaults.get("activated_loras", []))
+    
+    if lora_basename not in current_activated:
+        current_activated.append(lora_basename)
+    ui_defaults["activated_loras"] = current_activated
+    
+    # Handle multipliers - simple approach for build_task_state
+    current_multipliers_str = ui_defaults.get("loras_multipliers", "")
+    multipliers_list = [m.strip() for m in current_multipliers_str.split(" ") if m.strip()] if current_multipliers_str else []
+    while len(multipliers_list) < len(current_activated):
+        multipliers_list.insert(0, "1.0")
+    ui_defaults["loras_multipliers"] = " ".join(multipliers_list)
+
 # --- SM_RESTRUCTURE: Function moved from headless.py ---
 def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False):
     state = {
@@ -1767,103 +1817,23 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         ui_defaults["activated_loras"] = current_activated_list # Update ui_defaults
     # --- End Custom LoRA Handling ---
 
-    # Apply CausVid LoRA specific settings if the flag is true
+    # Apply special LoRA settings using shared helper
     if causvid_active:
-        print(f"[Task ID: {task_params_dict.get('task_id')}] Applying CausVid LoRA settings.")
-        
-        # If steps are specified in the task JSON for a CausVid task, use them; otherwise, default to 9.
-        if "steps" in task_params_dict:
-            ui_defaults["num_inference_steps"] = task_params_dict["steps"]
-            print(f"[Task ID: {task_params_dict.get('task_id')}] CausVid task using specified steps: {ui_defaults['num_inference_steps']}")
-        elif "num_inference_steps" in task_params_dict:
-            ui_defaults["num_inference_steps"] = task_params_dict["num_inference_steps"]
-            print(f"[Task ID: {task_params_dict.get('task_id')}] CausVid task using specified num_inference_steps: {ui_defaults['num_inference_steps']}")
-        else:
-            ui_defaults["num_inference_steps"] = 9 # Default for CausVid if not specified in task
-            print(f"[Task ID: {task_params_dict.get('task_id')}] CausVid task defaulting to steps: {ui_defaults['num_inference_steps']}")
-
-        ui_defaults["guidance_scale"] = 1.0 # Still overridden
-        ui_defaults["flow_shift"] = 1.0     # Still overridden
-        
-        causvid_lora_basename = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
-        current_activated = ui_defaults.get("activated_loras", [])
-        if not isinstance(current_activated, list):
-             try: current_activated = [str(item).strip() for item in str(current_activated).split(',') if item.strip()] 
-             except: current_activated = []
-
-        if causvid_lora_basename not in current_activated:
-            current_activated.append(causvid_lora_basename)
-        ui_defaults["activated_loras"] = current_activated
-
-        current_multipliers_str = ui_defaults.get("loras_multipliers", "")
-        # Basic handling: if multipliers exist, prepend; otherwise, set directly.
-        # More sophisticated merging might be needed if specific order or pairing is critical.
-        # This assumes multipliers are space-separated.
-        if current_multipliers_str:
-            multipliers_list = current_multipliers_str.split()
-            
-            # Create a mapping from the original LoRA list to multipliers
-            # Handle the case where there might be fewer multipliers than LoRAs
-            original_lora_to_multiplier = {}
-            for i, lora_name in enumerate(current_activated):
-                if i < len(multipliers_list):
-                    original_lora_to_multiplier[lora_name] = multipliers_list[i]
-                else:
-                    original_lora_to_multiplier[lora_name] = "1.0"  # Default for missing multipliers
-            
-            final_multipliers = []
-            final_loras = []
-
-            # Add CausVid first with its multiplier (always "1.0" for CausVid)
-            final_loras.append(causvid_lora_basename)
-            final_multipliers.append("1.0")
-
-            # Add all other LoRAs (excluding CausVid since it's already added)
-            for lora_name in current_activated:
-                if lora_name != causvid_lora_basename:  # Don't duplicate CausVid
-                    final_loras.append(lora_name)
-                    final_multipliers.append(original_lora_to_multiplier.get(lora_name, "1.0"))
-            
-            ui_defaults["activated_loras"] = final_loras
-            ui_defaults["loras_multipliers"] = " ".join(final_multipliers)
-        else:
-            ui_defaults["loras_multipliers"] = "1.0"
-            ui_defaults["activated_loras"] = [causvid_lora_basename] # ensure only causvid if no others
+        _apply_special_lora_settings(
+            current_task_id_for_log, "CausVid", 
+            "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
+            default_steps=9, guidance_scale=1.0, flow_shift=1.0,
+            ui_defaults=ui_defaults, task_params_dict=task_params_dict
+        )
 
     if lighti2x_active:
-        print(f"[Task ID: {task_params_dict.get('task_id')}] Applying LightI2X LoRA settings.")
-
-        if "steps" in task_params_dict:
-            ui_defaults["num_inference_steps"] = task_params_dict["steps"]
-            print(f"[Task ID: {task_params_dict.get('task_id')}] LightI2X task using specified steps: {ui_defaults['num_inference_steps']}")
-        elif "num_inference_steps" in task_params_dict:
-            ui_defaults["num_inference_steps"] = task_params_dict["num_inference_steps"]
-            print(f"[Task ID: {task_params_dict.get('task_id')}] LightI2X task using specified num_inference_steps: {ui_defaults['num_inference_steps']}")
-        else:
-            ui_defaults["num_inference_steps"] = 5
-            print(f"[Task ID: {task_params_dict.get('task_id')}] LightI2X task defaulting to steps: {ui_defaults['num_inference_steps']}")
-
-        ui_defaults["guidance_scale"] = 1.0
-        ui_defaults["flow_shift"] = 5.0
-        ui_defaults["tea_cache_setting"] = 0.0
-
-        lighti2x_lora_basename = "wan_lcm_r16_fp32_comfy.safetensors"
-        current_activated = ui_defaults.get("activated_loras", [])
-        if not isinstance(current_activated, list):
-            try:
-                current_activated = [str(item).strip() for item in str(current_activated).split(',') if item.strip()]
-            except Exception:
-                current_activated = []
-
-        if lighti2x_lora_basename not in current_activated:
-            current_activated.append(lighti2x_lora_basename)
-        ui_defaults["activated_loras"] = current_activated
-
-        current_multipliers_str = ui_defaults.get("loras_multipliers", "")
-        multipliers_list = [m.strip() for m in current_multipliers_str.split(" ") if m.strip()] if current_multipliers_str else []
-        while len(multipliers_list) < len(current_activated):
-            multipliers_list.insert(0, "1.0")
-        ui_defaults["loras_multipliers"] = " ".join(multipliers_list)
+        _apply_special_lora_settings(
+            current_task_id_for_log, "LightI2X",
+            "wan_lcm_r16_fp32_comfy.safetensors", 
+            default_steps=5, guidance_scale=1.0, flow_shift=5.0,
+            ui_defaults=ui_defaults, task_params_dict=task_params_dict,
+            tea_cache_setting=0.0
+        )
 
     if apply_reward_lora:
         print(f"[Task ID: {task_params_dict.get('task_id')}] Applying Reward LoRA settings.")
