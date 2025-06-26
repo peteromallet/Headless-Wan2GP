@@ -40,6 +40,17 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
     dprint(f"Single image task params: {json.dumps(task_params_from_db, default=str, indent=2)}")
     
     try:
+        # -------------------------------------------------------------
+        # Flatten orchestrator_details (if present) so that nested keys
+        # like `use_causvid_lora` or `prompt` become first-class entries.
+        # Top-level keys take precedence over nested ones in case of clash.
+        # -------------------------------------------------------------
+        if isinstance(task_params_from_db.get("orchestrator_details"), dict):
+            task_params_from_db = {
+                **task_params_from_db["orchestrator_details"],  # Nested first
+                **{k: v for k, v in task_params_from_db.items() if k != "orchestrator_details"},  # Top-level override
+            }
+
         # Extract required parameters with defaults
         prompt = task_params_from_db.get("prompt", " ").strip() or " "  # Default to space if empty
         model_name = task_params_from_db.get("model", "t2v")  # Default to t2v model
