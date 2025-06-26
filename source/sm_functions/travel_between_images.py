@@ -760,8 +760,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # ------------------------------------------------------------------
         # Ensure sensible defaults for critical generation params
         # ------------------------------------------------------------------
-        causvid_enabled = bool(segment_params.get("use_causvid_lora", False) or full_orchestrator_payload.get("apply_causvid", False))
-        lighti2x_enabled = bool(segment_params.get("use_lighti2x_lora", False) or full_orchestrator_payload.get("apply_lighti2x", False))
+        causvid_enabled = bool(segment_params.get("use_causvid_lora", False) or full_orchestrator_payload.get("apply_causvid", False) or full_orchestrator_payload.get("use_causvid_lora", False))
+        lighti2x_enabled = bool(segment_params.get("use_lighti2x_lora", False) or full_orchestrator_payload.get("use_lighti2x_lora", False))
 
         num_inference_steps = (
             segment_params.get("num_inference_steps")
@@ -802,8 +802,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
              video_guide=str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
              video_mask=str(mask_video_path_for_wgp.resolve()) if mask_video_path_for_wgp else None,
              image_refs=safe_vace_image_ref_paths_for_wgp,
-             use_causvid_lora=full_orchestrator_payload.get("apply_causvid", False),
-             use_lighti2x_lora=full_orchestrator_payload.get("apply_lighti2x", False) or segment_params.get("use_lighti2x_lora", False),
+             use_causvid_lora=full_orchestrator_payload.get("apply_causvid", False) or full_orchestrator_payload.get("use_causvid_lora", False),
+             use_lighti2x_lora=full_orchestrator_payload.get("use_lighti2x_lora", False) or segment_params.get("use_lighti2x_lora", False),
              apply_reward_lora=effective_apply_reward_lora,
              additional_loras=processed_additional_loras,
              video_prompt_type=video_prompt_type_str,
