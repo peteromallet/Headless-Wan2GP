@@ -9,6 +9,54 @@ from typing import Any, Tuple, Dict, Optional, Union, Callable
 from PIL import Image
 
 
+def _ensure_lora_in_lists(lora_name: str, multiplier: str, activated_loras: list, loras_multipliers: Union[list, str]) -> Tuple[list, Union[list, str]]:
+    """
+    Helper function to ensure a LoRA is present in activated_loras with the correct multiplier.
+    Returns updated (activated_loras, loras_multipliers) tuple.
+    """
+    if lora_name not in activated_loras:
+        activated_loras.insert(0, lora_name)
+        if isinstance(loras_multipliers, list):
+            loras_multipliers.insert(0, multiplier)
+        elif isinstance(loras_multipliers, str):
+            mult_list = [m.strip() for m in loras_multipliers.split(",") if m.strip()] if loras_multipliers else []
+            mult_list.insert(0, multiplier)
+            loras_multipliers = ",".join(mult_list)
+        else:
+            loras_multipliers = [multiplier]
+    return activated_loras, loras_multipliers
+
+
+def _set_param_if_different(params: dict, key: str, target_value: Union[int, float], task_id: str, lora_name: str, dprint: Callable):
+    """
+    Helper function to set a parameter value if it differs from the target, with logging.
+    """
+    current_value = params.get(key)
+    if isinstance(target_value, int):
+        try:
+            current_int = int(current_value) if current_value is not None else 0
+        except (TypeError, ValueError):
+            current_int = 0
+        if current_int != target_value:
+            dprint(f"{task_id}: {lora_name} active – overriding {key} {current_int} → {target_value}")
+            params[key] = target_value
+    elif isinstance(target_value, float):
+        current_float = float(current_value) if current_value is not None else 0.0
+        if current_float != target_value:
+            dprint(f"{task_id}: {lora_name} active – setting {key} → {target_value}")
+            params[key] = target_value
+
+
+def _normalize_loras_multipliers_format(loras_multipliers: Union[list, str]) -> str:
+    """
+    Helper function to normalize loras_multipliers to string format expected by WGP.
+    """
+    if isinstance(loras_multipliers, list):
+        return ",".join(loras_multipliers) if loras_multipliers else ""
+    else:
+        return loras_multipliers if loras_multipliers else ""
+
+
 def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
     """
     Centralized wrapper for wgp_mod.generate_video.
@@ -137,101 +185,28 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
     # ------------------------------------------------------------
     #  CausVid LoRA upstream fix – keep WGP happy
     # ------------------------------------------------------------
-    # Running CausVid with the full 30-step schedule crashes the stock
-    # wgp.py implementation ("list index out of range").  The web UI
-    # that ships with WanGP forces 9 steps, 1.0 guidance-scale and
-    # 1.0 flow-shift when the CausVid LoRA is active.  We replicate the
-    # same guardrails here *before* we ever enter wgp.py so that headless
-    # tasks don't trigger the bug.
-
     if use_causvid_lora:
-        # 1) Make sure the canonical CausVid LoRA is in the list.
         causvid_lora_name = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
-        if causvid_lora_name not in activated_loras:
-            activated_loras.insert(0, causvid_lora_name)
-            # Handle loras_multipliers as either list or string
-            if isinstance(loras_multipliers, list):
-                loras_multipliers.insert(0, "1.0")
-            elif isinstance(loras_multipliers, str):
-                # Convert comma-separated string back to list, add new multiplier, then rejoin
-                mult_list = [m.strip() for m in loras_multipliers.split(",") if m.strip()] if loras_multipliers else []
-                mult_list.insert(0, "1.0")
-                loras_multipliers = ",".join(mult_list)
-            else:
-                # Fallback: treat as empty and create new list
-                loras_multipliers = ["1.0"]
-
-        # 2) Clamp the schedule to 9 steps (UI default).
-        try:
-            steps_int = int(params.get("num_inference_steps", 30))
-        except (TypeError, ValueError):
-            steps_int = 30
-        if steps_int > 9 or steps_int <= 0:
-            dprint(f"{task_id}: CausVid active – overriding num_inference_steps {steps_int} → 9")
-            params["num_inference_steps"] = 9
-
-        # 3) Guidance / flow-shift tweaks used by the UI.
-        if float(params.get("guidance_scale", 5.0)) != 1.0:
-            dprint(f"{task_id}: CausVid active – setting guidance_scale → 1.0")
-            params["guidance_scale"] = 1.0
-        if float(params.get("flow_shift", 3.0)) != 1.0:
-            dprint(f"{task_id}: CausVid active – setting flow_shift → 1.0")
-            params["flow_shift"] = 1.0
-
-        # Push back the updated LoRA lists
-        params["activated_loras"] = activated_loras
-        # Handle loras_multipliers as either list or string
-        if isinstance(loras_multipliers, list):
-            params["loras_multipliers"] = ",".join(loras_multipliers) if loras_multipliers else ""
-        else:
-            params["loras_multipliers"] = loras_multipliers if loras_multipliers else ""
+        activated_loras, loras_multipliers = _ensure_lora_in_lists(causvid_lora_name, "1.0", activated_loras, loras_multipliers)
+        _set_param_if_different(params, "num_inference_steps", 9, task_id, "CausVid", dprint)
+        _set_param_if_different(params, "guidance_scale", 1.0, task_id, "CausVid", dprint)
+        _set_param_if_different(params, "flow_shift", 1.0, task_id, "CausVid", dprint)
 
     # ------------------------------------------------------------
     #  Light I2X LoRA tweaks – fast 5-step schedule
     # ------------------------------------------------------------
     if use_lighti2x_lora:
         lighti2x_lora_name = "wan_lcm_r16_fp32_comfy.safetensors"
+        activated_loras, loras_multipliers = _ensure_lora_in_lists(lighti2x_lora_name, "1.0", activated_loras, loras_multipliers)
+        _set_param_if_different(params, "num_inference_steps", 5, task_id, "LightI2X", dprint)
+        _set_param_if_different(params, "guidance_scale", 1.0, task_id, "LightI2X", dprint)
+        _set_param_if_different(params, "flow_shift", 5.0, task_id, "LightI2X", dprint)
+        _set_param_if_different(params, "tea_cache_setting", 0.0, task_id, "LightI2X", dprint)
 
-        # Ensure the LoRA is activated with multiplier 1.0 (self-forcing)
-        if lighti2x_lora_name not in activated_loras:
-            activated_loras.insert(0, lighti2x_lora_name)
-            if isinstance(loras_multipliers, list):
-                loras_multipliers.insert(0, "1.0")
-            elif isinstance(loras_multipliers, str):
-                mult_list = [m.strip() for m in loras_multipliers.split(",") if m.strip()] if loras_multipliers else []
-                mult_list.insert(0, "1.0")
-                loras_multipliers = ",".join(mult_list)
-            else:
-                loras_multipliers = ["1.0"]
-
-        # Force a very short schedule & mild guidance as recommended
-        try:
-            steps_int = int(params.get("num_inference_steps", 30))
-        except (TypeError, ValueError):
-            steps_int = 30
-        if steps_int != 5:
-            dprint(f"{task_id}: LightI2X active – overriding num_inference_steps {steps_int} → 5")
-            params["num_inference_steps"] = 5
-
-        if float(params.get("guidance_scale", 5.0)) != 1.0:
-            dprint(f"{task_id}: LightI2X active – setting guidance_scale → 1.0")
-            params["guidance_scale"] = 1.0
-
-        if float(params.get("flow_shift", 3.0)) != 5.0:
-            dprint(f"{task_id}: LightI2X active – setting flow_shift → 5.0")
-            params["flow_shift"] = 5.0
-
-        # Disable Tea Cache explicitly (even though default is 0.0)
-        if float(params.get("tea_cache_setting", 0.0)) != 0.0:
-            dprint(f"{task_id}: LightI2X active – disabling Tea Cache (tea_cache_setting → 0.0)")
-            params["tea_cache_setting"] = 0.0
-
-        # Push back the updated lists
+    # Apply LoRA changes to params if any special LoRAs were configured
+    if use_causvid_lora or use_lighti2x_lora:
         params["activated_loras"] = activated_loras
-        if isinstance(loras_multipliers, list):
-            params["loras_multipliers"] = ",".join(loras_multipliers) if loras_multipliers else ""
-        else:
-            params["loras_multipliers"] = loras_multipliers if loras_multipliers else ""
+        params["loras_multipliers"] = _normalize_loras_multipliers_format(loras_multipliers)
 
     # Expose the flags to downstream logic (build_task_state & wgp)
     params["use_causvid_lora"] = use_causvid_lora

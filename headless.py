@@ -153,14 +153,58 @@ def make_send_cmd(task_id):
         if cmd == "progress":
             if isinstance(data, list) and len(data) >= 2:
                 prog, txt = data[0], data[1]
-                if isinstance(prog, tuple) and len(prog) == 2: step, total = prog; print(f"{prefix}[Progress] {step}/{total} – {txt}")
-                else: print(f"{prefix}[Progress] {txt}")
-        elif cmd == "status": print(f"{prefix}[Status] {data}")
-        elif cmd == "info": print(f"{prefix}[INFO] {data}")
-        elif cmd == "error": print(f"{prefix}[ERROR] {data}"); raise RuntimeError(f"wgp.py error for {task_id}: {data}")
-        elif cmd == "output": print(f"{prefix}[Output] video written.")
-        
+                if isinstance(prog, tuple) and len(prog) == 2:
+                    step, total = prog
+                    print(f"{prefix}[Progress] {step}/{total} – {txt}")
+                else:
+                    print(f"{prefix}[Progress] {txt}")
+        elif cmd == "status":
+            print(f"{prefix}[Status] {data}")
+        elif cmd == "info":
+            print(f"{prefix}[INFO] {data}")
+        elif cmd == "error":
+            print(f"{prefix}[ERROR] {data}")
+            raise RuntimeError(f"wgp.py error for {task_id}: {data}")
+        elif cmd == "output":
+            print(f"{prefix}[Output] video written.")
     return _send
+
+def _ensure_lora_downloaded(task_id: str, lora_name: str, lora_url: str, target_dir: Path, 
+                           task_params_dict: dict, flag_key: str, model_filename: str = None,
+                           model_requirements: list = None) -> bool:
+    """
+    Shared helper to download a LoRA if it doesn't exist.
+    
+    Args:
+        task_id: Task identifier for logging
+        lora_name: Filename of the LoRA to download
+        lora_url: URL to download from
+        target_dir: Directory to save the LoRA
+        task_params_dict: Task parameters dictionary to modify if download fails
+        flag_key: Key in task_params_dict to set to False if download fails
+        model_filename: Optional model filename for requirement checking
+        model_requirements: Optional list of strings that must be in model_filename
+    
+    Returns:
+        True if LoRA exists or was successfully downloaded, False otherwise
+    """
+    target_path = target_dir / lora_name
+    
+    # Check model requirements if specified
+    if model_filename and model_requirements:
+        requirements_met = all(req in model_filename.lower() for req in model_requirements)
+        if not requirements_met:
+            print(f"[WARNING Task ID: {task_id}] {lora_name} is intended for models with {model_requirements}. Current model is {model_filename}. Results may vary.")
+    
+    # Download if not present
+    if not target_path.exists():
+        print(f"[Task ID: {task_id}] {lora_name} not found. Attempting download...")
+        if not download_file(lora_url, target_dir, lora_name):
+            print(f"[WARNING Task ID: {task_id}] Failed to download {lora_name}. Proceeding without it.")
+            task_params_dict[flag_key] = False
+            return False
+    
+    return True
 
 # -----------------------------------------------------------------------------
 # 4. State builder for a single task (same as before)
@@ -249,13 +293,10 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         
         if apply_reward_lora:
             print(f"[Task ID: {task_id}] --apply-reward-lora flag is active. Checking and downloading reward LoRA.")
-            reward_lora_data = {
-                "url": "https://huggingface.co/peteromallet/Wan2.1-Fun-14B-InP-MPS_reward_lora_diffusers/resolve/main/Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors",
-                "filename": "Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors"
-            }
-            
-            base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
-            download_file(reward_lora_data['url'], base_lora_dir_for_model, reward_lora_data['filename'])
+            # Use shared helper (reward LoRA download never fails)
+            reward_url = "https://huggingface.co/peteromallet/Wan2.1-Fun-14B-InP-MPS_reward_lora_diffusers/resolve/main/Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors"
+            _ensure_lora_downloaded(task_id, "Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors", 
+                                  reward_url, Path(wgp_mod.get_lora_dir(model_filename_for_task)), {}, "dummy_key")
 
         effective_image_download_dir = image_download_dir
 
@@ -274,48 +315,27 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                 except Exception as e_idir_sqlite:
                     dprint(f"Task {task_id}: Could not create SQLite-based image_download_dir for standard task: {e_idir_sqlite}.")
 
-        use_causvid = task_params_dict.get("use_causvid_lora", False)
-        # New LightI2X LoRA flag handling
-        use_lighti2x = task_params_dict.get("use_lighti2x_lora", False)
-        causvid_lora_basename = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
-        causvid_lora_url = "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
-        lighti2x_lora_basename = "wan_lcm_r16_fp32_comfy.safetensors"
-        lighti2x_lora_url = "https://huggingface.co/peteromallet/ad_motion_loras/resolve/main/wan_lcm_r16_fp32_comfy.safetensors"
+        # Handle special LoRA downloads using shared helper
+        base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
+        
+        if task_params_dict.get("use_causvid_lora", False):
+            _ensure_lora_downloaded(
+                task_id, "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
+                "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
+                base_lora_dir_for_model, task_params_dict, "use_causvid_lora",
+                model_filename_for_task, ["14b", "t2v"]
+            )
 
-        if use_causvid:
-            base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
-            target_causvid_lora_dir = base_lora_dir_for_model
-            
-            if "14B" in model_filename_for_task and "t2v" in model_filename_for_task.lower():
-                 pass 
-            elif "14B" in model_filename_for_task:
-                 pass 
-
-            if not Path(target_causvid_lora_dir / causvid_lora_basename).exists():
-                print(f"[Task ID: {task_id}] CausVid LoRA not found. Attempting download...")
-                if not download_file(causvid_lora_url, target_causvid_lora_dir, causvid_lora_basename):
-                    print(f"[WARNING Task ID: {task_id}] Failed to download CausVid LoRA. Proceeding without it or with default settings.")
-                    task_params_dict["use_causvid_lora"] = False
-                else:
-                     pass 
-            if not "14B" in model_filename_for_task or not "t2v" in model_filename_for_task.lower():
-                print(f"[WARNING Task ID: {task_id}] CausVid LoRA is intended for 14B T2V models. Current model is {model_filename_for_task}. Results may vary.")
-
-        # Ensure LightI2X LoRA is present if requested
-        if use_lighti2x:
-            base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
-            target_lighti2x_path = base_lora_dir_for_model / lighti2x_lora_basename
-
-            if not target_lighti2x_path.exists():
-                print(f"[Task ID: {task_id}] LightI2X LoRA not found. Attempting download...")
-                if not download_file(lighti2x_lora_url, base_lora_dir_for_model, lighti2x_lora_basename):
-                    print(f"[WARNING Task ID: {task_id}] Failed to download LightI2X LoRA. Proceeding without it.")
-                    task_params_dict["use_lighti2x_lora"] = False
+        if task_params_dict.get("use_lighti2x_lora", False):
+            _ensure_lora_downloaded(
+                task_id, "wan_lcm_r16_fp32_comfy.safetensors",
+                "https://huggingface.co/peteromallet/ad_motion_loras/resolve/main/wan_lcm_r16_fp32_comfy.safetensors",
+                base_lora_dir_for_model, task_params_dict, "use_lighti2x_lora"
+            )
 
         additional_loras = task_params_dict.get("additional_loras", {})
         if additional_loras:
             dprint(f"[Task ID: {task_id}] Processing additional LoRAs: {additional_loras}")
-            base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
             processed_loras = {}
             for lora_path, lora_strength in additional_loras.items():
                 try:
