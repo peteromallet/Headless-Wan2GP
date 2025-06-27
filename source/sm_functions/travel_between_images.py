@@ -624,17 +624,20 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             end_image_for_banner = None
             if show_input_images_enabled:
                 try:
-                    # Prefer the explicit input images list when indices are valid
-                    if segment_idx < len(input_images_resolved_original):
-                        start_image_for_banner = input_images_resolved_original[segment_idx]
-                    elif start_ref_path_for_cm:
-                        # Fallback – e.g. continue-video first segment uses extracted frame
-                        start_image_for_banner = start_ref_path_for_cm
+                    # Use FIRST and LAST images of the entire journey for ALL segments
+                    # This ensures consistent banner throughout the video
+                    if len(input_images_resolved_original) >= 1:
+                        start_image_for_banner = input_images_resolved_original[0]  # Always first image
+                        
+                    if len(input_images_resolved_original) >= 2:
+                        end_image_for_banner = input_images_resolved_original[-1]  # Always last image
+                    elif len(input_images_resolved_original) == 1:
+                        # Single image journey - use same image for both
+                        end_image_for_banner = input_images_resolved_original[0]
 
-                    if end_anchor_img_path_str_idx != -1 and end_anchor_img_path_str_idx < len(input_images_resolved_original):
-                        end_image_for_banner = input_images_resolved_original[end_anchor_img_path_str_idx]
-                    elif end_ref_path_for_cm:
-                        end_image_for_banner = end_ref_path_for_cm
+                    # Handle continue-from-video case where first frame might be from video
+                    if full_orchestrator_payload.get("continue_from_video_resolved_path") and start_ref_path_for_cm:
+                        start_image_for_banner = start_ref_path_for_cm
 
                     # Ensure both banner images are local paths (download if URL)
                     if start_image_for_banner:
