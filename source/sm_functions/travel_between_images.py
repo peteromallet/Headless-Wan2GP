@@ -624,20 +624,16 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             end_image_for_banner = None
             if show_input_images_enabled:
                 try:
-                    # Use FIRST and LAST images of the entire journey for ALL segments
-                    # This ensures consistent banner throughout the video
-                    if len(input_images_resolved_original) >= 1:
+                    # For banner overlay, always show the first and last images of the entire journey
+                    # This provides consistent context across all segments
+                    if len(input_images_resolved_original) > 0:
                         start_image_for_banner = input_images_resolved_original[0]  # Always first image
                         
-                    if len(input_images_resolved_original) >= 2:
+                    if len(input_images_resolved_original) > 1:
                         end_image_for_banner = input_images_resolved_original[-1]  # Always last image
                     elif len(input_images_resolved_original) == 1:
-                        # Single image journey - use same image for both
+                        # Single image journey - use the same image for both
                         end_image_for_banner = input_images_resolved_original[0]
-
-                    # Handle continue-from-video case where first frame might be from video
-                    if full_orchestrator_payload.get("continue_from_video_resolved_path") and start_ref_path_for_cm:
-                        start_image_for_banner = start_ref_path_for_cm
 
                     # Ensure both banner images are local paths (download if URL)
                     if start_image_for_banner:
