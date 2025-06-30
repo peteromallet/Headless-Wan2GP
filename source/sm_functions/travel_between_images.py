@@ -808,7 +808,11 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
 
         num_inference_steps = (
             segment_params.get("num_inference_steps")
+            or segment_params.get("steps")  # Check for "steps" as alternative
             or full_orchestrator_payload.get("num_inference_steps")
+            or full_orchestrator_payload.get("steps")  # Check for "steps" as alternative
+            or wgp_payload.get("num_inference_steps")  # Check wgp_payload after JSON override
+            or wgp_payload.get("steps")  # Check for "steps" in wgp_payload
             or (9 if causvid_enabled else (5 if lighti2x_enabled else 30))
         )
 
