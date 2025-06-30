@@ -2071,3 +2071,57 @@ def wait_for_file_stable(path: Path | str, checks: int = 3, interval: float = 1.
             stable_count = 0
             last_size = new_size
     return False
+
+def report_orchestrator_failure(task_params_dict: dict, error_msg: str, dprint: callable = print) -> None:
+    """Update the parent orchestrator task to FAILED when a sub-task encounters a fatal error.
+
+    Args:
+        task_params_dict: The params payload of the *current* sub-task.
+            It is expected to contain a reference to the orchestrator via one
+            of the standard keys (e.g. ``orchestrator_task_id_ref``).
+        error_msg: Human-readable message describing the failure.
+        dprint: Debug print helper (typically passed from the caller).
+    """
+    # Defer import to avoid potential circular dependencies at module import time
+    try:
+        from source import db_operations as db_ops  # type: ignore
+    except Exception as e:  # pragma: no cover
+        dprint(f"[report_orchestrator_failure] Could not import db_operations: {e}")
+        return
+
+    orchestrator_id = None
+    # Common payload keys that may reference the orchestrator task
+    for key in (
+        "orchestrator_task_id_ref",
+        "orchestrator_task_id",
+        "parent_orchestrator_task_id",
+        "orchestrator_id",
+    ):
+        orchestrator_id = task_params_dict.get(key)
+        if orchestrator_id:
+            break
+
+    if not orchestrator_id:
+        dprint(
+            f"[report_orchestrator_failure] No orchestrator reference found in payload. Message: {error_msg}"
+        )
+        return
+
+    # Truncate very long messages to avoid DB column overflow
+    truncated_msg = error_msg[:500]
+
+    try:
+        db_ops.update_task_status(
+            orchestrator_id,
+            db_ops.STATUS_FAILED,
+            truncated_msg,
+        )
+        dprint(
+            f"[report_orchestrator_failure] Marked orchestrator task {orchestrator_id} as FAILED with message: {truncated_msg}"
+        )
+    except Exception as e_update:  # pragma: no cover
+        dprint(
+            f"[report_orchestrator_failure] Failed to update orchestrator status for {orchestrator_id}: {e_update}"
+        )
+
+# --------------------------------------------------------------------------------------------------

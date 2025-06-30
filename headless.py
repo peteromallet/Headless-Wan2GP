@@ -813,14 +813,34 @@ def main():
     db_ops.debug_mode = cli_args.debug # Also set it in the db_ops module
     dprint("Verbose debug logging enabled.")
 
-    # original_argv = sys.argv.copy() # No longer needed to copy if not restoring fully
-    sys.argv = ["Wan2GP/wgp.py"] # Set for wgp.py import and its potential internal arg parsing
+    # Before importing Wan2GP.wgp we need to ensure that a CPU-only PyTorch build
+    # does not crash when third-party code unconditionally calls CUDA helpers.
+    try:
+        import torch  # Local import to limit overhead when torch is missing
+
+        if not torch.cuda.is_available():
+            # Monkey-patch *early* to stub out problematic functions that trigger
+            # torch.cuda initialisation on CPU-only builds (which raises
+            # "Torch not compiled with CUDA enabled").  This is safe because the
+            # downstream Wan2GP code only checks the return value tuple.
+            def _dummy_get_device_capability(device=None):
+                return (0, 0)
+
+            torch.cuda.get_device_capability = _dummy_get_device_capability  # type: ignore[attr-defined]
+
+            # Some libraries check for the attribute rather than calling it, so
+            # we also advertise zero GPUs.
+            torch.cuda.device_count = lambda: 0  # type: ignore[attr-defined]
+    except ImportError:
+        # torch not installed – Wan2GP import will fail later anyway.
+        pass
+
+    # Ensure Wan2GP sees a clean argv list and Gradio functions are stubbed
+    sys.argv = ["Wan2GP/wgp.py"]  # Prevent wgp.py from parsing headless.py CLI args
     patch_gradio()
-    
+
     # Import wgp from the Wan2GP sub-package
     from Wan2GP import wgp as wgp_mod
-    
-    # sys.argv = original_argv # DO NOT RESTORE: This was causing wgp.py to parse headless.py args
 
     # Apply wgp.py global config overrides
     if cli_args.wgp_attention_mode is not None: wgp_mod.attention_mode = cli_args.wgp_attention_mode
