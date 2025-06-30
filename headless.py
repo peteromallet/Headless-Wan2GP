@@ -1000,6 +1000,12 @@ def main():
             # Inserted: define segment_image_download_dir from task params if available
             segment_image_download_dir = current_task_params.get("segment_image_download_dir")
             
+            # Ensure orchestrator tasks propagate the DB row ID as their canonical task_id *before* processing
+            if current_task_type in {"travel_orchestrator", "different_perspective_orchestrator"}:
+                current_task_params["task_id"] = current_task_id_for_status_update
+                if "orchestrator_details" in current_task_params:
+                    current_task_params["orchestrator_details"]["orchestrator_task_id"] = current_task_id_for_status_update
+
             task_succeeded, output_location = process_single_task(
                 wgp_mod, current_task_params, main_output_dir, current_task_type, current_project_id,
                 image_download_dir=segment_image_download_dir,
