@@ -486,9 +486,19 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
     project_id = task_payload.get("project_id", "default_project_id")
 
     if DB_TYPE == "supabase":
+        # ------------------------------------------------------------------
+        # Supabase path – we call the existing RPC to insert the row *then*
+        # immediately patch the `created_at` column so that the dashboard
+        # shows a real timestamp instead of 1970-01-01 when the DB default
+        # isn't set.  This avoids the need to change the SQL function.
+        # ------------------------------------------------------------------
         if not SUPABASE_CLIENT:
             print("[ERROR] Supabase client not initialized. Cannot add task.")
             return
+
+        # Always use an explicit UTC timestamp (ISO-8601 + "Z")
+        current_timestamp_iso = datetime.datetime.utcnow().isoformat() + "Z"
+
         try:
             rpc_params = {
                 "p_task_id": task_id,
@@ -498,8 +508,22 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
                 "p_dependant_on": dependant_on,
                 "p_table_name": PG_TABLE_NAME,
             }
-            dprint(f"Supabase RPC: Adding task {task_id} via func_add_task with params: {rpc_params}")
+            dprint(
+                f"Supabase RPC: Adding task {task_id} via func_add_task with params: {rpc_params}"
+            )
             SUPABASE_CLIENT.rpc("func_add_task", rpc_params).execute()
+
+            # Patch created_at if the SQL function didn't set it (or if the
+            # column has no default).  We ignore errors silently to keep the
+            # original behaviour if the column is write-protected.
+            try:
+                SUPABASE_CLIENT.table(PG_TABLE_NAME).update({"created_at": current_timestamp_iso}).eq("id", task_id).execute()
+                dprint(f"Supabase: Set created_at for {task_id} to {current_timestamp_iso}")
+            except Exception as e_patch:
+                dprint(
+                    f"Supabase: Non-fatal – could not update created_at for {task_id}: {e_patch}"
+                )
+
             print(f"Task {task_id} (Type: {task_type_str}) added to Supabase.")
         except Exception as e:
             print(f"[ERROR] Supabase RPC func_add_task for {task_id} failed: {e}")
@@ -512,10 +536,18 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
 
         def _add_op(conn):
             cursor = conn.cursor()
-            current_timestamp = datetime.datetime.now().isoformat()
+            current_timestamp = datetime.datetime.utcnow().isoformat() + "Z"
             cursor.execute(
                 f"INSERT INTO tasks (id, params, task_type, status, created_at, project_id, dependant_on) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (task_id, params_json_str, task_type_str, STATUS_QUEUED, current_timestamp, project_id, dependant_on)
+                (
+                    task_id,
+                    params_json_str,
+                    task_type_str,
+                    STATUS_QUEUED,
+                    current_timestamp,
+                    project_id,
+                    dependant_on,
+                ),
             )
         try:
             execute_sqlite_with_retry(db_to_use, _add_op)

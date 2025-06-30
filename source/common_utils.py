@@ -41,7 +41,7 @@ DEFAULT_DB_TABLE_NAME = "tasks"
 def dprint(msg: str):
     """Print a debug message if DEBUG_MODE is enabled."""
     if DEBUG_MODE:
-        print(f"[DEBUG SM-COMMON {datetime.datetime.now().isoformat()}] {msg}")
+        print(f"[DEBUG SM-COMMON {datetime.utcnow().isoformat()}Z] {msg}")
 
 # --- Helper Functions ---
 
@@ -391,7 +391,7 @@ def add_task_to_db(task_payload: dict, db_path: str | Path, task_type_str: str, 
         # The `task_payload` argument to this function is what gets stored in the `params` column.
 
         params_json_for_db = json.dumps(headless_params_dict)
-        current_timestamp = datetime.now().isoformat()
+        current_timestamp = datetime.utcnow().isoformat() + "Z"
         project_id = task_payload.get("project_id", "default_project_id") # Get project_id or use default
 
         cursor.execute(
