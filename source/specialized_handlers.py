@@ -25,7 +25,7 @@ except ImportError:
     DepthAnnotator = None
 
 from . import db_operations as db_ops
-from .common_utils import sm_get_unique_target_path, parse_resolution as sm_parse_resolution, prepare_output_path, save_frame_from_video
+from .common_utils import sm_get_unique_target_path, parse_resolution as sm_parse_resolution, prepare_output_path, save_frame_from_video, report_orchestrator_failure
 from .video_utils import rife_interpolate_images_to_video as sm_rife_interpolate_images_to_video
 
 def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable):
@@ -38,6 +38,7 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
     if PoseBodyFaceVideoAnnotator is None:
         msg = "PoseBodyFaceVideoAnnotator not imported. Cannot process 'generate_openpose' task."
         print(f"[ERROR Task ID: {task_id}] {msg}")
+        report_orchestrator_failure(task_params_dict, msg, dprint)
         return False, "PoseBodyFaceVideoAnnotator module not available."
 
     # If direct path is not given, try to resolve it from a dependency task ID
@@ -46,29 +47,37 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
         if not input_image_task_id:
             msg = "Task requires either 'input_image_path' or 'input_image_task_id'."
             print(f"[ERROR Task ID: {task_id}] {msg}")
+            report_orchestrator_failure(task_params_dict, msg, dprint)
             return False, msg
         
         try:
             path_from_db = db_ops.get_task_output_location_from_db(input_image_task_id)
             if not path_from_db:
-                return False, f"Task {task_id}: Could not find output location for dependency task {input_image_task_id}."
+                msg = f"Task {task_id}: Could not find output location for dependency task {input_image_task_id}."
+                report_orchestrator_failure(task_params_dict, msg, dprint)
+                return False, msg
 
             abs_path = db_ops.get_abs_path_from_db_path(path_from_db, dprint)
             if not abs_path:
-                return False, f"Task {task_id}: Could not resolve or find image file from DB path '{path_from_db}'."
+                msg = f"Task {task_id}: Could not resolve or find image file from DB path '{path_from_db}'."
+                report_orchestrator_failure(task_params_dict, msg, dprint)
+                return False, msg
             input_image_path_str = str(abs_path)
             dprint(f"Task {task_id}: Resolved input image path from task ID to '{input_image_path_str}'")
         except Exception as e:
             error_msg = f"Task {task_id}: Failed during input image path resolution from task ID: {e}"
             print(f"[ERROR] {error_msg}")
             traceback.print_exc()
+            report_orchestrator_failure(task_params_dict, error_msg, dprint)
             return False, str(e)
 
     input_image_path = Path(input_image_path_str)
 
     if not input_image_path.is_file():
         print(f"[ERROR Task ID: {task_id}] Input image file not found: {input_image_path}")
-        return False, f"Input image not found: {input_image_path}"
+        msg = f"Input image not found: {input_image_path}"
+        report_orchestrator_failure(task_params_dict, msg, dprint)
+        return False, msg
 
     final_save_path, db_output_location = prepare_output_path(
         task_id,
@@ -95,7 +104,9 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
 
         if not openpose_np_frames_bgr or openpose_np_frames_bgr[0] is None:
             print(f"[ERROR Task ID: {task_id}] OpenPose generation failed or returned no frame.")
-            return False, "OpenPose generation returned no data."
+            msg = "OpenPose generation returned no data."
+            report_orchestrator_failure(task_params_dict, msg, dprint)
+            return False, msg
 
         openpose_np_frame_bgr = openpose_np_frames_bgr[0]
 
@@ -108,15 +119,21 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
     except ImportError as ie:
         print(f"[ERROR Task ID: {task_id}] Import error during OpenPose generation: {ie}. Ensure 'preprocessing' module is in PYTHONPATH and dependencies are installed.")
         traceback.print_exc()
-        return False, f"Import error: {ie}"
+        msg = f"Import error: {ie}"
+        report_orchestrator_failure(task_params_dict, msg, dprint)
+        return False, msg
     except FileNotFoundError as fnfe:
         print(f"[ERROR Task ID: {task_id}] ONNX model file not found for OpenPose: {fnfe}. Ensure 'ckpts/pose/*' models are present.")
         traceback.print_exc()
-        return False, f"ONNX model not found: {fnfe}"
+        msg = f"ONNX model not found: {fnfe}"
+        report_orchestrator_failure(task_params_dict, msg, dprint)
+        return False, msg
     except Exception as e:
         print(f"[ERROR Task ID: {task_id}] Failed during OpenPose image generation: {e}")
         traceback.print_exc()
-        return False, f"OpenPose generation exception: {e}"
+        msg = f"OpenPose generation exception: {e}"
+        report_orchestrator_failure(task_params_dict, msg, dprint)
+        return False, msg
 
 def handle_extract_frame_task(task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable):
     """Handles the 'extract_frame' task."""
@@ -127,17 +144,23 @@ def handle_extract_frame_task(task_params_dict: dict, main_output_dir_base: Path
     custom_output_dir = task_params_dict.get("output_dir")
     
     if not input_video_task_id:
-        return False, f"Task {task_id}: Missing 'input_video_task_id' in payload."
+        msg = f"Task {task_id}: Missing 'input_video_task_id' in payload."
+        report_orchestrator_failure(task_params_dict, msg, dprint)
+        return False, msg
 
     try:
         # Get the output path of the dependency task
         video_path_from_db = db_ops.get_task_output_location_from_db(input_video_task_id)
         if not video_path_from_db:
-            return False, f"Task {task_id}: Could not find output location for dependency task {input_video_task_id}."
+            msg = f"Task {task_id}: Could not find output location for dependency task {input_video_task_id}."
+            report_orchestrator_failure(task_params_dict, msg, dprint)
+            return False, msg
 
         video_abs_path = db_ops.get_abs_path_from_db_path(video_path_from_db, dprint)
         if not video_abs_path:
-            return False, f"Task {task_id}: Could not resolve or find video file from DB path '{video_path_from_db}'."
+            msg = f"Task {task_id}: Could not resolve or find video file from DB path '{video_path_from_db}'."
+            report_orchestrator_failure(task_params_dict, msg, dprint)
+            return False, msg
 
         # Use prepare_output_path to determine the correct save location
         output_filename = f"{task_id}_frame_{frame_index}.png"
@@ -153,7 +176,9 @@ def handle_extract_frame_task(task_params_dict: dict, main_output_dir_base: Path
         # Or passed in the payload if a specific resize is needed. For now, we don't resize.
         cap = cv2.VideoCapture(str(video_abs_path))
         if not cap.isOpened():
-             return False, f"Task {task_id}: Could not open video file {video_abs_path}"
+            msg = f"Task {task_id}: Could not open video file {video_abs_path}"
+            report_orchestrator_failure(task_params_dict, msg, dprint)
+            return False, msg
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         cap.release()
@@ -170,12 +195,15 @@ def handle_extract_frame_task(task_params_dict: dict, main_output_dir_base: Path
             print(f"[Task ID: {task_id}] Successfully extracted frame {frame_index} to: {final_save_path}")
             return True, db_output_location
         else:
-            return False, f"Task {task_id}: save_frame_from_video utility failed for video {video_abs_path}."
+            msg = f"Task {task_id}: save_frame_from_video utility failed for video {video_abs_path}."
+            report_orchestrator_failure(task_params_dict, msg, dprint)
+            return False, msg
 
     except Exception as e:
         error_msg = f"Task {task_id}: Failed during frame extraction: {e}"
         print(f"[ERROR] {error_msg}")
         traceback.print_exc()
+        report_orchestrator_failure(task_params_dict, error_msg, dprint)
         return False, str(e)
 
 def handle_rife_interpolate_task(wgp_mod, task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable):
@@ -290,6 +318,7 @@ def handle_generate_depth_task(task_params_dict: dict, main_output_dir_base: Pat
     if DepthAnnotator is None:
         msg = "DepthAnnotator not available. Ensure MiDaS preprocessing module is installed."
         print(f"[ERROR Task ID: {task_id}] {msg}")
+        report_orchestrator_failure(task_params_dict, msg, dprint)
         return False, msg
 
     # Resolve image path from dependency task if direct path is missing
@@ -298,26 +327,34 @@ def handle_generate_depth_task(task_params_dict: dict, main_output_dir_base: Pat
         if not input_image_task_id:
             msg = "Task requires either 'input_image_path' or 'input_image_task_id'."
             print(f"[ERROR Task ID: {task_id}] {msg}")
+            report_orchestrator_failure(task_params_dict, msg, dprint)
             return False, msg
         try:
             path_from_db = db_ops.get_task_output_location_from_db(input_image_task_id)
             if not path_from_db:
-                return False, f"Task {task_id}: Could not find output location for dependency task {input_image_task_id}."
+                msg = f"Task {task_id}: Could not find output location for dependency task {input_image_task_id}."
+                report_orchestrator_failure(task_params_dict, msg, dprint)
+                return False, msg
             abs_path = db_ops.get_abs_path_from_db_path(path_from_db, dprint)
             if not abs_path:
-                return False, f"Task {task_id}: Could not resolve or find image file from DB path '{path_from_db}'."
+                msg = f"Task {task_id}: Could not resolve or find image file from DB path '{path_from_db}'."
+                report_orchestrator_failure(task_params_dict, msg, dprint)
+                return False, msg
             input_image_path_str = str(abs_path)
             dprint(f"Task {task_id}: Resolved input image path from task ID to '{input_image_path_str}'")
         except Exception as e:
             error_msg = f"Task {task_id}: Failed during input image path resolution: {e}"
             print(f"[ERROR] {error_msg}")
             traceback.print_exc()
+            report_orchestrator_failure(task_params_dict, error_msg, dprint)
             return False, str(e)
 
     input_image_path = Path(input_image_path_str)
     if not input_image_path.is_file():
         print(f"[ERROR Task ID: {task_id}] Input image file not found: {input_image_path}")
-        return False, f"Input image not found: {input_image_path}"
+        msg = f"Input image not found: {input_image_path}"
+        report_orchestrator_failure(task_params_dict, msg, dprint)
+        return False, msg
 
     # Prepare save path for depth PNG
     final_save_path, db_output_location = prepare_output_path(
@@ -335,7 +372,9 @@ def handle_generate_depth_task(task_params_dict: dict, main_output_dir_base: Pat
 
         depth_np = depth_annotator.forward(pil_input_image)  # Returns RGB depth map as numpy array
         if depth_np is None:
-            return False, "Depth generation returned no data."
+            msg = "Depth generation returned no data."
+            report_orchestrator_failure(task_params_dict, msg, dprint)
+            return False, msg
 
         depth_pil = Image.fromarray(depth_np.astype(np.uint8))
         depth_pil.save(final_save_path)
@@ -345,12 +384,18 @@ def handle_generate_depth_task(task_params_dict: dict, main_output_dir_base: Pat
     except ImportError as ie:
         print(f"[ERROR Task ID: {task_id}] Import error during depth generation: {ie}")
         traceback.print_exc()
-        return False, f"Import error: {ie}"
+        msg = f"Import error: {ie}"
+        report_orchestrator_failure(task_params_dict, msg, dprint)
+        return False, msg
     except FileNotFoundError as fnfe:
         print(f"[ERROR Task ID: {task_id}] Model file not found for MiDaS depth: {fnfe}")
         traceback.print_exc()
-        return False, f"Model not found: {fnfe}"
+        msg = f"Model not found: {fnfe}"
+        report_orchestrator_failure(task_params_dict, msg, dprint)
+        return False, msg
     except Exception as e:
         print(f"[ERROR Task ID: {task_id}] Failed during depth map generation: {e}")
         traceback.print_exc()
-        return False, f"Depth generation exception: {e}" 
+        msg = f"Depth generation exception: {e}"
+        report_orchestrator_failure(task_params_dict, msg, dprint)
+        return False, msg 

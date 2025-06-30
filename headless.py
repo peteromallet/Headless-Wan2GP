@@ -979,11 +979,36 @@ def main():
             )
 
             if task_succeeded:
-                if db_ops.DB_TYPE == "supabase":
-                    db_ops.update_task_status_supabase(current_task_id_for_status_update, db_ops.STATUS_COMPLETE, output_location)
+                # Orchestrator tasks stay "In Progress" until their children report back.
+                orchestrator_types_waiting = {"travel_orchestrator", "different_perspective_orchestrator"}
+
+                if current_task_type in orchestrator_types_waiting:
+                    # Keep status as IN_PROGRESS (already set when we claimed the task).
+                    # We still store the output message (if any) so operators can see it.
+                    db_ops.update_task_status(
+                        current_task_id_for_status_update,
+                        db_ops.STATUS_IN_PROGRESS,
+                        output_location,
+                    )
+                    print(
+                        f"Task {current_task_id_for_status_update} queued child tasks; awaiting completion before finalising."
+                    )
                 else:
-                    db_ops.update_task_status(current_task_id_for_status_update, db_ops.STATUS_COMPLETE, output_location)
-                print(f"Task {current_task_id_for_status_update} completed successfully. Output location: {output_location}")
+                    if db_ops.DB_TYPE == "supabase":
+                        db_ops.update_task_status_supabase(
+                            current_task_id_for_status_update,
+                            db_ops.STATUS_COMPLETE,
+                            output_location,
+                        )
+                    else:
+                        db_ops.update_task_status(
+                            current_task_id_for_status_update,
+                            db_ops.STATUS_COMPLETE,
+                            output_location,
+                        )
+                    print(
+                        f"Task {current_task_id_for_status_update} completed successfully. Output location: {output_location}"
+                    )
             else:
                 if db_ops.DB_TYPE == "supabase":
                     db_ops.update_task_status_supabase(current_task_id_for_status_update, db_ops.STATUS_FAILED, output_location)

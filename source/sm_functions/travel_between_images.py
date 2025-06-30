@@ -628,7 +628,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     # This provides consistent context across all segments
                     if len(input_images_resolved_original) > 0:
                         start_image_for_banner = input_images_resolved_original[0]  # Always first image
-                        
+
                     if len(input_images_resolved_original) > 1:
                         end_image_for_banner = input_images_resolved_original[-1]  # Always last image
                     elif len(input_images_resolved_original) == 1:
@@ -885,6 +885,17 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             final_segment_video_output_path_str = None 
             output_message_for_segment_task = f"Segment {segment_idx} (Task {segment_task_id_str}) processing (WGP generation) failed. Error: {wgp_output_path_or_msg}"
             print(f"[ERROR] {output_message_for_segment_task}")
+            
+            # Notify orchestrator of segment failure
+            try:
+                db_ops.update_task_status(
+                    orchestrator_task_id_ref,
+                    db_ops.STATUS_FAILED,
+                    output_message_for_segment_task[:500]  # Truncate to avoid DB overflow
+                )
+                dprint(f"Segment {segment_idx}: Marked orchestrator task {orchestrator_task_id_ref} as FAILED due to WGP generation failure")
+            except Exception as e_orch:
+                dprint(f"Segment {segment_idx}: Warning - could not update orchestrator status: {e_orch}")
         
         # The old polling logic is no longer needed as process_single_task is synchronous here.
 
@@ -896,8 +907,22 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
     except Exception as e:
         print(f"ERROR Task {segment_task_id_str}: Unexpected error during segment processing: {e}")
         traceback.print_exc()
+        
+        # Notify orchestrator of segment failure
+        if 'orchestrator_task_id_ref' in locals() and orchestrator_task_id_ref:
+            try:
+                error_msg = f"Segment {segment_idx if 'segment_idx' in locals() else 'unknown'} failed: {str(e)[:200]}"
+                db_ops.update_task_status(
+                    orchestrator_task_id_ref,
+                    db_ops.STATUS_FAILED,
+                    error_msg
+                )
+                dprint(f"Segment: Marked orchestrator task {orchestrator_task_id_ref} as FAILED due to exception")
+            except Exception as e_orch:
+                dprint(f"Segment: Warning - could not update orchestrator status: {e_orch}")
+        
         # return False, f"Unexpected error: {str(e)[:200]}"
-        return False, f"Segment {segment_idx} failed: {str(e)[:200]}"
+        return False, f"Segment {segment_idx if 'segment_idx' in locals() else 'unknown'} failed: {str(e)[:200]}"
 
 # --- SM_RESTRUCTURE: New function to handle chaining after WGP/Comfy sub-task ---
 def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_video_path: str | None, wgp_mod, image_download_dir: Path | str | None = None, *, dprint) -> tuple[bool, str, str | None]:
@@ -1100,6 +1125,20 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
         error_msg = f"Chain (Seg {chain_details.get('segment_index_completed', 'N/A')} for WGP {wgp_task_id}): Failed during chaining: {e_chain}"
         print(f"[ERROR] {error_msg}")
         traceback.print_exc()
+        
+        # Notify orchestrator of chaining failure
+        orchestrator_task_id_ref = chain_details.get("orchestrator_task_id_ref") if chain_details else None
+        if orchestrator_task_id_ref:
+            try:
+                db_ops.update_task_status(
+                    orchestrator_task_id_ref,
+                    db_ops.STATUS_FAILED,
+                    error_msg[:500]  # Truncate to avoid DB overflow
+                )
+                dprint(f"Chain: Marked orchestrator task {orchestrator_task_id_ref} as FAILED due to chaining failure")
+            except Exception as e_orch:
+                dprint(f"Chain: Warning - could not update orchestrator status: {e_orch}")
+        
         return False, error_msg, str(final_video_path_for_db) # Return path as it was before error
 
 
@@ -1412,12 +1451,35 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         # so the stitched video will automatically include them. No additional overlay needed here.
         
         stitch_success = True
+        
+        # Mark orchestrator as complete now that all segments and stitching are done
+        try:
+            db_ops.update_task_status(
+                orchestrator_task_id_ref,
+                db_ops.STATUS_COMPLETE,
+                final_video_location_for_db
+            )
+            dprint(f"Stitch: Marked orchestrator task {orchestrator_task_id_ref} as COMPLETE")
+        except Exception as e_orch_update:
+            dprint(f"Stitch: Warning - could not update orchestrator status to COMPLETE: {e_orch_update}")
 
     except Exception as e_stitch_main:
         msg = f"Stitch Task {stitch_task_id_str}: Main process failed: {e_stitch_main}"
         print(f"[ERROR Task {stitch_task_id_str}]: {msg}"); traceback.print_exc()
         stitch_success = False
         final_video_location_for_db = msg # Store truncated error for DB
+        
+        # Mark orchestrator as failed since stitch failed
+        if orchestrator_task_id_ref:
+            try:
+                db_ops.update_task_status(
+                    orchestrator_task_id_ref,
+                    db_ops.STATUS_FAILED,
+                    msg[:500]  # Truncate message to avoid DB field overflow
+                )
+                dprint(f"Stitch: Marked orchestrator task {orchestrator_task_id_ref} as FAILED due to stitch failure")
+            except Exception as e_orch_fail:
+                dprint(f"Stitch: Warning - could not update orchestrator status to FAILED: {e_orch_fail}")
     
     finally:
         # --- 6. Cleanup --- 
