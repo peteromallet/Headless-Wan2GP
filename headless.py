@@ -232,6 +232,10 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
     # are either the start of a chain or a self-contained unit.
     if task_type == "travel_orchestrator":
         print(f"[Task ID: {task_id}] Identified as 'travel_orchestrator' task.")
+        # Ensure the orchestrator uses the DB row ID as its canonical task_id
+        task_params_dict["task_id"] = task_id
+        if "orchestrator_details" in task_params_dict:
+            task_params_dict["orchestrator_details"]["orchestrator_task_id"] = task_id
         return tbi._handle_travel_orchestrator_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, orchestrator_task_id_str=task_id, orchestrator_project_id=project_id_for_task, dprint=dprint)
     elif task_type == "travel_segment":
         print(f"[Task ID: {task_id}] Identified as 'travel_segment' task.")
