@@ -662,6 +662,12 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                 print(f"[WARNING Task ID: {task_id}] Chaining reported success, but final path '{chaining_result_path_override}' (checked as '{path_to_check_existence}') is invalid or not a file. Using original WGP output '{output_location_to_db}' for DB.")
 
 
+    # Ensure orchestrator tasks use their DB row ID as task_id so that
+    # downstream sub-tasks reference the right row when updating status.
+    if task_type in {"travel_orchestrator", "different_perspective_orchestrator"}:
+        # Overwrite/insert the canonical task_id inside params to the DB row's ID
+        task_params_dict["task_id"] = task_id
+
     print(f"--- Finished task ID: {task_id} (Success: {generation_success}) ---")
     return generation_success, output_location_to_db
 
