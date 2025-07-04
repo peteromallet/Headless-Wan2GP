@@ -1455,7 +1455,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         # Handle Supabase upload (if configured) and get final location for DB
         final_video_location_for_db = upload_and_get_final_output_location(
             final_video_path,
-            stitch_task_id_str,
+            final_video_filename,  # Pass only the filename to avoid redundant subfolder
             initial_db_location,
             dprint=dprint
         )

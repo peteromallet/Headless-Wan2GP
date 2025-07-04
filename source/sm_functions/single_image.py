@@ -204,9 +204,9 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
 
                                 # Handle Supabase upload (if configured) and get final location for DB
                                 final_db_location = upload_and_get_final_output_location(
-                                    local_output_path,
-                                    task_id,
-                                    initial_db_output_location,
+                                    local_file_path=local_output_path,
+                                    supabase_object_name=output_filename, # Pass only the filename
+                                    initial_db_location=initial_db_output_location,
                                     dprint=dprint
                                 )
 
