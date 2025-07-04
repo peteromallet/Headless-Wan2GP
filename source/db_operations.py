@@ -808,6 +808,13 @@ def upload_to_supabase_storage(local_file_path: Path, supabase_object_name: str,
         return None
 
     try:
+        # Debug: Check what role we're authenticated as
+        try:
+            user_info = SUPABASE_CLIENT.auth.get_user()
+            dprint(f"Supabase auth role check: {user_info}")
+        except Exception as e_auth:
+            dprint(f"Could not get auth info (might be service role): {e_auth}")
+        
         dprint(f"Uploading {local_file_path} to Supabase bucket '{bucket_name}' as '{supabase_object_name}'...")
         with open(local_file_path, 'rb') as f:
             # Upsert to overwrite if exists
