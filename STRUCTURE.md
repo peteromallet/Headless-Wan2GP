@@ -5,6 +5,8 @@
 ├── add_task.py
 ├── generate_test_tasks.py
 ├── headless.py
+├── test_supabase_headless.py    # NEW: Test script for Supabase functionality
+├── SUPABASE_SETUP.md            # NEW: Setup guide for Supabase mode
 ├── source/
 │   ├── __init__.py
 │   ├── common_utils.py
@@ -17,6 +19,8 @@
 │       ├── travel_between_images.py
 │       ├── different_perspective.py
 │       └── single_image.py
+├── tasks/                      # Task specifications
+│   └── HEADLESS_SUPABASE_TASK.md  # NEW: Supabase implementation spec
 ├── logs/               # runtime logs (git-ignored)
 ├── outputs/            # generated videos/images (git-ignored)
 ├── samples/            # example inputs for docs & tests
@@ -28,16 +32,17 @@
 
 ## Top-level scripts
 
-* **headless.py** – Headless service that polls the `tasks` database, claims work, and drives the Wan2GP generator (`wgp.py`). Includes extra handlers for OpenPose and RIFE interpolation tasks and can upload outputs to Supabase storage.
+* **headless.py** – Headless service that polls the `tasks` database, claims work, and drives the Wan2GP generator (`wgp.py`). Includes extra handlers for OpenPose and RIFE interpolation tasks and can upload outputs to Supabase storage. **NEW**: Now supports both SQLite and Supabase backends via `--db-type` flag.
 * **add_task.py** – Lightweight CLI helper to queue a single new task into SQLite/Supabase. Accepts a JSON payload (or file) and inserts it into the `tasks` table.
 * **generate_test_tasks.py** – Developer utility that back-fills the database with synthetic images/prompts for integration testing and local benchmarking.
+* **test_supabase_headless.py** – **NEW**: Test script to verify Supabase connection, RPC functions, and authentication before running the full headless worker.
 
 ## source/ package
 
 This is the main application package.
 
 * **common_utils.py** – Reusable helpers (file downloads, ffmpeg helpers, MediaPipe keypoint interpolation, debug utilities, etc.)
-* **db_operations.py** – Handles all database interactions for both SQLite and Supabase.
+* **db_operations.py** – Handles all database interactions for both SQLite and Supabase. **UPDATED**: Now includes Supabase client initialization, RPC function wrappers, and automatic backend selection based on `DB_TYPE`.
 * **specialized_handlers.py** – Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation.
 * **video_utils.py** – Provides utilities for video manipulation like cross-fading, frame extraction, and color matching.
 * **wgp_utils.py** – Thin wrapper around `Wan2GP.wgp` that standardises parameter names, handles LoRA quirks (e.g. CausVid, LightI2X), and exposes the single `generate_single_video` helper used by every task handler.
@@ -58,7 +63,27 @@ Task-specific wrappers around the bulky upstream logic. These are imported by `h
 * **samples/** – A handful of small images shipped inside the repo that are referenced in the README and tests.
 * **tests/** – Pytest-based regression and smoke tests covering both low-level helpers and full task workflows.
 * **test_outputs/** – Artefacts produced by the test-suite; kept out of version control via `.gitignore`.
-* **tasks.db** – SQLite database created on-demand by the orchestrator to track queued, running, and completed tasks.
+* **tasks.db** – SQLite database created on-demand by the orchestrator to track queued, running, and completed tasks (SQLite mode only).
+
+## Database Backends
+
+**NEW**: The system now supports two database backends:
+
+### SQLite (Default)
+* Local file-based database (`tasks.db`)
+* No authentication required
+* Good for single-machine deployments
+* Files stored in `public/files/`
+
+### Supabase
+* Cloud-hosted PostgreSQL via Supabase
+* Supports Row-Level Security (RLS)
+* Enable with: `--db-type supabase --supabase-url <url> --supabase-access-token <token>`
+* Two token types:
+  * **User JWT**: Only processes tasks owned by that user
+  * **Service-role key**: Processes all tasks (bypasses RLS)
+* Files can be uploaded to Supabase Storage (in development)
+* Requires RPC functions: `func_claim_task`, `func_update_task_status`, etc.
 
 ## Wan2GP/
 
@@ -88,21 +113,21 @@ The submodule is currently pinned to commit `6706709` ("optimization for i2v wit
 
 ## Runtime artefacts
 
-* **tasks.db** – SQLite database created on-demand by the orchestrator/server to track queued, running, and completed tasks.
+* **tasks.db** – SQLite database created on-demand by the orchestrator/server to track queued, running, and completed tasks (SQLite mode only).
 * **public/files/** – For SQLite mode, all final video outputs are saved directly here with descriptive filenames (e.g., `{run_id}_seg00_output.mp4`, `{run_id}_final.mp4`). No nested subdirectories are created.
 * **outputs/** – For non-SQLite modes or when explicitly configured, videos are saved here with task-specific subdirectories.
 
 ## End-to-End task lifecycle (1-minute read)
 
-1. **Task injection** – A CLI, API, or test script calls `add_task.py`, which inserts a new row into the `tasks` table (SQLite or Supabase).  Payload JSON is stored in `params`, `status` is set to `pending`.
-2. **Worker pickup** – `headless.py` runs in a loop, atomically updates a `pending` row to `running`, and inspects `task_type` to choose the correct handler.
+1. **Task injection** – A CLI, API, or test script calls `add_task.py`, which inserts a new row into the `tasks` table (SQLite or Supabase).  Payload JSON is stored in `params`, `status` is set to `Queued`.
+2. **Worker pickup** – `headless.py` runs in a loop, atomically updates a `Queued` row to `In Progress`, and inspects `task_type` to choose the correct handler.
 3. **Handler execution**
    * Standard tasks live in `source/sm_functions/…` (see table below).
    * Special one-offs (OpenPose, RIFE, etc.) live in `specialized_handlers.py`.
    * Handlers may queue **sub-tasks** (e.g. travel → N segments + 1 stitch) by inserting new rows with `dependant_on` set, forming a DAG.
 4. **Video generation** – Every handler eventually calls `wgp_utils.generate_single_video` which wraps **Wan2GP/wgp.py** and returns a path to the rendered MP4.
 5. **Post-processing** – Optional saturation / brightness / colour-match (`video_utils.py`) or upscaling tasks.
-6. **DB update** – Handler stores `output_location` (relative in SQLite, absolute otherwise) and marks the row `completed` (or `failed`).  Dependants are now eligible to start.
+6. **DB update** – Handler stores `output_location` (relative in SQLite, absolute or URL in Supabase) and marks the row `Complete` (or `Failed`).  Dependants are now eligible to start.
 7. **Cleanup** – Intermediate folders are deleted unless `debug_mode_enabled` or `skip_cleanup_enabled` flags are set in the payload.
 
 ## Quick task-to-file reference
@@ -127,9 +152,10 @@ Column | Purpose
 `task_type` | e.g. `travel_segment`, `wgp`, `travel_stitch`
 `dependant_on` | Optional FK forming execution DAG
 `params` | JSON payload saved by the enqueuer
-`status` | `pending` → `running` → `completed`/`failed`
+`status` | `Queued` → `In Progress` → `Complete`/`Failed`
 `output_location` | Where the final artefact lives (string)
 `updated_at` | Heartbeat & ordering
+`project_id` | Links to project (required for Supabase RLS)
 
 SQLite keeps the DB at `tasks.db`; Supabase uses the same columns with RLS policies.
 
@@ -146,10 +172,15 @@ Both flags automatically configure optimal generation parameters and handle LoRA
 
 Variable / flag | Effect
 ----------------|-------
-`SUPABASE_URL / SUPABASE_KEY` | Switches DB operations to Supabase mode.
+`SUPABASE_URL / SUPABASE_SERVICE_KEY` | Used for Supabase connection (if not provided via CLI).
+`POSTGRES_TABLE_NAME` | Table name for Supabase (default: `tasks`).
+`SUPABASE_VIDEO_BUCKET` | Storage bucket name for video uploads.
 `WAN2GP_CACHE` | Where Wan2GP caches model weights.
 `--debug` | Prevents cleanup of temp folders, extra logs.
 `--skip_cleanup` | Keeps all intermediate artefacts even outside debug.
+`--db-type` | Choose between `sqlite` (default) or `supabase`.
+`--supabase-url` | Supabase project URL (required for Supabase mode).
+`--supabase-access-token` | JWT token or service-role key for authentication.
 
 ---
 

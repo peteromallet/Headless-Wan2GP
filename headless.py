@@ -101,6 +101,14 @@ def parse_args():
                                help="Generate and pass a mask video where frames that are re-used remain unmasked while new frames are masked (enabled by default).")
     pgroup_server.add_argument("--no-mask-active-frames", dest="mask_active_frames", action="store_false",
                                help="Disable automatic mask video generation.")
+    
+    # --- New Supabase-related arguments ---
+    pgroup_server.add_argument("--db-type", type=str, choices=["sqlite", "supabase"], default="sqlite",
+                               help="Database type to use (default: sqlite)")
+    pgroup_server.add_argument("--supabase-url", type=str, default=None,
+                               help="Supabase project URL (required if db_type = supabase)")
+    pgroup_server.add_argument("--supabase-access-token", type=str, default=None,
+                               help="Supabase access token (JWT) for authentication (required if db_type = supabase)")
 
     # Advanced wgp.py Global Config Overrides (Optional) - Applied once at server start
     pgroup_wgp_globals = parser.add_argument_group("WGP Global Config Overrides (Applied at Server Start)")
@@ -756,15 +764,15 @@ def main():
 
     # --- Configure DB Type and Connection Globals ---
     # This block sets DB_TYPE, SQLITE_DB_PATH, SUPABASE_CLIENT, etc. in the db_ops module
-    if env_db_type == "supabase" and env_supabase_url and env_supabase_key:
+    if cli_args.db_type == "supabase" and cli_args.supabase_url and cli_args.supabase_access_token:
         try:
-            temp_supabase_client = create_client(env_supabase_url, env_supabase_key)
+            temp_supabase_client = create_client(cli_args.supabase_url, cli_args.supabase_access_token)
             if temp_supabase_client:
                 db_ops.DB_TYPE = "supabase"
-                db_ops.PG_TABLE_NAME = env_pg_table_name
-                db_ops.SUPABASE_URL = env_supabase_url
-                db_ops.SUPABASE_SERVICE_KEY = env_supabase_key
-                db_ops.SUPABASE_VIDEO_BUCKET = env_supabase_bucket
+                db_ops.PG_TABLE_NAME = env_pg_table_name # Use env_pg_table_name from .env
+                db_ops.SUPABASE_URL = cli_args.supabase_url
+                db_ops.SUPABASE_SERVICE_KEY = cli_args.supabase_access_token # Use access token as service key
+                db_ops.SUPABASE_VIDEO_BUCKET = env_supabase_bucket # Use env_supabase_bucket from .env
                 db_ops.SUPABASE_CLIENT = temp_supabase_client
                 # Also set local globals for non-db logic if needed
                 DB_TYPE = "supabase"
@@ -780,8 +788,8 @@ def main():
             DB_TYPE = "sqlite"
             SQLITE_DB_PATH = db_ops.SQLITE_DB_PATH
     else: # Default to sqlite if .env DB_TYPE is unrecognized or not set, or if it's explicitly "sqlite"
-        if env_db_type != "sqlite":
-            print(f"DB_TYPE '{env_db_type}' in .env is not recognized. Defaulting to SQLite.")
+        if cli_args.db_type != "sqlite":
+            print(f"DB_TYPE '{cli_args.db_type}' in CLI args is not recognized. Defaulting to SQLite.")
         db_ops.DB_TYPE = "sqlite"
         db_ops.SQLITE_DB_PATH = env_sqlite_db_path if env_sqlite_db_path else cli_args.db_file
         DB_TYPE = "sqlite"
