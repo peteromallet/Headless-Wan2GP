@@ -27,7 +27,8 @@ python test_supabase_headless.py \
 python headless.py \
   --db-type supabase \
   --supabase-url https://your-project.supabase.co \
-  --supabase-access-token eyJhbGciOi...your-jwt-token
+  --supabase-anon-key $SUPABASE_ANON_KEY \
+  --supabase-access-token your-user-jwt
 
 # With service-role key (processes all tasks)
 python headless.py \
