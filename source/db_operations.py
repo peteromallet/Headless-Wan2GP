@@ -8,6 +8,7 @@ import datetime
 import sqlite3
 import urllib.parse
 import threading
+import httpx  # For calling Supabase Edge Function
 from pathlib import Path
 
 try:
@@ -25,6 +26,7 @@ SUPABASE_URL = None
 SUPABASE_SERVICE_KEY = None
 SUPABASE_VIDEO_BUCKET = "image_uploads"
 SUPABASE_CLIENT: SupabaseClient | None = None
+SUPABASE_EDGE_COMPLETE_TASK_URL: str | None = None  # Optional override for edge function
 
 sqlite_lock = threading.Lock()
 
@@ -417,6 +419,44 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
     if not SUPABASE_CLIENT:
         print("[ERROR] Supabase client not initialized. Cannot update task status.")
         return
+
+    # --- Prefer edge function for COMPLETE state ---
+    if status_str == STATUS_COMPLETE and output_location_val is not None:
+        # Build edge URL (env override > global var > default pattern)
+        edge_url = (
+            SUPABASE_EDGE_COMPLETE_TASK_URL
+            or (os.getenv("SUPABASE_EDGE_COMPLETE_TASK_URL") or None)
+            or (f"{SUPABASE_URL.rstrip('/')}/functions/v1/complete-task" if SUPABASE_URL else None)
+        )
+
+        if edge_url:
+            try:
+                jwt = None
+                try:
+                    sess = SUPABASE_CLIENT.auth.session()
+                    if sess and sess.access_token:
+                        jwt = sess.access_token
+                except Exception:
+                    pass
+
+                headers = {"Content-Type": "application/json"}
+                if jwt:
+                    headers["Authorization"] = f"Bearer {jwt}"
+
+                payload = {"task_id": task_id_str, "output_location": output_location_val}
+                dprint(f"Supabase Edge call >>> POST {edge_url} payload={payload}")
+                resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
+
+                if resp.status_code == 200:
+                    dprint(f"Edge function completed task {task_id_str} → status COMPLETE")
+                    return  # Success, no further RPC needed
+                else:
+                    dprint(
+                        f"Edge function returned {resp.status_code}: {resp.text}. Falling back to RPC."
+                    )
+            except Exception as e_edge:
+                dprint(f"Edge function call failed: {e_edge}. Falling back to RPC.")
+
     try:
         params = {
             "p_table_name": PG_TABLE_NAME,
