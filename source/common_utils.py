@@ -1996,56 +1996,26 @@ def prepare_output_path_with_upload(
 
 def upload_and_get_final_output_location(
     local_file_path: Path,
-    task_id: str,
+    supabase_object_name: str,  # This parameter is now unused but kept for compatibility
     initial_db_location: str,
     *,
     dprint=lambda *_: None
 ) -> str:
     """
-    Uploads file to Supabase storage if configured, otherwise returns the local path.
+    Returns the local file path. Upload is now handled by the edge function.
     
     Args:
         local_file_path: Path to the local file
-        task_id: Task ID for logging and object naming
+        supabase_object_name: Unused (kept for compatibility)
         initial_db_location: The initial DB location (local path)
         dprint: Debug print function
         
     Returns:
-        str: Final output location (Supabase URL or local path)
+        str: Local file path (upload now handled by edge function)
     """
-    # Import DB configuration lazily to avoid circular dependencies.
-    try:
-        from source import db_operations as db_ops  # type: ignore
-    except Exception:  # pragma: no cover
-        db_ops = None
-    
-    # If Supabase is configured, upload the file
-    if db_ops and db_ops.DB_TYPE == "supabase" and db_ops.SUPABASE_CLIENT and db_ops.SUPABASE_VIDEO_BUCKET:
-        import urllib.parse
-        
-        # Create a unique object name for Supabase
-        encoded_file_name = urllib.parse.quote(local_file_path.name)
-        object_name = f"{task_id}/{encoded_file_name}"
-        
-        dprint(f"[Task ID: {task_id}] Uploading to Supabase storage...")
-        dprint(f"[Task ID: {task_id}] Local file: {local_file_path}")
-        dprint(f"[Task ID: {task_id}] Object name: {object_name}")
-        
-        public_url = db_ops.upload_to_supabase_storage(
-            local_file_path, 
-            object_name, 
-            db_ops.SUPABASE_VIDEO_BUCKET
-        )
-        
-        if public_url:
-            dprint(f"[Task ID: {task_id}] Successfully uploaded to Supabase: {public_url}")
-            return public_url
-        else:
-            dprint(f"[WARNING Task ID: {task_id}] Supabase upload failed, using local path")
-            return initial_db_location
-    else:
-        # Not using Supabase or not configured, return local path
-        return initial_db_location
+    # Edge function will handle the upload, so we just return the local path
+    dprint(f"File ready for edge function upload: {local_file_path}")
+    return str(local_file_path.resolve())
 
 def create_mask_video_from_inactive_indices(
     total_frames: int,
