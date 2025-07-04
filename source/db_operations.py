@@ -896,7 +896,7 @@ def upload_to_supabase_storage(local_file_path: Path, supabase_object_name: str,
         dprint(f"Supabase upload response status: {res.status_code}")
         # A 200 status code indicates success.
         if res.status_code == 200:
-            public_url_response = SUPABASE_CLIENT.storage.from_(bucket_name).get_public_url(supabase_object_name)
+            public_url_response = SUPABASE_CLIENT.storage.from_(bucket_name).get_public_url(final_object_name)
             dprint(f"Supabase get_public_url response: {public_url_response}")
             if isinstance(public_url_response, str):
                  print(f"Successfully uploaded to Supabase. Public URL: {public_url_response}")
