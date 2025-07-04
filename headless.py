@@ -846,8 +846,9 @@ def main():
     print(f"Polling interval: {cli_args.poll_interval} seconds.")
 
     # Initialize database
+    # Supabase table/schema assumed to exist; skip initialization RPC
     if db_ops.DB_TYPE == "supabase":
-        db_ops.init_db_supabase() # New call, uses globals in db_ops
+        dprint("Supabase: Skipping init_db_supabase – table assumed present.")
     else: # SQLite
         db_ops.init_db() # Existing SQLite init
 

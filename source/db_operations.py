@@ -468,10 +468,9 @@ def _run_db_migrations():
         else:
             print("[ERROR] DB Migration: SQLITE_DB_PATH not set. Skipping SQLite migration.")
     elif DB_TYPE == "supabase":
-        if SUPABASE_CLIENT and PG_TABLE_NAME:
-            _migrate_supabase_schema()
-        else:
-            print("[ERROR] DB Migration: Supabase client or PG_TABLE_NAME not configured. Skipping Supabase migration.")
+        # The Supabase schema is expected to be managed externally. Skipping automatic RPC migrations.
+        dprint("DB Migrations: Skipping Supabase migrations (table assumed to exist).")
+        return
     else:
         dprint(f"DB Migrations: No migration logic for DB_TYPE '{DB_TYPE}'. Skipping migrations.")
 
