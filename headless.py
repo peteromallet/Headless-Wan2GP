@@ -786,12 +786,17 @@ def main():
                     access_token=cli_args.supabase_access_token,
                     refresh_token=""
                 )
-            except AttributeError:
-                # Older SDK (<2.x) uses set_auth
+            except Exception as e_set_session:
+                dprint(f"Supabase: auth.set_session failed ({e_set_session}). Falling back to direct PostgREST auth header.")
                 try:
-                    temp_supabase_client.auth.set_auth(cli_args.supabase_access_token)
-                except AttributeError:
-                    pass
+                    # v2 location
+                    getattr(temp_supabase_client, "postgrest").auth(cli_args.supabase_access_token)
+                except Exception:
+                    try:
+                        # v1 fallback
+                        temp_supabase_client.auth.set_auth(cli_args.supabase_access_token)
+                    except Exception as e_set_auth:
+                        dprint(f"Supabase: set_auth fallback also failed ({e_set_auth}). Continuing; server will likely reject requests if token is bad.")
             if temp_supabase_client:
                 db_ops.DB_TYPE = "supabase"
                 db_ops.PG_TABLE_NAME = env_pg_table_name
