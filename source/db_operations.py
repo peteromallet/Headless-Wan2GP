@@ -23,7 +23,7 @@ PG_TABLE_NAME = "tasks"
 SQLITE_DB_PATH = "tasks.db"
 SUPABASE_URL = None
 SUPABASE_SERVICE_KEY = None
-SUPABASE_VIDEO_BUCKET = "videos"
+SUPABASE_VIDEO_BUCKET = "image_uploads"
 SUPABASE_CLIENT: SupabaseClient | None = None
 
 sqlite_lock = threading.Lock()

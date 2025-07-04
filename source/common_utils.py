@@ -1963,6 +1963,90 @@ def prepare_output_path(
 
     return final_save_path, db_output_location
 
+def prepare_output_path_with_upload(
+    task_id: str, 
+    filename: str, 
+    main_output_dir_base: Path, 
+    *, 
+    dprint=lambda *_: None,
+    custom_output_dir: str | Path | None = None
+) -> tuple[Path, str]:
+    """
+    Prepares the output path for a task's artifact and handles Supabase upload if configured.
+    
+    Returns:
+        tuple[Path, str]: (local_file_path, db_output_location)
+        - local_file_path: Where to save the file locally (for generation)
+        - db_output_location: What to store in the database (local path or Supabase URL)
+    """
+    # Import DB configuration lazily to avoid circular dependencies.
+    try:
+        from source import db_operations as db_ops  # type: ignore
+    except Exception:  # pragma: no cover
+        db_ops = None
+
+    # First, get the local path where we'll save the file
+    local_save_path, initial_db_location = prepare_output_path(
+        task_id, filename, main_output_dir_base, 
+        dprint=dprint, custom_output_dir=custom_output_dir
+    )
+    
+    # Return the local path for now - we'll handle Supabase upload after file is created
+    return local_save_path, initial_db_location
+
+def upload_and_get_final_output_location(
+    local_file_path: Path,
+    task_id: str,
+    initial_db_location: str,
+    *,
+    dprint=lambda *_: None
+) -> str:
+    """
+    Uploads file to Supabase storage if configured, otherwise returns the local path.
+    
+    Args:
+        local_file_path: Path to the local file
+        task_id: Task ID for logging and object naming
+        initial_db_location: The initial DB location (local path)
+        dprint: Debug print function
+        
+    Returns:
+        str: Final output location (Supabase URL or local path)
+    """
+    # Import DB configuration lazily to avoid circular dependencies.
+    try:
+        from source import db_operations as db_ops  # type: ignore
+    except Exception:  # pragma: no cover
+        db_ops = None
+    
+    # If Supabase is configured, upload the file
+    if db_ops and db_ops.DB_TYPE == "supabase" and db_ops.SUPABASE_CLIENT and db_ops.SUPABASE_VIDEO_BUCKET:
+        import urllib.parse
+        
+        # Create a unique object name for Supabase
+        encoded_file_name = urllib.parse.quote(local_file_path.name)
+        object_name = f"{task_id}/{encoded_file_name}"
+        
+        dprint(f"[Task ID: {task_id}] Uploading to Supabase storage...")
+        dprint(f"[Task ID: {task_id}] Local file: {local_file_path}")
+        dprint(f"[Task ID: {task_id}] Object name: {object_name}")
+        
+        public_url = db_ops.upload_to_supabase_storage(
+            local_file_path, 
+            object_name, 
+            db_ops.SUPABASE_VIDEO_BUCKET
+        )
+        
+        if public_url:
+            dprint(f"[Task ID: {task_id}] Successfully uploaded to Supabase: {public_url}")
+            return public_url
+        else:
+            dprint(f"[WARNING Task ID: {task_id}] Supabase upload failed, using local path")
+            return initial_db_location
+    else:
+        # Not using Supabase or not configured, return local path
+        return initial_db_location
+
 def create_mask_video_from_inactive_indices(
     total_frames: int,
     resolution_wh: tuple[int, int], 

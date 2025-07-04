@@ -90,23 +90,24 @@ sequenceDiagram
     end
 ```
 
-## 7 Implementation Status
+## Implementation Status
 
-### ✅ Completed
-- [x] Added CLI arguments (`--db-type`, `--supabase-url`, `--supabase-access-token`)
-- [x] Database type detection and configuration in `main()`
-- [x] Supabase client initialization
-- [x] Status constants updated to match schema (`"Queued"`, `"In Progress"`, `"Complete"`)
-- [x] `get_oldest_queued_task_supabase()` implementation
-- [x] `update_task_status_supabase()` implementation
-- [x] Project ID handling in SQLite version
-- [x] Basic polling loop integration
+### ✅ **COMPLETED**
+- [x] CLI argument parsing (`--db-type`, `--supabase-url`, `--supabase-access-token`)
+- [x] Backend abstraction layer (SQLite vs Supabase)
+- [x] Supabase task polling and claiming via RPC
+- [x] Status updates ("Queued" → "In Progress" → "Complete"/"Failed")
+- [x] **NEW**: Automatic file upload to Supabase Storage
+- [x] **NEW**: Public URL storage in `output_location` field
+- [x] **NEW**: Support for `image_uploads` bucket (configurable via `SUPABASE_VIDEO_BUCKET`)
+- [x] Test script (`test_supabase_headless.py`)
+- [x] Documentation (`SUPABASE_SETUP.md`)
 
-### ⚠️ Needs Attention
-- [ ] **RPC Update Required**: `func_claim_task` must return `project_id_out`
-- [ ] File upload handling for Supabase (currently stores local paths)
-- [ ] Error handling for network failures
-- [ ] Graceful shutdown on Ctrl+C with proper status updates
+### ⚠️ **NEEDS VERIFICATION**
+- [ ] RPC function `func_claim_task` needs to return `project_id_out` parameter
+- [ ] Supabase Storage bucket (`image_uploads`) must be created and configured
+- [ ] Row-Level-Security policies must be properly configured
+- [ ] Test with both user tokens and service-role tokens
 
 ### 📝 Future Enhancements
 - [ ] Worker heartbeat/health checks

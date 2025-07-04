@@ -25,7 +25,7 @@ except ImportError:
     DepthAnnotator = None
 
 from . import db_operations as db_ops
-from .common_utils import sm_get_unique_target_path, parse_resolution as sm_parse_resolution, prepare_output_path, save_frame_from_video, report_orchestrator_failure
+from .common_utils import sm_get_unique_target_path, parse_resolution as sm_parse_resolution, prepare_output_path, save_frame_from_video, report_orchestrator_failure, prepare_output_path_with_upload, upload_and_get_final_output_location
 from .video_utils import rife_interpolate_images_to_video as sm_rife_interpolate_images_to_video
 
 def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable):
@@ -79,7 +79,7 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
         report_orchestrator_failure(task_params_dict, msg, dprint)
         return False, msg
 
-    final_save_path, db_output_location = prepare_output_path(
+    final_save_path, initial_db_location = prepare_output_path_with_upload(
         task_id,
         f"{task_id}_openpose.png",
         main_output_dir_base,
@@ -113,8 +113,13 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
         openpose_pil_image = Image.fromarray(openpose_np_frame_bgr.astype(np.uint8))
         openpose_pil_image.save(final_save_path)
 
+        # Upload to Supabase if configured
+        final_db_location = upload_and_get_final_output_location(
+            final_save_path, task_id, initial_db_location, dprint=dprint
+        )
+
         print(f"[Task ID: {task_id}] Successfully generated OpenPose image to: {final_save_path.resolve()}")
-        return True, db_output_location
+        return True, final_db_location
 
     except ImportError as ie:
         print(f"[ERROR Task ID: {task_id}] Import error during OpenPose generation: {ie}. Ensure 'preprocessing' module is in PYTHONPATH and dependencies are installed.")
@@ -162,9 +167,9 @@ def handle_extract_frame_task(task_params_dict: dict, main_output_dir_base: Path
             report_orchestrator_failure(task_params_dict, msg, dprint)
             return False, msg
 
-        # Use prepare_output_path to determine the correct save location
+        # Use prepare_output_path_with_upload to determine the correct save location
         output_filename = f"{task_id}_frame_{frame_index}.png"
-        final_save_path, db_output_location = prepare_output_path(
+        final_save_path, initial_db_location = prepare_output_path_with_upload(
             task_id,
             output_filename,
             main_output_dir_base,
@@ -192,13 +197,18 @@ def handle_extract_frame_task(task_params_dict: dict, main_output_dir_base: Path
         )
         
         if success:
+            # Upload to Supabase if configured
+            final_db_location = upload_and_get_final_output_location(
+                final_save_path, task_id, initial_db_location, dprint=dprint
+            )
+            
             print(f"[Task ID: {task_id}] Successfully extracted frame {frame_index} to: {final_save_path}")
-            return True, db_output_location
+            return True, final_db_location
         else:
             msg = f"Task {task_id}: save_frame_from_video utility failed for video {video_abs_path}."
             report_orchestrator_failure(task_params_dict, msg, dprint)
             return False, msg
-
+    
     except Exception as e:
         error_msg = f"Task {task_id}: Failed during frame extraction: {e}"
         print(f"[ERROR] {error_msg}")
@@ -238,7 +248,7 @@ def handle_rife_interpolate_task(wgp_mod, task_params_dict: dict, main_output_di
     generation_success = False
     output_location_to_db = None
 
-    final_save_path_for_video, db_output_location_for_rife = prepare_output_path(
+    final_save_path_for_video, initial_db_location_for_rife = prepare_output_path_with_upload(
         task_id,
         f"{task_id}_rife_interpolated.mp4",
         main_output_dir_base,
@@ -282,7 +292,10 @@ def handle_rife_interpolate_task(wgp_mod, task_params_dict: dict, main_output_di
         if rife_success:
             if final_save_path_for_video.exists() and final_save_path_for_video.stat().st_size > 0:
                 generation_success = True
-                output_location_to_db = db_output_location_for_rife
+                # Upload to Supabase if configured
+                output_location_to_db = upload_and_get_final_output_location(
+                    final_save_path_for_video, task_id, initial_db_location_for_rife, dprint=dprint
+                )
                 print(f"[Task ID: {task_id}] RIFE video saved to: {final_save_path_for_video.resolve()} (DB: {output_location_to_db})")
             else:
                 print(f"[ERROR Task ID: {task_id}] RIFE utility reported success, but output file is missing or empty: {final_save_path_for_video}")
@@ -357,7 +370,7 @@ def handle_generate_depth_task(task_params_dict: dict, main_output_dir_base: Pat
         return False, msg
 
     # Prepare save path for depth PNG
-    final_save_path, db_output_location = prepare_output_path(
+    final_save_path, initial_db_location = prepare_output_path_with_upload(
         task_id,
         f"{task_id}_depth.png",
         main_output_dir_base,
@@ -378,8 +391,14 @@ def handle_generate_depth_task(task_params_dict: dict, main_output_dir_base: Pat
 
         depth_pil = Image.fromarray(depth_np.astype(np.uint8))
         depth_pil.save(final_save_path)
+        
+        # Upload to Supabase if configured
+        final_db_location = upload_and_get_final_output_location(
+            final_save_path, task_id, initial_db_location, dprint=dprint
+        )
+        
         print(f"[Task ID: {task_id}] Successfully generated depth map: {final_save_path.resolve()}")
-        return True, db_output_location
+        return True, final_db_location
 
     except ImportError as ie:
         print(f"[ERROR Task ID: {task_id}] Import error during depth generation: {ie}")

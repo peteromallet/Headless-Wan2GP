@@ -697,7 +697,7 @@ def main():
     env_pg_table_name = os.getenv("POSTGRES_TABLE_NAME", "tasks")
     env_supabase_url = os.getenv("SUPABASE_URL")
     env_supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
-    env_supabase_bucket = os.getenv("SUPABASE_VIDEO_BUCKET", "videos")
+    env_supabase_bucket = os.getenv("SUPABASE_VIDEO_BUCKET", "image_uploads")
     env_sqlite_db_path = os.getenv("SQLITE_DB_PATH_ENV") # Read SQLite DB path from .env
 
     cli_args = parse_args()
