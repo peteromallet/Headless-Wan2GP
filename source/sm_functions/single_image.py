@@ -15,7 +15,9 @@ from ..common_utils import (
     build_task_state,
     prepare_output_path,
     process_additional_loras_shared,  # New shared function
-    snap_resolution_to_model_grid    # New shared function
+    snap_resolution_to_model_grid,    # New shared function
+    prepare_output_path_with_upload,  # New shared function
+    upload_and_get_final_output_location  # New shared function
 )
 from ..wgp_utils import generate_single_video
 
@@ -108,9 +110,9 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
                 dprint
             )
         
-        # Prepare the output path
+        # Prepare the output path (with Supabase upload support)
         output_filename = f"single_image_{task_id}.png"
-        final_output_path, db_output_location = prepare_output_path(
+        local_output_path, initial_db_output_location = prepare_output_path_with_upload(
             task_id,
             output_filename,
             main_output_dir_base,
@@ -196,12 +198,21 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
                         ret, frame = cap.read()
                         if ret:
                             # Save the frame as PNG to the final location
-                            success = cv2.imwrite(str(final_output_path), frame)
-                            if success and final_output_path.exists():
-                                print(f"[Single Image {task_id}] Successfully saved image to: {final_output_path}")
-                                return True, db_output_location
+                            success = cv2.imwrite(str(local_output_path), frame)
+                            if success and local_output_path.exists():
+                                print(f"[Single Image {task_id}] Successfully saved image to: {local_output_path}")
+
+                                # Handle Supabase upload (if configured) and get final location for DB
+                                final_db_location = upload_and_get_final_output_location(
+                                    local_output_path,
+                                    task_id,
+                                    initial_db_output_location,
+                                    dprint=dprint
+                                )
+
+                                return True, final_db_location
                             else:
-                                error_msg = f"Single image task {task_id}: Failed to save extracted frame to {final_output_path}"
+                                error_msg = f"Single image task {task_id}: Failed to save extracted frame to {local_output_path}"
                                 print(f"[ERROR] {error_msg}")
                                 return False, error_msg
                         else:

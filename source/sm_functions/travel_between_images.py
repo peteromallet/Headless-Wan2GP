@@ -21,6 +21,8 @@ from ..common_utils import (
     parse_resolution as sm_parse_resolution,    
     download_image_if_url as sm_download_image_if_url,
     prepare_output_path,
+    prepare_output_path_with_upload,
+    upload_and_get_final_output_location,
     snap_resolution_to_model_grid,
     ensure_valid_prompt,
     ensure_valid_negative_prompt,
@@ -1431,15 +1433,16 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         elif upscale_factor > 1.0 and not upscale_model_name:
             dprint(f"Stitch: Upscale factor {upscale_factor} > 1.0 but no upscale_model_name provided. Skipping upscale.")
 
-        # Use prepare_output_path to handle final video location consistently
+        # Use prepare_output_path_with_upload to handle final video location consistently (with Supabase upload support)
         final_video_filename = f"{orchestrator_run_id}_final{video_path_after_optional_upscale.suffix}"
         if upscale_factor > 1.0:
             final_video_filename = f"{orchestrator_run_id}_final_upscaled_{upscale_factor:.1f}x{video_path_after_optional_upscale.suffix}"
         
-        final_video_path, final_video_location_for_db = prepare_output_path(
+        final_video_path, initial_db_location = prepare_output_path_with_upload(
             task_id=stitch_task_id_str,
             filename=final_video_filename,
-            main_output_dir_base=stitch_processing_dir
+            main_output_dir_base=stitch_processing_dir,
+            dprint=dprint
         )
         
         # Move the video to final location if it's not already there
@@ -1448,6 +1451,14 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             shutil.move(str(video_path_after_optional_upscale), str(final_video_path))
         else:
             dprint(f"Stitch Task {stitch_task_id_str}: Video already at final destination {final_video_path}")
+        
+        # Handle Supabase upload (if configured) and get final location for DB
+        final_video_location_for_db = upload_and_get_final_output_location(
+            final_video_path,
+            stitch_task_id_str,
+            initial_db_location,
+            dprint=dprint
+        )
         
         print(f"Stitch Task {stitch_task_id_str}: Final video saved to: {final_video_path} (DB location: {final_video_location_for_db})")
         
