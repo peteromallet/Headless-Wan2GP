@@ -304,7 +304,7 @@ def _handle_dp_final_gen_task(
         # Handle Supabase upload (if configured) and get final location for DB
         final_path_for_db = upload_and_get_final_output_location(
             final_posed_image_output_path,
-            payload.get("task_id", "dp_final_gen"),
+            final_image_filename,  # Pass only the filename to avoid redundant subfolder
             initial_db_location,
             dprint=dprint
         )
