@@ -92,3 +92,19 @@ SUPABASE_VIDEO_BUCKET=videos
 ```
 
 The CLI arguments take precedence over environment variables. 
+
+## Supabase Storage Setup
+
+Your Supabase project needs a storage bucket to store generated videos and images.
+
+1. Go to your Supabase project → Storage
+2. Create a bucket named `image_uploads` (or whatever you prefer)
+3. Set the bucket to public if you want direct URL access
+4. Update `SUPABASE_VIDEO_BUCKET` in your .env
+
+```bash
+# .env example
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=your-service-role-key
+SUPABASE_VIDEO_BUCKET=image_uploads
+``` 

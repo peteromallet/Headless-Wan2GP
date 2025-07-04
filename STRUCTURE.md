@@ -174,7 +174,7 @@ Variable / flag | Effect
 ----------------|-------
 `SUPABASE_URL / SUPABASE_SERVICE_KEY` | Used for Supabase connection (if not provided via CLI).
 `POSTGRES_TABLE_NAME` | Table name for Supabase (default: `tasks`).
-`SUPABASE_VIDEO_BUCKET` | Storage bucket name for video uploads.
+`SUPABASE_VIDEO_BUCKET` | Storage bucket name for video and image uploads.
 `WAN2GP_CACHE` | Where Wan2GP caches model weights.
 `--debug` | Prevents cleanup of temp folders, extra logs.
 `--skip_cleanup` | Keeps all intermediate artefacts even outside debug.

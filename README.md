@@ -103,7 +103,7 @@ Once `headless.py` is running, you can open another terminal to queue tasks usin
     POSTGRES_TABLE_NAME="tasks" 
     SUPABASE_URL="https://your-project-ref.supabase.co"
     SUPABASE_SERVICE_KEY="your_supabase_service_role_key" # Keep this secret!
-    SUPABASE_VIDEO_BUCKET="videos" # Your Supabase storage bucket name
+    SUPABASE_VIDEO_BUCKET="image_uploads" # Your Supabase storage bucket name
 
 
     ```
