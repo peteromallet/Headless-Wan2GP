@@ -815,13 +815,29 @@ def upload_to_supabase_storage(local_file_path: Path, supabase_object_name: str,
         except Exception as e_auth:
             dprint(f"Could not get auth info (might be service role): {e_auth}")
         
-        dprint(f"Uploading {local_file_path} to Supabase bucket '{bucket_name}' as '{supabase_object_name}'...")
+        # Determine final object path respecting default RLS (name must start with auth.uid())
+        user_prefix = None
+        try:
+            auth_data = SUPABASE_CLIENT.auth.get_user()
+            if auth_data and auth_data.user:
+                role_detected = getattr(auth_data.user, "role", "unknown")
+                user_prefix = getattr(auth_data.user, "id", None)
+                dprint(f"Supabase auth role: {role_detected}, uid: {user_prefix}")
+        except Exception as e_uid:
+            dprint(f"Auth user lookup failed (may be service role): {e_uid}")
+
+        final_object_name = supabase_object_name
+        if user_prefix and not supabase_object_name.startswith(f"{user_prefix}/"):
+            final_object_name = f"{user_prefix}/{supabase_object_name}"
+            dprint(f"Adjusted object path to satisfy RLS: {final_object_name}")
+
+        dprint(f"Uploading {local_file_path} to Supabase bucket '{bucket_name}' as '{final_object_name}'...")
         with open(local_file_path, 'rb') as f:
             # Upsert to overwrite if exists
             res = SUPABASE_CLIENT.storage.from_(bucket_name).upload(
-                path=supabase_object_name,
+                path=final_object_name,
                 file=f,
-                file_options={"cache-control": "3600", "upsert": "true"} 
+                file_options={"cache-control": "3600", "upsert": "true"}
             )
         
         dprint(f"Supabase upload response status: {res.status_code}")
