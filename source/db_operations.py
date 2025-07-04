@@ -857,27 +857,36 @@ def upload_to_supabase_storage(local_file_path: Path, supabase_object_name: str,
         
         # Determine final object path respecting default RLS (name must start with auth.uid())
         user_prefix = None
+        role_detected = "unknown"
         try:
-            auth_data = SUPABASE_CLIENT.auth.get_user()
-            if auth_data and auth_data.user:
-                role_detected = getattr(auth_data.user, "role", "unknown")
-                user_prefix = getattr(auth_data.user, "id", None)
-                dprint(f"Supabase auth role: {role_detected}, uid: {user_prefix}")
-        except Exception as e_uid:
-            dprint(f"Auth user lookup failed (may be service role): {e_uid}")
+            auth_response = SUPABASE_CLIENT.auth.get_user()
+            if auth_response and auth_response.user:
+                user_prefix = auth_response.user.id
+                role_detected = auth_response.user.role
+                dprint(f"Auth check PASSED. Role: '{role_detected}', UID: '{user_prefix}'")
+            else:
+                dprint(f"Auth check FAILED. get_user() returned no user data. Response: {auth_response}")
+
+        except Exception as e_auth:
+            dprint(f"Auth check FAILED with exception: {e_auth}")
+            role_detected = "error"
 
         final_object_name = supabase_object_name
-        if user_prefix and not supabase_object_name.startswith(f"{user_prefix}/"):
-            final_object_name = f"{user_prefix}/{supabase_object_name}"
-            dprint(f"Adjusted object path to satisfy RLS: {final_object_name}")
-
+        # Only prefix if we are an authenticated user, not a service role
+        if role_detected == "authenticated" and user_prefix:
+            if not supabase_object_name.startswith(f"{user_prefix}/"):
+                final_object_name = f"{user_prefix}/{supabase_object_name}"
+                dprint(f"Adjusted object path to satisfy RLS: {final_object_name}")
+        else:
+            dprint(f"Auth role is '{role_detected}', not prefixing object path with UID.")
+            
         dprint(f"Uploading {local_file_path} to Supabase bucket '{bucket_name}' as '{final_object_name}'...")
         with open(local_file_path, 'rb') as f:
             # Upsert to overwrite if exists
             res = SUPABASE_CLIENT.storage.from_(bucket_name).upload(
                 path=final_object_name,
                 file=f,
-                file_options={"cache-control": "3600", "upsert": "true"}
+                file_options={"cache-control": "3600", "upsert": "true"} 
             )
         
         dprint(f"Supabase upload response status: {res.status_code}")
