@@ -764,55 +764,52 @@ def main():
     # This block sets DB_TYPE, SQLITE_DB_PATH, SUPABASE_CLIENT, etc. in the db_ops module
     if cli_args.db_type == "supabase" and cli_args.supabase_url and cli_args.supabase_access_token:
         try:
-            # Prefer explicitly provided anon key, then env var, then fall back to access/service key (for backward-compat / service role use)
-            supabase_anon_key_for_client = (
-                cli_args.supabase_anon_key
-                or env_supabase_anon_key
-                or env_supabase_key  # still allow service key if admin wants full bypass
-                or cli_args.supabase_access_token  # last-ditch (old behaviour)
-            )
+            # --- New, stricter Supabase client initialization ---
+            # For user authentication, we MUST have the anon key to create the client
+            # and an access token (JWT) to set the user session.
+            supabase_anon_key_for_client = cli_args.supabase_anon_key or env_supabase_anon_key
+            
+            if not supabase_anon_key_for_client:
+                raise ValueError("When using db-type 'supabase' with an access token, the Supabase anon key is required. Provide it via --supabase-anon-key or the SUPABASE_ANON_KEY environment variable.")
 
+            dprint(f"Supabase: Initializing client for {cli_args.supabase_url} with anon key.")
             temp_supabase_client = create_client(cli_args.supabase_url, supabase_anon_key_for_client)
 
-            # Impersonate the user (or service) via JWT so RLS applies correctly
-            try:
-                # supabase-py >=2.x
-                temp_supabase_client.auth.set_session(
-                    access_token=cli_args.supabase_access_token,
-                    refresh_token=""
-                )
-            except Exception as e_set_session:
-                dprint(f"Supabase: auth.set_session failed ({e_set_session}). Falling back to direct PostgREST auth header.")
-                try:
-                    # v2 location
-                    getattr(temp_supabase_client, "postgrest").auth(cli_args.supabase_access_token)
-                except Exception:
-                    try:
-                        # v1 fallback
-                        temp_supabase_client.auth.set_auth(cli_args.supabase_access_token)
-                    except Exception as e_set_auth:
-                        dprint(f"Supabase: set_auth fallback also failed ({e_set_auth}). Continuing; server will likely reject requests if token is bad.")
-            if temp_supabase_client:
-                db_ops.DB_TYPE = "supabase"
-                db_ops.PG_TABLE_NAME = env_pg_table_name
-                db_ops.SUPABASE_URL = cli_args.supabase_url
-                db_ops.SUPABASE_SERVICE_KEY = supabase_anon_key_for_client
-                db_ops.SUPABASE_VIDEO_BUCKET = env_supabase_bucket
-                db_ops.SUPABASE_CLIENT = temp_supabase_client
+            dprint(f"Supabase: Setting user session with provided access token.")
+            auth_response = temp_supabase_client.auth.set_session(
+                access_token=cli_args.supabase_access_token,
+                refresh_token=""  # We don't have a refresh token in this context
+            )
+            dprint(f"Supabase: set_session response: {auth_response}")
 
-                # Local globals for convenience
-                DB_TYPE = "supabase"
-                SUPABASE_CLIENT = temp_supabase_client
-                SUPABASE_VIDEO_BUCKET = env_supabase_bucket
+            # Verify that we have a user session now
+            user_check = temp_supabase_client.auth.get_user()
+            if not user_check or not user_check.user:
+                # If using a service key as the access token, get_user will fail. This is expected.
+                # However, if it's a real user JWT, this indicates a problem.
+                dprint(f"Supabase Auth Check: get_user() did not return a user. This is okay if using a service key, but may indicate an invalid JWT if using a user token. Full response: {user_check}")
             else:
-                raise Exception("Supabase client creation returned None")
+                dprint(f"Supabase Auth Check: Successfully authenticated as user {user_check.user.id} with role {user_check.user.role}")
+
+            # --- Assign to db_ops globals on success ---
+            db_ops.DB_TYPE = "supabase"
+            db_ops.PG_TABLE_NAME = env_pg_table_name
+            db_ops.SUPABASE_URL = cli_args.supabase_url
+            db_ops.SUPABASE_SERVICE_KEY = env_supabase_key # Keep service key if present for other potential uses
+            db_ops.SUPABASE_VIDEO_BUCKET = env_supabase_bucket
+            db_ops.SUPABASE_CLIENT = temp_supabase_client
+
+            # Local globals for convenience
+            DB_TYPE = "supabase"
+            SUPABASE_CLIENT = temp_supabase_client
+            SUPABASE_VIDEO_BUCKET = env_supabase_bucket
+
         except Exception as e:
-            print(f"[ERROR] Failed to initialize Supabase client: {e}. Check SUPABASE_URL and SUPABASE_SERVICE_KEY.")
+            print(f"[ERROR] Failed to initialize and authenticate Supabase client: {e}")
+            traceback.print_exc()
             print("Falling back to SQLite due to Supabase client initialization error.")
             db_ops.DB_TYPE = "sqlite"
             db_ops.SQLITE_DB_PATH = env_sqlite_db_path if env_sqlite_db_path else cli_args.db_file
-            DB_TYPE = "sqlite"
-            SQLITE_DB_PATH = db_ops.SQLITE_DB_PATH
     else: # Default to sqlite if .env DB_TYPE is unrecognized or not set, or if it's explicitly "sqlite"
         if cli_args.db_type != "sqlite":
             print(f"DB_TYPE '{cli_args.db_type}' in CLI args is not recognized. Defaulting to SQLite.")
