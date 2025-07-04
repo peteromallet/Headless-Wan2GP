@@ -50,7 +50,9 @@ from source.common_utils import (
     download_image_if_url as sm_download_image_if_url,
     download_file,
     load_pil_images as sm_load_pil_images,
-    build_task_state
+    build_task_state,
+    prepare_output_path_with_upload,
+    upload_and_get_final_output_location
 )
 from source.sm_functions import travel_between_images as tbi
 from source.sm_functions import different_perspective as dp
@@ -576,39 +578,32 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                         print(f"[ERROR Task ID: {task_id}] Failed to move video to custom output directory: {e_move}")
                         generation_success = False
                         
-                elif db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
-                    sqlite_db_file_path = Path(db_ops.SQLITE_DB_PATH).resolve()
-                    target_files_dir = sqlite_db_file_path.parent / "public" / "files"
-                    target_files_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    final_video_path = sm_get_unique_target_path(
-                        target_files_dir, 
-                        task_id,
-                        generated_video_file.suffix
+                else:
+                    # Use the generalized upload-aware output handling for all other cases
+                    final_video_path, initial_db_location = prepare_output_path_with_upload(
+                        task_id=task_id,
+                        filename=generated_video_file.name,
+                        main_output_dir_base=main_output_dir_base,
+                        dprint=dprint
                     )
-                    output_location_to_db = f"files/{final_video_path.name}"
+                    
                     try:
                         shutil.move(str(generated_video_file), str(final_video_path))
+                        dprint(f"[Task ID: {task_id}] Moved generated video to: {final_video_path}")
+                        
+                        # Handle Supabase upload (if configured) and get final location for DB
+                        output_location_to_db = upload_and_get_final_output_location(
+                            final_video_path,
+                            task_id,
+                            initial_db_location,
+                            dprint=dprint
+                        )
+                        
                         print(f"[Task ID: {task_id}] Output video saved to: {final_video_path.resolve()} (DB location: {output_location_to_db})")
+                        
                     except Exception as e_move:
-                        print(f"[ERROR Task ID: {task_id}] Failed to move video to final local destination: {e_move}")
+                        print(f"[ERROR Task ID: {task_id}] Failed to move video to final destination: {e_move}")
                         generation_success = False
-                elif db_ops.DB_TYPE == "supabase" and db_ops.SUPABASE_CLIENT:
-                    encoded_file_name = urllib.parse.quote(generated_video_file.name)
-                    object_name = f"{task_id}/{encoded_file_name}"
-                    dprint(f"[Task ID: {task_id}] Original filename: {generated_video_file.name}")
-                    dprint(f"[Task ID: {task_id}] Encoded filename for Supabase object: {encoded_file_name}")
-                    dprint(f"[Task ID: {task_id}] Final Supabase object_name: {object_name}")
-                    
-                    public_url = db_ops.upload_to_supabase_storage(generated_video_file, object_name, db_ops.SUPABASE_VIDEO_BUCKET)
-                    if public_url:
-                        output_location_to_db = public_url
-                    else:
-                        print(f"[WARNING Task ID: {task_id}] Supabase upload failed or no URL returned. No output location will be saved.")
-                        generation_success = False
-                else:
-                    print(f"[WARNING Task ID: {task_id}] Output generated but DB_TYPE ({db_ops.DB_TYPE}) is not sqlite or Supabase client is not configured for upload.")
-                    generation_success = False
             else:
                 print(f"[WARNING Task ID: {task_id}] Generation reported success, but no .mp4 file found in {temp_output_dir}")
                 generation_success = False

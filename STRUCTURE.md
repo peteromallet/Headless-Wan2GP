@@ -37,23 +37,46 @@
 * **generate_test_tasks.py** – Developer utility that back-fills the database with synthetic images/prompts for integration testing and local benchmarking.
 * **test_supabase_headless.py** – **NEW**: Test script to verify Supabase connection, RPC functions, and authentication before running the full headless worker.
 
+## Supabase Upload System
+
+**NEW**: All task types now support automatic upload to Supabase Storage when configured:
+
+### How it works
+* **Local-first**: Files are always saved locally first for reliability
+* **Conditional upload**: If Supabase is configured, files are uploaded to the `image_uploads` bucket
+* **Consistent API**: All task handlers use the same two functions:
+  * `prepare_output_path_with_upload()` - Sets up local path and provisional DB location
+  * `upload_and_get_final_output_location()` - Handles upload and returns final URL/path for DB
+
+### Task type coverage
+* **single_image**: Generated images → Supabase bucket with public URLs
+* **travel_stitch**: Final stitched videos → Supabase bucket
+* **different_perspective**: Final posed images → Supabase bucket  
+* **Standard WGP tasks**: All video outputs → Supabase bucket
+* **Specialized handlers**: OpenPose masks, RIFE interpolations, etc. → Supabase bucket
+
+### Database behavior
+* **SQLite mode**: `output_location` contains relative paths (e.g., `files/video.mp4`)
+* **Supabase mode**: `output_location` contains public URLs (e.g., `https://xyz.supabase.co/storage/v1/object/public/image_uploads/task_123/video.mp4`)
+* **Object naming**: Files stored as `{task_id}/{filename}` for collision-free organization
+
 ## source/ package
 
 This is the main application package.
 
-* **common_utils.py** – Reusable helpers (file downloads, ffmpeg helpers, MediaPipe keypoint interpolation, debug utilities, etc.)
+* **common_utils.py** – Reusable helpers (file downloads, ffmpeg helpers, MediaPipe keypoint interpolation, debug utilities, etc.). **UPDATED**: Now includes generalized Supabase upload functions (`prepare_output_path_with_upload`, `upload_and_get_final_output_location`) used by all task types.
 * **db_operations.py** – Handles all database interactions for both SQLite and Supabase. **UPDATED**: Now includes Supabase client initialization, RPC function wrappers, and automatic backend selection based on `DB_TYPE`.
-* **specialized_handlers.py** – Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation.
+* **specialized_handlers.py** – Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation. **UPDATED**: Uses Supabase-compatible upload functions for all outputs.
 * **video_utils.py** – Provides utilities for video manipulation like cross-fading, frame extraction, and color matching.
 * **wgp_utils.py** – Thin wrapper around `Wan2GP.wgp` that standardises parameter names, handles LoRA quirks (e.g. CausVid, LightI2X), and exposes the single `generate_single_video` helper used by every task handler.
 
 ### source/sm_functions/ sub-package
 
-Task-specific wrappers around the bulky upstream logic. These are imported by `headless.py` (and potentially by notebooks/unit tests) without dragging in the interactive Gradio UI shipped with Wan2GP.
+Task-specific wrappers around the bulky upstream logic. These are imported by `headless.py` (and potentially by notebooks/unit tests) without dragging in the interactive Gradio UI shipped with Wan2GP. **UPDATED**: All task handlers now use generalized Supabase upload functions for consistent output handling.
 
-* **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images. Builds guide videos, queues generation tasks, stitches outputs.
-* **different_perspective.py** – Generates a new perspective for a single image using an OpenPose or depth-driven guide video plus optional RIFE interpolation for smoothness.
-* **single_image.py** – Minimal handler for one-off image-to-video generation without travel or pose manipulation.
+* **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images. Builds guide videos, queues generation tasks, stitches outputs. **UPDATED**: Final stitched videos are uploaded to Supabase when configured.
+* **different_perspective.py** – Generates a new perspective for a single image using an OpenPose or depth-driven guide video plus optional RIFE interpolation for smoothness. **UPDATED**: Final posed images are uploaded to Supabase when configured.
+* **single_image.py** – Minimal handler for one-off image-to-video generation without travel or pose manipulation. **UPDATED**: Generated images are uploaded to Supabase when configured.
 * **__init__.py** – Re-exports public APIs (`run_travel_between_images_task`, `run_single_image_task`, `run_different_perspective_task`) and common utilities for convenient importing.
 
 ## Additional runtime artefacts & folders

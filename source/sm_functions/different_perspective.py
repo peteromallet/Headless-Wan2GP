@@ -15,7 +15,9 @@ from ..common_utils import (
     save_frame_from_video, create_pose_interpolated_guide_video,
     generate_different_perspective_debug_video_summary,
     parse_resolution as sm_parse_resolution,
-    create_simple_first_frame_mask_video
+    create_simple_first_frame_mask_video,
+    prepare_output_path_with_upload,
+    upload_and_get_final_output_location
 )
 from ..video_utils import rife_interpolate_images_to_video  # For depth guide interpolation
 
@@ -286,13 +288,28 @@ def _handle_dp_final_gen_task(
             return False, f"Could not resolve final video path from '{final_video_output_db}'", None
 
         print("\nDP Final Gen: Extracting final posed image...")
-        final_posed_image_output_path = Path(orchestrator_payload["main_output_dir"]) / f"final_posed_image_{orchestrator_payload['run_id']}.png"
+        
+        # Use prepare_output_path_with_upload for Supabase-compatible output handling
+        final_image_filename = f"final_posed_image_{orchestrator_payload['run_id']}.png"
+        final_posed_image_output_path, initial_db_location = prepare_output_path_with_upload(
+            task_id=payload.get("task_id", "dp_final_gen"),
+            filename=final_image_filename,
+            main_output_dir_base=Path(orchestrator_payload["main_output_dir"]),
+            dprint=dprint
+        )
         
         if not save_frame_from_video(final_video_path, -1, final_posed_image_output_path, sm_parse_resolution(original_params.get("resolution"))):
              return False, f"Failed to extract final posed image from {final_video_path}", None
         
-        print(f"Successfully completed 'different_perspective' task! Final image: {final_posed_image_output_path.resolve()}")
-        final_path_for_db = str(final_posed_image_output_path.resolve())
+        # Handle Supabase upload (if configured) and get final location for DB
+        final_path_for_db = upload_and_get_final_output_location(
+            final_posed_image_output_path,
+            payload.get("task_id", "dp_final_gen"),
+            initial_db_location,
+            dprint=dprint
+        )
+        
+        print(f"Successfully completed 'different_perspective' task! Final image: {final_posed_image_output_path.resolve()} (DB location: {final_path_for_db})")
 
         if not orchestrator_payload.get("skip_cleanup") and not orchestrator_payload.get("debug_mode"):
             print(f"DP Final Gen: Cleaning up intermediate files in {work_dir}...")
