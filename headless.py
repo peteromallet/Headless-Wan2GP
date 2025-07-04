@@ -764,9 +764,10 @@ def main():
     # This block sets DB_TYPE, SQLITE_DB_PATH, SUPABASE_CLIENT, etc. in the db_ops module
     if cli_args.db_type == "supabase" and cli_args.supabase_url and cli_args.supabase_access_token:
         try:
-            # --- New, stricter Supabase client initialization ---
-            # For user authentication, we MUST have the anon key to create the client
-            # and an access token (JWT) to set the user session.
+            # --- New PAT-based Supabase client initialization ---
+            # Personal Access Tokens (PATs) are used directly as Bearer tokens and don't have
+            # a "session" that can be set. We must initialize the client and then manually
+            # set the Authorization header for the sub-clients (postgrest, storage).
             supabase_anon_key_for_client = cli_args.supabase_anon_key or env_supabase_anon_key
             
             if not supabase_anon_key_for_client:
@@ -775,29 +776,26 @@ def main():
             dprint(f"Supabase: Initializing client for {cli_args.supabase_url} with anon key.")
             temp_supabase_client = create_client(cli_args.supabase_url, supabase_anon_key_for_client)
 
-            dprint(f"Supabase: Setting user session with provided access token.")
-            auth_response = temp_supabase_client.auth.set_session(
-                access_token=cli_args.supabase_access_token,
-                refresh_token=""  # We don't have a refresh token in this context
-            )
-            dprint(f"Supabase: set_session response: {auth_response}")
+            dprint(f"Supabase: Authenticating sub-clients with provided access token (PAT).")
+            # Manually set the auth token for PostgREST (database)
+            temp_supabase_client.postgrest.auth(cli_args.supabase_access_token)
+            dprint("Supabase: PostgREST client authenticated.")
 
-            # Verify that we have a user session now
-            user_check = temp_supabase_client.auth.get_user()
-            if not user_check or not user_check.user:
-                # If using a service key as the access token, get_user will fail. This is expected.
-                # However, if it's a real user JWT, this indicates a problem.
-                dprint(f"Supabase Auth Check: get_user() did not return a user. This is okay if using a service key, but may indicate an invalid JWT if using a user token. Full response: {user_check}")
-            else:
-                dprint(f"Supabase Auth Check: Successfully authenticated as user {user_check.user.id} with role {user_check.user.role}")
+            # Manually set the auth token for Storage by updating the main client's headers
+            temp_supabase_client.options.headers.update({
+                "Authorization": f"Bearer {cli_args.supabase_access_token}"
+            })
+            dprint("Supabase: Storage client headers updated for authentication.")
 
             # --- Assign to db_ops globals on success ---
             db_ops.DB_TYPE = "supabase"
             db_ops.PG_TABLE_NAME = env_pg_table_name
             db_ops.SUPABASE_URL = cli_args.supabase_url
-            db_ops.SUPABASE_SERVICE_KEY = env_supabase_key # Keep service key if present for other potential uses
+            db_ops.SUPABASE_SERVICE_KEY = env_supabase_key # Keep service key if present
             db_ops.SUPABASE_VIDEO_BUCKET = env_supabase_bucket
             db_ops.SUPABASE_CLIENT = temp_supabase_client
+            # Also store the token itself for use in Edge Function calls etc.
+            db_ops.SUPABASE_ACCESS_TOKEN = cli_args.supabase_access_token
 
             # Local globals for convenience
             DB_TYPE = "supabase"

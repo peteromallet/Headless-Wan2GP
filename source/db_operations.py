@@ -10,6 +10,7 @@ import urllib.parse
 import threading
 import httpx  # For calling Supabase Edge Function
 from pathlib import Path
+import base64 # Added for JWT decoding
 
 try:
     from supabase import create_client, Client as SupabaseClient
@@ -27,6 +28,7 @@ SUPABASE_SERVICE_KEY = None
 SUPABASE_VIDEO_BUCKET = "image_uploads"
 SUPABASE_CLIENT: SupabaseClient | None = None
 SUPABASE_EDGE_COMPLETE_TASK_URL: str | None = None  # Optional override for edge function
+SUPABASE_ACCESS_TOKEN: str | None = None # Will be set by headless.py
 
 sqlite_lock = threading.Lock()
 
@@ -89,6 +91,28 @@ def execute_sqlite_with_retry(db_path_str: str, operation_func, *args, **kwargs)
             raise
     
     raise sqlite3.OperationalError(f"Failed to execute SQLite operation after {SQLITE_MAX_RETRIES} attempts")
+
+# -----------------------------------------------------------------------------
+# Internal Helpers for Supabase
+# -----------------------------------------------------------------------------
+
+def _get_user_id_from_jwt(jwt_str: str) -> str | None:
+    """Decodes a JWT and extracts the 'sub' (user ID) claim without validation."""
+    if not jwt_str:
+        return None
+    try:
+        # JWT is composed of header.payload.signature
+        _, payload_b64, _ = jwt_str.split('.')
+        # The payload is base64 encoded. It needs to be padded to be decoded correctly.
+        payload_b64 += '=' * (-len(payload_b64) % 4)
+        payload_json = base64.b64decode(payload_b64).decode('utf-8')
+        payload = json.loads(payload_json)
+        user_id = payload.get('sub')
+        dprint(f"JWT Decode: Extracted user ID (sub): {user_id}")
+        return user_id
+    except Exception as e:
+        dprint(f"[ERROR] Could not decode JWT to get user ID: {e}")
+        return None
 
 # -----------------------------------------------------------------------------
 # Public Database Functions
@@ -431,13 +455,8 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
 
         if edge_url:
             try:
-                jwt = None
-                try:
-                    sess = SUPABASE_CLIENT.auth.session()
-                    if sess and sess.access_token:
-                        jwt = sess.access_token
-                except Exception:
-                    pass
+                # Use the globally stored access token since we no longer have a "session"
+                jwt = SUPABASE_ACCESS_TOKEN
 
                 headers = {"Content-Type": "application/json"}
                 if jwt:
@@ -457,6 +476,7 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
             except Exception as e_edge:
                 dprint(f"Edge function call failed: {e_edge}. Falling back to RPC.")
 
+    # --- Fallback to RPC for other states or if Edge Function fails ---
     try:
         params = {
             "p_table_name": PG_TABLE_NAME,
@@ -848,37 +868,21 @@ def upload_to_supabase_storage(local_file_path: Path, supabase_object_name: str,
         return None
 
     try:
-        # Debug: Check what role we're authenticated as
-        try:
-            user_info = SUPABASE_CLIENT.auth.get_user()
-            dprint(f"Supabase auth role check: {user_info}")
-        except Exception as e_auth:
-            dprint(f"Could not get auth info (might be service role): {e_auth}")
+        # Since we are no longer using set_session, get_user() will not work.
+        # We must decode the JWT to get the user ID for the path prefix.
+        user_id = _get_user_id_from_jwt(SUPABASE_ACCESS_TOKEN)
         
         # Determine final object path respecting default RLS (name must start with auth.uid())
-        user_prefix = None
-        role_detected = "unknown"
-        try:
-            auth_response = SUPABASE_CLIENT.auth.get_user()
-            if auth_response and auth_response.user:
-                user_prefix = auth_response.user.id
-                role_detected = auth_response.user.role
-                dprint(f"Auth check PASSED. Role: '{role_detected}', UID: '{user_prefix}'")
-            else:
-                dprint(f"Auth check FAILED. get_user() returned no user data. Response: {auth_response}")
-
-        except Exception as e_auth:
-            dprint(f"Auth check FAILED with exception: {e_auth}")
-            role_detected = "error"
-
         final_object_name = supabase_object_name
-        # Only prefix if we are an authenticated user, not a service role
-        if role_detected == "authenticated" and user_prefix:
-            if not supabase_object_name.startswith(f"{user_prefix}/"):
-                final_object_name = f"{user_prefix}/{supabase_object_name}"
+        if user_id:
+            # RLS policy for storage requires the path to be prefixed with the user's ID.
+            if not supabase_object_name.startswith(f"{user_id}/"):
+                final_object_name = f"{user_id}/{supabase_object_name}"
                 dprint(f"Adjusted object path to satisfy RLS: {final_object_name}")
         else:
-            dprint(f"Auth role is '{role_detected}', not prefixing object path with UID.")
+            # If we can't get a user ID, the upload will likely fail due to RLS.
+            # We proceed anyway and let the error from Supabase be the indicator.
+            dprint(f"Warning: Could not determine user ID from JWT. Upload to '{final_object_name}' may violate RLS.")
             
         dprint(f"Uploading {local_file_path} to Supabase bucket '{bucket_name}' as '{final_object_name}'...")
         with open(local_file_path, 'rb') as f:
