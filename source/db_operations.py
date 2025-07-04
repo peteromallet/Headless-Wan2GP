@@ -455,24 +455,55 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
 
         if edge_url:
             try:
-                # Use the globally stored access token since we no longer have a "session"
-                jwt = SUPABASE_ACCESS_TOKEN
+                # Check if output_location_val is a local file path
+                output_path = Path(output_location_val)
+                if output_path.exists() and output_path.is_file():
+                    # Read the file and encode as base64
+                    import base64
+                    with open(output_path, 'rb') as f:
+                        file_data = base64.b64encode(f.read()).decode('utf-8')
+                    
+                    # Use the globally stored access token
+                    jwt = SUPABASE_ACCESS_TOKEN
 
-                headers = {"Content-Type": "application/json"}
-                if jwt:
-                    headers["Authorization"] = f"Bearer {jwt}"
+                    headers = {"Content-Type": "application/json"}
+                    if jwt:
+                        headers["Authorization"] = f"Bearer {jwt}"
 
-                payload = {"task_id": task_id_str, "output_location": output_location_val}
-                dprint(f"Supabase Edge call >>> POST {edge_url} payload={payload}")
-                resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
+                    payload = {
+                        "task_id": task_id_str, 
+                        "file_data": file_data,
+                        "filename": output_path.name
+                    }
+                    dprint(f"Supabase Edge call >>> POST {edge_url} with file: {output_path.name}")
+                    resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)  # Increased timeout for file upload
 
-                if resp.status_code == 200:
-                    dprint(f"Edge function completed task {task_id_str} → status COMPLETE")
-                    return  # Success, no further RPC needed
+                    if resp.status_code == 200:
+                        dprint(f"Edge function completed task {task_id_str} → status COMPLETE with file upload")
+                        return  # Success, no further RPC needed
+                    else:
+                        dprint(
+                            f"Edge function returned {resp.status_code}: {resp.text}. Falling back to RPC."
+                        )
                 else:
-                    dprint(
-                        f"Edge function returned {resp.status_code}: {resp.text}. Falling back to RPC."
-                    )
+                    # Not a local file, treat as URL and use old logic
+                    payload = {"task_id": task_id_str, "output_location": output_location_val}
+                    dprint(f"Supabase Edge call >>> POST {edge_url} payload={payload}")
+                    
+                    jwt = SUPABASE_ACCESS_TOKEN
+                    headers = {"Content-Type": "application/json"}
+                    if jwt:
+                        headers["Authorization"] = f"Bearer {jwt}"
+                    
+                    resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
+
+                    if resp.status_code == 200:
+                        dprint(f"Edge function completed task {task_id_str} → status COMPLETE")
+                        return  # Success, no further RPC needed
+                    else:
+                        dprint(
+                            f"Edge function returned {resp.status_code}: {resp.text}. Falling back to RPC."
+                        )
             except Exception as e_edge:
                 dprint(f"Edge function call failed: {e_edge}. Falling back to RPC.")
 
