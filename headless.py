@@ -109,6 +109,8 @@ def parse_args():
                                help="Supabase project URL (required if db_type = supabase)")
     pgroup_server.add_argument("--supabase-access-token", type=str, default=None,
                                help="Supabase access token (JWT) for authentication (required if db_type = supabase)")
+    pgroup_server.add_argument("--supabase-anon-key", type=str, default=None,
+                               help="Supabase anon (public) API key used to create the client when authenticating with a user JWT. If omitted, falls back to SUPABASE_ANON_KEY env var or service key.")
 
     # Advanced wgp.py Global Config Overrides (Optional) - Applied once at server start
     pgroup_wgp_globals = parser.add_argument_group("WGP Global Config Overrides (Applied at Server Start)")
@@ -187,7 +189,7 @@ def _ensure_lora_downloaded(task_id: str, lora_name: str, lora_url: str, target_
     Args:
         task_id: Task identifier for logging
         lora_name: Filename of the LoRA to download
-        lora_url: URL to download from
+        lora_url: URL to download fromCan you add
         target_dir: Directory to save the LoRA
         task_params_dict: Task parameters dictionary to modify if download fails
         flag_key: Key in task_params_dict to set to False if download fails
@@ -697,6 +699,7 @@ def main():
     env_pg_table_name = os.getenv("POSTGRES_TABLE_NAME", "tasks")
     env_supabase_url = os.getenv("SUPABASE_URL")
     env_supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
+    env_supabase_anon_key = os.getenv("SUPABASE_ANON_KEY")
     env_supabase_bucket = os.getenv("SUPABASE_VIDEO_BUCKET", "image_uploads")
     env_sqlite_db_path = os.getenv("SQLITE_DB_PATH_ENV") # Read SQLite DB path from .env
 
@@ -766,15 +769,38 @@ def main():
     # This block sets DB_TYPE, SQLITE_DB_PATH, SUPABASE_CLIENT, etc. in the db_ops module
     if cli_args.db_type == "supabase" and cli_args.supabase_url and cli_args.supabase_access_token:
         try:
-            temp_supabase_client = create_client(cli_args.supabase_url, cli_args.supabase_access_token)
+            # Prefer explicitly provided anon key, then env var, then fall back to access/service key (for backward-compat / service role use)
+            supabase_anon_key_for_client = (
+                cli_args.supabase_anon_key
+                or env_supabase_anon_key
+                or env_supabase_key  # still allow service key if admin wants full bypass
+                or cli_args.supabase_access_token  # last-ditch (old behaviour)
+            )
+
+            temp_supabase_client = create_client(cli_args.supabase_url, supabase_anon_key_for_client)
+
+            # Impersonate the user (or service) via JWT so RLS applies correctly
+            try:
+                # supabase-py >=2.x
+                temp_supabase_client.auth.set_session(
+                    access_token=cli_args.supabase_access_token,
+                    refresh_token=""
+                )
+            except AttributeError:
+                # Older SDK (<2.x) uses set_auth
+                try:
+                    temp_supabase_client.auth.set_auth(cli_args.supabase_access_token)
+                except AttributeError:
+                    pass
             if temp_supabase_client:
                 db_ops.DB_TYPE = "supabase"
-                db_ops.PG_TABLE_NAME = env_pg_table_name # Use env_pg_table_name from .env
+                db_ops.PG_TABLE_NAME = env_pg_table_name
                 db_ops.SUPABASE_URL = cli_args.supabase_url
-                db_ops.SUPABASE_SERVICE_KEY = cli_args.supabase_access_token # Use access token as service key
-                db_ops.SUPABASE_VIDEO_BUCKET = env_supabase_bucket # Use env_supabase_bucket from .env
+                db_ops.SUPABASE_SERVICE_KEY = supabase_anon_key_for_client
+                db_ops.SUPABASE_VIDEO_BUCKET = env_supabase_bucket
                 db_ops.SUPABASE_CLIENT = temp_supabase_client
-                # Also set local globals for non-db logic if needed
+
+                # Local globals for convenience
                 DB_TYPE = "supabase"
                 SUPABASE_CLIENT = temp_supabase_client
                 SUPABASE_VIDEO_BUCKET = env_supabase_bucket
