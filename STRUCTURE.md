@@ -21,6 +21,10 @@
 │       └── single_image.py
 ├── tasks/                      # Task specifications
 │   └── HEADLESS_SUPABASE_TASK.md  # NEW: Supabase implementation spec
+├── supabase/
+│   └── functions/
+│       ├── complete_task/         # Edge Function: uploads file & marks task complete
+│       └── create_task/           # NEW Edge Function: queues task from client
 ├── logs/               # runtime logs (git-ignored)
 ├── outputs/            # generated videos/images (git-ignored)
 ├── samples/            # example inputs for docs & tests
