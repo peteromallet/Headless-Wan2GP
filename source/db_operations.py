@@ -29,6 +29,7 @@ SUPABASE_VIDEO_BUCKET = "image_uploads"
 SUPABASE_CLIENT: SupabaseClient | None = None
 SUPABASE_EDGE_COMPLETE_TASK_URL: str | None = None  # Optional override for edge function
 SUPABASE_ACCESS_TOKEN: str | None = None # Will be set by headless.py
+SUPABASE_EDGE_CREATE_TASK_URL: str | None = None # Will be set by headless.py
 
 sqlite_lock = threading.Lock()
 
@@ -581,48 +582,86 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
     project_id = task_payload.get("project_id", "default_project_id")
 
     if DB_TYPE == "supabase":
-        # ------------------------------------------------------------------
-        # Supabase path – we call the existing RPC to insert the row *then*
-        # immediately patch the `created_at` column so that the dashboard
-        # shows a real timestamp instead of 1970-01-01 when the DB default
-        # isn't set.  This avoids the need to change the SQL function.
-        # ------------------------------------------------------------------
-        if not SUPABASE_CLIENT:
-            print("[ERROR] Supabase client not initialized. Cannot add task.")
-            return
 
-        # Always use an explicit UTC timestamp (ISO-8601 + "Z")
-        current_timestamp_iso = datetime.datetime.utcnow().isoformat() + "Z"
+        # Preferred path: call the `create-task` Edge Function so we don't
+        # depend on a SQL RPC that may not exist.  We fall back to the legacy
+        # RPC if the Edge Function is unavailable.
 
-        try:
-            rpc_params = {
-                "p_task_id": task_id,
-                "p_params": params_json_str,
-                "p_task_type": task_type_str,
-                "p_project_id": project_id,
-                "p_dependant_on": dependant_on,
-                "p_table_name": PG_TABLE_NAME,
-            }
-            dprint(
-                f"Supabase RPC: Adding task {task_id} via func_add_task with params: {rpc_params}"
-            )
-            SUPABASE_CLIENT.rpc("func_add_task", rpc_params).execute()
+        # Build Edge URL – env var override > global constant > default pattern
+        edge_url = (
+            SUPABASE_EDGE_CREATE_TASK_URL  # may be set at runtime
+            if "SUPABASE_EDGE_CREATE_TASK_URL" in globals() else None
+        ) or (os.getenv("SUPABASE_EDGE_CREATE_TASK_URL") or None) or (
+            f"{SUPABASE_URL.rstrip('/')}/functions/v1/create-task" if SUPABASE_URL else None
+        )
 
-            # Patch created_at if the SQL function didn't set it (or if the
-            # column has no default).  We ignore errors silently to keep the
-            # original behaviour if the column is write-protected.
+        edge_success = False
+        if edge_url:
             try:
-                SUPABASE_CLIENT.table(PG_TABLE_NAME).update({"created_at": current_timestamp_iso}).eq("id", task_id).execute()
-                dprint(f"Supabase: Set created_at for {task_id} to {current_timestamp_iso}")
-            except Exception as e_patch:
-                dprint(
-                    f"Supabase: Non-fatal – could not update created_at for {task_id}: {e_patch}"
-                )
+                headers = {"Content-Type": "application/json"}
+                if SUPABASE_ACCESS_TOKEN:
+                    headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
 
-            print(f"Task {task_id} (Type: {task_type_str}) added to Supabase.")
-        except Exception as e:
-            print(f"[ERROR] Supabase RPC func_add_task for {task_id} failed: {e}")
-            raise
+                payload_edge = {
+                    "task_id": task_id,
+                    "params": params_for_db,  # pass JSON directly
+                    "task_type": task_type_str,
+                    "project_id": project_id,
+                    "dependant_on": dependant_on,
+                }
+
+                dprint(f"Supabase Edge call >>> POST {edge_url} payload={str(payload_edge)[:120]}…")
+
+                resp = httpx.post(edge_url, json=payload_edge, headers=headers, timeout=30)
+
+                if resp.status_code == 200:
+                    edge_success = True
+                    print(f"Task {task_id} (Type: {task_type_str}) queued via Edge Function.")
+                else:
+                    dprint(
+                        f"Edge function create-task returned {resp.status_code}: {resp.text}. Falling back to RPC."
+                    )
+            except Exception as e_edge:
+                dprint(f"Edge function call failed: {e_edge}. Falling back to RPC.")
+
+        if not edge_success:
+            # ------------------------------------------------------------------
+            # Legacy fallback – use the RPC func_add_task.  This path requires
+            # that the SQL function is present (older deployments).
+            # ------------------------------------------------------------------
+
+            if not SUPABASE_CLIENT:
+                print("[ERROR] Supabase client not initialized. Cannot add task.")
+                return
+
+            current_timestamp_iso = datetime.datetime.utcnow().isoformat() + "Z"
+
+            try:
+                rpc_params = {
+                    "p_task_id": task_id,
+                    "p_params": params_json_str,
+                    "p_task_type": task_type_str,
+                    "p_project_id": project_id,
+                    "p_dependant_on": dependant_on,
+                    "p_table_name": PG_TABLE_NAME,
+                }
+                dprint(
+                    f"Supabase RPC: Adding task {task_id} via func_add_task with params: {rpc_params}"
+                )
+                SUPABASE_CLIENT.rpc("func_add_task", rpc_params).execute()
+
+                try:
+                    SUPABASE_CLIENT.table(PG_TABLE_NAME).update({"created_at": current_timestamp_iso}).eq("id", task_id).execute()
+                    dprint(f"Supabase: Set created_at for {task_id} to {current_timestamp_iso}")
+                except Exception as e_patch:
+                    dprint(
+                        f"Supabase: Non-fatal – could not update created_at for {task_id}: {e_patch}"
+                    )
+
+                print(f"Task {task_id} (Type: {task_type_str}) added to Supabase via RPC.")
+            except Exception as e:
+                print(f"[ERROR] Supabase RPC func_add_task for {task_id} failed: {e}")
+                raise
 
     else: # Default to SQLite
         db_to_use = db_path if db_path else SQLITE_DB_PATH
