@@ -3,6 +3,7 @@ import math
 import shutil
 import traceback
 from pathlib import Path
+import time
 
 try:
     import cv2
@@ -1260,53 +1261,82 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 dprint(f"Stitch: ERROR - Could not open continue video for property check")
             segment_video_paths_for_stitch.append(str(Path(initial_continued_video_path_str).resolve()))
         
-        # Query DB for all completed generation sub-tasks for this run_id
-        completed_segment_outputs_from_db = db_ops.get_completed_segment_outputs_for_stitch(orchestrator_run_id)
-        dprint(f"Stitch Task {stitch_task_id_str}: Raw completed_segment_outputs_from_db: {completed_segment_outputs_from_db}")
+        # Fetch completed segments with a small retry loop to handle race conditions
+        max_stitch_fetch_retries = 3
+        completed_segment_outputs_from_db = []
+        for attempt in range(max_stitch_fetch_retries):
+            dprint(f"[DEBUG] Stitch fetch attempt {attempt+1}/{max_stitch_fetch_retries} for run_id: {orchestrator_run_id}")
+            completed_segment_outputs_from_db = db_ops.get_completed_segment_outputs_for_stitch(orchestrator_run_id) or []
+            dprint(f"[DEBUG] Attempt {attempt+1} returned {len(completed_segment_outputs_from_db)} segments")
+            if completed_segment_outputs_from_db:
+                dprint(f"[DEBUG] Segments found on attempt {attempt+1}, breaking retry loop")
+                break
+            dprint(f"Stitch: No completed segment rows found (attempt {attempt+1}/{max_stitch_fetch_retries}). Waiting 3s and retrying...")
+            if attempt < max_stitch_fetch_retries - 1:  # Don't sleep after the last attempt
+                time.sleep(3)
+        dprint(f"Stitch Task {stitch_task_id_str}: Completed segments fetched: {completed_segment_outputs_from_db}")
 
-        # Filter and add valid paths from DB query results
-        # `completed_segment_outputs_from_db` now contains (segment_idx, video_path_str) directly
+        # ------------------------------------------------------------------
+        # 2b. Resolve each returned video path (local, SQLite-relative, or URL)
+        # ------------------------------------------------------------------
+        dprint(f"[DEBUG] Starting path resolution for {len(completed_segment_outputs_from_db)} segments")
         for seg_idx, video_path_str_from_db in completed_segment_outputs_from_db:
+            dprint(f"[DEBUG] Processing segment {seg_idx} with path: {video_path_str_from_db}")
             resolved_video_path_for_stitch: Path | None = None
-            if video_path_str_from_db:
-                if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and video_path_str_from_db.startswith("files/"):
-                    sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
-                    absolute_path_candidate = (sqlite_db_parent / "public" / video_path_str_from_db).resolve()
-                    dprint(f"Stitch: Resolved SQLite relative path from DB '{video_path_str_from_db}' to absolute '{absolute_path_candidate}' for segment index {seg_idx}")
-                    if absolute_path_candidate.exists() and absolute_path_candidate.is_file():
-                        resolved_video_path_for_stitch = absolute_path_candidate
-                    else:
-                        dprint(f"[WARNING] Stitch: Resolved absolute path '{absolute_path_candidate}' for segment index {seg_idx} (DB path: '{video_path_str_from_db}') does not exist or is not a file.")
+
+            if not video_path_str_from_db:
+                dprint(f"[WARNING] Stitch: Segment {seg_idx} has empty video_path in DB; skipping.")
+                continue
+
+            # Case A: SQLite relative path that starts with files/
+            if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and video_path_str_from_db.startswith("files/"):
+                sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
+                absolute_path_candidate = (sqlite_db_parent / "public" / video_path_str_from_db).resolve()
+                dprint(f"Stitch: Resolved SQLite relative path '{video_path_str_from_db}' to '{absolute_path_candidate}' for segment {seg_idx}")
+                if absolute_path_candidate.exists() and absolute_path_candidate.is_file():
+                    resolved_video_path_for_stitch = absolute_path_candidate
+                    dprint(f"[DEBUG] SQLite path exists: {absolute_path_candidate}")
                 else:
-                    # Supabase public URL or absolute path
-                    if video_path_str_from_db.startswith("http"):
-                        try:
-                            dprint(f"Stitch: Detected remote URL for segment {seg_idx}: {video_path_str_from_db}. Downloading...")
-                            from ..common_utils import download_file as sm_download_file
-                            remote_url = video_path_str_from_db
-                            local_filename = Path(remote_url).name
-                            local_download_path = stitch_processing_dir / f"seg{seg_idx:02d}_{local_filename}"
-                            if not local_download_path.exists():
-                                sm_download_file(remote_url, stitch_processing_dir, local_download_path.name)
-                                dprint(f"Stitch: Downloaded segment {seg_idx} video to {local_download_path}")
-                            else:
-                                dprint(f"Stitch: Local copy for segment {seg_idx} already exists at {local_download_path}")
-                            resolved_video_path_for_stitch = local_download_path
-                        except Exception as e_dl_stitch:
-                            dprint(f"[WARNING] Stitch: Failed to download remote video for segment {seg_idx}: {e_dl_stitch}")
+                    dprint(f"[WARNING] Stitch: Resolved absolute path '{absolute_path_candidate}' for segment {seg_idx} is missing.")
+
+            # Case B: Remote public URL (Supabase storage)
+            elif video_path_str_from_db.startswith("http"):
+                try:
+                    from ..common_utils import download_file as sm_download_file
+                    remote_url = video_path_str_from_db
+                    local_filename = Path(remote_url).name
+                    local_download_path = stitch_processing_dir / f"seg{seg_idx:02d}_{local_filename}"
+                    dprint(f"[DEBUG] Remote URL detected, local download path: {local_download_path}")
+                    if not local_download_path.exists():
+                        dprint(f"Stitch: Downloading remote segment {seg_idx} from {remote_url} to {local_download_path}")
+                        sm_download_file(remote_url, stitch_processing_dir, local_download_path.name)
+                        dprint(f"[DEBUG] Download completed for segment {seg_idx}")
                     else:
-                        absolute_path_candidate = Path(video_path_str_from_db).resolve()
-                        if absolute_path_candidate.exists() and absolute_path_candidate.is_file():
-                            resolved_video_path_for_stitch = absolute_path_candidate
-                        else:
-                            dprint(f"[WARNING] Stitch: Absolute path from DB '{absolute_path_candidate}' for segment index {seg_idx} does not exist or is not a file.")
+                        dprint(f"Stitch: Local copy for segment {seg_idx} already exists at {local_download_path}")
+                    resolved_video_path_for_stitch = local_download_path
+                except Exception as e_dl:
+                    dprint(f"[WARNING] Stitch: Failed to download remote video for segment {seg_idx}: {e_dl}")
 
-            if resolved_video_path_for_stitch:
+            # Case C: Provided absolute/local path
+            else:
+                absolute_path_candidate = Path(video_path_str_from_db).resolve()
+                dprint(f"[DEBUG] Treating as absolute path: {absolute_path_candidate}")
+                if absolute_path_candidate.exists() and absolute_path_candidate.is_file():
+                    resolved_video_path_for_stitch = absolute_path_candidate
+                    dprint(f"[DEBUG] Absolute path exists: {absolute_path_candidate}")
+                else:
+                    dprint(f"[WARNING] Stitch: Absolute path '{absolute_path_candidate}' for segment {seg_idx} does not exist or is not a file.")
+
+            if resolved_video_path_for_stitch is not None:
                 segment_video_paths_for_stitch.append(str(resolved_video_path_for_stitch))
-                dprint(f"Stitch: Adding valid video for segment index {seg_idx}: {resolved_video_path_for_stitch}")
-            else: 
-                dprint(f"[WARNING] Stitch: Segment video (from DB, index {seg_idx}, original path '{video_path_str_from_db}') is missing or invalid after path resolution. It will be excluded.")
+                dprint(f"Stitch: Added video for segment {seg_idx}: {resolved_video_path_for_stitch}")
+            else:
+                dprint(f"[WARNING] Stitch: Unable to resolve video for segment {seg_idx}; will be excluded from stitching.")
 
+        dprint(f"[DEBUG] Final segment_video_paths_for_stitch: {segment_video_paths_for_stitch}")
+        dprint(f"[DEBUG] Total videos collected: {len(segment_video_paths_for_stitch)}")
+        dprint(f"[DEBUG] Expected total videos: {total_videos_for_stitch}")
+        
         total_videos_for_stitch = (1 if initial_continued_video_path_str and Path(initial_continued_video_path_str).exists() else 0) + num_expected_new_segments
         if len(segment_video_paths_for_stitch) < total_videos_for_stitch:
             # This is a warning because some segments might have legitimately failed and been skipped by their handlers.
@@ -1314,6 +1344,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             dprint(f"[WARNING] Stitch: Expected {total_videos_for_stitch} videos for stitch, but found {len(segment_video_paths_for_stitch)}. Stitching with available videos.")
         
         if not segment_video_paths_for_stitch:
+            dprint(f"[ERROR] Stitch: No valid segment videos found to stitch. DB returned {len(completed_segment_outputs_from_db)} segments, but none resolved to valid paths.")
             raise ValueError("Stitch: No valid segment videos found to stitch.")
         if len(segment_video_paths_for_stitch) == 1 and total_videos_for_stitch > 1:
             dprint(f"Stitch: Only one video segment found ({segment_video_paths_for_stitch[0]}) but {total_videos_for_stitch} were expected. Using this single video as the 'stitched' output.")

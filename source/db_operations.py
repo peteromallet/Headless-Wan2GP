@@ -441,12 +441,15 @@ def get_oldest_queued_task_supabase(): # Renamed from get_oldest_queued_task_pos
 
 def update_task_status_supabase(task_id_str, status_str, output_location_val=None): # Renamed from update_task_status_postgres
     """Updates a task's status via Supabase RPC using func_update_task_status."""
+    dprint(f"[DEBUG] update_task_status_supabase called: task_id={task_id_str}, status={status_str}, output_location={output_location_val}")
+    
     if not SUPABASE_CLIENT:
         print("[ERROR] Supabase client not initialized. Cannot update task status.")
         return
 
     # --- Prefer edge function for COMPLETE state ---
     if status_str == STATUS_COMPLETE and output_location_val is not None:
+        dprint(f"[DEBUG] Task {task_id_str} being marked COMPLETE, trying Edge Function first")
         # Build edge URL (env override > global var > default pattern)
         edge_url = (
             SUPABASE_EDGE_COMPLETE_TASK_URL
@@ -476,19 +479,23 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                         "file_data": file_data,
                         "filename": output_path.name
                     }
+                    dprint(f"[DEBUG] Calling Edge Function with file upload for task {task_id_str}")
                     dprint(f"Supabase Edge call >>> POST {edge_url} with file: {output_path.name}")
                     resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)  # Increased timeout for file upload
 
                     if resp.status_code == 200:
+                        dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE with file upload")
                         dprint(f"Edge function completed task {task_id_str} → status COMPLETE with file upload")
                         return  # Success, no further RPC needed
                     else:
+                        dprint(f"[DEBUG] Edge function FAILED for task {task_id_str}: {resp.status_code}")
                         dprint(
                             f"Edge function returned {resp.status_code}: {resp.text}. Falling back to RPC."
                         )
                 else:
                     # Not a local file, treat as URL and use old logic
                     payload = {"task_id": task_id_str, "output_location": output_location_val}
+                    dprint(f"[DEBUG] Calling Edge Function with URL for task {task_id_str}")
                     dprint(f"Supabase Edge call >>> POST {edge_url} payload={payload}")
                     
                     jwt = SUPABASE_ACCESS_TOKEN
@@ -499,16 +506,20 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                     resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
 
                     if resp.status_code == 200:
+                        dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE")
                         dprint(f"Edge function completed task {task_id_str} → status COMPLETE")
                         return  # Success, no further RPC needed
                     else:
+                        dprint(f"[DEBUG] Edge function FAILED for task {task_id_str}: {resp.status_code}")
                         dprint(
                             f"Edge function returned {resp.status_code}: {resp.text}. Falling back to RPC."
                         )
             except Exception as e_edge:
+                dprint(f"[DEBUG] Edge function EXCEPTION for task {task_id_str}: {e_edge}")
                 dprint(f"Edge function call failed: {e_edge}. Falling back to RPC.")
 
     # --- Fallback to RPC for other states or if Edge Function fails ---
+    dprint(f"[DEBUG] Using RPC fallback for task {task_id_str}")
     try:
         params = {
             "p_table_name": PG_TABLE_NAME,
@@ -518,9 +529,12 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
         if output_location_val is not None:
             params["p_output_location"] = output_location_val
         
+        dprint(f"[DEBUG] Calling RPC func_update_task_status for task {task_id_str}")
         SUPABASE_CLIENT.rpc("func_update_task_status", params).execute()
+        dprint(f"[DEBUG] RPC SUCCESS for task {task_id_str} → status {status_str}")
         dprint(f"Supabase RPC: Updated status of task {task_id_str} to {status_str}. Output: {output_location_val if output_location_val else 'N/A'}")
     except Exception as e:
+        dprint(f"[DEBUG] RPC FAILED for task {task_id_str}: {e}")
         print(f"[ERROR] Supabase RPC func_update_task_status for {task_id_str} failed: {e}")
 
 def _migrate_supabase_schema():
@@ -847,6 +861,8 @@ def get_task_dependency(task_id: str) -> str | None:
 
 def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
     """Gets completed travel_segment outputs for a given run_id for stitching."""
+    dprint(f"[DEBUG] get_completed_segment_outputs_for_stitch called with run_id: {run_id}")
+    
     if DB_TYPE == "sqlite":
         def _get_op(conn):
             cursor = conn.cursor()
@@ -871,43 +887,71 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
                   AND t.status = ?
                 ORDER BY CAST(json_extract(t.params, '$.segment_index') AS INTEGER) ASC
             """
+            dprint(f"[DEBUG] SQLite query: {sql_query}")
+            dprint(f"[DEBUG] SQLite query params: run_id={run_id}, status={STATUS_COMPLETE}")
             cursor.execute(sql_query, (run_id, STATUS_COMPLETE, run_id, STATUS_COMPLETE))
             rows = cursor.fetchall()
+            dprint(f"[DEBUG] SQLite returned {len(rows)} rows: {rows}")
             return rows
         return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_op)
     elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
         try:
+            dprint(f"[DEBUG] Trying Supabase RPC func_get_completed_generation_segments_for_stitch with run_id: {run_id}")
             rpc_params = {"p_run_id": run_id, "p_gen_task_type": "travel_segment"}
             rpc_response = SUPABASE_CLIENT.rpc("func_get_completed_generation_segments_for_stitch", rpc_params).execute()
+            dprint(f"[DEBUG] RPC response: {rpc_response}")
 
             if rpc_response.data:
-                return [(item.get("segment_idx"), item.get("output_loc")) for item in rpc_response.data]
+                result = [(item.get("segment_idx"), item.get("output_loc")) for item in rpc_response.data]
+                dprint(f"[DEBUG] RPC returned {len(result)} items: {result}")
+                return result
             elif rpc_response.error:
                 dprint(f"Stitch Supabase: Error from RPC func_get_completed_generation_segments_for_stitch: {rpc_response.error}. Falling back to direct select.")
             # Fallback: direct select if RPC missing
             try:
+                dprint(f"[DEBUG] Falling back to direct select for run_id: {run_id}")
                 sel_resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("params, output_location")\
                     .eq("task_type", "travel_segment").eq("status", STATUS_COMPLETE).execute()
+                dprint(f"[DEBUG] Direct select response: {sel_resp}")
+                
                 fallback_results = []
                 if sel_resp.data:
                     import json
-                    for row in sel_resp.data:
+                    dprint(f"[DEBUG] Processing {len(sel_resp.data)} rows from direct select")
+                    for i, row in enumerate(sel_resp.data):
+                        dprint(f"[DEBUG] Row {i}: {row}")
                         params_raw = row.get("params")
-                        if params_raw is None: continue
+                        if params_raw is None: 
+                            dprint(f"[DEBUG] Row {i} has no params, skipping")
+                            continue
                         try:
                             params_obj = params_raw if isinstance(params_raw, dict) else json.loads(params_raw)
-                        except Exception:
+                        except Exception as e:
+                            dprint(f"[DEBUG] Row {i} params parse failed: {e}")
                             continue
-                        if params_obj.get("orchestrator_run_id") == run_id:
+                        
+                        row_run_id = params_obj.get("orchestrator_run_id")
+                        dprint(f"[DEBUG] Row {i} orchestrator_run_id: {row_run_id} (looking for: {run_id})")
+                        
+                        if row_run_id == run_id:
                             seg_idx = params_obj.get("segment_index")
-                            fallback_results.append((seg_idx, row.get("output_location")))
-                return sorted(fallback_results, key=lambda x: x[0] if x[0] is not None else 0)
+                            output_loc = row.get("output_location")
+                            dprint(f"[DEBUG] Row {i} MATCHED: segment_index={seg_idx}, output_location={output_loc}")
+                            fallback_results.append((seg_idx, output_loc))
+                        else:
+                            dprint(f"[DEBUG] Row {i} run_id mismatch, skipping")
+                
+                sorted_results = sorted(fallback_results, key=lambda x: x[0] if x[0] is not None else 0)
+                dprint(f"[DEBUG] Final fallback results: {sorted_results}")
+                return sorted_results
             except Exception as e_sel:
                  dprint(f"Stitch Supabase: Direct select fallback failed: {e_sel}")
                  return []
         except Exception as e_supabase_fetch_gen:
              dprint(f"Stitch Supabase: Exception during generation segment fetch: {e_supabase_fetch_gen}. Stitching may fail.")
              return []
+    
+    dprint(f"[DEBUG] No DB_TYPE match, returning empty list")
     return []
 
 def get_initial_task_counts() -> tuple[int, int] | None:
