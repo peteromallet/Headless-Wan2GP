@@ -1597,103 +1597,25 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 print(f"[ERROR] Stitch: Exception type: {type(e_orch_update).__name__}")
                 traceback.print_exc()
                 dprint(f"Stitch: Warning - could not update orchestrator status to COMPLETE: {e_orch_update}")
-
-    except Exception as e_stitch_main:
-        msg = f"Stitch Task {stitch_task_id_str}: Main process failed: {e_stitch_main}"
-        print(f"[ERROR Task {stitch_task_id_str}]: {msg}"); traceback.print_exc()
-        stitch_success = False
-        final_video_location_for_db = msg # Store truncated error for DB
         
-        # Mark orchestrator as failed since stitch failed
-        if orchestrator_task_id_ref:
+        # Return the final video path so the stitch task itself gets uploaded via Edge Function
+        return stitch_success, str(final_video_path.resolve())
+
+    except Exception as e:
+        print(f"[ERROR] Stitch task {stitch_task_id_str}: Unexpected error during stitching: {e}")
+        traceback.print_exc()
+        
+        # Notify orchestrator of stitch failure
+        if 'orchestrator_task_id_ref' in locals() and orchestrator_task_id_ref:
             try:
+                error_msg = f"Stitch task failed: {str(e)[:200]}"
                 db_ops.update_task_status(
                     orchestrator_task_id_ref,
                     db_ops.STATUS_FAILED,
-                    msg[:500]  # Truncate message to avoid DB field overflow
+                    error_msg
                 )
-                dprint(f"Stitch: Marked orchestrator task {orchestrator_task_id_ref} as FAILED due to stitch failure")
-            except Exception as e_orch_fail:
-                dprint(f"Stitch: Warning - could not update orchestrator status to FAILED: {e_orch_fail}")
-    
-    finally:
-        # --- 6. Cleanup --- 
-        debug_mode = False # Default
-        skip_cleanup = False # Default
-        if full_orchestrator_payload: # Check if it's not None
-            debug_mode = full_orchestrator_payload.get("debug_mode_enabled", False)
-            skip_cleanup = full_orchestrator_payload.get("skip_cleanup_enabled", False)
+                dprint(f"Stitch: Marked orchestrator task {orchestrator_task_id_ref} as FAILED due to exception")
+            except Exception as e_orch:
+                dprint(f"Stitch: Warning - could not update orchestrator status: {e_orch}")
         
-        # Condition for cleaning the stitch_processing_dir (the sub-workspace)
-        # Cleaned if stitch was successful and skip_cleanup is not set.
-        # debug_mode does not prevent cleanup of this specific intermediate directory.
-        cleanup_stitch_sub_workspace = stitch_success and not skip_cleanup
-
-        if cleanup_stitch_sub_workspace and 'stitch_processing_dir' in locals() and stitch_processing_dir.exists():
-            # If the processing dir is the same as the public files root (or any shared
-            # directory that also contains the FINAL output), we must **not** remove the
-            # whole directory.  Instead, delete only the intermediate artefacts that were
-            # created for *this* run.  Otherwise we would wipe the final video and any
-            # other unrelated outputs.
-
-            if "final_video_path" in locals() and final_video_path.parent.resolve() == stitch_processing_dir.resolve():
-                # Safe, selective clean-up: remove any file (or directory) that belongs
-                # to the current run but is **not** the final stitched video.
-                dprint(
-                    f"Stitch: Cleaning up intermediate files for run {orchestrator_run_id} in shared dir: {stitch_processing_dir}"
-                )
-
-                for item in stitch_processing_dir.iterdir():
-                    # Skip the final stitched video (and potential upscaled version)
-                    if item.resolve() == final_video_path.resolve():
-                        continue
-
-                    # Only touch artefacts whose names include the unique run_id
-                    if orchestrator_run_id in item.name:
-                        try:
-                            if item.is_file() or item.is_symlink():
-                                item.unlink()
-                            else:
-                                shutil.rmtree(item)
-                            dprint(f"Stitch: Removed intermediate artefact {item}")
-                        except Exception as e_rm:
-                            dprint(f"Stitch: Warning – could not remove {item}: {e_rm}")
-            else:
-                # The processing dir is a run-specific subfolder – safe to delete entirely.
-                dprint(f"Stitch: Cleaning up stitch processing sub-workspace: {stitch_processing_dir}")
-                try:
-                    shutil.rmtree(stitch_processing_dir)
-                except Exception as e_c1:
-                    dprint(f"Stitch: Error cleaning up {stitch_processing_dir}: {e_c1}")
-        elif 'stitch_processing_dir' in locals() and stitch_processing_dir.exists(): # Not cleaning it up, state why
-            dprint(f"Stitch: Skipping cleanup of stitch processing sub-workspace: {stitch_processing_dir} (stitch_success:{stitch_success}, skip_cleanup:{skip_cleanup})")
-
-        # Condition for cleaning the main run directory (current_run_base_output_dir)
-        # Cleaned if stitch was successful, skip_cleanup is not set, AND debug_mode is not set.
-        cleanup_main_run_dir = stitch_success and not skip_cleanup and not debug_mode
-
-        if cleanup_main_run_dir and 'current_run_base_output_dir' in locals() and current_run_base_output_dir.exists():
-            dprint(f"Stitch: Full run successful, not in debug, and cleanup not skipped. Cleaning up main run directory: {current_run_base_output_dir}")
-            try: shutil.rmtree(current_run_base_output_dir)
-            except Exception as e_c2: dprint(f"Stitch: Error cleaning up main run directory {current_run_base_output_dir}: {e_c2}")
-        elif 'current_run_base_output_dir' in locals() and current_run_base_output_dir.exists(): # Not cleaning main run dir, state why
-            reasons_for_keeping_main_run_dir = []
-            if not stitch_success: reasons_for_keeping_main_run_dir.append("stitch_failed")
-            if skip_cleanup: reasons_for_keeping_main_run_dir.append("skip_cleanup_enabled")
-            if debug_mode: reasons_for_keeping_main_run_dir.append("debug_mode_enabled")
-            # Add a more specific reason if stitch_sub_workspace was kept due to skip_cleanup, which then prevents main dir cleanup
-            if not cleanup_stitch_sub_workspace and stitch_success and skip_cleanup: 
-                reasons_for_keeping_main_run_dir.append("stitch_sub_workspace_kept_due_to_skip_cleanup")
-            
-            # Filter out redundant "debug_mode_enabled" if it's already implied by other conditions not met for cleanup_main_run_dir
-            if not (stitch_success and not skip_cleanup) and "debug_mode_enabled" in reasons_for_keeping_main_run_dir:
-                 if not debug_mode: # if debug_mode is false, but it's listed as a reason, it's because other primary conditions failed
-                     pass # Let it be listed if debug_mode is true
-                 elif not (stitch_success and not skip_cleanup): # if other conditions failed, debug is secondary
-                     # This part of logic for dprint is getting complex, simplify the message:
-                     pass # Handled by the general list.
-
-            final_reason_text = ", ".join(reasons_for_keeping_main_run_dir) if reasons_for_keeping_main_run_dir else "(e.g. stitch failed or conditions not met for cleanup)"
-            dprint(f"Stitch: Skipping cleanup of main run directory: {current_run_base_output_dir} (Reasons: {final_reason_text})")
-            
-    return stitch_success, final_video_location_for_db
+        return False, f"Stitch task failed: {str(e)[:200]}"
