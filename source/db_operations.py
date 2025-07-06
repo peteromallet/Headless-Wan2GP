@@ -583,7 +583,7 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
 
     if DB_TYPE == "supabase":
 
-        # Preferred path: call the `create_task` Edge Function so we don't
+        # Preferred path: call the `create-task` Edge Function so we don't
         # depend on a SQL RPC that may not exist.  We fall back to the legacy
         # RPC if the Edge Function is unavailable.
 
@@ -592,7 +592,7 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
             SUPABASE_EDGE_CREATE_TASK_URL  # may be set at runtime
             if "SUPABASE_EDGE_CREATE_TASK_URL" in globals() else None
         ) or (os.getenv("SUPABASE_EDGE_CREATE_TASK_URL") or None) or (
-            f"{SUPABASE_URL.rstrip('/')}/functions/v1/create_task" if SUPABASE_URL else None
+            f"{SUPABASE_URL.rstrip('/')}/functions/v1/create-task" if SUPABASE_URL else None
         )
 
         edge_success = False
