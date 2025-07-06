@@ -352,7 +352,15 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # Use the base directory directly without creating segment-specific subdirectories
         segment_processing_dir = current_run_base_output_dir
         segment_processing_dir.mkdir(parents=True, exist_ok=True)
-        dprint(f"Segment {segment_idx} (Task {segment_task_id_str}): Processing in {segment_processing_dir.resolve()}")
+
+        # ─── Ensure we have a directory for downloading remote images ────────────
+        if segment_image_download_dir is None:
+            segment_image_download_dir = segment_processing_dir / "image_downloads"
+            try:
+                segment_image_download_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as e_mkdir_dl:
+                dprint(f"[WARNING] Segment {segment_idx}: Could not create image_downloads dir {segment_image_download_dir}: {e_mkdir_dl}")
+        dprint(f"Segment {segment_idx} (Task {segment_task_id_str}): Processing in {segment_processing_dir.resolve()} | image_download_dir={segment_image_download_dir}")
 
         # --- Color Match Reference Image Determination ---
         start_ref_path_for_cm, end_ref_path_for_cm = None, None
