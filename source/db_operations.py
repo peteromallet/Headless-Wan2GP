@@ -861,9 +861,14 @@ def get_task_dependency(task_id: str) -> str | None:
 
 def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
     """Gets completed travel_segment outputs for a given run_id for stitching."""
+    print(f"[IMMEDIATE DEBUG] get_completed_segment_outputs_for_stitch called with run_id: {run_id}")
+    print(f"[IMMEDIATE DEBUG] DB_TYPE: {DB_TYPE}")
+    print(f"[IMMEDIATE DEBUG] SUPABASE_CLIENT present: {SUPABASE_CLIENT is not None}")
+    
     dprint(f"[DEBUG] get_completed_segment_outputs_for_stitch called with run_id: {run_id}")
     
     if DB_TYPE == "sqlite":
+        print(f"[IMMEDIATE DEBUG] Using SQLite path")
         def _get_op(conn):
             cursor = conn.cursor()
             sql_query = f"""
@@ -889,35 +894,46 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
             """
             dprint(f"[DEBUG] SQLite query: {sql_query}")
             dprint(f"[DEBUG] SQLite query params: run_id={run_id}, status={STATUS_COMPLETE}")
+            print(f"[IMMEDIATE DEBUG] SQLite query params: run_id={run_id}, status={STATUS_COMPLETE}")
             cursor.execute(sql_query, (run_id, STATUS_COMPLETE, run_id, STATUS_COMPLETE))
             rows = cursor.fetchall()
             dprint(f"[DEBUG] SQLite returned {len(rows)} rows: {rows}")
+            print(f"[IMMEDIATE DEBUG] SQLite returned {len(rows)} rows: {rows}")
             return rows
         return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_op)
     elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
+        print(f"[IMMEDIATE DEBUG] Using Supabase path")
         try:
             dprint(f"[DEBUG] Trying Supabase RPC func_get_completed_generation_segments_for_stitch with run_id: {run_id}")
+            print(f"[IMMEDIATE DEBUG] Trying Supabase RPC with run_id: {run_id}")
             rpc_params = {"p_run_id": run_id, "p_gen_task_type": "travel_segment"}
             rpc_response = SUPABASE_CLIENT.rpc("func_get_completed_generation_segments_for_stitch", rpc_params).execute()
             dprint(f"[DEBUG] RPC response: {rpc_response}")
+            print(f"[IMMEDIATE DEBUG] RPC response data: {rpc_response.data}")
+            print(f"[IMMEDIATE DEBUG] RPC response error: {rpc_response.error}")
 
             if rpc_response.data:
                 result = [(item.get("segment_idx"), item.get("output_loc")) for item in rpc_response.data]
                 dprint(f"[DEBUG] RPC returned {len(result)} items: {result}")
+                print(f"[IMMEDIATE DEBUG] RPC returned {len(result)} items: {result}")
                 return result
             elif rpc_response.error:
                 dprint(f"Stitch Supabase: Error from RPC func_get_completed_generation_segments_for_stitch: {rpc_response.error}. Falling back to direct select.")
+                print(f"[IMMEDIATE DEBUG] RPC error, falling back to direct select: {rpc_response.error}")
             # Fallback: direct select if RPC missing
             try:
                 dprint(f"[DEBUG] Falling back to direct select for run_id: {run_id}")
+                print(f"[IMMEDIATE DEBUG] Falling back to direct select for run_id: {run_id}")
                 sel_resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("params, output_location")\
                     .eq("task_type", "travel_segment").eq("status", STATUS_COMPLETE).execute()
                 dprint(f"[DEBUG] Direct select response: {sel_resp}")
+                print(f"[IMMEDIATE DEBUG] Direct select response data count: {len(sel_resp.data) if sel_resp.data else 0}")
                 
                 fallback_results = []
                 if sel_resp.data:
                     import json
                     dprint(f"[DEBUG] Processing {len(sel_resp.data)} rows from direct select")
+                    print(f"[IMMEDIATE DEBUG] Processing {len(sel_resp.data)} rows from direct select")
                     for i, row in enumerate(sel_resp.data):
                         dprint(f"[DEBUG] Row {i}: {row}")
                         params_raw = row.get("params")
@@ -937,21 +953,26 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
                             seg_idx = params_obj.get("segment_index")
                             output_loc = row.get("output_location")
                             dprint(f"[DEBUG] Row {i} MATCHED: segment_index={seg_idx}, output_location={output_loc}")
+                            print(f"[IMMEDIATE DEBUG] Row {i} MATCHED: segment_index={seg_idx}, output_location={output_loc}")
                             fallback_results.append((seg_idx, output_loc))
                         else:
                             dprint(f"[DEBUG] Row {i} run_id mismatch, skipping")
                 
                 sorted_results = sorted(fallback_results, key=lambda x: x[0] if x[0] is not None else 0)
                 dprint(f"[DEBUG] Final fallback results: {sorted_results}")
+                print(f"[IMMEDIATE DEBUG] Final fallback results: {sorted_results}")
                 return sorted_results
             except Exception as e_sel:
                 dprint(f"Stitch Supabase: Direct select fallback failed: {e_sel}")
+                print(f"[IMMEDIATE DEBUG] Direct select fallback failed: {e_sel}")
                 return []
         except Exception as e_supabase_fetch_gen:
-             dprint(f"Stitch Supabase: Exception during generation segment fetch: {e_supabase_fetch_gen}. Stitching may fail.")
-             return []
+            dprint(f"Stitch Supabase: Exception during generation segment fetch: {e_supabase_fetch_gen}. Stitching may fail.")
+            print(f"[IMMEDIATE DEBUG] Exception during Supabase fetch: {e_supabase_fetch_gen}")
+            return []
     
     dprint(f"[DEBUG] No DB_TYPE match, returning empty list")
+    print(f"[IMMEDIATE DEBUG] No DB_TYPE match, returning empty list")
     return []
 
 def get_initial_task_counts() -> tuple[int, int] | None:
