@@ -209,9 +209,15 @@ def parse_resolution(res_str: str) -> tuple[int, int]:
     except ValueError as e:
         raise ValueError(f"Resolution string must be in WIDTHxHEIGHT format with positive integers (e.g., '960x544'), got {res_str}. Error: {e}")
 
-def generate_unique_task_id(prefix="sm_task_") -> str:
-    """Generates a unique task ID."""
-    return f"{prefix}{uuid.uuid4().hex[:12]}"
+def generate_unique_task_id(prefix: str = "") -> str:
+    """Generates a UUID4 string.
+
+    The optional *prefix* parameter is now ignored so that the returned value
+    is a bare RFC-4122 UUID which can be stored in a Postgres `uuid` column
+    without casting errors.  The argument is kept in the signature to avoid
+    breaking existing call-sites that still pass a prefix.
+    """
+    return str(uuid.uuid4())
 
 def image_to_frame(image_path: str | Path, target_size: tuple[int, int]) -> np.ndarray | None:
     """Loads an image, resizes it, and converts to BGR NumPy array for OpenCV."""
