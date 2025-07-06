@@ -1335,9 +1335,9 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
 
         dprint(f"[DEBUG] Final segment_video_paths_for_stitch: {segment_video_paths_for_stitch}")
         dprint(f"[DEBUG] Total videos collected: {len(segment_video_paths_for_stitch)}")
-        dprint(f"[DEBUG] Expected total videos: {total_videos_for_stitch}")
         
         total_videos_for_stitch = (1 if initial_continued_video_path_str and Path(initial_continued_video_path_str).exists() else 0) + num_expected_new_segments
+        dprint(f"[DEBUG] Expected total videos: {total_videos_for_stitch}")
         if len(segment_video_paths_for_stitch) < total_videos_for_stitch:
             # This is a warning because some segments might have legitimately failed and been skipped by their handlers.
             # The stitcher should proceed with what it has, unless it has zero or one video when multiple were expected.
