@@ -34,23 +34,32 @@ serve(async (req) => {
   }
   const jwt = authHeader.slice(7);
   let callerId: string | null = null;
+  let isServiceRole = false;
   try {
     const [, payloadBase64] = jwt.split(".");
     const padded = payloadBase64 + "=".repeat((4 - payloadBase64.length % 4) % 4);
     const payload = JSON.parse(atob(padded));
     callerId = payload.sub;
+    // If the token represents the service role or an elevated role, allow bypass
+    const roleClaim = payload.role || payload.app_metadata?.role;
+    isServiceRole = roleClaim === "service_role" || roleClaim === "supabase_admin";
   } catch (e) {
     console.error("JWT decode failed", e);
     return new Response("Invalid JWT", { status: 401 });
   }
-  if (!callerId) {
+  if (!callerId && !isServiceRole) {
     return new Response("Could not extract user id from JWT", { status: 401 });
   }
 
-  // If project_id provided, ensure caller matches it
-  if (project_id && project_id !== callerId) {
-    return new Response("project_id does not match token", { status: 403 });
+  // If the caller is NOT service role, ensure project_id matches their sub
+  if (!isServiceRole) {
+    if (project_id && project_id !== callerId) {
+      return new Response("project_id does not match token", { status: 403 });
+    }
   }
+
+  // Determine which project_id to insert
+  const finalProjectId = project_id ?? callerId;
 
   // ─── 3. Insert row using service-role key ───────────────────────
   const supabase = createClient(
@@ -62,7 +71,7 @@ serve(async (req) => {
     id: task_id,
     params,
     task_type,
-    project_id: project_id ?? callerId,
+    project_id: finalProjectId,
     dependant_on: dependant_on ?? null,
     status: "Queued",
     created_at: new Date().toISOString(),
