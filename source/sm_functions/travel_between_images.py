@@ -1277,12 +1277,29 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                         resolved_video_path_for_stitch = absolute_path_candidate
                     else:
                         dprint(f"[WARNING] Stitch: Resolved absolute path '{absolute_path_candidate}' for segment index {seg_idx} (DB path: '{video_path_str_from_db}') does not exist or is not a file.")
-                else: # Path from DB is already absolute (Supabase) or an old absolute SQLite path, or non-standard
-                    absolute_path_candidate = Path(video_path_str_from_db).resolve()
-                    if absolute_path_candidate.exists() and absolute_path_candidate.is_file():
-                        resolved_video_path_for_stitch = absolute_path_candidate
+                else:
+                    # Supabase public URL or absolute path
+                    if video_path_str_from_db.startswith("http"):
+                        try:
+                            dprint(f"Stitch: Detected remote URL for segment {seg_idx}: {video_path_str_from_db}. Downloading...")
+                            from ..common_utils import download_file as sm_download_file
+                            remote_url = video_path_str_from_db
+                            local_filename = Path(remote_url).name
+                            local_download_path = stitch_processing_dir / f"seg{seg_idx:02d}_{local_filename}"
+                            if not local_download_path.exists():
+                                sm_download_file(remote_url, stitch_processing_dir, local_download_path.name)
+                                dprint(f"Stitch: Downloaded segment {seg_idx} video to {local_download_path}")
+                            else:
+                                dprint(f"Stitch: Local copy for segment {seg_idx} already exists at {local_download_path}")
+                            resolved_video_path_for_stitch = local_download_path
+                        except Exception as e_dl_stitch:
+                            dprint(f"[WARNING] Stitch: Failed to download remote video for segment {seg_idx}: {e_dl_stitch}")
                     else:
-                        dprint(f"[WARNING] Stitch: Absolute path from DB '{absolute_path_candidate}' for segment index {seg_idx} does not exist or is not a file.")
+                        absolute_path_candidate = Path(video_path_str_from_db).resolve()
+                        if absolute_path_candidate.exists() and absolute_path_candidate.is_file():
+                            resolved_video_path_for_stitch = absolute_path_candidate
+                        else:
+                            dprint(f"[WARNING] Stitch: Absolute path from DB '{absolute_path_candidate}' for segment index {seg_idx} does not exist or is not a file.")
 
             if resolved_video_path_for_stitch:
                 segment_video_paths_for_stitch.append(str(resolved_video_path_for_stitch))
