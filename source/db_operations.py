@@ -904,39 +904,16 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
     elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
         print(f"[IMMEDIATE DEBUG] Using Supabase path")
         
-        # Try RPC function first, but handle missing function gracefully
+        # Use direct select query (simpler and more reliable than RPC)
         try:
-            dprint(f"[DEBUG] Trying Supabase RPC func_get_completed_generation_segments_for_stitch with run_id: {run_id}")
-            print(f"[IMMEDIATE DEBUG] Trying Supabase RPC with run_id: {run_id}")
-            rpc_params = {"p_run_id": run_id, "p_gen_task_type": "travel_segment"}
-            rpc_response = SUPABASE_CLIENT.rpc("func_get_completed_generation_segments_for_stitch", rpc_params).execute()
-            dprint(f"[DEBUG] RPC response: {rpc_response}")
-            print(f"[IMMEDIATE DEBUG] RPC response data: {rpc_response.data}")
-            print(f"[IMMEDIATE DEBUG] RPC response error: {rpc_response.error}")
-
-            if rpc_response.data:
-                result = [(item.get("segment_idx"), item.get("output_loc")) for item in rpc_response.data]
-                dprint(f"[DEBUG] RPC returned {len(result)} items: {result}")
-                print(f"[IMMEDIATE DEBUG] RPC returned {len(result)} items: {result}")
-                return result
-            elif rpc_response.error:
-                dprint(f"Stitch Supabase: Error from RPC func_get_completed_generation_segments_for_stitch: {rpc_response.error}. Falling back to direct select.")
-                print(f"[IMMEDIATE DEBUG] RPC error, falling back to direct select: {rpc_response.error}")
-        except Exception as e_rpc:
-            # RPC function doesn't exist or other RPC error - fall back to direct select
-            dprint(f"Stitch Supabase: RPC function call failed: {e_rpc}. Falling back to direct select.")
-            print(f"[IMMEDIATE DEBUG] RPC function call failed: {e_rpc}. Falling back to direct select.")
-        
-        # Fallback: direct select if RPC missing or failed
-        try:
-            dprint(f"[DEBUG] Falling back to direct select for run_id: {run_id}")
-            print(f"[IMMEDIATE DEBUG] Falling back to direct select for run_id: {run_id}")
+            dprint(f"[DEBUG] Using direct select for run_id: {run_id}")
+            print(f"[IMMEDIATE DEBUG] Using direct select for run_id: {run_id}")
             sel_resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("params, output_location")\
                 .eq("task_type", "travel_segment").eq("status", STATUS_COMPLETE).execute()
             dprint(f"[DEBUG] Direct select response: {sel_resp}")
             print(f"[IMMEDIATE DEBUG] Direct select response data count: {len(sel_resp.data) if sel_resp.data else 0}")
             
-            fallback_results = []
+            results = []
             if sel_resp.data:
                 import json
                 dprint(f"[DEBUG] Processing {len(sel_resp.data)} rows from direct select")
@@ -961,17 +938,17 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
                         output_loc = row.get("output_location")
                         dprint(f"[DEBUG] Row {i} MATCHED: segment_index={seg_idx}, output_location={output_loc}")
                         print(f"[IMMEDIATE DEBUG] Row {i} MATCHED: segment_index={seg_idx}, output_location={output_loc}")
-                        fallback_results.append((seg_idx, output_loc))
+                        results.append((seg_idx, output_loc))
                     else:
                         dprint(f"[DEBUG] Row {i} run_id mismatch, skipping")
             
-            sorted_results = sorted(fallback_results, key=lambda x: x[0] if x[0] is not None else 0)
-            dprint(f"[DEBUG] Final fallback results: {sorted_results}")
-            print(f"[IMMEDIATE DEBUG] Final fallback results: {sorted_results}")
+            sorted_results = sorted(results, key=lambda x: x[0] if x[0] is not None else 0)
+            dprint(f"[DEBUG] Final results: {sorted_results}")
+            print(f"[IMMEDIATE DEBUG] Final results: {sorted_results}")
             return sorted_results
         except Exception as e_sel:
-            dprint(f"Stitch Supabase: Direct select fallback failed: {e_sel}")
-            print(f"[IMMEDIATE DEBUG] Direct select fallback failed: {e_sel}")
+            dprint(f"Stitch Supabase: Direct select failed: {e_sel}")
+            print(f"[IMMEDIATE DEBUG] Direct select failed: {e_sel}")
             return []
     
     dprint(f"[DEBUG] No DB_TYPE match, returning empty list")
