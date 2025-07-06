@@ -623,7 +623,7 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
                     "project_id": project_id,
                     "dependant_on": dependant_on,
                 }
-                
+
                 dprint(f"Supabase Edge call >>> POST {edge_url} payload={str(payload_edge)[:120]}…")
 
                 resp = httpx.post(edge_url, json=payload_edge, headers=headers, timeout=30)
@@ -945,8 +945,8 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
                 dprint(f"[DEBUG] Final fallback results: {sorted_results}")
                 return sorted_results
             except Exception as e_sel:
-                 dprint(f"Stitch Supabase: Direct select fallback failed: {e_sel}")
-                 return []
+                dprint(f"Stitch Supabase: Direct select fallback failed: {e_sel}")
+                return []
         except Exception as e_supabase_fetch_gen:
              dprint(f"Stitch Supabase: Exception during generation segment fetch: {e_supabase_fetch_gen}. Stitching may fail.")
              return []
