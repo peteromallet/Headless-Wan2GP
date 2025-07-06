@@ -585,6 +585,29 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             else:
                 dprint(f"Seg {segment_idx}: Could not find a valid 'depends_on' task ID for {segment_task_id_str}. Cannot create guide video based on predecessor.")
                 path_to_previous_segment_video_output_for_guide = None
+ 
+            # --- New: Handle Supabase public URLs by downloading them locally for guide processing ---
+            if path_to_previous_segment_video_output_for_guide and path_to_previous_segment_video_output_for_guide.startswith("http"):
+                try:
+                    dprint(f"Seg {segment_idx}: Detected remote URL for previous segment: {path_to_previous_segment_video_output_for_guide}. Downloading...")
+                    # Reuse download_file utility from common_utils
+                    from ..common_utils import download_file as sm_download_file, sm_get_unique_target_path
+                    remote_url = path_to_previous_segment_video_output_for_guide
+                    local_filename = Path(remote_url).name
+                    # Store under segment_processing_dir to keep things tidy
+                    local_download_path = segment_processing_dir / f"prev_{segment_idx:02d}_{local_filename}"
+                    # Ensure directory exists
+                    segment_processing_dir.mkdir(parents=True, exist_ok=True)
+                    # Perform download if file not already present
+                    if not local_download_path.exists():
+                        sm_download_file(remote_url, segment_processing_dir, local_download_path.name)
+                        dprint(f"Seg {segment_idx}: Downloaded previous segment video to {local_download_path}")
+                    else:
+                        dprint(f"Seg {segment_idx}: Local copy of previous segment video already exists at {local_download_path}")
+                    path_to_previous_segment_video_output_for_guide = str(local_download_path.resolve())
+                except Exception as e_dl_prev:
+                    dprint(f"[WARNING] Seg {segment_idx}: Failed to download remote previous segment video: {e_dl_prev}")
+                    # Leave path unchanged – will trigger the existing invalid path error below
 
             if not path_to_previous_segment_video_output_for_guide or not Path(path_to_previous_segment_video_output_for_guide).exists():
                 error_detail_path = raw_path_from_db if 'raw_path_from_db' in locals() and raw_path_from_db else path_to_previous_segment_video_output_for_guide
