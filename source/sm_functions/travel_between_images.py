@@ -1193,6 +1193,10 @@ def _cleanup_intermediate_video(orchestrator_payload, video_path: Path, segment_
             dprint(f"Chain (Seg {segment_idx}): Warning - could not remove intermediate video {video_path}: {e_del}")
 
 def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: Path, stitch_task_id_str: str, *, dprint):
+    print(f"[IMMEDIATE DEBUG] _handle_travel_stitch_task: Starting for {stitch_task_id_str}")
+    print(f"[IMMEDIATE DEBUG] task_params_from_db keys: {list(task_params_from_db.keys())}")
+    print(f"[IMMEDIATE DEBUG] DB_TYPE: {db_ops.DB_TYPE}")
+    
     dprint(f"_handle_travel_stitch_task: Starting for {stitch_task_id_str}")
     dprint(f"Stitch task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
     stitch_params = task_params_from_db # This now contains full_orchestrator_payload
@@ -1204,6 +1208,10 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         orchestrator_task_id_ref = stitch_params.get("orchestrator_task_id_ref")
         orchestrator_run_id = stitch_params.get("orchestrator_run_id")
         full_orchestrator_payload = stitch_params.get("full_orchestrator_payload")
+
+        print(f"[IMMEDIATE DEBUG] orchestrator_run_id: {orchestrator_run_id}")
+        print(f"[IMMEDIATE DEBUG] orchestrator_task_id_ref: {orchestrator_task_id_ref}")
+        print(f"[IMMEDIATE DEBUG] full_orchestrator_payload present: {full_orchestrator_payload is not None}")
 
         if not all([orchestrator_task_id_ref, orchestrator_run_id, full_orchestrator_payload]):
             msg = f"Stitch task {stitch_task_id_str} missing critical orchestrator refs or full_orchestrator_payload."
@@ -1220,6 +1228,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         dprint(f"Stitch Task {stitch_task_id_str}: Processing in {stitch_processing_dir.resolve()}")
 
         num_expected_new_segments = full_orchestrator_payload["num_new_segments_to_generate"]
+        print(f"[IMMEDIATE DEBUG] num_expected_new_segments: {num_expected_new_segments}")
         
         # Ensure parsed_res_wh is a tuple of integers for stitch task with model grid snapping
         parsed_res_wh_str = full_orchestrator_payload["parsed_resolution_wh"]
@@ -1264,17 +1273,33 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         # Fetch completed segments with a small retry loop to handle race conditions
         max_stitch_fetch_retries = 6  # Allow up to ~18s total wait
         completed_segment_outputs_from_db = []
+        
+        print(f"[IMMEDIATE DEBUG] About to start retry loop for run_id: {orchestrator_run_id}")
+        
         for attempt in range(max_stitch_fetch_retries):
+            print(f"[IMMEDIATE DEBUG] Stitch fetch attempt {attempt+1}/{max_stitch_fetch_retries} for run_id: {orchestrator_run_id}")
             dprint(f"[DEBUG] Stitch fetch attempt {attempt+1}/{max_stitch_fetch_retries} for run_id: {orchestrator_run_id}")
-            completed_segment_outputs_from_db = db_ops.get_completed_segment_outputs_for_stitch(orchestrator_run_id) or []
+            
+            try:
+                completed_segment_outputs_from_db = db_ops.get_completed_segment_outputs_for_stitch(orchestrator_run_id) or []
+                print(f"[IMMEDIATE DEBUG] DB query returned: {completed_segment_outputs_from_db}")
+            except Exception as e_db_query:
+                print(f"[IMMEDIATE DEBUG] DB query failed: {e_db_query}")
+                completed_segment_outputs_from_db = []
+            
             dprint(f"[DEBUG] Attempt {attempt+1} returned {len(completed_segment_outputs_from_db)} segments")
+            print(f"[IMMEDIATE DEBUG] Attempt {attempt+1} returned {len(completed_segment_outputs_from_db)} segments")
+            
             if len(completed_segment_outputs_from_db) >= num_expected_new_segments:
                 dprint(f"[DEBUG] Expected {num_expected_new_segments} segment rows found on attempt {attempt+1}. Proceeding.")
+                print(f"[IMMEDIATE DEBUG] Expected {num_expected_new_segments} segment rows found on attempt {attempt+1}. Proceeding.")
                 break
             dprint(f"Stitch: No completed segment rows found (attempt {attempt+1}/{max_stitch_fetch_retries}). Waiting 3s and retrying...")
+            print(f"[IMMEDIATE DEBUG] Insufficient segments found (attempt {attempt+1}/{max_stitch_fetch_retries}). Waiting 3s and retrying...")
             if attempt < max_stitch_fetch_retries - 1:  # Don't sleep after the last attempt
                 time.sleep(3)
         dprint(f"Stitch Task {stitch_task_id_str}: Completed segments fetched: {completed_segment_outputs_from_db}")
+        print(f"[IMMEDIATE DEBUG] Final completed_segment_outputs_from_db: {completed_segment_outputs_from_db}")
 
         # ------------------------------------------------------------------
         # 2b. Resolve each returned video path (local, SQLite-relative, or URL)
