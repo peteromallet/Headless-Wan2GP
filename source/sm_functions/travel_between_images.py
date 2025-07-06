@@ -1288,14 +1288,21 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 dprint(f"[WARNING] Stitch: Segment {seg_idx} has empty video_path in DB; skipping.")
                 continue
 
-            # Case A: SQLite relative path that starts with files/
-            if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and video_path_str_from_db.startswith("files/"):
-                sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
-                absolute_path_candidate = (sqlite_db_parent / "public" / video_path_str_from_db).resolve()
-                dprint(f"Stitch: Resolved SQLite relative path '{video_path_str_from_db}' to '{absolute_path_candidate}' for segment {seg_idx}")
+            # Case A: Relative path that starts with files/ (works for both sqlite and supabase when headless has local access)
+            if video_path_str_from_db.startswith("files/") or video_path_str_from_db.startswith("public/files/"):
+                sqlite_db_parent = None
+                if db_ops.SQLITE_DB_PATH:
+                    sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
+                else:
+                    # Fall back: examine cwd and assume standard layout ../public
+                    try:
+                        sqlite_db_parent = Path.cwd()
+                    except Exception:
+                        sqlite_db_parent = Path(".")
+                absolute_path_candidate = (sqlite_db_parent / "public" / video_path_str_from_db.lstrip("public/")).resolve()
+                dprint(f"Stitch: Resolved relative path '{video_path_str_from_db}' to '{absolute_path_candidate}' for segment {seg_idx}")
                 if absolute_path_candidate.exists() and absolute_path_candidate.is_file():
                     resolved_video_path_for_stitch = absolute_path_candidate
-                    dprint(f"[DEBUG] SQLite path exists: {absolute_path_candidate}")
                 else:
                     dprint(f"[WARNING] Stitch: Resolved absolute path '{absolute_path_candidate}' for segment {seg_idx} is missing.")
 
