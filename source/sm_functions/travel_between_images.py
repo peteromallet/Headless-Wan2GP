@@ -1337,12 +1337,12 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             if resolved_video_path_for_stitch is not None:
                 segment_video_paths_for_stitch.append(str(resolved_video_path_for_stitch))
                 dprint(f"Stitch: Added video for segment {seg_idx}: {resolved_video_path_for_stitch}")
-            else:
+            else: 
                 dprint(f"[WARNING] Stitch: Unable to resolve video for segment {seg_idx}; will be excluded from stitching.")
 
         dprint(f"[DEBUG] Final segment_video_paths_for_stitch: {segment_video_paths_for_stitch}")
         dprint(f"[DEBUG] Total videos collected: {len(segment_video_paths_for_stitch)}")
-        
+
         total_videos_for_stitch = (1 if initial_continued_video_path_str and Path(initial_continued_video_path_str).exists() else 0) + num_expected_new_segments
         dprint(f"[DEBUG] Expected total videos: {total_videos_for_stitch}")
         if len(segment_video_paths_for_stitch) < total_videos_for_stitch:

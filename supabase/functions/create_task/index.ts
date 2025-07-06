@@ -53,9 +53,9 @@ serve(async (req) => {
 
   // If the caller is NOT service role, ensure project_id matches their sub
   if (!isServiceRole) {
-    if (project_id && project_id !== callerId) {
-      return new Response("project_id does not match token", { status: 403 });
-    }
+  if (project_id && project_id !== callerId) {
+    return new Response("project_id does not match token", { status: 403 });
+  }
   }
 
   // Determine which project_id to insert
