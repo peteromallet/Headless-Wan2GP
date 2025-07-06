@@ -449,6 +449,8 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
 
     # --- Prefer edge function for COMPLETE state ---
     if status_str == STATUS_COMPLETE and output_location_val is not None:
+        print(f"[IMMEDIATE DEBUG] Task {task_id_str} being marked COMPLETE, trying Edge Function first")
+        print(f"[IMMEDIATE DEBUG] output_location_val: {output_location_val}")
         dprint(f"[DEBUG] Task {task_id_str} being marked COMPLETE, trying Edge Function first")
         # Build edge URL (env override > global var > default pattern)
         edge_url = (
@@ -456,19 +458,28 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
             or (os.getenv("SUPABASE_EDGE_COMPLETE_TASK_URL") or None)
             or (f"{SUPABASE_URL.rstrip('/')}/functions/v1/complete-task" if SUPABASE_URL else None)
         )
+        print(f"[IMMEDIATE DEBUG] edge_url: {edge_url}")
 
         if edge_url:
             try:
                 # Check if output_location_val is a local file path
                 output_path = Path(output_location_val)
+                print(f"[IMMEDIATE DEBUG] output_path: {output_path}")
+                print(f"[IMMEDIATE DEBUG] output_path.exists(): {output_path.exists()}")
+                print(f"[IMMEDIATE DEBUG] output_path.is_file(): {output_path.is_file() if output_path.exists() else 'N/A'}")
+                
                 if output_path.exists() and output_path.is_file():
+                    print(f"[IMMEDIATE DEBUG] File exists, preparing for upload")
                     # Read the file and encode as base64
                     import base64
                     with open(output_path, 'rb') as f:
                         file_data = base64.b64encode(f.read()).decode('utf-8')
                     
+                    print(f"[IMMEDIATE DEBUG] File size: {len(file_data)} base64 chars")
+                    
                     # Use the globally stored access token
                     jwt = SUPABASE_ACCESS_TOKEN
+                    print(f"[IMMEDIATE DEBUG] JWT present: {jwt is not None}")
 
                     headers = {"Content-Type": "application/json"}
                     if jwt:
@@ -479,20 +490,27 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                         "file_data": file_data,
                         "filename": output_path.name
                     }
+                    print(f"[IMMEDIATE DEBUG] Calling Edge Function with filename: {output_path.name}")
                     dprint(f"[DEBUG] Calling Edge Function with file upload for task {task_id_str}")
                     dprint(f"Supabase Edge call >>> POST {edge_url} with file: {output_path.name}")
                     resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)  # Increased timeout for file upload
 
+                    print(f"[IMMEDIATE DEBUG] Edge Function response status: {resp.status_code}")
+                    print(f"[IMMEDIATE DEBUG] Edge Function response text: {resp.text}")
+                    
                     if resp.status_code == 200:
+                        print(f"[IMMEDIATE DEBUG] Edge function SUCCESS for task {task_id_str}")
                         dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE with file upload")
                         dprint(f"Edge function completed task {task_id_str} → status COMPLETE with file upload")
                         return  # Success, no further RPC needed
                     else:
+                        print(f"[IMMEDIATE DEBUG] Edge function FAILED for task {task_id_str}: {resp.status_code}")
                         dprint(f"[DEBUG] Edge function FAILED for task {task_id_str}: {resp.status_code}")
                         dprint(
                             f"Edge function returned {resp.status_code}: {resp.text}. Falling back to RPC."
                         )
                 else:
+                    print(f"[IMMEDIATE DEBUG] Not a local file, treating as URL")
                     # Not a local file, treat as URL and use old logic
                     payload = {"task_id": task_id_str, "output_location": output_location_val}
                     dprint(f"[DEBUG] Calling Edge Function with URL for task {task_id_str}")
@@ -515,8 +533,11 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                             f"Edge function returned {resp.status_code}: {resp.text}. Falling back to RPC."
                         )
             except Exception as e_edge:
+                print(f"[IMMEDIATE DEBUG] Edge function EXCEPTION for task {task_id_str}: {e_edge}")
                 dprint(f"[DEBUG] Edge function EXCEPTION for task {task_id_str}: {e_edge}")
                 dprint(f"Edge function call failed: {e_edge}. Falling back to RPC.")
+        else:
+            print(f"[IMMEDIATE DEBUG] No edge_url available")
 
     # --- Fallback to RPC for other states or if Edge Function fails ---
     dprint(f"[DEBUG] Using RPC fallback for task {task_id_str}")
