@@ -1262,14 +1262,14 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             segment_video_paths_for_stitch.append(str(Path(initial_continued_video_path_str).resolve()))
         
         # Fetch completed segments with a small retry loop to handle race conditions
-        max_stitch_fetch_retries = 3
+        max_stitch_fetch_retries = 6  # Allow up to ~18s total wait
         completed_segment_outputs_from_db = []
         for attempt in range(max_stitch_fetch_retries):
             dprint(f"[DEBUG] Stitch fetch attempt {attempt+1}/{max_stitch_fetch_retries} for run_id: {orchestrator_run_id}")
             completed_segment_outputs_from_db = db_ops.get_completed_segment_outputs_for_stitch(orchestrator_run_id) or []
             dprint(f"[DEBUG] Attempt {attempt+1} returned {len(completed_segment_outputs_from_db)} segments")
-            if completed_segment_outputs_from_db:
-                dprint(f"[DEBUG] Segments found on attempt {attempt+1}, breaking retry loop")
+            if len(completed_segment_outputs_from_db) >= num_expected_new_segments:
+                dprint(f"[DEBUG] Expected {num_expected_new_segments} segment rows found on attempt {attempt+1}. Proceeding.")
                 break
             dprint(f"Stitch: No completed segment rows found (attempt {attempt+1}/{max_stitch_fetch_retries}). Waiting 3s and retrying...")
             if attempt < max_stitch_fetch_retries - 1:  # Don't sleep after the last attempt
