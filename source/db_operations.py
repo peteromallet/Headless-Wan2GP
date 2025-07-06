@@ -883,8 +883,28 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
             if rpc_response.data:
                 return [(item.get("segment_idx"), item.get("output_loc")) for item in rpc_response.data]
             elif rpc_response.error:
-                dprint(f"Stitch Supabase: Error from RPC func_get_completed_generation_segments_for_stitch: {rpc_response.error}. Stitching may fail.")
-                return []
+                dprint(f"Stitch Supabase: Error from RPC func_get_completed_generation_segments_for_stitch: {rpc_response.error}. Falling back to direct select.")
+            # Fallback: direct select if RPC missing
+            try:
+                sel_resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("params, output_location")\
+                    .eq("task_type", "travel_segment").eq("status", STATUS_COMPLETE).execute()
+                fallback_results = []
+                if sel_resp.data:
+                    import json
+                    for row in sel_resp.data:
+                        params_raw = row.get("params")
+                        if params_raw is None: continue
+                        try:
+                            params_obj = params_raw if isinstance(params_raw, dict) else json.loads(params_raw)
+                        except Exception:
+                            continue
+                        if params_obj.get("orchestrator_run_id") == run_id:
+                            seg_idx = params_obj.get("segment_index")
+                            fallback_results.append((seg_idx, row.get("output_location")))
+                return sorted(fallback_results, key=lambda x: x[0] if x[0] is not None else 0)
+            except Exception as e_sel:
+                 dprint(f"Stitch Supabase: Direct select fallback failed: {e_sel}")
+                 return []
         except Exception as e_supabase_fetch_gen:
              dprint(f"Stitch Supabase: Exception during generation segment fetch: {e_supabase_fetch_gen}. Stitching may fail.")
              return []
