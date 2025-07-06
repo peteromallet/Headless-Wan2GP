@@ -903,6 +903,8 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
         return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_op)
     elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
         print(f"[IMMEDIATE DEBUG] Using Supabase path")
+        
+        # Try RPC function first, but handle missing function gracefully
         try:
             dprint(f"[DEBUG] Trying Supabase RPC func_get_completed_generation_segments_for_stitch with run_id: {run_id}")
             print(f"[IMMEDIATE DEBUG] Trying Supabase RPC with run_id: {run_id}")
@@ -920,55 +922,56 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
             elif rpc_response.error:
                 dprint(f"Stitch Supabase: Error from RPC func_get_completed_generation_segments_for_stitch: {rpc_response.error}. Falling back to direct select.")
                 print(f"[IMMEDIATE DEBUG] RPC error, falling back to direct select: {rpc_response.error}")
-            # Fallback: direct select if RPC missing
-            try:
-                dprint(f"[DEBUG] Falling back to direct select for run_id: {run_id}")
-                print(f"[IMMEDIATE DEBUG] Falling back to direct select for run_id: {run_id}")
-                sel_resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("params, output_location")\
-                    .eq("task_type", "travel_segment").eq("status", STATUS_COMPLETE).execute()
-                dprint(f"[DEBUG] Direct select response: {sel_resp}")
-                print(f"[IMMEDIATE DEBUG] Direct select response data count: {len(sel_resp.data) if sel_resp.data else 0}")
-                
-                fallback_results = []
-                if sel_resp.data:
-                    import json
-                    dprint(f"[DEBUG] Processing {len(sel_resp.data)} rows from direct select")
-                    print(f"[IMMEDIATE DEBUG] Processing {len(sel_resp.data)} rows from direct select")
-                    for i, row in enumerate(sel_resp.data):
-                        dprint(f"[DEBUG] Row {i}: {row}")
-                        params_raw = row.get("params")
-                        if params_raw is None: 
-                            dprint(f"[DEBUG] Row {i} has no params, skipping")
-                            continue
-                        try:
-                            params_obj = params_raw if isinstance(params_raw, dict) else json.loads(params_raw)
-                        except Exception as e:
-                            dprint(f"[DEBUG] Row {i} params parse failed: {e}")
-                            continue
-                        
-                        row_run_id = params_obj.get("orchestrator_run_id")
-                        dprint(f"[DEBUG] Row {i} orchestrator_run_id: {row_run_id} (looking for: {run_id})")
-                        
-                        if row_run_id == run_id:
-                            seg_idx = params_obj.get("segment_index")
-                            output_loc = row.get("output_location")
-                            dprint(f"[DEBUG] Row {i} MATCHED: segment_index={seg_idx}, output_location={output_loc}")
-                            print(f"[IMMEDIATE DEBUG] Row {i} MATCHED: segment_index={seg_idx}, output_location={output_loc}")
-                            fallback_results.append((seg_idx, output_loc))
-                        else:
-                            dprint(f"[DEBUG] Row {i} run_id mismatch, skipping")
-                
-                sorted_results = sorted(fallback_results, key=lambda x: x[0] if x[0] is not None else 0)
-                dprint(f"[DEBUG] Final fallback results: {sorted_results}")
-                print(f"[IMMEDIATE DEBUG] Final fallback results: {sorted_results}")
-                return sorted_results
-            except Exception as e_sel:
-                dprint(f"Stitch Supabase: Direct select fallback failed: {e_sel}")
-                print(f"[IMMEDIATE DEBUG] Direct select fallback failed: {e_sel}")
-                return []
-        except Exception as e_supabase_fetch_gen:
-            dprint(f"Stitch Supabase: Exception during generation segment fetch: {e_supabase_fetch_gen}. Stitching may fail.")
-            print(f"[IMMEDIATE DEBUG] Exception during Supabase fetch: {e_supabase_fetch_gen}")
+        except Exception as e_rpc:
+            # RPC function doesn't exist or other RPC error - fall back to direct select
+            dprint(f"Stitch Supabase: RPC function call failed: {e_rpc}. Falling back to direct select.")
+            print(f"[IMMEDIATE DEBUG] RPC function call failed: {e_rpc}. Falling back to direct select.")
+        
+        # Fallback: direct select if RPC missing or failed
+        try:
+            dprint(f"[DEBUG] Falling back to direct select for run_id: {run_id}")
+            print(f"[IMMEDIATE DEBUG] Falling back to direct select for run_id: {run_id}")
+            sel_resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("params, output_location")\
+                .eq("task_type", "travel_segment").eq("status", STATUS_COMPLETE).execute()
+            dprint(f"[DEBUG] Direct select response: {sel_resp}")
+            print(f"[IMMEDIATE DEBUG] Direct select response data count: {len(sel_resp.data) if sel_resp.data else 0}")
+            
+            fallback_results = []
+            if sel_resp.data:
+                import json
+                dprint(f"[DEBUG] Processing {len(sel_resp.data)} rows from direct select")
+                print(f"[IMMEDIATE DEBUG] Processing {len(sel_resp.data)} rows from direct select")
+                for i, row in enumerate(sel_resp.data):
+                    dprint(f"[DEBUG] Row {i}: {row}")
+                    params_raw = row.get("params")
+                    if params_raw is None: 
+                        dprint(f"[DEBUG] Row {i} has no params, skipping")
+                        continue
+                    try:
+                        params_obj = params_raw if isinstance(params_raw, dict) else json.loads(params_raw)
+                    except Exception as e:
+                        dprint(f"[DEBUG] Row {i} params parse failed: {e}")
+                        continue
+                    
+                    row_run_id = params_obj.get("orchestrator_run_id")
+                    dprint(f"[DEBUG] Row {i} orchestrator_run_id: {row_run_id} (looking for: {run_id})")
+                    
+                    if row_run_id == run_id:
+                        seg_idx = params_obj.get("segment_index")
+                        output_loc = row.get("output_location")
+                        dprint(f"[DEBUG] Row {i} MATCHED: segment_index={seg_idx}, output_location={output_loc}")
+                        print(f"[IMMEDIATE DEBUG] Row {i} MATCHED: segment_index={seg_idx}, output_location={output_loc}")
+                        fallback_results.append((seg_idx, output_loc))
+                    else:
+                        dprint(f"[DEBUG] Row {i} run_id mismatch, skipping")
+            
+            sorted_results = sorted(fallback_results, key=lambda x: x[0] if x[0] is not None else 0)
+            dprint(f"[DEBUG] Final fallback results: {sorted_results}")
+            print(f"[IMMEDIATE DEBUG] Final fallback results: {sorted_results}")
+            return sorted_results
+        except Exception as e_sel:
+            dprint(f"Stitch Supabase: Direct select fallback failed: {e_sel}")
+            print(f"[IMMEDIATE DEBUG] Direct select fallback failed: {e_sel}")
             return []
     
     dprint(f"[DEBUG] No DB_TYPE match, returning empty list")
