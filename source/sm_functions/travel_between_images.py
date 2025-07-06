@@ -4,6 +4,7 @@ import shutil
 import traceback
 from pathlib import Path
 import time
+import subprocess
 
 try:
     import cv2
@@ -1475,11 +1476,16 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         video_path_after_optional_upscale = current_stitched_video_path
 
         if isinstance(upscale_factor, (float, int)) and upscale_factor > 1.0 and upscale_model_name:
+            print(f"[STITCH UPSCALE] Starting upscale process: {upscale_factor}x using model {upscale_model_name}")
             dprint(f"Stitch: Upscaling (x{upscale_factor}) video {current_stitched_video_path.name} using model {upscale_model_name}")
             
-            original_frames_count, _ = sm_get_video_frame_count_and_fps(str(current_stitched_video_path))
+            original_frames_count, original_fps = sm_get_video_frame_count_and_fps(str(current_stitched_video_path))
             if original_frames_count is None or original_frames_count == 0:
                 raise ValueError(f"Stitch: Cannot get frame count or 0 frames for video {current_stitched_video_path} before upscaling.")
+            
+            print(f"[STITCH UPSCALE] Input video: {original_frames_count} frames @ {original_fps} FPS")
+            print(f"[STITCH UPSCALE] Target resolution: {int(parsed_res_wh[0] * upscale_factor)}x{int(parsed_res_wh[1] * upscale_factor)}")
+            dprint(f"[DEBUG] Pre-upscale analysis: {original_frames_count} frames, {original_fps} FPS")
 
             target_width_upscaled = int(parsed_res_wh[0] * upscale_factor)
             target_height_upscaled = int(parsed_res_wh[1] * upscale_factor)
@@ -1504,16 +1510,20 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 task_payload=upscale_payload, 
                 task_type_str=upscaler_engine_to_use
             )
+            print(f"[STITCH UPSCALE] Enqueued upscale sub-task {upscale_sub_task_id} ({upscaler_engine_to_use}). Waiting...")
             print(f"Stitch Task {stitch_task_id_str}: Enqueued upscale sub-task {upscale_sub_task_id} ({upscaler_engine_to_use}). Waiting...")
             
             poll_interval_ups = full_orchestrator_payload.get("poll_interval", 15)
             poll_timeout_ups = full_orchestrator_payload.get("poll_timeout_upscale", full_orchestrator_payload.get("poll_timeout", 30 * 60) * 2)
+            
+            print(f"[STITCH UPSCALE] Polling for completion (timeout: {poll_timeout_ups}s, interval: {poll_interval_ups}s)")
             
             upscaled_video_db_location = db_ops.poll_task_status(
                 task_id=upscale_sub_task_id, 
                 poll_interval_seconds=poll_interval_ups, 
                 timeout_seconds=poll_timeout_ups
             )
+            print(f"[STITCH UPSCALE] Poll result: {upscaled_video_db_location}")
             dprint(f"Stitch Task {stitch_task_id_str}: Upscale sub-task {upscale_sub_task_id} poll result: {upscaled_video_db_location}")
 
             if upscaled_video_db_location:
@@ -1525,7 +1535,21 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                     upscaled_video_abs_path = Path(upscaled_video_db_location)
 
                 if upscaled_video_abs_path.exists():
+                    print(f"[STITCH UPSCALE] Upscale completed successfully: {upscaled_video_abs_path}")
                     dprint(f"Stitch: Upscale sub-task {upscale_sub_task_id} completed. Output: {upscaled_video_abs_path}")
+                    
+                    # Analyze upscaled result
+                    try:
+                        upscaled_frame_count, upscaled_fps = sm_get_video_frame_count_and_fps(str(upscaled_video_abs_path))
+                        print(f"[STITCH UPSCALE] Upscaled result: {upscaled_frame_count} frames @ {upscaled_fps} FPS")
+                        dprint(f"[DEBUG] Post-upscale analysis: {upscaled_frame_count} frames, {upscaled_fps} FPS")
+                        
+                        # Compare frame counts
+                        if upscaled_frame_count != original_frames_count:
+                            print(f"[STITCH UPSCALE] Frame count changed during upscale: {original_frames_count} → {upscaled_frame_count}")
+                    except Exception as e_post_upscale:
+                        print(f"[WARNING] Could not analyze upscaled video: {e_post_upscale}")
+                    
                     video_path_after_optional_upscale = upscaled_video_abs_path
                     
                     if not full_orchestrator_payload.get("skip_cleanup_enabled", False) and \
@@ -1537,12 +1561,18 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                         except Exception as e_del_non_upscaled:
                             dprint(f"Stitch: Warning - could not remove non-upscaled video {current_stitched_video_path}: {e_del_non_upscaled}")
                 else: 
+                    print(f"[STITCH UPSCALE] ERROR: Upscale output missing at {upscaled_video_abs_path}. Using non-upscaled video.")
                     print(f"[WARNING] Stitch Task {stitch_task_id_str}: Upscale sub-task {upscale_sub_task_id} output missing ({upscaled_video_abs_path}). Using non-upscaled video.")
             else: 
+                print(f"[STITCH UPSCALE] ERROR: Upscale sub-task failed or timed out. Using non-upscaled video.")
                 print(f"[WARNING] Stitch Task {stitch_task_id_str}: Upscale sub-task {upscale_sub_task_id} failed or timed out. Using non-upscaled video.")
 
         elif upscale_factor > 1.0 and not upscale_model_name:
+            print(f"[STITCH UPSCALE] Upscale factor {upscale_factor} > 1.0 but no upscale_model_name provided. Skipping upscale.")
             dprint(f"Stitch: Upscale factor {upscale_factor} > 1.0 but no upscale_model_name provided. Skipping upscale.")
+        else:
+            print(f"[STITCH UPSCALE] No upscaling requested (factor: {upscale_factor})")
+            dprint(f"Stitch: No upscaling (factor: {upscale_factor})")
 
         # Use prepare_output_path_with_upload to handle final video location consistently (with Supabase upload support)
         final_video_filename = f"{orchestrator_run_id}_final{video_path_after_optional_upscale.suffix}"
@@ -1572,6 +1602,15 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         )
         
         print(f"Stitch Task {stitch_task_id_str}: Final video saved to: {final_video_path} (DB location: {final_video_location_for_db})")
+        
+        # Analyze final result
+        try:
+            final_frame_count, final_fps = sm_get_video_frame_count_and_fps(str(final_video_path))
+            final_duration = final_frame_count / final_fps if final_fps > 0 else 0
+            print(f"[STITCH FINAL] Final video: {final_frame_count} frames @ {final_fps} FPS = {final_duration:.2f}s")
+            dprint(f"[DEBUG] Final video analysis: {final_frame_count} frames, {final_fps} FPS, {final_duration:.2f}s duration")
+        except Exception as e_final_analysis:
+            print(f"[WARNING] Could not analyze final video: {e_final_analysis}")
         
         # Note: Individual segments already have banner overlays applied when show_input_images is enabled,
         # so the stitched video will automatically include them. No additional overlay needed here.
