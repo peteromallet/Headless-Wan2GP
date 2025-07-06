@@ -90,8 +90,7 @@ serve(async (req) => {
         output_location: publicUrl
       })
       .eq("id", task_id)
-      .eq("status", "In Progress")
-      .is("output_location", null);
+      .eq("status", "In Progress");
 
     if (dbError) {
       console.error("Database update error:", dbError);
