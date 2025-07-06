@@ -611,8 +611,9 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
                 
                 # Only include project_id if it's not the default fallback
                 # This allows the Edge Function to use the caller's JWT subject as project_id
+                # Skip project_id entirely to avoid JWT mismatch errors
                 if project_id != "default_project_id":
-                    payload_edge["project_id"] = project_id
+                    dprint(f"Skipping project_id ({project_id}) in Edge Function payload to avoid JWT mismatch - Edge Function will use JWT subject")
 
                 dprint(f"Supabase Edge call >>> POST {edge_url} payload={str(payload_edge)[:120]}…")
 
