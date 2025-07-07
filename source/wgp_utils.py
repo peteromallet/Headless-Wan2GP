@@ -183,35 +183,30 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
     params = {**defaults, **kwargs}
 
     # ------------------------------------------------------------
-    #  CausVid LoRA upstream fix – calculate steps to achieve target video_length
+    #  CausVid LoRA upstream fix – use fast inference with explicit video_length
     # ------------------------------------------------------------
     if use_causvid_lora:
         causvid_lora_name = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
         activated_loras, loras_multipliers = _ensure_lora_in_lists(causvid_lora_name, "1.0", activated_loras, loras_multipliers)
         
-        # Calculate num_inference_steps to achieve target video_length
-        # WGP formula: video_length = num_inference_steps * 3 - 2
-        # Solving for steps: num_inference_steps = (video_length + 2) / 3
-        required_steps = max(1, int((video_length + 2) / 3))
-        dprint(f"[Task ID: {task_id}] CausVid: Calculating steps for target {video_length} frames: {required_steps} steps")
-        
-        _set_param_if_different(params, "num_inference_steps", required_steps, task_id, "CausVid", dprint)
+        # CausVid uses fast inference (8 steps) but should still generate target video_length
+        # The key is to set video_length explicitly so WGP doesn't recalculate it
+        _set_param_if_different(params, "num_inference_steps", 8, task_id, "CausVid", dprint)
+        _set_param_if_different(params, "video_length", video_length, task_id, "CausVid", dprint)  # Make video_length authoritative
         _set_param_if_different(params, "guidance_scale", 1.0, task_id, "CausVid", dprint)
         _set_param_if_different(params, "flow_shift", 1.0, task_id, "CausVid", dprint)
 
     # ------------------------------------------------------------
-    #  Light I2X LoRA tweaks – calculate steps to achieve target video_length
+    #  Light I2X LoRA tweaks – use fast inference with explicit video_length
     # ------------------------------------------------------------
     if use_lighti2x_lora:
         lighti2x_lora_name = "wan_lcm_r16_fp32_comfy.safetensors"
         activated_loras, loras_multipliers = _ensure_lora_in_lists(lighti2x_lora_name, "1.0", activated_loras, loras_multipliers)
         
-        # Calculate num_inference_steps to achieve target video_length
-        # Using same formula as CausVid: video_length = num_inference_steps * 3 - 2
-        required_steps = max(1, int((video_length + 2) / 3))
-        dprint(f"[Task ID: {task_id}] LightI2X: Calculating steps for target {video_length} frames: {required_steps} steps")
-        
-        _set_param_if_different(params, "num_inference_steps", required_steps, task_id, "LightI2X", dprint)
+        # LightI2X uses fast inference (5 steps) but should still generate target video_length
+        # The key is to set video_length explicitly so WGP doesn't recalculate it
+        _set_param_if_different(params, "num_inference_steps", 5, task_id, "LightI2X", dprint)
+        _set_param_if_different(params, "video_length", video_length, task_id, "LightI2X", dprint)  # Make video_length authoritative
         _set_param_if_different(params, "guidance_scale", 1.0, task_id, "LightI2X", dprint)
         _set_param_if_different(params, "flow_shift", 5.0, task_id, "LightI2X", dprint)
         _set_param_if_different(params, "tea_cache_setting", 0.0, task_id, "LightI2X", dprint)
