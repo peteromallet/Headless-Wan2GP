@@ -1665,6 +1665,15 @@ def _apply_special_lora_settings(task_id: str, lora_type: str, lora_basename: st
     """
     print(f"[Task ID: {task_id}] Applying {lora_type} LoRA settings.")
     
+    # [STEPS DEBUG] Add detailed debug for steps logic
+    print(f"[STEPS DEBUG] {lora_type}: task_params_dict keys: {list(task_params_dict.keys())}")
+    if "steps" in task_params_dict:
+        print(f"[STEPS DEBUG] {lora_type}: Found 'steps' = {task_params_dict['steps']}")
+    if "num_inference_steps" in task_params_dict:
+        print(f"[STEPS DEBUG] {lora_type}: Found 'num_inference_steps' = {task_params_dict['num_inference_steps']}")
+    if "video_length" in task_params_dict:
+        print(f"[STEPS DEBUG] {lora_type}: Found 'video_length' = {task_params_dict['video_length']}")
+    
     # Handle steps logic
     if "steps" in task_params_dict:
         ui_defaults["num_inference_steps"] = task_params_dict["steps"]
