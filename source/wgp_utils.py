@@ -57,368 +57,263 @@ def _normalize_loras_multipliers_format(loras_multipliers: Union[list, str]) -> 
         return loras_multipliers if loras_multipliers else ""
 
 
-def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
+def generate_single_video(
+    wgp_mod,
+    task_id: str,
+    prompt: str,
+    negative_prompt: str = "",
+    resolution: str = "512x512",
+    video_length: int = 81,
+    seed: int = 12345,
+    num_inference_steps: int = 30,
+    guidance_scale: float = 5.0,
+    flow_shift: float = 3.0,
+    model_filename: str = None,
+    video_guide: str = None,
+    video_mask: str = None,
+    image_refs: list = None,
+    use_causvid_lora: bool = False,
+    use_lighti2x_lora: bool = False,
+    apply_reward_lora: bool = False,
+    additional_loras: dict = None,
+    video_prompt_type: str = "T",
+    dprint = None,
+    **kwargs
+) -> tuple[bool, str]:
     """
-    Centralized wrapper for wgp_mod.generate_video.
-
-    Uses flexible keyword-style API only:
-    generate_single_video(
-        wgp_mod=wgp_mod,
-        task_id="abc",
-        prompt="...",
-        negative_prompt="...",
-        resolution="832x512",
-        video_length=81,
-        seed=123,
-        model_filename=model_filename,
-        dprint=print,  # optional
-        **extra_params  # forwarded verbatim to wgp_mod.generate_video
-    )
-    
-    This is the ONLY way to generate videos - all handlers must use this interface.
-    
-    Args:
-        wgp_mod: WGP module instance
-        task_id: Unique task identifier
-        prompt: Text prompt for generation
-        negative_prompt: Negative prompt (defaults to space)
-        resolution: Resolution in "WIDTHxHEIGHT" format
-        video_length: Number of frames to generate
-        seed: Random seed for generation
-        model_filename: Model filename to use
-        dprint: Debug print function (optional)
-        **kwargs: Additional parameters for wgp_mod.generate_video
-        
-    Returns:
-        Tuple of (success: bool, output_path_or_None: str | None)
+    Centralized wrapper for WGP video generation with comprehensive debugging.
+    Returns (success_bool, output_path_or_error_message)
     """
-    # Extract required parameters
-    wgp_mod = kwargs.pop("wgp_mod", None)
-    if wgp_mod is None and args:
-        wgp_mod = args[0]
-    if wgp_mod is None:
-        raise ValueError("wgp_mod must be provided")
-
-    task_id: str = kwargs.pop("task_id")
-    prompt: str = kwargs.pop("prompt")
-    resolution: str = kwargs.pop("resolution")
-    video_length: int = kwargs.pop("video_length")
-    seed: int = kwargs.pop("seed")
-    model_filename: str = kwargs.pop("model_filename")
-    negative_prompt: str = kwargs.pop("negative_prompt", " ")  # Default to space
-    dprint: Callable = kwargs.pop("dprint", (lambda *_: None))
-
-    # Validate required parameters
-    if not prompt or not prompt.strip():
-        prompt = " "  # Ensure valid prompt
-    if not negative_prompt or not negative_prompt.strip():
-        negative_prompt = " "  # Ensure valid negative prompt
-
-    # Translate convenience keys to the names expected by wgp.py
-    if "video_guide_path" in kwargs and "video_guide" not in kwargs:
-        kwargs["video_guide"] = kwargs.pop("video_guide_path")
-    if "video_mask_path" in kwargs and "video_mask" not in kwargs:
-        kwargs["video_mask"] = kwargs.pop("video_mask_path")
-    if "image_refs_paths" in kwargs and "image_refs" not in kwargs:
-        kwargs["image_refs"] = kwargs.pop("image_refs_paths")
-
-    # ------------------------------------------------------------------
-    # Special flags (popped early so they don't pollute **kwargs later)
-    # ------------------------------------------------------------------
-    use_causvid_lora: bool = bool(kwargs.pop("use_causvid_lora", False))
-    # New: Lightweight I2X LoRA (self-forcing) support
-    use_lighti2x_lora: bool = bool(kwargs.pop("use_lighti2x_lora", False))
-    apply_reward_lora: bool = bool(kwargs.pop("apply_reward_lora", False))
-
-    # Handle additional_loras parameter
-    processed_additional_loras: Dict[str, str] = kwargs.pop("additional_loras", {})
+    if dprint is None:
+        dprint = lambda x: print(f"[DEBUG] {x}")
     
-    # Convert to WGP's expected LoRA format
-    activated_loras = []
-    loras_multipliers = []
+    print(f"[WGP_GENERATION_DEBUG] Starting generation for task {task_id}")
+    print(f"[WGP_GENERATION_DEBUG] Parameters:")
+    print(f"[WGP_GENERATION_DEBUG]   prompt: {prompt}")
+    print(f"[WGP_GENERATION_DEBUG]   resolution: {resolution}")
+    print(f"[WGP_GENERATION_DEBUG]   video_length: {video_length}")
+    print(f"[WGP_GENERATION_DEBUG]   seed: {seed}")
+    print(f"[WGP_GENERATION_DEBUG]   num_inference_steps: {num_inference_steps}")
+    print(f"[WGP_GENERATION_DEBUG]   guidance_scale: {guidance_scale}")
+    print(f"[WGP_GENERATION_DEBUG]   flow_shift: {flow_shift}")
+    print(f"[WGP_GENERATION_DEBUG]   use_causvid_lora: {use_causvid_lora}")
+    print(f"[WGP_GENERATION_DEBUG]   use_lighti2x_lora: {use_lighti2x_lora}")
+    print(f"[WGP_GENERATION_DEBUG]   video_guide: {video_guide}")
+    print(f"[WGP_GENERATION_DEBUG]   video_mask: {video_mask}")
+    print(f"[WGP_GENERATION_DEBUG]   video_prompt_type: {video_prompt_type}")
     
-    if processed_additional_loras:
-        for lora_filename, strength_str in processed_additional_loras.items():
-            activated_loras.append(lora_filename)
-            loras_multipliers.append(str(strength_str))
-    
-    # Defaults for the enormous parameter list
-    defaults = dict(
-        num_inference_steps=30,
-        guidance_scale=5.0,
-        audio_guidance_scale=5.0,
-        flow_shift=wgp_mod.get_default_flow(model_filename, wgp_mod.test_class_i2v(model_filename)),
-        embedded_guidance_scale=6.0,
-        repeat_generation=1,
-        multi_images_gen_type=0,
-        tea_cache_setting=0.0,
-        tea_cache_start_step_perc=0,
-        activated_loras=activated_loras,
-        loras_multipliers=','.join(loras_multipliers) if loras_multipliers else "",
-        image_prompt_type="T",
-        image_start=[],
-        image_end=[],
-        model_mode=0,
-        video_source=None,
-        keep_frames_video_source="",
-        video_prompt_type=kwargs.get("video_prompt_type", ""),
-        keep_frames_video_guide="",
-        sliding_window_size=81,
-        sliding_window_overlap=5,
-        sliding_window_overlap_noise=20,
-        sliding_window_discard_last_frames=0,
-        remove_background_images_ref=False,
-        temporal_upsampling="",
-        spatial_upsampling="",
-        RIFLEx_setting=0,
-        slg_switch=0,
-        slg_layers=[9],
-        slg_start_perc=10,
-        slg_end_perc=90,
-        cfg_star_switch=0,
-        cfg_zero_step=-1,
-        prompt_enhancer="",
-        state={},
-    )
-    params = {**defaults, **kwargs}
-
-    # ------------------------------------------------------------
-    #  CausVid LoRA fix – calculate steps to achieve target video_length
-    # ------------------------------------------------------------
-    if use_causvid_lora:
-        causvid_lora_name = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
-        activated_loras, loras_multipliers = _ensure_lora_in_lists(causvid_lora_name, "1.0", activated_loras, loras_multipliers)
+    try:
+        # Analyze input guide video if provided
+        if video_guide and Path(video_guide).exists():
+            from .common_utils import get_video_frame_count_and_fps
+            guide_frames, guide_fps = get_video_frame_count_and_fps(video_guide)
+            print(f"[WGP_GENERATION_DEBUG] Guide video analysis:")
+            print(f"[WGP_GENERATION_DEBUG]   Path: {video_guide}")
+            print(f"[WGP_GENERATION_DEBUG]   Frames: {guide_frames}")
+            print(f"[WGP_GENERATION_DEBUG]   FPS: {guide_fps}")
+            if guide_frames != video_length:
+                print(f"[WGP_GENERATION_DEBUG]   ⚠️  GUIDE/TARGET MISMATCH! Guide has {guide_frames} frames, target is {video_length}")
         
-        # Calculate steps needed for target video_length using WGP's formula
-        # WGP formula: video_length = num_inference_steps × 3 - 2
-        # Solving for steps: num_inference_steps = (video_length + 2) ÷ 3
-        required_steps = max(1, int((video_length + 2) / 3))
-        _set_param_if_different(params, "num_inference_steps", required_steps, task_id, "CausVid", dprint)
-        _set_param_if_different(params, "guidance_scale", 1.0, task_id, "CausVid", dprint)
-        _set_param_if_different(params, "flow_shift", 1.0, task_id, "CausVid", dprint)
-
-    # ------------------------------------------------------------
-    #  Light I2X LoRA fix – calculate steps to achieve target video_length
-    # ------------------------------------------------------------
-    if use_lighti2x_lora:
-        lighti2x_lora_name = "wan_lcm_r16_fp32_comfy.safetensors"
-        activated_loras, loras_multipliers = _ensure_lora_in_lists(lighti2x_lora_name, "1.0", activated_loras, loras_multipliers)
+        # Analyze input mask video if provided
+        if video_mask and Path(video_mask).exists():
+            from .common_utils import get_video_frame_count_and_fps
+            mask_frames, mask_fps = get_video_frame_count_and_fps(video_mask)
+            print(f"[WGP_GENERATION_DEBUG] Mask video analysis:")
+            print(f"[WGP_GENERATION_DEBUG]   Path: {video_mask}")
+            print(f"[WGP_GENERATION_DEBUG]   Frames: {mask_frames}")
+            print(f"[WGP_GENERATION_DEBUG]   FPS: {mask_fps}")
+            if mask_frames != video_length:
+                print(f"[WGP_GENERATION_DEBUG]   ⚠️  MASK/TARGET MISMATCH! Mask has {mask_frames} frames, target is {video_length}")
         
-        # Calculate steps needed for target video_length using WGP's formula
-        # WGP formula: video_length = num_inference_steps × 3 - 2
-        # Solving for steps: num_inference_steps = (video_length + 2) ÷ 3
-        required_steps = max(1, int((video_length + 2) / 3))
-        _set_param_if_different(params, "num_inference_steps", required_steps, task_id, "LightI2X", dprint)
-        _set_param_if_different(params, "guidance_scale", 1.0, task_id, "LightI2X", dprint)
-        _set_param_if_different(params, "flow_shift", 5.0, task_id, "LightI2X", dprint)
-        _set_param_if_different(params, "tea_cache_setting", 0.0, task_id, "LightI2X", dprint)
-        _set_param_if_different(params, "sample_solver", "unipc", task_id, "LightI2X", dprint)
-        _set_param_if_different(params, "denoise_strength", 1.0, task_id, "LightI2X", dprint)
-
-    # Apply LoRA changes to params if any special LoRAs were configured
-    if use_causvid_lora or use_lighti2x_lora:
-        params["activated_loras"] = activated_loras
-        params["loras_multipliers"] = _normalize_loras_multipliers_format(loras_multipliers)
-
-    # Expose the flags to downstream logic (build_task_state & wgp)
-    params["use_causvid_lora"] = use_causvid_lora
-    params["use_lighti2x_lora"] = use_lighti2x_lora
-    params["apply_reward_lora"] = apply_reward_lora
-
-    # Convert PIL images in image_start/image_end if any
-    for key in ("image_start", "image_end"):
-        if key in params and isinstance(params[key], list):
-            params[key] = [wgp_mod.convert_image(img) for img in params[key]]
-
-    # Convert image_refs paths to PIL images if provided as paths/strings
-    if "image_refs" in params and isinstance(params["image_refs"], list):
-        refs_list = params["image_refs"]
-
-        # If the list is empty → treat as no refs at all to avoid VAE index errors.
-        if not refs_list:
-            params["image_refs"] = None
-        # Non-empty list: convert string/Path entries to PIL then to tensor
-        elif isinstance(refs_list[0], (str, Path)):
-            converted_refs = []
-            for ref_path in refs_list:
-                try:
-                    img_pil = Image.open(str(ref_path)).convert("RGB")
-                    converted_refs.append(wgp_mod.convert_image(img_pil))
-                except Exception as e_img:
-                    dprint(f"{task_id}: WARNING – failed to load reference image '{ref_path}': {e_img}")
-            params["image_refs"] = converted_refs if converted_refs else None
-
-    # Ensure we have a valid `state` structure expected by wgp.py.  When callers
-    # (e.g. single-image or travel_segment helpers) invoke this wrapper they may
-    # omit the `state` argument entirely which causes wgp.py to raise a
-    # KeyError or, later on, a mysterious `list index out of range` when it
-    # tries to access nested lists inside the state dict.  We therefore attempt
-    # to build a **fully-featured** state using the same helper that headless.py
-    # relies on.  If that fails for any reason we gracefully fall back to the
-    # minimal stub so that the previous behaviour is preserved.
-    if "state" not in params or not params["state"]:
-        try:
-            # --- Prefer the robust builder used by headless.py ---
-            from source.common_utils import build_task_state  # Local import to avoid circular deps
-
-            # Obtain the full list of LoRAs available for this model so that
-            # build_task_state can resolve `activated_loras` correctly.
-            lora_dir_for_model = wgp_mod.get_lora_dir(model_filename)
-            all_loras_for_model, *_ = wgp_mod.setup_loras(
-                model_filename, None, lora_dir_for_model, "", None
-            )
-
-            task_params_for_state = {
-                "task_id": task_id,
-                "prompt": prompt,
-                "negative_prompt": negative_prompt,
-                "resolution": resolution,
-                "video_length": video_length,
-                "seed": seed,
-                "num_inference_steps": params["num_inference_steps"],
-                "guidance_scale": params["guidance_scale"],
-                "flow_shift": params["flow_shift"],
-                "activated_loras": params["activated_loras"],
-                "loras_multipliers": params["loras_multipliers"],
-                # Expose the CausVid flag so that builder can apply its tweaks
-                "use_causvid_lora": use_causvid_lora,
-                "use_lighti2x_lora": use_lighti2x_lora,
-            }
-            # Merge any miscellaneous keys the caller already supplied – this
-            # lets advanced features (video_guide, image_refs, etc.) propagate.
-            task_params_for_state.update({k: v for k, v in kwargs.items()})
-
-            state_built, _ = build_task_state(
-                wgp_mod,
-                model_filename,
-                task_params_for_state,
-                all_loras_for_model,
-                image_download_dir=None,
-                apply_reward_lora=apply_reward_lora,
-            )
-            params["state"] = state_built
-        except Exception as e_state:
-            # Fall back to the lightweight stub built below
-            dprint(f"{task_id}: Failed to build full task state ({e_state}); falling back to minimal stub.")
-            params["state"] = None  # Will be replaced a few lines later
-
-    if not params["state"]:
-        # --- Minimal fallback (previous behaviour) ---
-        minimal_state = {
-            "model_filename": model_filename,
-            "validate_success": 1,
-            "advanced": True,
-            # The UI logic inside wgp.py expects this nested structure to exist.
-            "gen": {
-                "queue": [],
-                "file_list": [],
-                "file_settings_list": [],
-                "prompt_no": 1,
-                "prompts_max": 1,
-            },
-            "loras": [],
-        }
-        # Add a per-model settings bucket so that wgp.py can read/write into it.
-        model_type_key = wgp_mod.get_model_type(model_filename)
-        minimal_state[model_type_key] = {
+        # Build task state for WGP
+        from .common_utils import build_task_state
+        
+        task_params_dict = {
+            "task_id": task_id,
             "prompt": prompt,
             "negative_prompt": negative_prompt,
             "resolution": resolution,
             "video_length": video_length,
+            "frames": video_length,  # Alternative key
             "seed": seed,
-            "num_inference_steps": params["num_inference_steps"],
-            "guidance_scale": params["guidance_scale"],
-            "flow_shift": params["flow_shift"],
-            "activated_loras": params["activated_loras"],
-            "loras_multipliers": params["loras_multipliers"],
+            "num_inference_steps": num_inference_steps,
+            "guidance_scale": guidance_scale,
+            "flow_shift": flow_shift,
+            "video_guide_path": video_guide,
+            "video_mask": video_mask,
+            "image_refs_paths": image_refs,
+            "video_prompt_type": video_prompt_type,
+            "use_causvid_lora": use_causvid_lora,
+            "use_lighti2x_lora": use_lighti2x_lora,
+            "apply_reward_lora": apply_reward_lora,
+            "processed_additional_loras": additional_loras or {},
+            **kwargs
         }
-        params["state"] = minimal_state
-
-    # At this point we are guaranteed to have a usable state dict.
-
-    # Build send_cmd for progress reporting
-    def _send(cmd: str, data: Any = None) -> None:
-        prefix = f"[Task ID: {task_id}]"
-        if cmd == "progress":
-            if isinstance(data, list) and len(data) >= 2:
-                prog, txt = data[0], data[1]
-                if isinstance(prog, tuple) and len(prog) == 2:
-                    step, total = prog
-                    print(f"{prefix}[Progress] {step}/{total} – {txt}")
-                else:
-                    print(f"{prefix}[Progress] {txt}")
-        elif cmd == "status":
-            print(f"{prefix}[Status] {data}")
-        elif cmd == "info":
-            print(f"{prefix}[INFO] {data}")
-        elif cmd == "error":
-            print(f"{prefix}[ERROR] {data}")
-            raise RuntimeError(f"wgp.py error for {task_id}: {data}")
-        elif cmd == "output":
-            print(f"{prefix}[Output] video written.")
-
-    # Preserve true single-frame requests.  Only bump **other** tiny values (<4 and ≠1).
-    if video_length < 4 and video_length != 1:
-        dprint(f"{task_id}: Requested video_length={video_length} too small; bumping to 4 to satisfy WGP minimum (except when exactly 1 frame is desired).")
-        video_length = 4
-
-    try:
-        dprint(f"{task_id}: Calling wgp_mod.generate_video (centralized API)")
-        wgp_mod.generate_video(
-            task={"id": 1, "prompt": prompt,
-                  "params": {"model_filename_from_gui_state": model_filename}},
-            send_cmd=_send,
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            resolution=resolution,
-            video_length=video_length,
-            seed=seed,
-            num_inference_steps=params["num_inference_steps"],
-            guidance_scale=params["guidance_scale"],
-            audio_guidance_scale=params["audio_guidance_scale"],
-            flow_shift=params["flow_shift"],
-            embedded_guidance_scale=params["embedded_guidance_scale"],
-            repeat_generation=params["repeat_generation"],
-            multi_images_gen_type=params["multi_images_gen_type"],
-            tea_cache_setting=params["tea_cache_setting"],
-            tea_cache_start_step_perc=params["tea_cache_start_step_perc"],
-            activated_loras=params["activated_loras"],
-            loras_multipliers=params["loras_multipliers"],
-            image_prompt_type=params["image_prompt_type"],
-            image_start=params["image_start"],
-            image_end=params["image_end"],
-            model_mode=params["model_mode"],
-            video_source=params["video_source"],
-            keep_frames_video_source=params["keep_frames_video_source"],
-            video_prompt_type=params["video_prompt_type"],
-            image_refs=params.get("image_refs"),
-            video_guide=params.get("video_guide"),
-            keep_frames_video_guide=params["keep_frames_video_guide"],
-            video_mask=params.get("video_mask"),
-            audio_guide=params.get("audio_guide"),
-            sliding_window_size=params["sliding_window_size"],
-            sliding_window_overlap=params["sliding_window_overlap"],
-            sliding_window_overlap_noise=params["sliding_window_overlap_noise"],
-            sliding_window_discard_last_frames=params["sliding_window_discard_last_frames"],
-            remove_background_images_ref=params["remove_background_images_ref"],
-            temporal_upsampling=params["temporal_upsampling"],
-            spatial_upsampling=params["spatial_upsampling"],
-            RIFLEx_setting=params["RIFLEx_setting"],
-            slg_switch=params["slg_switch"],
-            slg_layers=params["slg_layers"],
-            slg_start_perc=params["slg_start_perc"],
-            slg_end_perc=params["slg_end_perc"],
-            cfg_star_switch=params["cfg_star_switch"],
-            cfg_zero_step=params["cfg_zero_step"],
-            prompt_enhancer=params["prompt_enhancer"],
-            state=params["state"],
-            model_filename=model_filename,
+        
+        print(f"[WGP_GENERATION_DEBUG] Built task_params_dict with {len(task_params_dict)} parameters")
+        
+        # Get LoRA directory and setup
+        lora_dir_for_active_model = wgp_mod.get_lora_dir(model_filename)
+        all_loras_for_active_model, _, _, _, _, _, _ = wgp_mod.setup_loras(
+            model_filename, None, lora_dir_for_active_model, "", None
         )
-        out_candidates = sorted(Path(wgp_mod.save_path).glob("*.mp4"))
-        return True, str(out_candidates[-1]) if out_candidates else None
+        
+        print(f"[WGP_GENERATION_DEBUG] LoRA setup complete. Available LoRAs: {len(all_loras_for_active_model) if all_loras_for_active_model else 0}")
+        
+        # Build state and UI params
+        state, ui_params = build_task_state(
+            wgp_mod, 
+            model_filename, 
+            task_params_dict, 
+            all_loras_for_active_model, 
+            None,  # image_download_dir
+            apply_reward_lora=apply_reward_lora
+        )
+        
+        print(f"[WGP_GENERATION_DEBUG] State and UI params built")
+        print(f"[WGP_GENERATION_DEBUG] Final ui_params video_length: {ui_params.get('video_length', 'NOT_SET')}")
+        print(f"[WGP_GENERATION_DEBUG] Final ui_params frames: {ui_params.get('frames', 'NOT_SET')}")
+        
+        # Create temporary output directory
+        import tempfile
+        temp_output_dir = tempfile.mkdtemp(prefix=f"wgp_single_{task_id}_")
+        print(f"[WGP_GENERATION_DEBUG] Using temporary output directory: {temp_output_dir}")
+        
+        # Save original path and set temporary
+        original_wgp_save_path = wgp_mod.save_path
+        wgp_mod.save_path = str(temp_output_dir)
+        
+        try:
+            # Create task and send_cmd objects
+            gen_task_placeholder = {
+                "id": 1, 
+                "prompt": ui_params.get("prompt"), 
+                "params": {
+                    "model_filename_from_gui_state": model_filename, 
+                    "model": kwargs.get("model", "t2v")
+                }
+            }
+            
+            def send_cmd_debug(cmd, data=None):
+                if cmd == "progress":
+                    if isinstance(data, list) and len(data) >= 2:
+                        prog, txt = data[0], data[1]
+                        if isinstance(prog, tuple) and len(prog) == 2:
+                            step, total = prog
+                            print(f"[WGP_PROGRESS] {step}/{total} – {txt}")
+                        else:
+                            print(f"[WGP_PROGRESS] {txt}")
+                elif cmd == "status":
+                    print(f"[WGP_STATUS] {data}")
+                elif cmd == "info":
+                    print(f"[WGP_INFO] {data}")
+                elif cmd == "error":
+                    print(f"[WGP_ERROR] {data}")
+                    raise RuntimeError(f"WGP error for {task_id}: {data}")
+                elif cmd == "output":
+                    print(f"[WGP_OUTPUT] Video generation completed")
+            
+            print(f"[WGP_GENERATION_DEBUG] Calling wgp_mod.generate_video...")
+            print(f"[WGP_GENERATION_DEBUG] Final parameters being passed:")
+            print(f"[WGP_GENERATION_DEBUG]   video_length: {ui_params.get('video_length')}")
+            print(f"[WGP_GENERATION_DEBUG]   resolution: {ui_params.get('resolution')}")
+            print(f"[WGP_GENERATION_DEBUG]   seed: {ui_params.get('seed')}")
+            print(f"[WGP_GENERATION_DEBUG]   num_inference_steps: {ui_params.get('num_inference_steps')}")
+            
+            # Call the actual WGP generation
+            wgp_mod.generate_video(
+                task=gen_task_placeholder,
+                send_cmd=send_cmd_debug,
+                prompt=ui_params["prompt"],
+                negative_prompt=ui_params.get("negative_prompt", ""),
+                resolution=ui_params["resolution"],
+                video_length=ui_params.get("video_length", video_length),
+                seed=ui_params["seed"],
+                num_inference_steps=ui_params.get("num_inference_steps", num_inference_steps),
+                guidance_scale=ui_params.get("guidance_scale", guidance_scale),
+                flow_shift=ui_params.get("flow_shift", flow_shift),
+                video_guide=ui_params.get("video_guide"),
+                video_mask=ui_params.get("video_mask"),
+                image_refs=ui_params.get("image_refs"),
+                video_prompt_type=ui_params.get("video_prompt_type", video_prompt_type),
+                activated_loras=ui_params.get("activated_loras", []),
+                loras_multipliers=ui_params.get("loras_multipliers", ""),
+                state=state,
+                model_filename=model_filename,
+                # Add other parameters as needed
+                audio_guidance_scale=ui_params.get("audio_guidance_scale", 5.0),
+                embedded_guidance_scale=ui_params.get("embedded_guidance_scale", 6.0),
+                repeat_generation=ui_params.get("repeat_generation", 1),
+                multi_images_gen_type=ui_params.get("multi_images_gen_type", 0),
+                tea_cache_setting=ui_params.get("tea_cache_setting", 0.0),
+                tea_cache_start_step_perc=ui_params.get("tea_cache_start_step_perc", 0),
+                image_prompt_type=ui_params.get("image_prompt_type", "T"),
+                image_start=[wgp_mod.convert_image(img) for img in ui_params.get("image_start", [])],
+                image_end=[wgp_mod.convert_image(img) for img in ui_params.get("image_end", [])],
+                model_mode=ui_params.get("model_mode", 0),
+                video_source=ui_params.get("video_source"),
+                keep_frames_video_source=ui_params.get("keep_frames_video_source", ""),
+                keep_frames_video_guide=ui_params.get("keep_frames_video_guide", ""),
+                audio_guide=ui_params.get("audio_guide"),
+                sliding_window_size=ui_params.get("sliding_window_size", 81),
+                sliding_window_overlap=ui_params.get("sliding_window_overlap", 5),
+                sliding_window_overlap_noise=ui_params.get("sliding_window_overlap_noise", 20),
+                sliding_window_discard_last_frames=ui_params.get("sliding_window_discard_last_frames", 0),
+                remove_background_images_ref=ui_params.get("remove_background_images_ref", False),
+                temporal_upsampling=ui_params.get("temporal_upsampling", ""),
+                spatial_upsampling=ui_params.get("spatial_upsampling", ""),
+                RIFLEx_setting=ui_params.get("RIFLEx_setting", 0),
+                slg_switch=ui_params.get("slg_switch", 0),
+                slg_layers=ui_params.get("slg_layers", [9]),
+                slg_start_perc=ui_params.get("slg_start_perc", 10),
+                slg_end_perc=ui_params.get("slg_end_perc", 90),
+                cfg_star_switch=ui_params.get("cfg_star_switch", 0),
+                cfg_zero_step=ui_params.get("cfg_zero_step", -1),
+                prompt_enhancer=ui_params.get("prompt_enhancer", "")
+            )
+            
+            print(f"[WGP_GENERATION_DEBUG] WGP generation call completed")
+            
+            # Find generated video files
+            generated_video_files = sorted([
+                item for item in Path(temp_output_dir).iterdir()
+                if item.is_file() and item.suffix.lower() == ".mp4"
+            ])
+            
+            print(f"[WGP_GENERATION_DEBUG] Found {len(generated_video_files)} video files in output directory")
+            
+            if not generated_video_files:
+                print(f"[WGP_GENERATION_DEBUG] ERROR: No .mp4 files found in {temp_output_dir}")
+                return False, f"No video files generated in {temp_output_dir}"
+            
+            # Analyze each generated file
+            for i, video_file in enumerate(generated_video_files):
+                from .common_utils import get_video_frame_count_and_fps
+                try:
+                    frames, fps = get_video_frame_count_and_fps(str(video_file))
+                    file_size = video_file.stat().st_size
+                    print(f"[WGP_GENERATION_DEBUG] Generated file {i}: {video_file.name}")
+                    print(f"[WGP_GENERATION_DEBUG]   Frames: {frames}")
+                    print(f"[WGP_GENERATION_DEBUG]   FPS: {fps}")
+                    print(f"[WGP_GENERATION_DEBUG]   Size: {file_size / (1024*1024):.2f} MB")
+                    print(f"[WGP_GENERATION_DEBUG]   Expected frames: {video_length}")
+                    if frames != video_length:
+                        print(f"[WGP_GENERATION_DEBUG]   ⚠️  FRAME COUNT MISMATCH! Expected {video_length}, got {frames}")
+                except Exception as e:
+                    print(f"[WGP_GENERATION_DEBUG] ERROR analyzing {video_file}: {e}")
+            
+            # Return the first (or only) generated file
+            final_output = str(generated_video_files[0].resolve())
+            print(f"[WGP_GENERATION_DEBUG] Returning output: {final_output}")
+            
+            return True, final_output
+            
+        finally:
+            # Restore original save path
+            wgp_mod.save_path = original_wgp_save_path
+            
     except Exception as e:
+        print(f"[WGP_GENERATION_DEBUG] ERROR during generation: {e}")
         import traceback
-        print(f"\n[FULL TRACEBACK] {task_id}: generate_single_video failed:")
         traceback.print_exc()
-        dprint(f"{task_id}: generate_single_video failed: {e}")
-        return False, None 
+        return False, f"Generation failed: {str(e)}" 

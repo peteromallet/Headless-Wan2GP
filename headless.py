@@ -443,11 +443,21 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
 
         requested_frames_from_task = ui_params.get("video_length", 81)
         frame_num_for_wgp = requested_frames_from_task
+        print(f"[HEADLESS_DEBUG] Task {task_id}: FRAME COUNT ANALYSIS")
+        print(f"[HEADLESS_DEBUG]   requested_frames_from_task: {requested_frames_from_task}")
+        print(f"[HEADLESS_DEBUG]   frame_num_for_wgp: {frame_num_for_wgp}")
+        print(f"[HEADLESS_DEBUG]   ui_params video_length: {ui_params.get('video_length')}")
         dprint(f"[Task ID: {task_id}] Using requested frame count: {frame_num_for_wgp}")
 
         ui_params["video_length"] = frame_num_for_wgp
 
         try:
+            print(f"[HEADLESS_DEBUG] Task {task_id}: CALLING WGP GENERATION")
+            print(f"[HEADLESS_DEBUG]   Final video_length parameter: {ui_params.get('video_length')}")
+            print(f"[HEADLESS_DEBUG]   Resolution: {ui_params.get('resolution')}")
+            print(f"[HEADLESS_DEBUG]   Seed: {ui_params.get('seed')}")
+            print(f"[HEADLESS_DEBUG]   Steps: {ui_params.get('num_inference_steps')}")
+            print(f"[HEADLESS_DEBUG]   Model: {model_filename_for_task}")
             dprint(f"[Task ID: {task_id}] Calling wgp_mod.generate_video with effective ui_params (first 1000 chars): {json.dumps(ui_params, default=lambda o: 'Unserializable' if isinstance(o, Image.Image) else o.__dict__ if hasattr(o, '__dict__') else str(o), indent=2)[:1000]}...")
             wgp_mod.generate_video(
                 task=gen_task_placeholder, send_cmd=send_cmd,
@@ -499,6 +509,16 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                 model_filename=model_filename_for_task
             )
             print(f"[Task ID: {task_id}] Generation completed to temporary directory: {wgp_mod.save_path}")
+            print(f"[HEADLESS_DEBUG] Task {task_id}: WGP GENERATION COMPLETED")
+            print(f"[HEADLESS_DEBUG]   Temporary output directory: {temp_output_dir}")
+            
+            # List all files in temp directory for debugging
+            temp_dir_contents = list(Path(temp_output_dir).iterdir())
+            print(f"[HEADLESS_DEBUG]   Files in temp directory: {len(temp_dir_contents)}")
+            for item in temp_dir_contents:
+                if item.is_file():
+                    print(f"[HEADLESS_DEBUG]     {item.name} ({item.stat().st_size} bytes)")
+            
             generation_success = True
         except Exception as e:
             print(f"[ERROR] Task ID {task_id} failed during generation: {e}")
@@ -511,6 +531,27 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                 item for item in Path(temp_output_dir).iterdir()
                 if item.is_file() and item.suffix.lower() == ".mp4"
             ])
+            
+            print(f"[HEADLESS_DEBUG] Task {task_id}: ANALYZING GENERATED FILES")
+            print(f"[HEADLESS_DEBUG]   Found {len(generated_video_files)} .mp4 files")
+            
+            # Analyze each video file found
+            for i, video_file in enumerate(generated_video_files):
+                try:
+                    from source.common_utils import get_video_frame_count_and_fps
+                    frame_count, fps = get_video_frame_count_and_fps(str(video_file))
+                    file_size = video_file.stat().st_size
+                    duration = frame_count / fps if fps and fps > 0 else 0
+                    print(f"[HEADLESS_DEBUG]   Video {i}: {video_file.name}")
+                    print(f"[HEADLESS_DEBUG]     Frames: {frame_count}")
+                    print(f"[HEADLESS_DEBUG]     FPS: {fps}")
+                    print(f"[HEADLESS_DEBUG]     Duration: {duration:.2f}s")
+                    print(f"[HEADLESS_DEBUG]     Size: {file_size / (1024*1024):.2f} MB")
+                    print(f"[HEADLESS_DEBUG]     Expected frames: {frame_num_for_wgp}")
+                    if frame_count != frame_num_for_wgp:
+                        print(f"[HEADLESS_DEBUG]     ⚠️  FRAME COUNT MISMATCH! Expected {frame_num_for_wgp}, got {frame_count}")
+                except Exception as e_analysis:
+                    print(f"[HEADLESS_DEBUG]     ERROR analyzing {video_file.name}: {e_analysis}")
             
             generated_video_file = None
             if not generated_video_files:
