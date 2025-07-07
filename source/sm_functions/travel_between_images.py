@@ -1477,15 +1477,40 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                     print(f"[STITCH_DEBUG] Remote URL: {remote_url}")
                     print(f"[STITCH_DEBUG] Local download path: {local_download_path}")
                     dprint(f"[DEBUG] Remote URL detected, local download path: {local_download_path}")
-                    if not local_download_path.exists():
+                    
+                    # Check if cached file exists and validate its frame count against orchestrator's expected values
+                    need_download = True
+                    if local_download_path.exists():
+                        print(f"[STITCH_DEBUG] Local copy exists, validating frame count...")
+                        try:
+                            cached_frames, _ = sm_get_video_frame_count_and_fps(str(local_download_path))
+                            expected_segment_frames = full_orchestrator_payload["segment_frames_expanded"]
+                            expected_frames = expected_segment_frames[seg_idx] if seg_idx < len(expected_segment_frames) else None
+                            print(f"[STITCH_DEBUG] Cached file has {cached_frames} frames (expected: {expected_frames})")
+                            
+                            if expected_frames and cached_frames == expected_frames:
+                                print(f"[STITCH_DEBUG] ✅ Cached file frame count matches expected ({cached_frames} frames)")
+                                need_download = False
+                            elif expected_frames:
+                                print(f"[STITCH_DEBUG] ❌ Cached file frame count mismatch! Expected {expected_frames}, got {cached_frames}, will re-download")
+                            else:
+                                print(f"[STITCH_DEBUG] ❌ No expected frame count available for segment {seg_idx}, will re-download")
+                        except Exception as e_validate:
+                            print(f"[STITCH_DEBUG] ❌ Could not validate cached file: {e_validate}, will re-download")
+                    
+                    if need_download:
                         print(f"[STITCH_DEBUG] Downloading remote segment {seg_idx}...")
                         dprint(f"Stitch: Downloading remote segment {seg_idx} from {remote_url} to {local_download_path}")
+                        # Remove stale cached file if it exists
+                        if local_download_path.exists():
+                            local_download_path.unlink()
                         sm_download_file(remote_url, stitch_processing_dir, local_download_path.name)
                         print(f"[STITCH_DEBUG] ✅ Download completed for segment {seg_idx}")
                         dprint(f"[DEBUG] Download completed for segment {seg_idx}")
                     else:
-                        print(f"[STITCH_DEBUG] ✅ Local copy already exists for segment {seg_idx}")
-                        dprint(f"Stitch: Local copy for segment {seg_idx} already exists at {local_download_path}")
+                        print(f"[STITCH_DEBUG] ✅ Using validated cached file for segment {seg_idx}")
+                        dprint(f"Stitch: Using validated cached file for segment {seg_idx} at {local_download_path}")
+                    
                     resolved_video_path_for_stitch = local_download_path
                 except Exception as e_dl:
                     print(f"[STITCH_DEBUG] ❌ Download failed for segment {seg_idx}: {e_dl}")
@@ -1523,10 +1548,14 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         dprint(f"[DEBUG] Total videos collected: {len(segment_video_paths_for_stitch)}")
         # [CRITICAL DEBUG] Log each video's frame count before stitching
         print(f"[CRITICAL DEBUG] About to stitch videos:")
+        expected_segment_frames = full_orchestrator_payload["segment_frames_expanded"]
         for idx, video_path in enumerate(segment_video_paths_for_stitch):
             try:
                 frame_count, fps = sm_get_video_frame_count_and_fps(video_path)
-                print(f"[CRITICAL DEBUG] Video {idx}: {video_path} -> {frame_count} frames @ {fps} FPS")
+                expected_frames = expected_segment_frames[idx] if idx < len(expected_segment_frames) else "unknown"
+                print(f"[CRITICAL DEBUG] Video {idx}: {video_path} -> {frame_count} frames @ {fps} FPS (expected: {expected_frames})")
+                if expected_frames != "unknown" and frame_count != expected_frames:
+                    print(f"[CRITICAL DEBUG] ⚠️  FRAME COUNT MISMATCH! Expected {expected_frames}, got {frame_count}")
             except Exception as e_debug:
                 print(f"[CRITICAL DEBUG] Video {idx}: {video_path} -> ERROR: {e_debug}")
 
