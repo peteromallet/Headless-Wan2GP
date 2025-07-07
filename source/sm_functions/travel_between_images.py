@@ -791,8 +791,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         if full_orchestrator_payload.get("params_json_str_override"):
             try:
                 additional_p = json.loads(full_orchestrator_payload["params_json_str_override"])
-                # Ensure critical calculated params are not accidentally overridden by generic JSON override
-                additional_p.pop("frames", None); additional_p.pop("video_length", None) 
+                # Ensure override cannot change key params that indirectly control output length or resolution
+                additional_p.pop("frames", None); additional_p.pop("video_length", None)
+                additional_p.pop("steps", None); additional_p.pop("num_inference_steps", None)
                 additional_p.pop("resolution", None); additional_p.pop("output_path", None)
                 wgp_payload.update(additional_p)
             except Exception as e_json: dprint(f"Error merging override params for WGP payload: {e_json}")
