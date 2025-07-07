@@ -72,13 +72,13 @@ This is the main application package.
 * **db_operations.py** – Handles all database interactions for both SQLite and Supabase. **UPDATED**: Now includes Supabase client initialization, RPC function wrappers, and automatic backend selection based on `DB_TYPE`.
 * **specialized_handlers.py** – Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation. **UPDATED**: Uses Supabase-compatible upload functions for all outputs.
 * **video_utils.py** – Provides utilities for video manipulation like cross-fading, frame extraction, and color matching.
-* **wgp_utils.py** – Thin wrapper around `Wan2GP.wgp` that standardises parameter names, handles LoRA quirks (e.g. CausVid, LightI2X), and exposes the single `generate_single_video` helper used by every task handler.
+* **wgp_utils.py** – Thin wrapper around `Wan2GP.wgp` that standardises parameter names, handles LoRA quirks (e.g. CausVid, LightI2X), and exposes the single `generate_single_video` helper used by every task handler. **UPDATED**: Now includes comprehensive debugging throughout the generation pipeline with detailed frame count validation.
 
 ### source/sm_functions/ sub-package
 
 Task-specific wrappers around the bulky upstream logic. These are imported by `headless.py` (and potentially by notebooks/unit tests) without dragging in the interactive Gradio UI shipped with Wan2GP. **UPDATED**: All task handlers now use generalized Supabase upload functions for consistent output handling.
 
-* **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images. Builds guide videos, queues generation tasks, stitches outputs. **UPDATED**: Final stitched videos are uploaded to Supabase when configured.
+* **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images. Builds guide videos, queues generation tasks, stitches outputs. **UPDATED**: Final stitched videos are uploaded to Supabase when configured. **NEW**: Extensive debugging system with `debug_video_analysis()` function that tracks frame counts, file sizes, and processing steps throughout the entire orchestrator → segments → stitching pipeline.
 * **different_perspective.py** – Generates a new perspective for a single image using an OpenPose or depth-driven guide video plus optional RIFE interpolation for smoothness. **UPDATED**: Final posed images are uploaded to Supabase when configured.
 * **single_image.py** – Minimal handler for one-off image-to-video generation without travel or pose manipulation. **UPDATED**: Generated images are uploaded to Supabase when configured.
 * **__init__.py** – Re-exports public APIs (`run_travel_between_images_task`, `run_single_image_task`, `run_different_perspective_task`) and common utilities for convenient importing.
@@ -185,6 +185,33 @@ Column | Purpose
 `project_id` | Links to project (required for Supabase RLS)
 
 SQLite keeps the DB at `tasks.db`; Supabase uses the same columns with RLS policies.
+
+## Debugging System
+
+**NEW**: Comprehensive debugging system for video generation pipeline with detailed frame count tracking and validation:
+
+### Debug Functions
+* **`debug_video_analysis()`** – Analyzes any video file and reports frame count, FPS, duration, file size with clear labeling
+* **Frame count validation** – Compares expected vs actual frame counts at every processing step with ⚠️ warnings for mismatches
+* **Processing step tracking** – Logs success/failure of each chaining step (saturation, brightness, color matching, banner overlay)
+
+### Debug Output Categories
+* **`[FRAME_DEBUG]`** – Orchestrator frame quantization and overlap calculations
+* **`[SEGMENT_DEBUG]`** – Individual segment processing parameters and frame analysis
+* **`[WGP_DEBUG]`** – WGP generation parameters, results, and frame count validation
+* **`[CHAIN_DEBUG]`** – Post-processing chain (saturation, brightness, color matching) with step-by-step analysis
+* **`[STITCH_DEBUG]`** – Path resolution, video collection, and cross-fade analysis
+* **`[CRITICAL_DEBUG]`** – Critical stitching calculations and frame count summaries
+* **`[STITCH_FINAL_ANALYSIS]`** – Complete final video analysis with expected vs actual comparisons
+
+### Key Features
+* **Video analysis at every step** – Frame count, FPS, duration, file size tracked throughout pipeline
+* **Path resolution debugging** – Detailed logging of SQLite-relative, absolute, and URL path handling
+* **Cross-fade calculation verification** – Step-by-step analysis of overlap processing and frame arithmetic
+* **Mismatch highlighting** – Clear warnings when frame counts don't match expectations
+* **Processing chain validation** – Success/failure tracking for each post-processing step
+
+This debugging system provides comprehensive visibility into the video generation pipeline to identify exactly where frame counts change and why final outputs might have unexpected lengths.
 
 ## LoRA Support
 

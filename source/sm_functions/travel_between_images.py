@@ -45,6 +45,42 @@ from ..video_utils import (
 )
 from ..wgp_utils import generate_single_video
 
+# Add debugging helper function
+def debug_video_analysis(video_path: str | Path, label: str, task_id: str = "unknown") -> dict:
+    """Analyze a video file and return comprehensive debug info"""
+    try:
+        path_obj = Path(video_path)
+        if not path_obj.exists():
+            print(f"[VIDEO_DEBUG] {label} ({task_id}): FILE MISSING - {video_path}")
+            return {"exists": False, "path": str(video_path)}
+        
+        frame_count, fps = sm_get_video_frame_count_and_fps(str(path_obj))
+        file_size = path_obj.stat().st_size
+        duration = frame_count / fps if fps and fps > 0 else 0
+        
+        debug_info = {
+            "exists": True,
+            "path": str(path_obj.resolve()),
+            "frame_count": frame_count,
+            "fps": fps,
+            "duration_seconds": duration,
+            "file_size_bytes": file_size,
+            "file_size_mb": round(file_size / (1024*1024), 2)
+        }
+        
+        print(f"[VIDEO_DEBUG] {label} ({task_id}):")
+        print(f"[VIDEO_DEBUG]   Path: {debug_info['path']}")
+        print(f"[VIDEO_DEBUG]   Frames: {debug_info['frame_count']}")
+        print(f"[VIDEO_DEBUG]   FPS: {debug_info['fps']}")
+        print(f"[VIDEO_DEBUG]   Duration: {debug_info['duration_seconds']:.2f}s")
+        print(f"[VIDEO_DEBUG]   Size: {debug_info['file_size_mb']} MB")
+        
+        return debug_info
+        
+    except Exception as e:
+        print(f"[VIDEO_DEBUG] {label} ({task_id}): ERROR analyzing video - {e}")
+        return {"exists": False, "error": str(e), "path": str(video_path)}
+
 # --- SM_RESTRUCTURE: New Handler Functions for Travel Tasks ---
 def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_base: Path, orchestrator_task_id_str: str, orchestrator_project_id: str | None, *, dprint):
     dprint(f"_handle_travel_orchestrator_task: Starting for {orchestrator_task_id_str}")
@@ -113,19 +149,27 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         # smaller of the two segments they connect. This prevents errors downstream
         # in guide video creation, generation, and stitching.
         
+        print(f"[FRAME_DEBUG] Orchestrator {orchestrator_task_id_str}: QUANTIZATION ANALYSIS")
+        print(f"[FRAME_DEBUG] Original segment_frames_expanded: {expanded_segment_frames}")
+        print(f"[FRAME_DEBUG] Original frame_overlap: {expanded_frame_overlap}")
+        
         quantized_segment_frames = []
         dprint(f"Orchestrator: Quantizing frame counts. Original segment_frames_expanded: {expanded_segment_frames}")
         for i, frames in enumerate(expanded_segment_frames):
             # Quantize to 4*N+1 format to match model constraints, applied later in headless.py
             new_frames = (frames // 4) * 4 + 1
+            print(f"[FRAME_DEBUG] Segment {i}: {frames} -> {new_frames} (4*N+1 quantization)")
             if new_frames != frames:
                 dprint(f"Orchestrator: Quantized segment {i} length from {frames} to {new_frames} (4*N+1 format).")
             quantized_segment_frames.append(new_frames)
+        
+        print(f"[FRAME_DEBUG] Quantized segment_frames: {quantized_segment_frames}")
         dprint(f"Orchestrator: Finished quantizing frame counts. New quantized_segment_frames: {quantized_segment_frames}")
         
         quantized_frame_overlap = []
         # There are N-1 overlaps for N segments. The loop must not iterate more times than this.
         num_overlaps_to_process = len(quantized_segment_frames) - 1
+        print(f"[FRAME_DEBUG] Processing {num_overlaps_to_process} overlap values")
 
         if num_overlaps_to_process > 0:
             for i in range(num_overlaps_to_process):
@@ -146,10 +190,26 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 new_overlap = min(new_overlap, max_possible_overlap)
                 if new_overlap < 0: new_overlap = 0
 
+                print(f"[FRAME_DEBUG] Overlap {i} (segments {i}->{i+1}): {original_overlap} -> {new_overlap}")
+                print(f"[FRAME_DEBUG]   Segment lengths: {quantized_segment_frames[i]}, {quantized_segment_frames[i+1]}")
+                print(f"[FRAME_DEBUG]   Max possible overlap: {max_possible_overlap}")
+                
                 if new_overlap != original_overlap:
                     dprint(f"Orchestrator: Adjusted overlap between segments {i}-{i+1} from {original_overlap} to {new_overlap}.")
                 
                 quantized_frame_overlap.append(new_overlap)
+        
+        print(f"[FRAME_DEBUG] Final quantized_frame_overlap: {quantized_frame_overlap}")
+        
+        # Calculate expected final length
+        total_input_frames = sum(quantized_segment_frames)
+        total_overlaps = sum(quantized_frame_overlap)
+        expected_final_length = total_input_frames - total_overlaps
+        print(f"[FRAME_DEBUG] EXPECTED FINAL VIDEO:")
+        print(f"[FRAME_DEBUG]   Total input frames: {total_input_frames}")
+        print(f"[FRAME_DEBUG]   Total overlaps: {total_overlaps}")
+        print(f"[FRAME_DEBUG]   Expected final length: {expected_final_length} frames")
+        print(f"[FRAME_DEBUG]   Expected duration: {expected_final_length / orchestrator_payload.get('fps_helpers', 16):.2f}s")
         
         # Replace original lists with the new quantized ones for all subsequent logic
         expanded_segment_frames = quantized_segment_frames
@@ -486,6 +546,14 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # not just the new content. The overlap is handled internally for transition.
         total_frames_for_segment = base_duration
 
+        print(f"[SEGMENT_DEBUG] Segment {segment_idx} (Task {segment_task_id_str}): FRAME ANALYSIS")
+        print(f"[SEGMENT_DEBUG]   base_duration (segment_frames_target): {base_duration}")
+        print(f"[SEGMENT_DEBUG]   frame_overlap_from_previous: {frame_overlap_from_previous}")
+        print(f"[SEGMENT_DEBUG]   total_frames_for_segment: {total_frames_for_segment}")
+        print(f"[SEGMENT_DEBUG]   is_first_segment: {segment_params.get('is_first_segment', False)}")
+        print(f"[SEGMENT_DEBUG]   is_last_segment: {segment_params.get('is_last_segment', False)}")
+        print(f"[SEGMENT_DEBUG]   use_causvid_lora: {full_orchestrator_payload.get('apply_causvid', False)}")
+
         fps_helpers = full_orchestrator_payload.get("fps_helpers", 16)
         fade_in_duration_str = full_orchestrator_payload["fade_in_params_json_str"]
         fade_out_duration_str = full_orchestrator_payload["fade_out_params_json_str"]
@@ -720,6 +788,13 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         final_frames_for_wgp_generation = total_frames_for_segment
         current_wgp_engine = "wgp" # Defaulting to WGP for travel segments
         
+        print(f"[WGP_DEBUG] Segment {segment_idx}: GENERATION PARAMETERS")
+        print(f"[WGP_DEBUG]   final_frames_for_wgp_generation: {final_frames_for_wgp_generation}")
+        print(f"[WGP_DEBUG]   parsed_res_wh: {parsed_res_wh}")
+        print(f"[WGP_DEBUG]   fps_helpers: {fps_helpers}")
+        print(f"[WGP_DEBUG]   model_name: {full_orchestrator_payload['model_name']}")
+        print(f"[WGP_DEBUG]   use_causvid_lora: {full_orchestrator_payload.get('apply_causvid', False)}")
+        
         dprint(f"Task {segment_task_id_str}: Requesting WGP generation with {final_frames_for_wgp_generation} frames.")
 
         if final_frames_for_wgp_generation <= 0:
@@ -900,6 +975,18 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
              ]})
          )
 
+        print(f"[WGP_DEBUG] Segment {segment_idx}: GENERATION RESULT")
+        print(f"[WGP_DEBUG]   generation_success: {generation_success}")
+        print(f"[WGP_DEBUG]   wgp_output_path_or_msg: {wgp_output_path_or_msg}")
+        
+        # Analyze the WGP output if successful
+        if generation_success and wgp_output_path_or_msg:
+            wgp_debug_info = debug_video_analysis(wgp_output_path_or_msg, f"WGP_RAW_OUTPUT_Seg{segment_idx}", segment_task_id_str)
+            print(f"[WGP_DEBUG]   Expected frames: {final_frames_for_wgp_generation}")
+            print(f"[WGP_DEBUG]   Actual frames: {wgp_debug_info.get('frame_count', 'ERROR')}")
+            if wgp_debug_info.get('frame_count') != final_frames_for_wgp_generation:
+                print(f"[WGP_DEBUG]   ⚠️  FRAME COUNT MISMATCH! Expected {final_frames_for_wgp_generation}, got {wgp_debug_info.get('frame_count')}")
+
         if generation_success:
             # Apply post-processing chain (saturation, brightness, color matching)
             chain_success, chain_message, final_chained_path = _handle_travel_chaining_after_wgp(
@@ -913,11 +1000,23 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             if chain_success and final_chained_path:
                 final_segment_video_output_path_str = final_chained_path
                 output_message_for_segment_task = f"Segment {segment_idx} processing (WGP generation & chaining) completed. Final output: {final_segment_video_output_path_str}"
+                
+                # Analyze final chained output
+                final_debug_info = debug_video_analysis(final_chained_path, f"FINAL_CHAINED_Seg{segment_idx}", segment_task_id_str)
+                print(f"[CHAIN_DEBUG] Segment {segment_idx}: FINAL CHAINED OUTPUT ANALYSIS")
+                print(f"[CHAIN_DEBUG]   Expected frames: {final_frames_for_wgp_generation}")
+                print(f"[CHAIN_DEBUG]   Final frames: {final_debug_info.get('frame_count', 'ERROR')}")
+                if final_debug_info.get('frame_count') != final_frames_for_wgp_generation:
+                    print(f"[CHAIN_DEBUG]   ⚠️  CHAINING CHANGED FRAME COUNT! Expected {final_frames_for_wgp_generation}, got {final_debug_info.get('frame_count')}")
             else:
                 # Use raw WGP output if chaining failed
                 final_segment_video_output_path_str = wgp_output_path_or_msg
                 output_message_for_segment_task = f"Segment {segment_idx} WGP completed but chaining failed: {chain_message}. Using raw output: {final_segment_video_output_path_str}"
                 print(f"[WARNING] {output_message_for_segment_task}")
+                
+                # Analyze raw output being used as final
+                if wgp_output_path_or_msg:
+                    raw_debug_info = debug_video_analysis(wgp_output_path_or_msg, f"RAW_AS_FINAL_Seg{segment_idx}", segment_task_id_str)
             
             print(f"Seg {segment_idx} (Task {segment_task_id_str}): {output_message_for_segment_task}")
         else:
@@ -1028,6 +1127,8 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
             sm_wait_for_file_stable(video_to_process_abs_path, checks=3, interval=1.0, dprint=dprint)
 
             shutil.copy2(video_to_process_abs_path, moved_video_abs_path)
+            print(f"[CHAIN_DEBUG] Moved WGP output from {video_to_process_abs_path} to {moved_video_abs_path}")
+            debug_video_analysis(moved_video_abs_path, f"MOVED_WGP_OUTPUT_Seg{segment_idx_completed}", wgp_task_id)
             dprint(f"Chain (Seg {segment_idx_completed}): Moved WGP output from {video_to_process_abs_path} to {moved_video_abs_path}")
             
             # Update paths for further processing
@@ -1063,12 +1164,15 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                 )
                 
                 if sm_apply_saturation_to_video_ffmpeg(str(video_to_process_abs_path), saturated_video_output_abs_path, sat_level):
+                    print(f"[CHAIN_DEBUG] Saturation applied successfully to segment {segment_idx_completed}")
+                    debug_video_analysis(saturated_video_output_abs_path, f"SATURATED_Seg{segment_idx_completed}", wgp_task_id)
                     dprint(f"Chain (Seg {segment_idx_completed}): Saturation successful. New path: {new_db_path}")
                     _cleanup_intermediate_video(full_orchestrator_payload, video_to_process_abs_path, segment_idx_completed, "raw", dprint)
                     
                     video_to_process_abs_path = saturated_video_output_abs_path
                     final_video_path_for_db = new_db_path
                 else:
+                    print(f"[CHAIN_DEBUG] WARNING: Saturation failed for segment {segment_idx_completed}")
                     dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Saturation failed. Continuing with unsaturated video.")
             
             # --- 2. Brightness ---
@@ -1086,18 +1190,24 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                 processed_video = apply_brightness_to_video_frames(str(video_to_process_abs_path), brightened_video_output_abs_path, brightness_adjust, wgp_task_id)
 
                 if processed_video and processed_video.exists():
+                    print(f"[CHAIN_DEBUG] Brightness adjustment applied successfully to segment {segment_idx_completed}")
+                    debug_video_analysis(brightened_video_output_abs_path, f"BRIGHTENED_Seg{segment_idx_completed}", wgp_task_id)
                     dprint(f"Chain (Seg {segment_idx_completed}): Brightness adjustment successful. New path: {new_db_path}")
                     _cleanup_intermediate_video(full_orchestrator_payload, video_to_process_abs_path, segment_idx_completed, "saturated", dprint)
 
                     video_to_process_abs_path = brightened_video_output_abs_path
                     final_video_path_for_db = new_db_path
                 else:
+                    print(f"[CHAIN_DEBUG] WARNING: Brightness adjustment failed for segment {segment_idx_completed}")
                     dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Brightness adjustment failed. Continuing with previous video version.")
 
         # --- 3. Color Matching (Applied to all segments if enabled) ---
         if chain_details.get("colour_match_videos"):
             start_ref = chain_details.get("cm_start_ref_path")
             end_ref = chain_details.get("cm_end_ref_path")
+            print(f"[CHAIN_DEBUG] Color matching requested for segment {segment_idx_completed}")
+            print(f"[CHAIN_DEBUG] Start ref: {start_ref}")
+            print(f"[CHAIN_DEBUG] End ref: {end_ref}")
             dprint(f"Chain (Seg {segment_idx_completed}): Color matching requested. Start Ref: {start_ref}, End Ref: {end_ref}")
 
             if start_ref and end_ref and Path(start_ref).exists() and Path(end_ref).exists():
@@ -1117,14 +1227,18 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                 )
 
                 if matched_video_path and Path(matched_video_path).exists():
+                    print(f"[CHAIN_DEBUG] Color matching applied successfully to segment {segment_idx_completed}")
+                    debug_video_analysis(Path(matched_video_path), f"COLORMATCHED_Seg{segment_idx_completed}", wgp_task_id)
                     dprint(f"Chain (Seg {segment_idx_completed}): Color matching successful. New path: {new_db_path}")
                     _cleanup_intermediate_video(full_orchestrator_payload, video_to_process_abs_path, segment_idx_completed, "pre-colormatch", dprint)
 
                     video_to_process_abs_path = Path(matched_video_path)
                     final_video_path_for_db = new_db_path
                 else:
+                    print(f"[CHAIN_DEBUG] WARNING: Color matching failed for segment {segment_idx_completed}")
                     dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Color matching failed. Continuing with previous video version.")
             else:
+                print(f"[CHAIN_DEBUG] WARNING: Color matching skipped - missing or invalid reference images")
                 dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Skipping color matching due to missing or invalid reference image paths.")
 
         # --- 4. Optional: Overlay start/end images above the video ---
@@ -1146,17 +1260,24 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                     output_video_path=str(banner_video_abs_path),
                     dprint=dprint,
                 ):
+                    print(f"[CHAIN_DEBUG] Banner overlay applied successfully to segment {segment_idx_completed}")
+                    debug_video_analysis(banner_video_abs_path, f"BANNER_OVERLAY_Seg{segment_idx_completed}", wgp_task_id)
                     dprint(f"Chain (Seg {segment_idx_completed}): Banner overlay successful. New path: {new_db_path}")
                     _cleanup_intermediate_video(full_orchestrator_payload, video_to_process_abs_path, segment_idx_completed, "pre-banner", dprint)
 
                     video_to_process_abs_path = banner_video_abs_path
                     final_video_path_for_db = new_db_path
                 else:
+                    print(f"[CHAIN_DEBUG] WARNING: Banner overlay failed for segment {segment_idx_completed}")
                     dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): Banner overlay failed. Keeping previous video version.")
             else:
+                print(f"[CHAIN_DEBUG] WARNING: Banner overlay skipped - missing valid start/end images")
                 dprint(f"[WARNING] Chain (Seg {segment_idx_completed}): show_input_images enabled but valid start/end images not found.")
 
         # The orchestrator has already enqueued all segment and stitch tasks.
+        print(f"[CHAIN_DEBUG] Chaining complete for segment {segment_idx_completed}")
+        print(f"[CHAIN_DEBUG] Final video path for DB: {final_video_path_for_db}")
+        debug_video_analysis(video_to_process_abs_path, f"FINAL_CHAINED_Seg{segment_idx_completed}", wgp_task_id)
         msg = f"Chain (Seg {segment_idx_completed}): Post-WGP processing complete. Final path for this WGP task's output: {final_video_path_for_db}"
         dprint(msg)
         return True, msg, str(final_video_path_for_db)
@@ -1310,17 +1431,22 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         # ------------------------------------------------------------------
         # 2b. Resolve each returned video path (local, SQLite-relative, or URL)
         # ------------------------------------------------------------------
+        print(f"[STITCH_DEBUG] Starting path resolution for {len(completed_segment_outputs_from_db)} segments")
+        print(f"[STITCH_DEBUG] Raw DB results: {completed_segment_outputs_from_db}")
         dprint(f"[DEBUG] Starting path resolution for {len(completed_segment_outputs_from_db)} segments")
         for seg_idx, video_path_str_from_db in completed_segment_outputs_from_db:
+            print(f"[STITCH_DEBUG] Processing segment {seg_idx} with path: {video_path_str_from_db}")
             dprint(f"[DEBUG] Processing segment {seg_idx} with path: {video_path_str_from_db}")
             resolved_video_path_for_stitch: Path | None = None
 
             if not video_path_str_from_db:
+                print(f"[STITCH_DEBUG] WARNING: Segment {seg_idx} has empty video_path in DB; skipping.")
                 dprint(f"[WARNING] Stitch: Segment {seg_idx} has empty video_path in DB; skipping.")
                 continue
 
             # Case A: Relative path that starts with files/ (works for both sqlite and supabase when headless has local access)
             if video_path_str_from_db.startswith("files/") or video_path_str_from_db.startswith("public/files/"):
+                print(f"[STITCH_DEBUG] Case A: Relative path detected for segment {seg_idx}")
                 sqlite_db_parent = None
                 if db_ops.SQLITE_DB_PATH:
                     sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
@@ -1331,46 +1457,68 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                     except Exception:
                         sqlite_db_parent = Path(".")
                 absolute_path_candidate = (sqlite_db_parent / "public" / video_path_str_from_db.lstrip("public/")).resolve()
+                print(f"[STITCH_DEBUG] Resolved relative path '{video_path_str_from_db}' to '{absolute_path_candidate}' for segment {seg_idx}")
                 dprint(f"Stitch: Resolved relative path '{video_path_str_from_db}' to '{absolute_path_candidate}' for segment {seg_idx}")
                 if absolute_path_candidate.exists() and absolute_path_candidate.is_file():
                     resolved_video_path_for_stitch = absolute_path_candidate
+                    print(f"[STITCH_DEBUG] ✅ File exists at resolved path")
                 else:
+                    print(f"[STITCH_DEBUG] ❌ File missing at resolved path")
                     dprint(f"[WARNING] Stitch: Resolved absolute path '{absolute_path_candidate}' for segment {seg_idx} is missing.")
 
             # Case B: Remote public URL (Supabase storage)
             elif video_path_str_from_db.startswith("http"):
+                print(f"[STITCH_DEBUG] Case B: Remote URL detected for segment {seg_idx}")
                 try:
                     from ..common_utils import download_file as sm_download_file
                     remote_url = video_path_str_from_db
                     local_filename = Path(remote_url).name
                     local_download_path = stitch_processing_dir / f"seg{seg_idx:02d}_{local_filename}"
+                    print(f"[STITCH_DEBUG] Remote URL: {remote_url}")
+                    print(f"[STITCH_DEBUG] Local download path: {local_download_path}")
                     dprint(f"[DEBUG] Remote URL detected, local download path: {local_download_path}")
                     if not local_download_path.exists():
+                        print(f"[STITCH_DEBUG] Downloading remote segment {seg_idx}...")
                         dprint(f"Stitch: Downloading remote segment {seg_idx} from {remote_url} to {local_download_path}")
                         sm_download_file(remote_url, stitch_processing_dir, local_download_path.name)
+                        print(f"[STITCH_DEBUG] ✅ Download completed for segment {seg_idx}")
                         dprint(f"[DEBUG] Download completed for segment {seg_idx}")
                     else:
+                        print(f"[STITCH_DEBUG] ✅ Local copy already exists for segment {seg_idx}")
                         dprint(f"Stitch: Local copy for segment {seg_idx} already exists at {local_download_path}")
                     resolved_video_path_for_stitch = local_download_path
                 except Exception as e_dl:
+                    print(f"[STITCH_DEBUG] ❌ Download failed for segment {seg_idx}: {e_dl}")
                     dprint(f"[WARNING] Stitch: Failed to download remote video for segment {seg_idx}: {e_dl}")
 
             # Case C: Provided absolute/local path
             else:
+                print(f"[STITCH_DEBUG] Case C: Absolute/local path for segment {seg_idx}")
                 absolute_path_candidate = Path(video_path_str_from_db).resolve()
+                print(f"[STITCH_DEBUG] Treating as absolute path: {absolute_path_candidate}")
                 dprint(f"[DEBUG] Treating as absolute path: {absolute_path_candidate}")
                 if absolute_path_candidate.exists() and absolute_path_candidate.is_file():
                     resolved_video_path_for_stitch = absolute_path_candidate
+                    print(f"[STITCH_DEBUG] ✅ Absolute path exists")
                     dprint(f"[DEBUG] Absolute path exists: {absolute_path_candidate}")
                 else:
+                    print(f"[STITCH_DEBUG] ❌ Absolute path missing or not a file")
                     dprint(f"[WARNING] Stitch: Absolute path '{absolute_path_candidate}' for segment {seg_idx} does not exist or is not a file.")
 
             if resolved_video_path_for_stitch is not None:
                 segment_video_paths_for_stitch.append(str(resolved_video_path_for_stitch))
+                print(f"[STITCH_DEBUG] ✅ Added video for segment {seg_idx}: {resolved_video_path_for_stitch}")
                 dprint(f"Stitch: Added video for segment {seg_idx}: {resolved_video_path_for_stitch}")
+                
+                # Analyze the resolved video immediately
+                debug_video_analysis(resolved_video_path_for_stitch, f"RESOLVED_Seg{seg_idx}", stitch_task_id_str)
             else: 
+                print(f"[STITCH_DEBUG] ❌ Unable to resolve video for segment {seg_idx}; will be excluded from stitching.")
                 dprint(f"[WARNING] Stitch: Unable to resolve video for segment {seg_idx}; will be excluded from stitching.")
 
+        print(f"[STITCH_DEBUG] Path resolution complete")
+        print(f"[STITCH_DEBUG] Final segment_video_paths_for_stitch: {segment_video_paths_for_stitch}")
+        print(f"[STITCH_DEBUG] Total videos collected: {len(segment_video_paths_for_stitch)}")
         dprint(f"[DEBUG] Final segment_video_paths_for_stitch: {segment_video_paths_for_stitch}")
         dprint(f"[DEBUG] Total videos collected: {len(segment_video_paths_for_stitch)}")
         # [CRITICAL DEBUG] Log each video's frame count before stitching
@@ -1430,6 +1578,11 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
 
             if any_positive_overlap:
                 print(f"[CRITICAL DEBUG] Using cross-fade due to overlap values: {actual_overlaps_for_stitching}. Output to: {path_for_raw_stitched_video}")
+                print(f"[STITCH_ANALYSIS] Cross-fade stitching analysis:")
+                print(f"[STITCH_ANALYSIS]   Number of videos: {len(segment_video_paths_for_stitch)}")
+                print(f"[STITCH_ANALYSIS]   Overlap values: {actual_overlaps_for_stitching}")
+                print(f"[STITCH_ANALYSIS]   Expected stitch points: {num_stitch_points}")
+                
                 dprint(f"Stitch: Using cross-fade due to overlap values: {actual_overlaps_for_stitching}. Output to: {path_for_raw_stitched_video}")
                 all_segment_frames_lists = [sm_extract_frames_from_video(p, dprint_func=dprint) for p in segment_video_paths_for_stitch]
                 
@@ -1660,6 +1813,17 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             final_frame_count, final_fps = sm_get_video_frame_count_and_fps(str(final_video_path))
             final_duration = final_frame_count / final_fps if final_fps > 0 else 0
             print(f"[STITCH FINAL] Final video: {final_frame_count} frames @ {final_fps} FPS = {final_duration:.2f}s")
+            print(f"[STITCH_FINAL_ANALYSIS] Complete stitching analysis:")
+            print(f"[STITCH_FINAL_ANALYSIS]   Input segments: {len(segment_video_paths_for_stitch)}")
+            print(f"[STITCH_FINAL_ANALYSIS]   Overlap settings: {expanded_frame_overlaps}")
+            print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: {expected_final_length if 'expected_final_length' in locals() else 'Not calculated'}")
+            print(f"[STITCH_FINAL_ANALYSIS]   Actual final frames: {final_frame_count}")
+            if 'expected_final_length' in locals() and final_frame_count != expected_final_length:
+                print(f"[STITCH_FINAL_ANALYSIS]   ⚠️  FINAL LENGTH MISMATCH! Expected {expected_final_length}, got {final_frame_count}")
+            
+            # Detailed analysis of the final video
+            debug_video_analysis(final_video_path, "FINAL_STITCHED_VIDEO", stitch_task_id_str)
+            
             dprint(f"[DEBUG] Final video analysis: {final_frame_count} frames, {final_fps} FPS, {final_duration:.2f}s duration")
         except Exception as e_final_analysis:
             print(f"[WARNING] Could not analyze final video: {e_final_analysis}")
