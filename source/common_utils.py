@@ -1674,22 +1674,16 @@ def _apply_special_lora_settings(task_id: str, lora_type: str, lora_basename: st
     if "video_length" in task_params_dict:
         print(f"[STEPS DEBUG] {lora_type}: Found 'video_length' = {task_params_dict['video_length']}")
     
-    # Handle steps logic - preserve optimized step counts for fast inference LoRAs
-    if "steps" in task_params_dict and not (lora_type == "CausVid" or lora_type == "LightI2X"):
-        # Only use task-specified steps for non-fast-inference LoRAs
+    # Handle steps logic
+    if "steps" in task_params_dict:
         ui_defaults["num_inference_steps"] = task_params_dict["steps"]
         print(f"[Task ID: {task_id}] {lora_type} task using specified steps: {ui_defaults['num_inference_steps']}")
-    elif "num_inference_steps" in task_params_dict and not (lora_type == "CausVid" or lora_type == "LightI2X"):
-        # Only use task-specified num_inference_steps for non-fast-inference LoRAs
+    elif "num_inference_steps" in task_params_dict:
         ui_defaults["num_inference_steps"] = task_params_dict["num_inference_steps"]
         print(f"[Task ID: {task_id}] {lora_type} task using specified num_inference_steps: {ui_defaults['num_inference_steps']}")
     else:
-        # Use optimized default steps for fast inference LoRAs, or fallback for others
         ui_defaults["num_inference_steps"] = default_steps
-        if lora_type == "CausVid" or lora_type == "LightI2X":
-            print(f"[Task ID: {task_id}] {lora_type} task using optimized steps for fast inference: {ui_defaults['num_inference_steps']}")
-        else:
-            print(f"[Task ID: {task_id}] {lora_type} task defaulting to steps: {ui_defaults['num_inference_steps']}")
+        print(f"[Task ID: {task_id}] {lora_type} task defaulting to steps: {ui_defaults['num_inference_steps']}")
     
     # Set guidance and flow shift
     ui_defaults["guidance_scale"] = guidance_scale
@@ -1843,25 +1837,21 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         _apply_special_lora_settings(
             current_task_id_for_log, "CausVid", 
             "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
-            default_steps=8, guidance_scale=1.0, flow_shift=1.0,
+            default_steps=9, guidance_scale=1.0, flow_shift=1.0,
             ui_defaults=ui_defaults, task_params_dict=task_params_dict
         )
-        # Ensure video_length stays at the target value for CausVid
-        ui_defaults["video_length"] = task_params_dict.get("frames", task_params_dict.get("video_length", 81))
 
     if lighti2x_active:
         _apply_special_lora_settings(
             current_task_id_for_log, "LightI2X",
             "wan_lcm_r16_fp32_comfy.safetensors", 
-            default_steps=5, guidance_scale=1.0, flow_shift=5.0,
+            default_steps=4, guidance_scale=1.0, flow_shift=5.0,
             ui_defaults=ui_defaults, task_params_dict=task_params_dict,
             tea_cache_setting=0.0
         )
         # Additional LightI2X-specific settings
         ui_defaults["sample_solver"] = "unipc"
         ui_defaults["denoise_strength"] = 1.0
-        # Ensure video_length stays at the target value for LightI2X
-        ui_defaults["video_length"] = task_params_dict.get("frames", task_params_dict.get("video_length", 81))
 
     if apply_reward_lora:
         print(f"[Task ID: {task_params_dict.get('task_id')}] Applying Reward LoRA settings.")
