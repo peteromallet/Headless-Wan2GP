@@ -1248,6 +1248,10 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         crossfade_sharp_amt = full_orchestrator_payload.get("crossfade_sharp_amt", 0.3)
         initial_continued_video_path_str = full_orchestrator_payload.get("continue_from_video_resolved_path")
 
+        # [OVERLAP DEBUG] Add detailed debug for overlap values
+        print(f"[OVERLAP DEBUG] Stitch: expanded_frame_overlaps from payload: {expanded_frame_overlaps}")
+        dprint(f"[OVERLAP DEBUG] Stitch: expanded_frame_overlaps from payload: {expanded_frame_overlaps}")
+
         # Extract upscale parameters
         upscale_factor = full_orchestrator_payload.get("upscale_factor", 0.0) # Default to 0.0 if not present
         upscale_model_name = full_orchestrator_payload.get("upscale_model_name") # Default to None if not present
@@ -1368,6 +1372,14 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
 
         dprint(f"[DEBUG] Final segment_video_paths_for_stitch: {segment_video_paths_for_stitch}")
         dprint(f"[DEBUG] Total videos collected: {len(segment_video_paths_for_stitch)}")
+        # [CRITICAL DEBUG] Log each video's frame count before stitching
+        print(f"[CRITICAL DEBUG] About to stitch videos:")
+        for idx, video_path in enumerate(segment_video_paths_for_stitch):
+            try:
+                frame_count, fps = sm_get_video_frame_count_and_fps(video_path)
+                print(f"[CRITICAL DEBUG] Video {idx}: {video_path} -> {frame_count} frames @ {fps} FPS")
+            except Exception as e_debug:
+                print(f"[CRITICAL DEBUG] Video {idx}: {video_path} -> ERROR: {e_debug}")
 
         total_videos_for_stitch = (1 if initial_continued_video_path_str and Path(initial_continued_video_path_str).exists() else 0) + num_expected_new_segments
         dprint(f"[DEBUG] Expected total videos: {total_videos_for_stitch}")
@@ -1416,41 +1428,80 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             )
 
             if any_positive_overlap:
+                print(f"[CRITICAL DEBUG] Using cross-fade due to overlap values: {actual_overlaps_for_stitching}. Output to: {path_for_raw_stitched_video}")
                 dprint(f"Stitch: Using cross-fade due to overlap values: {actual_overlaps_for_stitching}. Output to: {path_for_raw_stitched_video}")
                 all_segment_frames_lists = [sm_extract_frames_from_video(p, dprint_func=dprint) for p in segment_video_paths_for_stitch]
+                
+                # [CRITICAL DEBUG] Log frame extraction results
+                print(f"[CRITICAL DEBUG] Frame extraction results:")
+                for idx, frame_list in enumerate(all_segment_frames_lists):
+                    if frame_list is not None:
+                        print(f"[CRITICAL DEBUG] Segment {idx}: {len(frame_list)} frames extracted")
+                    else:
+                        print(f"[CRITICAL DEBUG] Segment {idx}: FAILED to extract frames")
+                
                 if not all(f_list is not None and len(f_list)>0 for f_list in all_segment_frames_lists):
                     raise ValueError("Stitch: Frame extraction failed for one or more segments during cross-fade prep.")
                 
                 final_stitched_frames = []
                 overlap_for_first_join = actual_overlaps_for_stitching[0] if actual_overlaps_for_stitching else 0
+                print(f"[CRITICAL DEBUG] Processing first segment: {len(all_segment_frames_lists[0])} frames, overlap_for_first_join: {overlap_for_first_join}")
                 if len(all_segment_frames_lists[0]) > overlap_for_first_join:
-                    final_stitched_frames.extend(all_segment_frames_lists[0][:-overlap_for_first_join if overlap_for_first_join > 0 else len(all_segment_frames_lists[0])])
+                    frames_to_add = all_segment_frames_lists[0][:-overlap_for_first_join if overlap_for_first_join > 0 else len(all_segment_frames_lists[0])]
+                    final_stitched_frames.extend(frames_to_add)
+                    print(f"[CRITICAL DEBUG] Added {len(frames_to_add)} frames from segment 0")
                 else: 
                     final_stitched_frames.extend(all_segment_frames_lists[0])
+                    print(f"[CRITICAL DEBUG] Added all {len(all_segment_frames_lists[0])} frames from segment 0 (not enough for overlap)")
 
                 for i in range(num_stitch_points): 
                     frames_prev_segment = all_segment_frames_lists[i]
                     frames_curr_segment = all_segment_frames_lists[i+1]
                     current_overlap_val = actual_overlaps_for_stitching[i]
 
+                    print(f"[CRITICAL DEBUG] Stitch point {i}: segments {i}->{i+1}, overlap={current_overlap_val}")
+                    print(f"[CRITICAL DEBUG] Prev segment: {len(frames_prev_segment)} frames, Curr segment: {len(frames_curr_segment)} frames")
+
                     if current_overlap_val > 0:
                         faded_frames = sm_cross_fade_overlap_frames(frames_prev_segment, frames_curr_segment, current_overlap_val, "linear_sharp", crossfade_sharp_amt)
                         final_stitched_frames.extend(faded_frames)
+                        print(f"[CRITICAL DEBUG] Added {len(faded_frames)} cross-faded frames")
                     else: 
-                        pass 
+                        print(f"[CRITICAL DEBUG] No overlap, skipping cross-fade")
                     
                     if (i + 1) < num_stitch_points: 
                         overlap_for_next_join_of_curr = actual_overlaps_for_stitching[i+1]
                         start_index_for_curr_tail = current_overlap_val 
                         end_index_for_curr_tail = len(frames_curr_segment) - (overlap_for_next_join_of_curr if overlap_for_next_join_of_curr > 0 else 0)
+                        print(f"[CRITICAL DEBUG] Middle segment {i+1}: indices {start_index_for_curr_tail}:{end_index_for_curr_tail}")
                         if end_index_for_curr_tail > start_index_for_curr_tail:
-                             final_stitched_frames.extend(frames_curr_segment[start_index_for_curr_tail : end_index_for_curr_tail])
+                             frames_to_add = frames_curr_segment[start_index_for_curr_tail : end_index_for_curr_tail]
+                             final_stitched_frames.extend(frames_to_add)
+                             print(f"[CRITICAL DEBUG] Added {len(frames_to_add)} middle frames from segment {i+1}")
                     else: 
                         start_index_for_last_segment_tail = current_overlap_val
+                        print(f"[CRITICAL DEBUG] Last segment {i+1}: indices {start_index_for_last_segment_tail}:")
                         if len(frames_curr_segment) > start_index_for_last_segment_tail:
-                            final_stitched_frames.extend(frames_curr_segment[start_index_for_last_segment_tail:])
+                            frames_to_add = frames_curr_segment[start_index_for_last_segment_tail:]
+                            final_stitched_frames.extend(frames_to_add)
+                            print(f"[CRITICAL DEBUG] Added {len(frames_to_add)} tail frames from segment {i+1}")
+                    
+                    print(f"[CRITICAL DEBUG] Running total after stitch point {i}: {len(final_stitched_frames)} frames")
                 
                 if not final_stitched_frames: raise ValueError("Stitch: No frames produced after cross-fade logic.")
+                
+                # [CRITICAL DEBUG] Final calculation summary
+                total_input_frames = sum(len(frames) for frames in all_segment_frames_lists)
+                total_overlaps = sum(actual_overlaps_for_stitching)
+                expected_output_frames = total_input_frames - total_overlaps
+                actual_output_frames = len(final_stitched_frames)
+                print(f"[CRITICAL DEBUG] FINAL CROSS-FADE SUMMARY:")
+                print(f"[CRITICAL DEBUG] Total input frames: {total_input_frames}")
+                print(f"[CRITICAL DEBUG] Total overlaps: {total_overlaps}")
+                print(f"[CRITICAL DEBUG] Expected output: {expected_output_frames}")
+                print(f"[CRITICAL DEBUG] Actual output: {actual_output_frames}")
+                print(f"[CRITICAL DEBUG] Match: {expected_output_frames == actual_output_frames}")
+                
                 created_video_path_obj = sm_create_video_from_frames_list(final_stitched_frames, path_for_raw_stitched_video, final_fps, parsed_res_wh)
                 if created_video_path_obj and created_video_path_obj.exists():
                     current_stitched_video_path = created_video_path_obj
