@@ -183,22 +183,35 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
     params = {**defaults, **kwargs}
 
     # ------------------------------------------------------------
-    #  CausVid LoRA upstream fix – keep WGP happy
+    #  CausVid LoRA upstream fix – calculate steps to achieve target video_length
     # ------------------------------------------------------------
     if use_causvid_lora:
         causvid_lora_name = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
         activated_loras, loras_multipliers = _ensure_lora_in_lists(causvid_lora_name, "1.0", activated_loras, loras_multipliers)
-        _set_param_if_different(params, "num_inference_steps", 9, task_id, "CausVid", dprint)
+        
+        # Calculate num_inference_steps to achieve target video_length
+        # WGP formula: video_length = num_inference_steps * 3 - 2
+        # Solving for steps: num_inference_steps = (video_length + 2) / 3
+        required_steps = max(1, int((video_length + 2) / 3))
+        dprint(f"[Task ID: {task_id}] CausVid: Calculating steps for target {video_length} frames: {required_steps} steps")
+        
+        _set_param_if_different(params, "num_inference_steps", required_steps, task_id, "CausVid", dprint)
         _set_param_if_different(params, "guidance_scale", 1.0, task_id, "CausVid", dprint)
         _set_param_if_different(params, "flow_shift", 1.0, task_id, "CausVid", dprint)
 
     # ------------------------------------------------------------
-    #  Light I2X LoRA tweaks – fast 4-step schedule with unipc sampler
+    #  Light I2X LoRA tweaks – calculate steps to achieve target video_length
     # ------------------------------------------------------------
     if use_lighti2x_lora:
         lighti2x_lora_name = "wan_lcm_r16_fp32_comfy.safetensors"
         activated_loras, loras_multipliers = _ensure_lora_in_lists(lighti2x_lora_name, "1.0", activated_loras, loras_multipliers)
-        _set_param_if_different(params, "num_inference_steps", 4, task_id, "LightI2X", dprint)
+        
+        # Calculate num_inference_steps to achieve target video_length
+        # Using same formula as CausVid: video_length = num_inference_steps * 3 - 2
+        required_steps = max(1, int((video_length + 2) / 3))
+        dprint(f"[Task ID: {task_id}] LightI2X: Calculating steps for target {video_length} frames: {required_steps} steps")
+        
+        _set_param_if_different(params, "num_inference_steps", required_steps, task_id, "LightI2X", dprint)
         _set_param_if_different(params, "guidance_scale", 1.0, task_id, "LightI2X", dprint)
         _set_param_if_different(params, "flow_shift", 5.0, task_id, "LightI2X", dprint)
         _set_param_if_different(params, "tea_cache_setting", 0.0, task_id, "LightI2X", dprint)
@@ -209,27 +222,6 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
     if use_causvid_lora or use_lighti2x_lora:
         params["activated_loras"] = activated_loras
         params["loras_multipliers"] = _normalize_loras_multipliers_format(loras_multipliers)
-
-    # ------------------------------------------------------------------
-    #  Synchronise num_inference_steps with requested video_length
-    # ------------------------------------------------------------------
-    # Wan2GP derives the final frame count internally via:
-    #     frames = num_inference_steps * 3 - 2
-    # (see Wan2GP/wgp.py internals).  When we explicitly request
-    # `video_length` that does NOT match the above formula the model will
-    # silently shorten the clip.  This is why CausVid (9 steps → 25f)
-    # produced 25-frame segments even though we asked for 73.
-
-    implied_frames_from_steps = params["num_inference_steps"] * 3 - 2
-    desired_frames = video_length
-    if implied_frames_from_steps != desired_frames:
-        # Compute required steps so that steps*3-2 == desired_frames
-        required_steps = max(1, int(round((desired_frames + 2) / 3)))
-        dprint(
-            f"{task_id}: Adjusting num_inference_steps {params['num_inference_steps']} → {required_steps} "
-            f"to match requested video_length {desired_frames} (formula 3*s-2)."
-        )
-        params["num_inference_steps"] = required_steps
 
     # Expose the flags to downstream logic (build_task_state & wgp)
     params["use_causvid_lora"] = use_causvid_lora
