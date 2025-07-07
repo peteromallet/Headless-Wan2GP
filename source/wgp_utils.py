@@ -210,6 +210,27 @@ def generate_single_video(*args, **kwargs) -> Tuple[bool, Optional[str]]:
         params["activated_loras"] = activated_loras
         params["loras_multipliers"] = _normalize_loras_multipliers_format(loras_multipliers)
 
+    # ------------------------------------------------------------------
+    #  Synchronise num_inference_steps with requested video_length
+    # ------------------------------------------------------------------
+    # Wan2GP derives the final frame count internally via:
+    #     frames = num_inference_steps * 3 - 2
+    # (see Wan2GP/wgp.py internals).  When we explicitly request
+    # `video_length` that does NOT match the above formula the model will
+    # silently shorten the clip.  This is why CausVid (9 steps → 25f)
+    # produced 25-frame segments even though we asked for 73.
+
+    implied_frames_from_steps = params["num_inference_steps"] * 3 - 2
+    desired_frames = video_length
+    if implied_frames_from_steps != desired_frames:
+        # Compute required steps so that steps*3-2 == desired_frames
+        required_steps = max(1, int(round((desired_frames + 2) / 3)))
+        dprint(
+            f"{task_id}: Adjusting num_inference_steps {params['num_inference_steps']} → {required_steps} "
+            f"to match requested video_length {desired_frames} (formula 3*s-2)."
+        )
+        params["num_inference_steps"] = required_steps
+
     # Expose the flags to downstream logic (build_task_state & wgp)
     params["use_causvid_lora"] = use_causvid_lora
     params["use_lighti2x_lora"] = use_lighti2x_lora
