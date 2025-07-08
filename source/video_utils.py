@@ -714,62 +714,72 @@ def create_guide_video_for_travel_segment(
             if not file_stable:
                 dprint(f"GuideBuilder: WARNING - File stability check failed, proceeding anyway")
 
-            prev_vid_total_frames, prev_vid_fps = get_video_frame_count_and_fps(path_to_previous_segment_video_output_for_guide)
-            dprint(f"GuideBuilder: Initial frame count from cv2: {prev_vid_total_frames}, fps: {prev_vid_fps}")
-
-            # Check video resolution to understand if it matches our target
-            cap = cv2.VideoCapture(str(path_to_previous_segment_video_output_for_guide))
-            if cap.isOpened():
-                prev_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                prev_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                cap.release()
-                dprint(f"GuideBuilder: Previous video resolution: {prev_width}x{prev_height} (target: {parsed_res_wh[0]}x{parsed_res_wh[1]})")
-                if prev_width != parsed_res_wh[0] or prev_height != parsed_res_wh[1]:
-                    dprint(f"GuideBuilder: WARNING - Resolution mismatch detected! Previous video will be resized during guide creation.")
-            else:
-                dprint(f"GuideBuilder: ERROR - Could not open previous video for resolution check")
-
-            # Frame count verification - check if the count seems suspiciously low
-            expected_min_frames = 25  # Most segments should be at least this many frames
+            # Get the expected frame count for the previous segment from orchestrator data
+            expected_prev_segment_frames = None
             if segment_idx_for_logging > 0 and full_orchestrator_payload:
-                # Try to get expected frame count from orchestrator payload
                 segment_frames_expanded = full_orchestrator_payload.get("segment_frames_expanded", [])
                 if segment_idx_for_logging - 1 < len(segment_frames_expanded):
-                    expected_min_frames = int(segment_frames_expanded[segment_idx_for_logging - 1] * 0.5)  # Allow 50% tolerance
-                    dprint(f"GuideBuilder: Expected previous segment to have at least {expected_min_frames} frames based on orchestrator data")
+                    expected_prev_segment_frames = segment_frames_expanded[segment_idx_for_logging - 1]
+                    dprint(f"GuideBuilder: Previous segment expected to have {expected_prev_segment_frames} frames based on orchestrator data")
 
-            force_manual_extraction = False
-            if prev_vid_total_frames and prev_vid_total_frames < expected_min_frames:
-                dprint(f"GuideBuilder: WARNING - Frame count {prev_vid_total_frames} is suspiciously low (expected >= {expected_min_frames}). Will use manual extraction.")
-                force_manual_extraction = True
-
-            if not prev_vid_total_frames or force_manual_extraction:  # Handles None or 0 or suspiciously low counts
-                dprint(f"GuideBuilder: Fallback triggered due to zero/None/low frame count. Manually reading frames.")
-                # Fallback: read all frames to determine length
-                all_prev_frames = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, dprint_func=dprint)
-                prev_vid_total_frames = len(all_prev_frames)
-                dprint(f"GuideBuilder: Manual frame count from fallback: {prev_vid_total_frames}")
-                if prev_vid_total_frames == 0:
-                    raise ValueError("Previous segment video appears to have zero frames – cannot build guide overlap.")
-                # Decide how many overlap frames we can reuse
-                actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
-                overlap_frames_raw = all_prev_frames[-actual_overlap_to_use:]
-                dprint(f"GuideBuilder: Using fallback - extracting last {actual_overlap_to_use} frames from {prev_vid_total_frames} total frames")
-            else:
-                dprint(f"GuideBuilder: Using primary logic path with cv2 frame count.")
+            # If we have the expected frame count, use it directly
+            if expected_prev_segment_frames and expected_prev_segment_frames > 0:
+                dprint(f"GuideBuilder: Using known frame count {expected_prev_segment_frames} from orchestrator data")
+                prev_vid_total_frames = expected_prev_segment_frames
+                
+                # Calculate overlap frames to extract
                 actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
                 start_extraction_idx = max(0, prev_vid_total_frames - actual_overlap_to_use)
                 dprint(f"GuideBuilder: Extracting {actual_overlap_to_use} frames starting from index {start_extraction_idx}")
+                
+                # Extract the frames directly
                 overlap_frames_raw = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, start_extraction_idx, actual_overlap_to_use, dprint_func=dprint)
-            
-            dprint(f"GuideBuilder: Calculated actual_overlap_to_use: {actual_overlap_to_use}")
-            dprint(f"GuideBuilder: Extracted raw overlap frames count: {len(overlap_frames_raw)}")
-            
-            if overlap_frames_raw:
+                
+                # Verify we got the expected number of frames
+                if len(overlap_frames_raw) != actual_overlap_to_use:
+                    dprint(f"GuideBuilder: WARNING - Expected {actual_overlap_to_use} frames but got {len(overlap_frames_raw)}. Falling back to manual extraction.")
+                    # Fall back to extracting all frames
+                    all_prev_frames = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, dprint_func=dprint)
+                    prev_vid_total_frames = len(all_prev_frames)
+                    actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
+                    overlap_frames_raw = all_prev_frames[-actual_overlap_to_use:] if actual_overlap_to_use > 0 else []
+            else:
+                # Fallback: No orchestrator data, use OpenCV or manual extraction
+                dprint(f"GuideBuilder: No orchestrator frame count data available, falling back to frame detection")
+                prev_vid_total_frames, prev_vid_fps = get_video_frame_count_and_fps(path_to_previous_segment_video_output_for_guide)
+                dprint(f"GuideBuilder: Frame count from cv2: {prev_vid_total_frames}, fps: {prev_vid_fps}")
+
+                if not prev_vid_total_frames:  # Handles None or 0
+                    dprint(f"GuideBuilder: Fallback triggered due to zero/None frame count. Manually reading frames.")
+                    # Fallback: read all frames to determine length
+                    all_prev_frames = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, dprint_func=dprint)
+                    prev_vid_total_frames = len(all_prev_frames)
+                    dprint(f"GuideBuilder: Manual frame count from fallback: {prev_vid_total_frames}")
+                    if prev_vid_total_frames == 0:
+                        raise ValueError("Previous segment video appears to have zero frames – cannot build guide overlap.")
+                    # Decide how many overlap frames we can reuse
+                    actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
+                    overlap_frames_raw = all_prev_frames[-actual_overlap_to_use:]
+                    dprint(f"GuideBuilder: Using fallback - extracting last {actual_overlap_to_use} frames from {prev_vid_total_frames} total frames")
+                else:
+                    dprint(f"GuideBuilder: Using cv2 frame count.")
+                    actual_overlap_to_use = min(frame_overlap_from_previous, prev_vid_total_frames)
+                    start_extraction_idx = max(0, prev_vid_total_frames - actual_overlap_to_use)
+                    dprint(f"GuideBuilder: Extracting {actual_overlap_to_use} frames starting from index {start_extraction_idx}")
+                    overlap_frames_raw = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, start_extraction_idx, actual_overlap_to_use, dprint_func=dprint)
+
+            # Log the final overlap calculation
+            dprint(f"GuideBuilder: Calculated actual_overlap_to_use: {actual_overlap_to_use if 'actual_overlap_to_use' in locals() else 'Not calculated'}")
+            dprint(f"GuideBuilder: Extracted raw overlap frames count: {len(overlap_frames_raw) if 'overlap_frames_raw' in locals() else 'Not extracted'}")
+
+            # Check video resolution to understand if it matches our target
+            if overlap_frames_raw and len(overlap_frames_raw) > 0:
                 first_frame_shape = overlap_frames_raw[0].shape
-                dprint(f"GuideBuilder: First extracted frame shape: {first_frame_shape}")
-                dprint(f"GuideBuilder: Target guide shape should be: ({parsed_res_wh[1]}, {parsed_res_wh[0]}, 3)")
-            
+                prev_height, prev_width = first_frame_shape[0], first_frame_shape[1]
+                dprint(f"GuideBuilder: Previous video resolution from extracted frames: {prev_width}x{prev_height} (target: {parsed_res_wh[0]}x{parsed_res_wh[1]})")
+                if prev_width != parsed_res_wh[0] or prev_height != parsed_res_wh[1]:
+                    dprint(f"GuideBuilder: Resolution mismatch detected! Previous video will be resized during guide creation.")
+
             frames_read_for_overlap = 0
             for k, frame_fp in enumerate(overlap_frames_raw):
                 if k >= total_frames_for_segment: break
