@@ -741,6 +741,17 @@ def main():
 
     cli_args = parse_args()
 
+    # ------------------------------------------------------------------
+    # Auto-enable file logging when --debug flag is present
+    # ------------------------------------------------------------------
+    if cli_args.debug and not cli_args.save_logging:
+        from datetime import datetime
+        default_logs_dir = Path("logs")
+        default_logs_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        cli_args.save_logging = str(default_logs_dir / f"debug_{timestamp}.log")
+    # ------------------------------------------------------------------
+
     # --- Handle --delete-db flag ---
     if cli_args.delete_db:
         db_file_to_delete = cli_args.db_file
