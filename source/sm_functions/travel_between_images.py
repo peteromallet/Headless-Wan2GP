@@ -1596,6 +1596,16 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 actual_overlaps_for_stitching = expanded_frame_overlaps[:num_stitch_points] 
             else: 
                 actual_overlaps_for_stitching = expanded_frame_overlaps[:num_stitch_points]
+            
+            # --- NEW OVERLAP DEBUG LOGGING ---
+            print(f"[OVERLAP DEBUG] Number of videos: {len(segment_video_paths_for_stitch)} (expected stitch points: {num_stitch_points})")
+            print(f"[OVERLAP DEBUG] actual_overlaps_for_stitching: {actual_overlaps_for_stitching}")
+            if len(actual_overlaps_for_stitching) != num_stitch_points:
+                print(f"[OVERLAP DEBUG] ⚠️  MISMATCH! We have {len(actual_overlaps_for_stitching)} overlaps for {num_stitch_points} joins")
+            for join_idx, ov in enumerate(actual_overlaps_for_stitching):
+                print(f"[OVERLAP DEBUG]   Join {join_idx} (video {join_idx} -> {join_idx+1}): overlap={ov}")
+            # --- END NEW LOGGING ---
+            
             any_positive_overlap = any(o > 0 for o in actual_overlaps_for_stitching)
 
             raw_stitched_video_filename = f"{orchestrator_run_id}_stitched.mp4"
