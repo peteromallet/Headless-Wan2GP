@@ -33,7 +33,8 @@ try:
         create_color_frame as sm_create_color_frame, 
         image_to_frame as sm_image_to_frame, 
         _adjust_frame_brightness as sm_adjust_frame_brightness,
-        get_easing_function as sm_get_easing_function
+        get_easing_function as sm_get_easing_function,
+        wait_for_file_stable as sm_wait_for_file_stable
     )
 except ImportError as e_import:
     print(f"Critical import error in video_utils.py: {e_import}")
@@ -708,7 +709,6 @@ def create_guide_video_for_travel_segment(
                 raise ValueError(f"Previous video path does not exist: {path_to_previous_segment_video_output_for_guide}")
 
             # Wait for file to be stable before reading (important for recently encoded videos)
-            from ..common_utils import wait_for_file_stable as sm_wait_for_file_stable
             dprint(f"GuideBuilder: Waiting for previous video file to stabilize...")
             file_stable = sm_wait_for_file_stable(path_to_previous_segment_video_output_for_guide, checks=3, interval=1.0, dprint=dprint)
             if not file_stable:
