@@ -101,6 +101,50 @@ serve(async (req) => {
       });
     }
 
+    // 7. Check if this task completes an orchestrator workflow
+    try {
+      // Get the task details to check if it's a final task in an orchestrator workflow
+      const { data: taskData, error: taskError } = await supabase
+        .from("tasks")
+        .select("task_type, params")
+        .eq("id", task_id)
+        .single();
+
+      if (!taskError && taskData) {
+        const { task_type, params } = taskData;
+        
+        // Check if this is a final task that should complete an orchestrator
+        const isFinalTask = (
+          task_type === "travel_stitch" || 
+          task_type === "dp_final_gen"
+        );
+
+        if (isFinalTask && params?.orchestrator_task_id_ref) {
+          console.log(`Task ${task_id} is a final ${task_type} task. Marking orchestrator ${params.orchestrator_task_id_ref} as complete.`);
+          
+          // Update the orchestrator task to Complete status with the same output location
+          const { error: orchError } = await supabase
+            .from("tasks")
+            .update({
+              status: "Complete",
+              output_location: publicUrl
+            })
+            .eq("id", params.orchestrator_task_id_ref)
+            .eq("status", "In Progress"); // Only update if still in progress
+
+          if (orchError) {
+            console.error(`Failed to update orchestrator ${params.orchestrator_task_id_ref}:`, orchError);
+            // Don't fail the whole request, just log the error
+          } else {
+            console.log(`Successfully marked orchestrator ${params.orchestrator_task_id_ref} as complete.`);
+          }
+        }
+      }
+    } catch (orchCheckError) {
+      // Don't fail the main request if orchestrator check fails
+      console.error("Error checking for orchestrator completion:", orchCheckError);
+    }
+
     return new Response(JSON.stringify({ 
       success: true, 
       public_url: publicUrl,
