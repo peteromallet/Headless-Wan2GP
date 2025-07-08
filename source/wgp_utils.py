@@ -195,22 +195,22 @@ def generate_single_video(
             }
             
             def send_cmd_debug(cmd, data=None):
-        if cmd == "progress":
-            if isinstance(data, list) and len(data) >= 2:
-                prog, txt = data[0], data[1]
-                if isinstance(prog, tuple) and len(prog) == 2:
-                    step, total = prog
+                if cmd == "progress":
+                    if isinstance(data, list) and len(data) >= 2:
+                        prog, txt = data[0], data[1]
+                        if isinstance(prog, tuple) and len(prog) == 2:
+                            step, total = prog
                             print(f"[WGP_PROGRESS] {step}/{total} – {txt}")
-                else:
+                        else:
                             print(f"[WGP_PROGRESS] {txt}")
-        elif cmd == "status":
+                elif cmd == "status":
                     print(f"[WGP_STATUS] {data}")
-        elif cmd == "info":
+                elif cmd == "info":
                     print(f"[WGP_INFO] {data}")
-        elif cmd == "error":
+                elif cmd == "error":
                     print(f"[WGP_ERROR] {data}")
                     raise RuntimeError(f"WGP error for {task_id}: {data}")
-        elif cmd == "output":
+                elif cmd == "output":
                     print(f"[WGP_OUTPUT] Video generation completed")
             
             print(f"[WGP_GENERATION_DEBUG] Calling wgp_mod.generate_video...")
@@ -221,7 +221,7 @@ def generate_single_video(
             print(f"[WGP_GENERATION_DEBUG]   num_inference_steps: {ui_params.get('num_inference_steps')}")
             
             # Call the actual WGP generation
-        wgp_mod.generate_video(
+            wgp_mod.generate_video(
                 task=gen_task_placeholder,
                 send_cmd=send_cmd_debug,
                 prompt=ui_params["prompt"],
@@ -239,7 +239,7 @@ def generate_single_video(
                 activated_loras=ui_params.get("activated_loras", []),
                 loras_multipliers=ui_params.get("loras_multipliers", ""),
                 state=state,
-            model_filename=model_filename,
+                model_filename=model_filename,
                 # Add other parameters as needed
                 audio_guidance_scale=ui_params.get("audio_guidance_scale", 5.0),
                 embedded_guidance_scale=ui_params.get("embedded_guidance_scale", 6.0),
