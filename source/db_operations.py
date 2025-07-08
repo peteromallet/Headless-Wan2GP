@@ -900,14 +900,8 @@ def get_task_dependency(task_id: str) -> str | None:
 
 def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
     """Gets completed travel_segment outputs for a given run_id for stitching."""
-    print(f"[IMMEDIATE DEBUG] get_completed_segment_outputs_for_stitch called with run_id: {run_id}")
-    print(f"[IMMEDIATE DEBUG] DB_TYPE: {DB_TYPE}")
-    print(f"[IMMEDIATE DEBUG] SUPABASE_CLIENT present: {SUPABASE_CLIENT is not None}")
-    
-    dprint(f"[DEBUG] get_completed_segment_outputs_for_stitch called with run_id: {run_id}")
     
     if DB_TYPE == "sqlite":
-        print(f"[IMMEDIATE DEBUG] Using SQLite path")
         def _get_op(conn):
             cursor = conn.cursor()
             sql_query = f"""
@@ -931,67 +925,41 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
                   AND t.status = ?
                 ORDER BY CAST(json_extract(t.params, '$.segment_index') AS INTEGER) ASC
             """
-            dprint(f"[DEBUG] SQLite query: {sql_query}")
-            dprint(f"[DEBUG] SQLite query params: run_id={run_id}, status={STATUS_COMPLETE}")
-            print(f"[IMMEDIATE DEBUG] SQLite query params: run_id={run_id}, status={STATUS_COMPLETE}")
             cursor.execute(sql_query, (run_id, STATUS_COMPLETE, run_id, STATUS_COMPLETE))
             rows = cursor.fetchall()
-            dprint(f"[DEBUG] SQLite returned {len(rows)} rows: {rows}")
-            print(f"[IMMEDIATE DEBUG] SQLite returned {len(rows)} rows: {rows}")
             return rows
         return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_op)
     elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
-        print(f"[IMMEDIATE DEBUG] Using Supabase path")
-        
         # Use direct select query (simpler and more reliable than RPC)
         try:
-            dprint(f"[DEBUG] Using direct select for run_id: {run_id}")
-            print(f"[IMMEDIATE DEBUG] Using direct select for run_id: {run_id}")
             sel_resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("params, output_location")\
                 .eq("task_type", "travel_segment").eq("status", STATUS_COMPLETE).execute()
-            dprint(f"[DEBUG] Direct select response: {sel_resp}")
-            print(f"[IMMEDIATE DEBUG] Direct select response data count: {len(sel_resp.data) if sel_resp.data else 0}")
             
             results = []
             if sel_resp.data:
                 import json
-                dprint(f"[DEBUG] Processing {len(sel_resp.data)} rows from direct select")
-                print(f"[IMMEDIATE DEBUG] Processing {len(sel_resp.data)} rows from direct select")
                 for i, row in enumerate(sel_resp.data):
-                    
                     params_raw = row.get("params")
                     if params_raw is None: 
-                        dprint(f"[DEBUG] Row {i} has no params, skipping")
                         continue
                     try:
                         params_obj = params_raw if isinstance(params_raw, dict) else json.loads(params_raw)
                     except Exception as e:
-                        dprint(f"[DEBUG] Row {i} params parse failed: {e}")
                         continue
                     
                     row_run_id = params_obj.get("orchestrator_run_id")
-                    dprint(f"[DEBUG] Row {i} orchestrator_run_id: {row_run_id} (looking for: {run_id})")
                     
                     if row_run_id == run_id:
                         seg_idx = params_obj.get("segment_index")
                         output_loc = row.get("output_location")
-                        dprint(f"[DEBUG] Row {i} MATCHED: segment_index={seg_idx}, output_location={output_loc}")
-                        print(f"[IMMEDIATE DEBUG] Row {i} MATCHED: segment_index={seg_idx}, output_location={output_loc}")
                         results.append((seg_idx, output_loc))
-                    else:
-                        dprint(f"[DEBUG] Row {i} run_id mismatch, skipping")
             
             sorted_results = sorted(results, key=lambda x: x[0] if x[0] is not None else 0)
-            dprint(f"[DEBUG] Final results: {sorted_results}")
-            print(f"[IMMEDIATE DEBUG] Final results: {sorted_results}")
             return sorted_results
         except Exception as e_sel:
             dprint(f"Stitch Supabase: Direct select failed: {e_sel}")
-            print(f"[IMMEDIATE DEBUG] Direct select failed: {e_sel}")
             return []
     
-    dprint(f"[DEBUG] No DB_TYPE match, returning empty list")
-    print(f"[IMMEDIATE DEBUG] No DB_TYPE match, returning empty list")
     return []
 
 def get_initial_task_counts() -> tuple[int, int] | None:
