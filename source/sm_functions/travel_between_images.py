@@ -1641,15 +1641,9 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                     raise ValueError("Stitch: Frame extraction failed for one or more segments during cross-fade prep.")
                 
                 final_stitched_frames = []
-                overlap_for_first_join = actual_overlaps_for_stitching[0] if actual_overlaps_for_stitching else 0
-                print(f"[CRITICAL DEBUG] Processing first segment: {len(all_segment_frames_lists[0])} frames, overlap_for_first_join: {overlap_for_first_join}")
-                if len(all_segment_frames_lists[0]) > overlap_for_first_join:
-                    frames_to_add = all_segment_frames_lists[0][:-overlap_for_first_join if overlap_for_first_join > 0 else len(all_segment_frames_lists[0])]
-                    final_stitched_frames.extend(frames_to_add)
-                    print(f"[CRITICAL DEBUG] Added {len(frames_to_add)} frames from segment 0")
-                else: 
-                    final_stitched_frames.extend(all_segment_frames_lists[0])
-                    print(f"[CRITICAL DEBUG] Added all {len(all_segment_frames_lists[0])} frames from segment 0 (not enough for overlap)")
+                # Add ALL frames from the first segment
+                final_stitched_frames.extend(all_segment_frames_lists[0])
+                print(f"[CRITICAL DEBUG] Added all {len(all_segment_frames_lists[0])} frames from segment 0")
 
                 for i in range(num_stitch_points): 
                     frames_prev_segment = all_segment_frames_lists[i]
@@ -1667,17 +1661,17 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                         print(f"[CRITICAL DEBUG] No overlap, skipping cross-fade")
                     
                     if (i + 1) < num_stitch_points: 
-                        overlap_for_next_join_of_curr = actual_overlaps_for_stitching[i+1]
+                        # For middle segments, add frames after the overlap
                         start_index_for_curr_tail = current_overlap_val 
-                        end_index_for_curr_tail = len(frames_curr_segment) - (overlap_for_next_join_of_curr if overlap_for_next_join_of_curr > 0 else 0)
-                        print(f"[CRITICAL DEBUG] Middle segment {i+1}: indices {start_index_for_curr_tail}:{end_index_for_curr_tail}")
-                        if end_index_for_curr_tail > start_index_for_curr_tail:
-                             frames_to_add = frames_curr_segment[start_index_for_curr_tail : end_index_for_curr_tail]
+                        print(f"[CRITICAL DEBUG] Middle segment {i+1}: adding frames from index {start_index_for_curr_tail} onward")
+                        if len(frames_curr_segment) > start_index_for_curr_tail:
+                             frames_to_add = frames_curr_segment[start_index_for_curr_tail:]
                              final_stitched_frames.extend(frames_to_add)
-                             print(f"[CRITICAL DEBUG] Added {len(frames_to_add)} middle frames from segment {i+1}")
+                             print(f"[CRITICAL DEBUG] Added {len(frames_to_add)} frames from segment {i+1}")
                     else: 
+                        # For the last segment, add all frames after the overlap
                         start_index_for_last_segment_tail = current_overlap_val
-                        print(f"[CRITICAL DEBUG] Last segment {i+1}: indices {start_index_for_last_segment_tail}:")
+                        print(f"[CRITICAL DEBUG] Last segment {i+1}: adding frames from index {start_index_for_last_segment_tail} onward")
                         if len(frames_curr_segment) > start_index_for_last_segment_tail:
                             frames_to_add = frames_curr_segment[start_index_for_last_segment_tail:]
                             final_stitched_frames.extend(frames_to_add)
@@ -1688,6 +1682,8 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 if not final_stitched_frames: raise ValueError("Stitch: No frames produced after cross-fade logic.")
                 
                 # [CRITICAL DEBUG] Final calculation summary
+                # With proper cross-fade: output = sum(all frames) - sum(overlaps)
+                # Because overlapped frames are blended, not duplicated
                 total_input_frames = sum(len(frames) for frames in all_segment_frames_lists)
                 total_overlaps = sum(actual_overlaps_for_stitching)
                 expected_output_frames = total_input_frames - total_overlaps
