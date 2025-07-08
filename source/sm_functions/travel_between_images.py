@@ -1515,45 +1515,8 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                         if local_download_path.exists():
                             local_download_path.unlink()
                         sm_download_file(remote_url, stitch_processing_dir, local_download_path.name)
+                        print(f"[STITCH_DEBUG] ✅ Download completed for segment {seg_idx}")
                         dprint(f"[DEBUG] Download completed for segment {seg_idx}")
-
-                        # ------------------------------------------------------------------
-                        # NEW: Post-download validation – ensure we actually got the *full* video.
-                        # This guards against race-conditions where the remote upload has not
-                        # finished yet and we fetch a truncated file (e.g. 25/49 frames).
-                        # ------------------------------------------------------------------
-                        expected_frames_prev = None
-                        try:
-                            # The previous segment is always index (segment_idx-1)
-                            if segment_idx > 0:
-                                expected_frames_prev = full_orchestrator_payload.get("segment_frames_expanded", [])[segment_idx-1]
-                        except Exception:
-                            expected_frames_prev = None
-
-                        if expected_frames_prev:
-                            validation_attempts = 0
-                            max_validation_attempts = 4
-                            while validation_attempts < max_validation_attempts:
-                                downloaded_frames, _ = sm_get_video_frame_count_and_fps(str(local_download_path))
-                                if downloaded_frames == expected_frames_prev:
-                                    dprint(f"Seg {segment_idx}: Download validation succeeded – {downloaded_frames} frames matches expected {expected_frames_prev}.")
-                                    break  # Success
-                                # Frame-count mismatch – likely incomplete download. Retry after short delay.
-                                dprint(
-                                    f"[WARNING] Seg {segment_idx}: Downloaded video has {downloaded_frames} frames but expected {expected_frames_prev}. "
-                                    f"Retrying download ({validation_attempts+1}/{max_validation_attempts}) in 3s…")
-                                time.sleep(3)
-                                # Re-download (overwrite)
-                                if local_download_path.exists():
-                                    local_download_path.unlink()
-                                sm_download_file(remote_url, stitch_processing_dir, local_download_path.name)
-                                validation_attempts += 1
-                            else:
-                                # After retries still mismatch – warn but continue.
-                                dprint(
-                                    f"[WARNING] Seg {segment_idx}: After {max_validation_attempts} retries the downloaded video still "
-                                    f"has a frame-count mismatch (expected {expected_frames_prev}, got {downloaded_frames}). Proceeding anyway.")
-                        # ------------------------------------------------------------------
                     else:
                         print(f"[STITCH_DEBUG] ✅ Using validated cached file for segment {seg_idx}")
                         dprint(f"Stitch: Using validated cached file for segment {seg_idx} at {local_download_path}")

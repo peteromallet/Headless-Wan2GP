@@ -5,6 +5,7 @@ import traceback
 import os
 import sys
 import json
+import time
 
 try:
     import cv2  # pip install opencv-python
@@ -367,12 +368,36 @@ def color_match_video_to_reference(source_video_path: str | Path, reference_vide
 # ## Video Brightness Adjustment Functions
 
 def get_video_frame_count_and_fps(video_path: str) -> tuple[int, float] | tuple[None, None]:
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        return None, None
-    frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    cap.release()
+    """
+    Get frame count and FPS from a video file using OpenCV.
+    
+    Note: OpenCV can sometimes return incorrect frame counts for recently encoded videos.
+    Consider using manual frame extraction for critical operations where accuracy is essential.
+    """
+    
+    # Try multiple times in case the video metadata is still being written
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            if attempt < max_attempts - 1:
+                time.sleep(0.5)  # Wait a bit before retrying
+                continue
+            return None, None
+            
+        frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        cap.release()
+        
+        # If we got valid values, return them
+        if frames > 0 and fps > 0:
+            return frames, fps
+            
+        # Otherwise, wait and retry
+        if attempt < max_attempts - 1:
+            time.sleep(0.5)
+    
+    # If all attempts failed, return what we got (might be 0 or invalid)
     return frames, fps
 
 def adjust_frame_brightness(frame: np.ndarray, brightness_adjust: float) -> np.ndarray:
@@ -682,6 +707,13 @@ def create_guide_video_for_travel_segment(
             if not Path(path_to_previous_segment_video_output_for_guide).exists():
                 raise ValueError(f"Previous video path does not exist: {path_to_previous_segment_video_output_for_guide}")
 
+            # Wait for file to be stable before reading (important for recently encoded videos)
+            from ..common_utils import wait_for_file_stable as sm_wait_for_file_stable
+            dprint(f"GuideBuilder: Waiting for previous video file to stabilize...")
+            file_stable = sm_wait_for_file_stable(path_to_previous_segment_video_output_for_guide, checks=3, interval=1.0, dprint=dprint)
+            if not file_stable:
+                dprint(f"GuideBuilder: WARNING - File stability check failed, proceeding anyway")
+
             prev_vid_total_frames, prev_vid_fps = get_video_frame_count_and_fps(path_to_previous_segment_video_output_for_guide)
             dprint(f"GuideBuilder: Initial frame count from cv2: {prev_vid_total_frames}, fps: {prev_vid_fps}")
 
@@ -697,8 +729,22 @@ def create_guide_video_for_travel_segment(
             else:
                 dprint(f"GuideBuilder: ERROR - Could not open previous video for resolution check")
 
-            if not prev_vid_total_frames:  # Handles None or 0 (OpenCV quirk on freshly-encoded MP4s)
-                dprint(f"GuideBuilder: Fallback triggered due to zero/None frame count. Manually reading frames.")
+            # Frame count verification - check if the count seems suspiciously low
+            expected_min_frames = 25  # Most segments should be at least this many frames
+            if segment_idx_for_logging > 0 and full_orchestrator_payload:
+                # Try to get expected frame count from orchestrator payload
+                segment_frames_expanded = full_orchestrator_payload.get("segment_frames_expanded", [])
+                if segment_idx_for_logging - 1 < len(segment_frames_expanded):
+                    expected_min_frames = int(segment_frames_expanded[segment_idx_for_logging - 1] * 0.5)  # Allow 50% tolerance
+                    dprint(f"GuideBuilder: Expected previous segment to have at least {expected_min_frames} frames based on orchestrator data")
+
+            force_manual_extraction = False
+            if prev_vid_total_frames and prev_vid_total_frames < expected_min_frames:
+                dprint(f"GuideBuilder: WARNING - Frame count {prev_vid_total_frames} is suspiciously low (expected >= {expected_min_frames}). Will use manual extraction.")
+                force_manual_extraction = True
+
+            if not prev_vid_total_frames or force_manual_extraction:  # Handles None or 0 or suspiciously low counts
+                dprint(f"GuideBuilder: Fallback triggered due to zero/None/low frame count. Manually reading frames.")
                 # Fallback: read all frames to determine length
                 all_prev_frames = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, dprint_func=dprint)
                 prev_vid_total_frames = len(all_prev_frames)
