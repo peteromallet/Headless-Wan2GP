@@ -201,6 +201,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         
         print(f"[FRAME_DEBUG] Final quantized_frame_overlap: {quantized_frame_overlap}")
         
+        # Persist quantised results back to orchestrator_payload so all downstream tasks see them
+        orchestrator_payload["segment_frames_expanded"] = quantized_segment_frames
+        orchestrator_payload["frame_overlap_expanded"] = quantized_frame_overlap
+        
         # Calculate expected final length
         total_input_frames = sum(quantized_segment_frames)
         total_overlaps = sum(quantized_frame_overlap)
