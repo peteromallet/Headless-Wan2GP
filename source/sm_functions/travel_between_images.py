@@ -595,6 +595,12 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 # Every segment ends at its target image, which should be kept (inactive/black)
                 inactive_indices.add(total_frames_for_segment - 1)
 
+                # --- NEW DEBUG LOGGING FOR MASK/OVERLAP DETAILS ---
+                print(f"[MASK_DEBUG] Segment {segment_idx}: frame_overlap_from_previous={frame_overlap_from_previous}")
+                print(f"[MASK_DEBUG] Segment {segment_idx}: inactive (masked) frame indices: {sorted(list(inactive_indices))}")
+                print(f"[MASK_DEBUG] Segment {segment_idx}: active (unmasked) frame indices: {[i for i in range(total_frames_for_segment) if i not in inactive_indices]}")
+                # --- END DEBUG LOGGING ---
+
                 # Debug: Show the conditions that determined inactive indices
                 dprint(
                     f"Seg {segment_idx}: Mask conditions - is_first_segment={segment_params.get('is_first_segment', False)}, "
@@ -1650,6 +1656,17 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
 
                     print(f"[CRITICAL DEBUG] Stitch point {i}: segments {i}->{i+1}, overlap={current_overlap_val}")
                     print(f"[CRITICAL DEBUG] Prev segment: {len(frames_prev_segment)} frames, Curr segment: {len(frames_curr_segment)} frames")
+
+                    # --- NEW OVERLAP DETAIL LOG ---
+                    if current_overlap_val > 0:
+                        start_prev = len(frames_prev_segment) - current_overlap_val
+                        end_prev = len(frames_prev_segment) - 1
+                        start_curr = 0
+                        end_curr = current_overlap_val - 1
+                        print(
+                            f"[OVERLAP_DETAIL] Join {i}: blending prev[{start_prev}:{end_prev}] with curr[{start_curr}:{end_curr}] (total {current_overlap_val} frames)"
+                        )
+                    # --- END OVERLAP DETAIL LOG ---
 
                     if i == 0:
                         # For the first stitch point, add frames from segment 0 up to the overlap
