@@ -373,10 +373,28 @@ def get_oldest_queued_task():
 
 def update_task_status(task_id: str, status: str, output_location: str | None = None):
     """Updates a task's status, dispatching to the correct implementation."""
-    if DB_TYPE == "supabase":
-        return update_task_status_supabase(task_id, status, output_location)
-    else:
-        return update_task_status_sqlite(SQLITE_DB_PATH, task_id, status, output_location)
+    print(f"[UPDATE_TASK_STATUS_DEBUG] Called with:")
+    print(f"[UPDATE_TASK_STATUS_DEBUG]   task_id: '{task_id}'")
+    print(f"[UPDATE_TASK_STATUS_DEBUG]   status: '{status}'")
+    print(f"[UPDATE_TASK_STATUS_DEBUG]   output_location: '{output_location}'")
+    print(f"[UPDATE_TASK_STATUS_DEBUG]   DB_TYPE: '{DB_TYPE}'")
+    
+    try:
+        if DB_TYPE == "supabase":
+            print(f"[UPDATE_TASK_STATUS_DEBUG] Dispatching to update_task_status_supabase")
+            result = update_task_status_supabase(task_id, status, output_location)
+            print(f"[UPDATE_TASK_STATUS_DEBUG] update_task_status_supabase completed successfully")
+            return result
+        else:
+            print(f"[UPDATE_TASK_STATUS_DEBUG] Dispatching to update_task_status_sqlite")
+            result = update_task_status_sqlite(SQLITE_DB_PATH, task_id, status, output_location)
+            print(f"[UPDATE_TASK_STATUS_DEBUG] update_task_status_sqlite completed successfully")
+            return result
+    except Exception as e:
+        print(f"[UPDATE_TASK_STATUS_DEBUG] ❌ Exception in update_task_status: {e}")
+        print(f"[UPDATE_TASK_STATUS_DEBUG] Exception type: {type(e).__name__}")
+        traceback.print_exc()
+        raise
 
 def init_db_supabase(): # Renamed from init_db_postgres
     """Initializes the PostgreSQL tasks table via Supabase RPC if it doesn't exist."""
