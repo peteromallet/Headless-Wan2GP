@@ -311,7 +311,11 @@ def _handle_dp_final_gen_task(
         
         print(f"Successfully completed 'different_perspective' task! Final image: {final_posed_image_output_path.resolve()} (DB location: {final_path_for_db})")
 
-        if not orchestrator_payload.get("skip_cleanup") and not orchestrator_payload.get("debug_mode"):
+        # Preserve intermediates when either the orchestrator payload says so *or*
+        # the headless server is running with --debug (exposed via db_ops.debug_mode).
+        if (not orchestrator_payload.get("skip_cleanup") and
+            not orchestrator_payload.get("debug_mode") and
+            not db_ops.debug_mode):
             print(f"DP Final Gen: Cleaning up intermediate files in {work_dir}...")
             try:
                 shutil.rmtree(work_dir)

@@ -1316,9 +1316,15 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
 
 def _cleanup_intermediate_video(orchestrator_payload, video_path: Path, segment_idx: int, stage: str, dprint):
     """Helper to cleanup intermediate video files during chaining."""
-    if not orchestrator_payload.get("skip_cleanup_enabled", False) and \
-       not orchestrator_payload.get("debug_mode_enabled", False) and \
-       video_path.exists():
+    # Delete intermediates **only** when every cleanup-bypass flag is false.
+    # That now includes the headless-server global debug flag (db_ops.debug_mode)
+    # so that running the server with --debug automatically preserves files.
+    if (
+        not orchestrator_payload.get("skip_cleanup_enabled", False)
+        and not orchestrator_payload.get("debug_mode_enabled", False)
+        and not db_ops.debug_mode
+        and video_path.exists()
+    ):
         try:
             video_path.unlink()
             dprint(f"Chain (Seg {segment_idx}): Removed intermediate '{stage}' video {video_path}")
