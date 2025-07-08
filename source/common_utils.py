@@ -1957,8 +1957,16 @@ def prepare_output_path(
             output_dir_for_task = sqlite_db_parent / "public" / "files"
             dprint(f"Task {task_id}: Using SQLite public files directory: {output_dir_for_task}")
         else:
-            output_dir_for_task = main_output_dir_base / task_id
-            dprint(f"Task {task_id}: Using default task-specific output directory: {output_dir_for_task}")
+            # Flatten: put all artefacts directly in the main output dir, no per-task folder
+            output_dir_for_task = main_output_dir_base
+
+            # To avoid name collisions we prefix the filename with the task_id
+            if not filename.startswith(task_id):
+                filename = f"{task_id}_{filename}"
+
+            dprint(
+                f"Task {task_id}: Using flattened output directory: {output_dir_for_task} (filename '{filename}')"
+            )
 
     output_dir_for_task.mkdir(parents=True, exist_ok=True)
 
