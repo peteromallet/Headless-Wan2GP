@@ -958,7 +958,7 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
                 dprint(f"[DEBUG] Processing {len(sel_resp.data)} rows from direct select")
                 print(f"[IMMEDIATE DEBUG] Processing {len(sel_resp.data)} rows from direct select")
                 for i, row in enumerate(sel_resp.data):
-                    dprint(f"[DEBUG] Row {i}: {row}")
+                    
                     params_raw = row.get("params")
                     if params_raw is None: 
                         dprint(f"[DEBUG] Row {i} has no params, skipping")
