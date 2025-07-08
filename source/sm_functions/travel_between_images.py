@@ -1685,8 +1685,17 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                             # No overlap, add all frames from segment 0
                             final_stitched_frames.extend(frames_prev_segment)
                             print(f"[CRITICAL DEBUG] Added all {len(frames_prev_segment)} frames from segment 0 (no overlap)")
+                    else:
+                        pass
 
                     if current_overlap_val > 0:
+                        # Remove the overlap frames already appended from the previous segment so that
+                        # they can be replaced by the blended cross-fade frames for this stitch point.
+                        if i > 0:
+                            frames_to_remove = min(current_overlap_val, len(final_stitched_frames))
+                            if frames_to_remove > 0:
+                                del final_stitched_frames[-frames_to_remove:]
+                                print(f"[CRITICAL DEBUG] Removed {frames_to_remove} duplicate overlap frames before cross-fade (stitch point {i})")
                         # Blend the overlapping frames
                         faded_frames = sm_cross_fade_overlap_frames(frames_prev_segment, frames_curr_segment, current_overlap_val, "linear_sharp", crossfade_sharp_amt)
                         final_stitched_frames.extend(faded_frames)
