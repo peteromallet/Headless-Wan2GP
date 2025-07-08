@@ -1877,11 +1877,22 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         stitch_success = True
         
         # Mark orchestrator as complete now that all segments and stitching are done
+        print(f"[ORCHESTRATOR_COMPLETION_DEBUG] Checking orchestrator completion conditions:")
+        print(f"[ORCHESTRATOR_COMPLETION_DEBUG] orchestrator_task_id_ref: '{orchestrator_task_id_ref}'")
+        print(f"[ORCHESTRATOR_COMPLETION_DEBUG] final_video_location_for_db: '{final_video_location_for_db}'")
+        print(f"[ORCHESTRATOR_COMPLETION_DEBUG] stitch_success: {stitch_success}")
+        
         if not orchestrator_task_id_ref:
             print(f"[WARNING] Stitch: orchestrator_task_id_ref is None or empty. Cannot mark orchestrator as complete.")
             print(f"[DEBUG] Stitch: stitch_params orchestrator_task_id_ref: {stitch_params.get('orchestrator_task_id_ref')}")
+            print(f"[DEBUG] Stitch: stitch_params keys: {list(stitch_params.keys())}")
         else:
             print(f"[DEBUG] Stitch: About to mark orchestrator task {orchestrator_task_id_ref} as COMPLETE with output: {final_video_location_for_db}")
+            print(f"[ORCHESTRATOR_COMPLETION_DEBUG] Calling db_ops.update_task_status with:")
+            print(f"[ORCHESTRATOR_COMPLETION_DEBUG]   task_id: '{orchestrator_task_id_ref}'")
+            print(f"[ORCHESTRATOR_COMPLETION_DEBUG]   status: '{db_ops.STATUS_COMPLETE}'")
+            print(f"[ORCHESTRATOR_COMPLETION_DEBUG]   output_location: '{final_video_location_for_db}'")
+            print(f"[ORCHESTRATOR_COMPLETION_DEBUG]   DB_TYPE: '{db_ops.DB_TYPE}'")
             try:
                 db_ops.update_task_status(
                     orchestrator_task_id_ref,
@@ -1889,10 +1900,12 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                     final_video_location_for_db
                 )
                 print(f"[SUCCESS] Stitch: Successfully marked orchestrator task {orchestrator_task_id_ref} as COMPLETE")
+                print(f"[ORCHESTRATOR_COMPLETION_DEBUG] ✅ update_task_status call completed successfully")
                 dprint(f"Stitch: Marked orchestrator task {orchestrator_task_id_ref} as COMPLETE")
             except Exception as e_orch_update:
                 print(f"[ERROR] Stitch: Failed to update orchestrator status to COMPLETE for task {orchestrator_task_id_ref}: {e_orch_update}")
                 print(f"[ERROR] Stitch: Exception type: {type(e_orch_update).__name__}")
+                print(f"[ORCHESTRATOR_COMPLETION_DEBUG] ❌ update_task_status failed with exception: {e_orch_update}")
                 traceback.print_exc()
                 dprint(f"Stitch: Warning - could not update orchestrator status to COMPLETE: {e_orch_update}")
         
