@@ -26,7 +26,8 @@
 │       ├── complete_task/         # Edge Function: uploads file & marks task complete
 │       ├── create_task/           # NEW Edge Function: queues task from client
 │       ├── claim_next_task/       # NEW Edge Function: claims next task (service-role → any, user → own only)
-│       └── get_predecessor_output/ # NEW Edge Function: gets task dependency and its output in single call
+│       ├── get_predecessor_output/ # NEW Edge Function: gets task dependency and its output in single call
+│       └── get-completed-segments/ # NEW Edge Function: fetches completed travel_segment outputs for a run_id, bypassing RLS
 ├── logs/               # runtime logs (git-ignored)
 ├── outputs/            # generated videos/images (git-ignored)
 ├── samples/            # example inputs for docs & tests

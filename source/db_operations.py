@@ -714,11 +714,8 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
     project_id = task_payload.get("project_id", "default_project_id")
 
     if DB_TYPE == "supabase":
-
-        # Preferred path: call the `create-task` Edge Function so we don't
-        # depend on a SQL RPC that may not exist.  We fall back to the legacy
-        # RPC if the Edge Function is unavailable.
-
+        # Only use Edge Function - no RPC fallback
+        
         # Build Edge URL – env var override > global constant > default pattern
         edge_url = (
             SUPABASE_EDGE_CREATE_TASK_URL  # may be set at runtime
@@ -727,73 +724,38 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
             f"{SUPABASE_URL.rstrip('/')}/functions/v1/create-task" if SUPABASE_URL else None
         )
 
-        edge_success = False
-        if edge_url:
-            try:
-                headers = {"Content-Type": "application/json"}
-                if SUPABASE_ACCESS_TOKEN:
-                    headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
+        if not edge_url:
+            raise ValueError("Edge Function URL for create-task is not configured")
 
-                payload_edge = {
-                    "task_id": task_id,
-                    "params": params_for_db,  # pass JSON directly
-                    "task_type": task_type_str,
-                    "project_id": project_id,
-                    "dependant_on": dependant_on,
-                }
+        headers = {"Content-Type": "application/json"}
+        if SUPABASE_ACCESS_TOKEN:
+            headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
 
-                dprint(f"Supabase Edge call >>> POST {edge_url} payload={str(payload_edge)[:120]}…")
+        payload_edge = {
+            "task_id": task_id,
+            "params": params_for_db,  # pass JSON directly
+            "task_type": task_type_str,
+            "project_id": project_id,
+            "dependant_on": dependant_on,
+        }
 
-                resp = httpx.post(edge_url, json=payload_edge, headers=headers, timeout=30)
+        dprint(f"Supabase Edge call >>> POST {edge_url} payload={str(payload_edge)[:120]}…")
 
-                if resp.status_code == 200:
-                    edge_success = True
-                    print(f"Task {task_id} (Type: {task_type_str}) queued via Edge Function.")
-                else:
-                    dprint(
-                        f"Edge function create-task returned {resp.status_code}: {resp.text}. Falling back to RPC."
-                    )
-            except Exception as e_edge:
-                dprint(f"Edge function call failed: {e_edge}. Falling back to RPC.")
+        try:
+            resp = httpx.post(edge_url, json=payload_edge, headers=headers, timeout=30)
 
-        if not edge_success:
-            # ------------------------------------------------------------------
-            # Legacy fallback – use the RPC func_add_task.  This path requires
-            # that the SQL function is present (older deployments).
-            # ------------------------------------------------------------------
-
-            if not SUPABASE_CLIENT:
-                print("[ERROR] Supabase client not initialized. Cannot add task.")
+            if resp.status_code == 200:
+                print(f"Task {task_id} (Type: {task_type_str}) queued via Edge Function.")
                 return
-
-            current_timestamp_iso = datetime.datetime.utcnow().isoformat() + "Z"
-
-            try:
-                rpc_params = {
-                    "p_task_id": task_id,
-                    "p_params": params_json_str,
-                    "p_task_type": task_type_str,
-                    "p_project_id": project_id,
-                    "p_dependant_on": dependant_on,
-                    "p_table_name": PG_TABLE_NAME,
-                }
-                dprint(
-                    f"Supabase RPC: Adding task {task_id} via func_add_task with params: {rpc_params}"
-                )
-                SUPABASE_CLIENT.rpc("func_add_task", rpc_params).execute()
-
-                try:
-                    SUPABASE_CLIENT.table(PG_TABLE_NAME).update({"created_at": current_timestamp_iso}).eq("id", task_id).execute()
-                    dprint(f"Supabase: Set created_at for {task_id} to {current_timestamp_iso}")
-                except Exception as e_patch:
-                    dprint(
-                        f"Supabase: Non-fatal – could not update created_at for {task_id}: {e_patch}"
-                    )
-
-                print(f"Task {task_id} (Type: {task_type_str}) added to Supabase via RPC.")
-            except Exception as e:
-                print(f"[ERROR] Supabase RPC func_add_task for {task_id} failed: {e}")
-                raise
+            else:
+                error_msg = f"Edge Function create-task failed: {resp.status_code} - {resp.text}"
+                print(f"[ERROR] {error_msg}")
+                raise RuntimeError(error_msg)
+                
+        except httpx.RequestError as e:
+            error_msg = f"Edge Function create-task request failed: {e}"
+            print(f"[ERROR] {error_msg}")
+            raise RuntimeError(error_msg)
 
     else: # Default to SQLite
         db_to_use = db_path if db_path else SQLITE_DB_PATH
@@ -1077,9 +1039,58 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
             rows = cursor.fetchall()
             return rows
         return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_op)
-    elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
-        # Use direct select query (simpler and more reliable than RPC)
+    elif DB_TYPE == "supabase":
+        edge_url = f"{SUPABASE_URL.rstrip('/')}/functions/v1/get-completed-segments"
         try:
+            dprint(f"Calling Edge Function: {edge_url} for run_id {run_id}")
+            headers = {
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {SUPABASE_ACCESS_TOKEN}'
+            }
+            payload = {"run_id": run_id}
+            resp = httpx.post(edge_url, json=payload, headers=headers, timeout=15)
+            if resp.status_code == 200:
+                results = resp.json()
+                sorted_results = sorted(results, key=lambda x: x['segment_index'])
+                return [(r['segment_index'], r['output_location']) for r in sorted_results]
+            else:
+                dprint(f"Edge Function returned {resp.status_code}: {resp.text}. Falling back to direct query.")
+        except Exception as e:
+            dprint(f"Edge Function failed: {e}. Falling back to direct query.")
+        
+        # Fallback to direct query
+        try:
+            # First, let's debug by getting ALL completed tasks to see what's there
+            debug_resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("id, task_type, status, params, output_location")\
+                .eq("status", STATUS_COMPLETE).execute()
+            
+            dprint(f"[DEBUG_STITCH] Looking for run_id: '{run_id}' (type: {type(run_id)})")
+            dprint(f"[DEBUG_STITCH] Total completed tasks in DB: {len(debug_resp.data) if debug_resp.data else 0}")
+            
+            travel_segment_count = 0
+            matching_run_id_count = 0
+            
+            if debug_resp.data:
+                for task in debug_resp.data:
+                    task_type = task.get("task_type", "")
+                    if task_type == "travel_segment":
+                        travel_segment_count += 1
+                        params_raw = task.get("params", {})
+                        try:
+                            params_obj = params_raw if isinstance(params_raw, dict) else json.loads(params_raw)
+                            task_run_id = params_obj.get("orchestrator_run_id")
+                            dprint(f"[DEBUG_STITCH] Found travel_segment task {task.get('id')}: orchestrator_run_id='{task_run_id}' (type: {type(task_run_id)}), segment_index={params_obj.get('segment_index')}, output_location={task.get('output_location', 'None')}")
+                            
+                            if str(task_run_id) == str(run_id):
+                                matching_run_id_count += 1
+                                dprint(f"[DEBUG_STITCH] ✅ MATCH FOUND! Task {task.get('id')} matches run_id {run_id}")
+                        except Exception as e_debug:
+                            dprint(f"[DEBUG_STITCH] Error parsing params for task {task.get('id')}: {e_debug}")
+            
+            dprint(f"[DEBUG_STITCH] Travel_segment tasks found: {travel_segment_count}")
+            dprint(f"[DEBUG_STITCH] Tasks matching run_id '{run_id}': {matching_run_id_count}")
+            
+            # Now do the actual query
             sel_resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("params, output_location")\
                 .eq("task_type", "travel_segment").eq("status", STATUS_COMPLETE).execute()
             
@@ -1097,15 +1108,19 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
                     
                     row_run_id = params_obj.get("orchestrator_run_id")
                     
-                    if row_run_id == run_id:
+                    # Use string comparison to handle type mismatches
+                    if str(row_run_id) == str(run_id):
                         seg_idx = params_obj.get("segment_index")
                         output_loc = row.get("output_location")
                         results.append((seg_idx, output_loc))
+                        dprint(f"[DEBUG_STITCH] Added to results: segment_index={seg_idx}, output_location={output_loc}")
             
             sorted_results = sorted(results, key=lambda x: x[0] if x[0] is not None else 0)
+            dprint(f"[DEBUG_STITCH] Final sorted results: {sorted_results}")
             return sorted_results
         except Exception as e_sel:
             dprint(f"Stitch Supabase: Direct select failed: {e_sel}")
+            traceback.print_exc()
             return []
     
     return []
