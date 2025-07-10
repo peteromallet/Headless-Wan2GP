@@ -1,7 +1,28 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// deno-lint-ignore-file
+// @ts-ignore
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+declare const Deno: any;
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 
-// Inline CORS headers
+/**
+ * Edge Function: get-completed-segments
+ * Retrieves all completed travel_segment tasks for a given run_id.
+ *
+ * Auth rules:
+ * - Service-role key: full access.
+ * - JWT with service/admin role: full access.
+ * - Personal access token (PAT): must resolve via user_api_tokens and caller must own the project_id supplied.
+ *
+ * Request (POST):
+ * {
+ *   "run_id": "string",            // required
+ *   "project_id": "uuid"           // required for PAT / user JWT tokens
+ * }
+ *
+ * Returns 200 with: [{ segment_index, output_location }]
+ */
+
 const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Origin": "*",
@@ -14,7 +35,7 @@ serve(async (req) => {
   }
 
   if (req.method !== "POST") {
-    return new Response("Method Not Allowed", { status: 405 });
+    return new Response("Method not allowed", { status: 405 });
   }
 
   try {
@@ -22,48 +43,117 @@ serve(async (req) => {
     const { run_id, project_id } = body;
 
     if (!run_id) {
-      throw new Error("Missing run_id");
+      return new Response("run_id is required", { status: 400 });
     }
 
-    const authHeader = req.headers.get("Authorization")?.replace("Bearer ", "");
+    // ─── Extract & validate Authorization header ──────────────────────────
+    const authHeaderFull = req.headers.get("Authorization");
+    if (!authHeaderFull?.startsWith("Bearer ")) {
+      return new Response("Missing or invalid Authorization header", { status: 401 });
+    }
+    const token = authHeaderFull.slice(7);
 
+    // ─── Environment vars ─────────────────────────────────────────────────
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
-    const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-    const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+    const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
-    let supabase;
-    if (authHeader === SUPABASE_SERVICE_ROLE_KEY) {
-      supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-    } else if (authHeader) {
-      supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-        global: { headers: { Authorization: `Bearer ${authHeader}` } },
-      });
-      const { data: { user }, error } = await supabase.auth.getUser();
-      if (error || !user) {
-        throw new Error("Invalid authentication");
+    if (!SUPABASE_URL || !SERVICE_KEY) {
+      console.error("SUPABASE_URL or SERVICE_KEY missing in env");
+      return new Response("Server configuration error", { status: 500 });
+    }
+
+    // Admin client (always service role)
+    const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_KEY);
+
+    let isServiceRole = false;
+    let callerId: string | null = null;
+
+    // 1) Direct key match
+    if (token === SERVICE_KEY) {
+      isServiceRole = true;
+    }
+
+    // 2) JWT role check
+    if (!isServiceRole) {
+      try {
+        const parts = token.split(".");
+        if (parts.length === 3) {
+          const payloadB64 = parts[1];
+          const padded = payloadB64 + "=".repeat((4 - (payloadB64.length % 4)) % 4);
+          const payload = JSON.parse(atob(padded));
+          const role = payload.role || payload.app_metadata?.role;
+          if (["service_role", "supabase_admin"].includes(role)) {
+            isServiceRole = true;
+          }
+        }
+      } catch (_) {
+        /* ignore decode errors */
       }
-    } else {
-      throw new Error("Missing Authorization");
     }
 
-    let query = supabase.from("tasks").select("params, output_location").eq("task_type", "travel_segment").eq("status", "Complete");
+    // 3) PAT lookup
+    if (!isServiceRole) {
+      const { data, error } = await supabaseAdmin
+        .from("user_api_tokens")
+        .select("user_id")
+        .eq("token", token)
+        .single();
 
-    if (authHeader === SUPABASE_SERVICE_ROLE_KEY) {
-      // Bypass RLS for service role
-      query = query // Supabase JS doesn't have direct usingServiceRole, but since it's created with service key, it bypasses RLS
-    } else if (project_id) {
-      query = query.eq("project_id", project_id);
+      if (error || !data) {
+        return new Response("Invalid or expired token", { status: 403 });
+      }
+      callerId = data.user_id;
     }
 
-    const { data, error } = await query;
+    // ─── Authorization for non-service callers ────────────────────────────
+    let effectiveProjectId: string | undefined = project_id;
 
-    if (error) throw error;
+    if (!isServiceRole) {
+      if (!effectiveProjectId) {
+        return new Response("project_id required for user tokens", { status: 400 });
+      }
+
+      // Ensure caller owns the project
+      const { data: proj, error: projErr } = await supabaseAdmin
+        .from("projects")
+        .select("user_id")
+        .eq("id", effectiveProjectId)
+        .single();
+
+      if (projErr || !proj) {
+        return new Response("Project not found", { status: 404 });
+      }
+      if (proj.user_id !== callerId) {
+        return new Response("Forbidden: You don't own this project", { status: 403 });
+      }
+    }
+
+    // ─── Query completed segments ─────────────────────────────────────────
+    let query = supabaseAdmin
+      .from("tasks")
+      .select("params, output_location")
+      .eq("task_type", "travel_segment")
+      .eq("status", "Complete");
+
+    if (!isServiceRole) {
+      query = query.eq("project_id", effectiveProjectId as string);
+    }
+
+    const { data: rows, error: qErr } = await query;
+    if (qErr) {
+      console.error(qErr);
+      return new Response("Database query error", { status: 500 });
+    }
 
     const results: { segment_index: number; output_location: string }[] = [];
-    for (const row of data || []) {
-      const params = typeof row.params === "string" ? JSON.parse(row.params) : row.params;
-      if (params.orchestrator_run_id === run_id && typeof params.segment_index === "number" && row.output_location) {
-        results.push({ segment_index: params.segment_index, output_location: row.output_location });
+    for (const row of rows ?? []) {
+      const paramsObj = typeof row.params === "string" ? JSON.parse(row.params) : row.params;
+      if (
+        paramsObj.orchestrator_run_id === run_id &&
+        typeof paramsObj.segment_index === "number" &&
+        row.output_location
+      ) {
+        results.push({ segment_index: paramsObj.segment_index, output_location: row.output_location });
       }
     }
 
@@ -71,10 +161,11 @@ serve(async (req) => {
 
     return new Response(JSON.stringify(results), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 200,
     });
-  } catch (error) {
-    console.error(error);
-    return new Response(JSON.stringify({ error: error.message }), {
+  } catch (e) {
+    console.error(e);
+    return new Response(JSON.stringify({ error: (e as Error).message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

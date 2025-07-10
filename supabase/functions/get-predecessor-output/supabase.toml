@@ -1,0 +1,2 @@
+[functions.get-predecessor-output]
+verify_jwt = false 
