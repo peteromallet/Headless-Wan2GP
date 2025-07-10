@@ -116,6 +116,15 @@ def _get_user_id_from_jwt(jwt_str: str) -> str | None:
         dprint(f"[ERROR] Could not decode JWT to get user ID: {e}")
         return None
 
+def _is_jwt_token(token_str: str) -> bool:
+    """
+    Checks if a token string looks like a JWT (has 3 parts separated by dots).
+    """
+    if not token_str:
+        return False
+    parts = token_str.split('.')
+    return len(parts) == 3
+
 # -----------------------------------------------------------------------------
 # Public Database Functions
 # -----------------------------------------------------------------------------
@@ -485,7 +494,12 @@ def get_oldest_queued_task_supabase(): # Renamed from get_oldest_queued_task_pos
         except Exception as e_edge:
             dprint(f"Edge Function call failed: {e_edge}. Falling back to RPC.")
     
-    # Fallback to RPC
+    # Check if we're using a PAT token - if so, skip RPC fallback since it won't work
+    if SUPABASE_ACCESS_TOKEN and not _is_jwt_token(SUPABASE_ACCESS_TOKEN):
+        dprint("Access token appears to be a PAT, not a JWT. Skipping RPC fallback as it requires JWT authentication.")
+        return None
+    
+    # Fallback to RPC (only for JWT tokens)
     try:
         worker_id = f"worker_{os.getpid()}" # Example worker ID
         dprint(f"DEBUG get_oldest_queued_task_supabase: Falling back to RPC func_claim_task.")
