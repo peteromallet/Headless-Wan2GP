@@ -105,9 +105,13 @@ serve(async (req) => {
       
       console.log(`DEBUG: Found ${debugTasks?.length || 0} total tasks for user ${callerId}`);
       if (debugTasks && debugTasks.length > 0) {
-        console.log("DEBUG: Task details:", JSON.stringify(debugTasks.slice(0, 3), null, 2));
+        console.log("DEBUG: Task details:", JSON.stringify(debugTasks.slice(0, 5), null, 2));
         const queuedTasks = debugTasks.filter(t => t.status === "Queued");
         console.log(`DEBUG: ${queuedTasks.length} tasks are in 'Queued' status`);
+        
+        // Show unique status values to debug enum
+        const uniqueStatuses = [...new Set(debugTasks.map(t => t.status))];
+        console.log(`DEBUG: Unique status values found: ${JSON.stringify(uniqueStatuses)}`);
       }
     } catch (e) {
       console.error("Error querying user_api_token:", e);
@@ -135,12 +139,12 @@ serve(async (req) => {
       
       try {
         // Try the user-specific function first
-        // Use SQL to explicitly cast user_id to UUID to resolve function overload ambiguity
+        // Query for user's queued tasks (ensuring UUID comparison)
         const { data, error } = await supabaseAdmin
           .from("tasks")
           .select("*")
           .eq("status", "Queued")
-          .eq("project_id", callerId)
+          .eq("project_id", callerId) // Both are UUID type, should match properly
           .order("created_at", { ascending: true })
           .limit(1)
           .single();
