@@ -97,22 +97,33 @@ serve(async (req) => {
       callerId = data.user_id;
       console.log(`Token resolved to user ID: ${callerId}`);
       
-      // Debug: Check what tasks exist (not filtering by project since user_id != project_id)
-      const { data: debugTasks, error: debugError } = await supabaseAdmin
-        .from("tasks")
-        .select("id, status, project_id, task_type, created_at")
-        .limit(10);
+      // Debug: Check user's projects and tasks
+      const { data: userProjects } = await supabaseAdmin
+        .from("projects")
+        .select("id, name")
+        .eq("user_id", callerId);
       
-      console.log(`DEBUG: User ${callerId} is trying to claim tasks`);
-      console.log(`DEBUG: Found ${debugTasks?.length || 0} total tasks in database`);
-      if (debugTasks && debugTasks.length > 0) {
-        console.log("DEBUG: Sample tasks:", JSON.stringify(debugTasks.slice(0, 3), null, 2));
-        const queuedTasks = debugTasks.filter(t => t.status === "Queued");
-        console.log(`DEBUG: ${queuedTasks.length} tasks are in 'Queued' status`);
+      console.log(`DEBUG: User ${callerId} owns ${userProjects?.length || 0} projects`);
+      
+      if (userProjects && userProjects.length > 0) {
+        const projectIds = userProjects.map(p => p.id);
+        const { data: userTasks } = await supabaseAdmin
+          .from("tasks")
+          .select("id, status, project_id, task_type, created_at")
+          .in("project_id", projectIds);
         
-        // Show unique status values to debug enum
-        const uniqueStatuses = [...new Set(debugTasks.map(t => t.status))];
-        console.log(`DEBUG: Unique status values found: ${JSON.stringify(uniqueStatuses)}`);
+        console.log(`DEBUG: Found ${userTasks?.length || 0} tasks across user's projects`);
+        if (userTasks && userTasks.length > 0) {
+          const queuedTasks = userTasks.filter(t => t.status === "Queued");
+          console.log(`DEBUG: ${queuedTasks.length} tasks are in 'Queued' status`);
+          console.log("DEBUG: Sample tasks:", JSON.stringify(userTasks.slice(0, 3), null, 2));
+          
+          // Show unique status values to debug enum
+          const uniqueStatuses = [...new Set(userTasks.map(t => t.status))];
+          console.log(`DEBUG: Unique status values: ${JSON.stringify(uniqueStatuses)}`);
+        }
+      } else {
+        console.log(`DEBUG: User ${callerId} has no projects - cannot claim any tasks`);
       }
     } catch (e) {
       console.error("Error querying user_api_token:", e);
@@ -140,11 +151,15 @@ serve(async (req) => {
       
       try {
         // Try the user-specific function first
-        // Query for any available queued tasks (authenticated users can claim any task)
+        // Query for queued tasks from projects owned by this user
         const { data, error } = await supabaseAdmin
           .from("tasks")
-          .select("*")
+          .select(`
+            *,
+            project:projects!inner(user_id)
+          `)
           .eq("status", "Queued")
+          .eq("project.user_id", callerId)
           .order("created_at", { ascending: true })
           .limit(1)
           .single();
