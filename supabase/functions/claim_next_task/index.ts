@@ -122,11 +122,53 @@ serve(async (req) => {
       
       try {
         // Try the user-specific function first
-        rpcResponse = await supabaseAdmin.rpc("func_claim_user_task", {
-          p_table_name: "tasks",
-          p_worker_id: workerId,
-          p_user_id: callerId
-        });
+        // Use SQL to explicitly cast user_id to UUID to resolve function overload ambiguity
+        const { data, error } = await supabaseAdmin
+          .from("tasks")
+          .select("*")
+          .eq("status", "Queued")
+          .eq("project_id", callerId)
+          .order("created_at", { ascending: true })
+          .limit(1)
+          .single();
+
+        if (error && error.code !== "PGRST116") { // PGRST116 = no rows
+          throw error;
+        }
+
+        if (data) {
+          // Found a task - claim it atomically
+          const { data: updateData, error: updateError } = await supabaseAdmin
+            .from("tasks")
+            .update({
+              status: "In Progress",
+              worker_id: workerId,
+              updated_at: new Date().toISOString()
+            })
+            .eq("id", data.id)
+            .eq("status", "Queued") // Prevent race conditions
+            .select()
+            .single();
+
+          if (updateError || !updateData) {
+            // Task was claimed by someone else, no task available
+            rpcResponse = { data: [], error: null };
+          } else {
+            // Successfully claimed
+            rpcResponse = {
+              data: [{
+                task_id_out: updateData.id,
+                params_out: updateData.params,
+                task_type_out: updateData.task_type,
+                project_id_out: updateData.project_id
+              }],
+              error: null
+            };
+          }
+        } else {
+          // No tasks available
+          rpcResponse = { data: [], error: null };
+        }
       } catch (e) {
         // If func_claim_user_task doesn't exist, fall back to manual filtering
         console.log("func_claim_user_task not found, using fallback method");
