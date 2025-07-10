@@ -25,7 +25,8 @@
 │   └── functions/
 │       ├── complete_task/         # Edge Function: uploads file & marks task complete
 │       ├── create_task/           # NEW Edge Function: queues task from client
-│       └── claim_next_task/       # NEW Edge Function: claims next task (service-role → any, user → own only)
+│       ├── claim_next_task/       # NEW Edge Function: claims next task (service-role → any, user → own only)
+│       └── get_predecessor_output/ # NEW Edge Function: gets task dependency and its output in single call
 ├── logs/               # runtime logs (git-ignored)
 ├── outputs/            # generated videos/images (git-ignored)
 ├── samples/            # example inputs for docs & tests
@@ -111,7 +112,12 @@ Task-specific wrappers around the bulky upstream logic. These are imported by `h
   * **User JWT**: Only processes tasks owned by that user
   * **Service-role key**: Processes all tasks (bypasses RLS)
 * Files can be uploaded to Supabase Storage (in development)
-* Requires RPC functions: `func_claim_task`, `func_update_task_status`, etc.
+* Uses Edge Functions for database operations to handle RLS properly:
+  * `claim_next_task/` - Claims tasks with dependency checking
+  * `get_predecessor_output/` - Gets task dependencies and outputs
+  * `complete_task/` - Uploads files and marks tasks complete
+  * `create_task/` - Creates new tasks
+* Python code uses Edge Functions for Supabase, direct queries for SQLite
 
 ## Wan2GP/
 
