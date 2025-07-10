@@ -96,6 +96,19 @@ serve(async (req) => {
 
       callerId = data.user_id;
       console.log(`Token resolved to user ID: ${callerId}`);
+      
+      // Debug: Check what tasks exist for this user
+      const { data: debugTasks, error: debugError } = await supabaseAdmin
+        .from("tasks")
+        .select("id, status, project_id, task_type, created_at")
+        .eq("project_id", callerId);
+      
+      console.log(`DEBUG: Found ${debugTasks?.length || 0} total tasks for user ${callerId}`);
+      if (debugTasks && debugTasks.length > 0) {
+        console.log("DEBUG: Task details:", JSON.stringify(debugTasks.slice(0, 3), null, 2));
+        const queuedTasks = debugTasks.filter(t => t.status === "Queued");
+        console.log(`DEBUG: ${queuedTasks.length} tasks are in 'Queued' status`);
+      }
     } catch (e) {
       console.error("Error querying user_api_token:", e);
       return new Response("Token validation failed", { status: 403 });
