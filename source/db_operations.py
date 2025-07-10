@@ -977,6 +977,75 @@ def get_task_dependency(task_id: str) -> str | None:
             return None
     return None
 
+def get_predecessor_output_via_edge_function(task_id: str) -> tuple[str | None, str | None]:
+    """
+    Gets both the predecessor task ID and its output location in a single call using Edge Function.
+    Returns: (predecessor_id, output_location) or (None, None) if no dependency or error.
+    
+    This replaces the separate calls to get_task_dependency() + get_task_output_location_from_db().
+    """
+    if DB_TYPE == "sqlite":
+        # For SQLite, fall back to separate calls since we don't have Edge Functions
+        predecessor_id = get_task_dependency(task_id)
+        if predecessor_id:
+            output_location = get_task_output_location_from_db(predecessor_id)
+            return predecessor_id, output_location
+        return None, None
+        
+    elif DB_TYPE == "supabase" and SUPABASE_URL and SUPABASE_ACCESS_TOKEN:
+        # Use the new Edge Function for Supabase
+        edge_url = f"{SUPABASE_URL.rstrip('/')}/functions/v1/get-predecessor-output"
+        
+        try:
+            dprint(f"Calling Edge Function: {edge_url} for task {task_id}")
+            headers = {
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {SUPABASE_ACCESS_TOKEN}'
+            }
+            
+            resp = httpx.post(edge_url, json={"task_id": task_id}, headers=headers, timeout=15)
+            dprint(f"Edge Function response status: {resp.status_code}")
+            
+            if resp.status_code == 200:
+                result = resp.json()
+                dprint(f"Edge Function result: {result}")
+                
+                if result is None:
+                    # No dependency
+                    return None, None
+                
+                predecessor_id = result.get("predecessor_id")
+                output_location = result.get("output_location")
+                return predecessor_id, output_location
+                
+            elif resp.status_code == 404:
+                dprint(f"Edge Function: Task {task_id} not found")
+                return None, None
+            else:
+                dprint(f"Edge Function returned {resp.status_code}: {resp.text}. Falling back to direct queries.")
+                # Fall back to separate calls
+                predecessor_id = get_task_dependency(task_id)
+                if predecessor_id:
+                    output_location = get_task_output_location_from_db(predecessor_id)
+                    return predecessor_id, output_location
+                return None, None
+                
+        except Exception as e_edge:
+            dprint(f"Edge Function call failed: {e_edge}. Falling back to direct queries.")
+            # Fall back to separate calls
+            predecessor_id = get_task_dependency(task_id)
+            if predecessor_id:
+                output_location = get_task_output_location_from_db(predecessor_id)
+                return predecessor_id, output_location
+            return None, None
+    
+    # If we can't use Edge Function, fall back to separate calls
+    predecessor_id = get_task_dependency(task_id)
+    if predecessor_id:
+        output_location = get_task_output_location_from_db(predecessor_id)
+        return predecessor_id, output_location
+    return None, None
+
 def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
     """Gets completed travel_segment outputs for a given run_id for stitching."""
     

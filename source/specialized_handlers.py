@@ -155,6 +155,7 @@ def handle_extract_frame_task(task_params_dict: dict, main_output_dir_base: Path
 
     try:
         # Get the output path of the dependency task
+        # Note: This is looking up the direct task output, not a dependency relationship
         video_path_from_db = db_ops.get_task_output_location_from_db(input_video_task_id)
         if not video_path_from_db:
             msg = f"Task {task_id}: Could not find output location for dependency task {input_video_task_id}."
@@ -343,6 +344,8 @@ def handle_generate_depth_task(task_params_dict: dict, main_output_dir_base: Pat
             report_orchestrator_failure(task_params_dict, msg, dprint)
             return False, msg
         try:
+            # Get the output path of the dependency task
+            # Note: This is looking up the direct task output, not a dependency relationship
             path_from_db = db_ops.get_task_output_location_from_db(input_image_task_id)
             if not path_from_db:
                 msg = f"Task {task_id}: Could not find output location for dependency task {input_image_task_id}."

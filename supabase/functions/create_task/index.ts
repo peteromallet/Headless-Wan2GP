@@ -116,7 +116,10 @@ serve(async (req) => {
 
   if (isServiceRole) {
     // Service role can create tasks for any project_id
-    finalProjectId = project_id || 'system';
+    if (!project_id) {
+      return new Response("project_id required for service role", { status: 400 });
+    }
+    finalProjectId = project_id;
     console.log(`Service role creating task for project: ${finalProjectId}`);
   } else {
     // User token validation
@@ -124,14 +127,29 @@ serve(async (req) => {
       return new Response("Could not determine user ID", { status: 401 });
     }
 
-    // If project_id provided, it must match the caller's ID
-    if (project_id && project_id !== callerId) {
-      return new Response("project_id does not match authenticated user", { status: 403 });
+    if (!project_id) {
+      return new Response("project_id required", { status: 400 });
     }
 
-    // Use caller's ID as the project_id
-    finalProjectId = callerId;
-    console.log(`User ${callerId} creating task for their own project`);
+    // Verify user owns the specified project
+    const { data: projectData, error: projectError } = await supabaseAdmin
+      .from("projects")
+      .select("user_id")
+      .eq("id", project_id)
+      .single();
+
+    if (projectError) {
+      console.error("Project lookup error:", projectError);
+      return new Response("Project not found", { status: 404 });
+    }
+
+    if (projectData.user_id !== callerId) {
+      console.error(`User ${callerId} attempted to create task in project ${project_id} owned by ${projectData.user_id}`);
+      return new Response("Forbidden: You don't own this project", { status: 403 });
+    }
+
+    finalProjectId = project_id;
+    console.log(`User ${callerId} creating task in their owned project ${finalProjectId}`);
   }
 
   // ─── 7. Insert row using admin client ───────────────────────────
