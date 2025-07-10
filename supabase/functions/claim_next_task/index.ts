@@ -97,15 +97,16 @@ serve(async (req) => {
       callerId = data.user_id;
       console.log(`Token resolved to user ID: ${callerId}`);
       
-      // Debug: Check what tasks exist for this user
+      // Debug: Check what tasks exist (not filtering by project since user_id != project_id)
       const { data: debugTasks, error: debugError } = await supabaseAdmin
         .from("tasks")
         .select("id, status, project_id, task_type, created_at")
-        .eq("project_id", callerId);
+        .limit(10);
       
-      console.log(`DEBUG: Found ${debugTasks?.length || 0} total tasks for user ${callerId}`);
+      console.log(`DEBUG: User ${callerId} is trying to claim tasks`);
+      console.log(`DEBUG: Found ${debugTasks?.length || 0} total tasks in database`);
       if (debugTasks && debugTasks.length > 0) {
-        console.log("DEBUG: Task details:", JSON.stringify(debugTasks.slice(0, 5), null, 2));
+        console.log("DEBUG: Sample tasks:", JSON.stringify(debugTasks.slice(0, 3), null, 2));
         const queuedTasks = debugTasks.filter(t => t.status === "Queued");
         console.log(`DEBUG: ${queuedTasks.length} tasks are in 'Queued' status`);
         
@@ -139,12 +140,11 @@ serve(async (req) => {
       
       try {
         // Try the user-specific function first
-        // Query for user's queued tasks (ensuring UUID comparison)
+        // Query for any available queued tasks (authenticated users can claim any task)
         const { data, error } = await supabaseAdmin
           .from("tasks")
           .select("*")
           .eq("status", "Queued")
-          .eq("project_id", callerId) // Both are UUID type, should match properly
           .order("created_at", { ascending: true })
           .limit(1)
           .single();
