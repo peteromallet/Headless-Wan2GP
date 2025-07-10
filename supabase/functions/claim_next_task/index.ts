@@ -193,56 +193,71 @@ serve(async (req) => {
       
       try {
         // Try the user-specific function first
-        // Query for queued tasks from projects owned by this user
-        const { data, error } = await supabaseAdmin
-          .from("tasks")
-          .select(`
-            *,
-            project:projects!inner(user_id)
-          `)
-          .eq("status", "Queued")
-          .eq("project.user_id", callerId)
-          .order("created_at", { ascending: true })
-          .limit(1)
-          .single();
+        // First get user's project IDs, then query tasks
+        const { data: userProjects } = await supabaseAdmin
+          .from("projects")
+          .select("id")
+          .eq("user_id", callerId);
 
-        if (error && error.code !== "PGRST116") { // PGRST116 = no rows
-          throw error;
-        }
-
-        if (data) {
-          // Found a task - claim it atomically
-          const { data: updateData, error: updateError } = await supabaseAdmin
-            .from("tasks")
-            .update({
-              status: "In Progress",
-              worker_id: workerId,
-              updated_at: new Date().toISOString()
-            })
-            .eq("id", data.id)
-            .eq("status", "Queued") // Prevent race conditions
-            .select()
-            .single();
-
-          if (updateError || !updateData) {
-            // Task was claimed by someone else, no task available
-            rpcResponse = { data: [], error: null };
-          } else {
-            // Successfully claimed
-            rpcResponse = {
-              data: [{
-                task_id_out: updateData.id,
-                params_out: updateData.params,
-                task_type_out: updateData.task_type,
-                project_id_out: updateData.project_id
-              }],
-              error: null
-            };
-          }
-        } else {
-          // No tasks available
+        if (!userProjects || userProjects.length === 0) {
+          console.log("User has no projects");
           rpcResponse = { data: [], error: null };
-        }
+        } else {
+          const projectIds = userProjects.map(p => p.id);
+          console.log(`DEBUG: Claiming from project IDs: ${projectIds.slice(0, 3)}`);
+          
+                     // Query for queued tasks from user's projects
+           const { data, error } = await supabaseAdmin
+             .from("tasks")
+             .select("*")
+             .eq("status", "Queued")
+             .in("project_id", projectIds)
+             .order("created_at", { ascending: true })
+             .limit(1)
+             .single();
+
+           if (error && error.code !== "PGRST116") { // PGRST116 = no rows
+             throw error;
+           }
+
+           if (data) {
+             console.log(`DEBUG: Found queued task ${data.id} to claim`);
+             // Found a task - claim it atomically
+             const { data: updateData, error: updateError } = await supabaseAdmin
+               .from("tasks")
+               .update({
+                 status: "In Progress",
+                 worker_id: workerId,
+                 updated_at: new Date().toISOString()
+               })
+               .eq("id", data.id)
+               .eq("status", "Queued") // Prevent race conditions
+               .select()
+               .single();
+
+             if (updateError || !updateData) {
+               // Task was claimed by someone else, no task available
+               console.log("Task was claimed by someone else");
+               rpcResponse = { data: [], error: null };
+             } else {
+               // Successfully claimed
+               console.log(`Successfully claimed task ${updateData.id}`);
+               rpcResponse = {
+                 data: [{
+                   task_id_out: updateData.id,
+                   params_out: updateData.params,
+                   task_type_out: updateData.task_type,
+                   project_id_out: updateData.project_id
+                 }],
+                 error: null
+               };
+             }
+           } else {
+             // No tasks available
+             console.log("No queued tasks found for user's projects");
+             rpcResponse = { data: [], error: null };
+           }
+         }
       } catch (e) {
         console.error("Error claiming user task:", e);
         rpcResponse = { data: [], error: null };
