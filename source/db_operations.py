@@ -1008,7 +1008,8 @@ def get_predecessor_output_via_edge_function(task_id: str) -> tuple[str | None, 
         return predecessor_id, output_location
     return None, None
 
-def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
+
+def get_completed_segment_outputs_for_stitch(run_id: str, project_id: str | None = None) -> list:
     """Gets completed travel_segment outputs for a given run_id for stitching."""
     
     if DB_TYPE == "sqlite":
@@ -1042,12 +1043,15 @@ def get_completed_segment_outputs_for_stitch(run_id: str) -> list:
     elif DB_TYPE == "supabase":
         edge_url = f"{SUPABASE_URL.rstrip('/')}/functions/v1/get-completed-segments"
         try:
-            dprint(f"Calling Edge Function: {edge_url} for run_id {run_id}")
+            dprint(f"Calling Edge Function: {edge_url} for run_id {run_id}, project_id {project_id}")
             headers = {
                 'Content-Type': 'application/json',
                 'Authorization': f'Bearer {SUPABASE_ACCESS_TOKEN}'
             }
             payload = {"run_id": run_id}
+            if project_id:
+                payload["project_id"] = project_id
+
             resp = httpx.post(edge_url, json=payload, headers=headers, timeout=15)
             if resp.status_code == 200:
                 results = resp.json()
