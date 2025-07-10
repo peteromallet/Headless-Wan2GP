@@ -24,7 +24,8 @@
 ├── supabase/
 │   └── functions/
 │       ├── complete_task/         # Edge Function: uploads file & marks task complete
-│       └── create_task/           # NEW Edge Function: queues task from client
+│       ├── create_task/           # NEW Edge Function: queues task from client
+│       └── claim_next_task/       # NEW Edge Function: claims next task (service-role → any, user → own only)
 ├── logs/               # runtime logs (git-ignored)
 ├── outputs/            # generated videos/images (git-ignored)
 ├── samples/            # example inputs for docs & tests

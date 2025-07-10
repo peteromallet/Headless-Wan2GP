@@ -128,7 +128,11 @@ Once `headless.py` is running, you can open another terminal to queue tasks usin
                     worker_id TEXT NULL,
                     output_location TEXT NULL,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    generation_started_at TIMESTAMP WITH TIME ZONE NULL,
+                    generation_processed_at TIMESTAMP WITH TIME ZONE NULL,
+                    project_id TEXT NOT NULL,
+                    dependant_on TEXT NULL
                 );', p_table_name);
 
             EXECUTE format('
@@ -157,15 +161,16 @@ Once `headless.py` is running, you can open another terminal to queue tasks usin
         **Function 2: `func_claim_task`** (Updated to return `task_type_out`)
         ```sql
         CREATE OR REPLACE FUNCTION func_claim_task(p_table_name TEXT, p_worker_id TEXT)
-        RETURNS TABLE(task_id_out TEXT, params_out JSONB, task_type_out TEXT) AS $$
+        RETURNS TABLE(task_id_out TEXT, params_out JSONB, task_type_out TEXT, project_id_out TEXT) AS $$
         DECLARE
             v_task_id TEXT;
             v_params JSONB;
             v_task_type TEXT;
+            v_project_id TEXT;
         BEGIN
             EXECUTE format('
                 WITH selected_task AS (
-                    SELECT id, task_id, params, task_type -- Include task_type
+                    SELECT id, task_id, params, task_type, project_id
                     FROM %I
                     WHERE status = ''Queued''
                     ORDER BY created_at ASC
@@ -176,20 +181,21 @@ Once `headless.py` is running, you can open another terminal to queue tasks usin
                     SET
                         status = ''In Progress'',
                         worker_id = $1,
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = CURRENT_TIMESTAMP,
+                        generation_started_at = CURRENT_TIMESTAMP
                     WHERE id = (SELECT st.id FROM selected_task st)
-                    RETURNING task_id, params, task_type -- Return task_type
+                    RETURNING task_id, params, task_type, project_id
                 )
-                SELECT ut.task_id, ut.params, ut.task_type FROM updated_task ut LIMIT 1',
+                SELECT ut.task_id, ut.params, ut.task_type, ut.project_id FROM updated_task ut LIMIT 1',
                 p_table_name, p_table_name
             )
-            INTO v_task_id, v_params, v_task_type -- Store task_type
+            INTO v_task_id, v_params, v_task_type, v_project_id
             USING p_worker_id;
 
             IF v_task_id IS NOT NULL THEN
-                RETURN QUERY SELECT v_task_id, v_params, v_task_type;
+                RETURN QUERY SELECT v_task_id, v_params, v_task_type, v_project_id;
             ELSE
-                RETURN QUERY SELECT NULL::TEXT, NULL::JSONB, NULL::TEXT WHERE FALSE;
+                RETURN QUERY SELECT NULL::TEXT, NULL::JSONB, NULL::TEXT, NULL::TEXT WHERE FALSE;
             END IF;
         END;
         $$ LANGUAGE plpgsql SECURITY DEFINER;
