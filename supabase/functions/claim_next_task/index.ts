@@ -203,22 +203,30 @@ serve(async (req) => {
           console.log("User has no projects");
           rpcResponse = { data: [], error: null };
         } else {
-          const projectIds = userProjects.map(p => p.id);
-          console.log(`DEBUG: Claiming from project IDs: ${projectIds.slice(0, 3)}`);
+                    const projectIds = userProjects.map(p => p.id);
+          console.log(`DEBUG: Claiming from ${projectIds.length} project IDs: [${projectIds.slice(0, 3).join(', ')}...]`);
           
-                     // Query for queued tasks from user's projects
-           const { data, error } = await supabaseAdmin
-             .from("tasks")
-             .select("*")
-             .eq("status", "Queued")
-             .in("project_id", projectIds)
-             .order("created_at", { ascending: true })
-             .limit(1)
-             .single();
+          if (projectIds.length === 0) {
+            console.log("No project IDs to search - user has projects but they have no IDs?");
+            rpcResponse = { data: [], error: null };
+          } else {
+            // Query for queued tasks from user's projects
+            console.log(`DEBUG: Executing task query with status='Queued' and project_id IN [${projectIds.length} projects]`);
+            const { data, error } = await supabaseAdmin
+              .from("tasks")
+              .select("*")
+              .eq("status", "Queued")
+              .in("project_id", projectIds)
+              .order("created_at", { ascending: true })
+              .limit(1)
+              .single();
 
-           if (error && error.code !== "PGRST116") { // PGRST116 = no rows
-             throw error;
-           }
+            console.log(`DEBUG: Task query result - error: ${error?.message || 'none'}, data: ${data ? 'found task ' + data.id : 'no data'}`);
+            
+                        if (error && error.code !== "PGRST116") {
+              console.error("Task query failed:", error);
+              throw error;
+            }
 
            if (data) {
              console.log(`DEBUG: Found queued task ${data.id} to claim`);
@@ -258,6 +266,7 @@ serve(async (req) => {
              rpcResponse = { data: [], error: null };
            }
          }
+        }
       } catch (e) {
         console.error("Error claiming user task:", e);
         rpcResponse = { data: [], error: null };
