@@ -148,13 +148,10 @@ serve(async (req) => {
         updated_at: new Date().toISOString()
       };
 
-      // First, find eligible tasks with dependency checking
-      const { data: eligibleTasks, error: findError } = await supabaseAdmin
+      // Get all queued tasks and manually check dependencies
+      const { data: queuedTasks, error: findError } = await supabaseAdmin
         .from("tasks")
-        .select(`
-          id, params, task_type, project_id, created_at,
-          dependency:dependant_on(id, status)
-        `)
+        .select("id, params, task_type, project_id, created_at, dependant_on")
         .eq("status", "Queued")
         .order("created_at", { ascending: true });
 
@@ -162,10 +159,27 @@ serve(async (req) => {
         throw findError;
       }
 
-      // Filter to tasks with no dependency OR completed dependency
-      const readyTasks = eligibleTasks?.filter(task => 
-        !task.dependant_on || task.dependency?.status === "Complete"
-      ) || [];
+      // Manual dependency checking for service role
+      const readyTasks: any[] = [];
+      for (const task of (queuedTasks || [])) {
+        if (!task.dependant_on) {
+          // No dependency - task is ready
+          readyTasks.push(task);
+        } else {
+          // Check if dependency is complete
+          const { data: depData } = await supabaseAdmin
+            .from("tasks")
+            .select("status")
+            .eq("id", task.dependant_on)
+            .single();
+          
+          if (depData?.status === "Complete") {
+            readyTasks.push(task);
+          }
+        }
+      }
+      
+      console.log(`Service role dependency check: ${queuedTasks?.length || 0} queued, ${readyTasks.length} ready`);
 
       let updateData: any = null;
       let updateError: any = null;
@@ -234,15 +248,12 @@ serve(async (req) => {
             console.log("No project IDs to search - user has projects but they have no IDs?");
             rpcResponse = { data: [], error: null };
           } else {
-            // Find eligible tasks with dependency checking for user projects
+            // Get queued tasks for user projects and manually check dependencies
             console.log(`DEBUG: Finding eligible tasks with dependency checking for ${projectIds.length} projects`);
             
-            const { data: userEligibleTasks, error: userFindError } = await supabaseAdmin
+            const { data: userQueuedTasks, error: userFindError } = await supabaseAdmin
               .from("tasks")
-              .select(`
-                id, params, task_type, project_id, created_at,
-                dependency:dependant_on(id, status)
-              `)
+              .select("id, params, task_type, project_id, created_at, dependant_on")
               .eq("status", "Queued")
               .in("project_id", projectIds)
               .order("created_at", { ascending: true });
@@ -251,12 +262,27 @@ serve(async (req) => {
               throw userFindError;
             }
 
-            // Filter to tasks with no dependency OR completed dependency
-            const userReadyTasks = userEligibleTasks?.filter(task => 
-              !task.dependant_on || task.dependency?.status === "Complete"
-            ) || [];
+            // Manual dependency checking for user tasks
+            const userReadyTasks: any[] = [];
+            for (const task of (userQueuedTasks || [])) {
+              if (!task.dependant_on) {
+                // No dependency - task is ready
+                userReadyTasks.push(task);
+              } else {
+                // Check if dependency is complete
+                const { data: depData } = await supabaseAdmin
+                  .from("tasks")
+                  .select("status")
+                  .eq("id", task.dependant_on)
+                  .single();
+                
+                if (depData?.status === "Complete") {
+                  userReadyTasks.push(task);
+                }
+              }
+            }
 
-            console.log(`DEBUG: Found ${userReadyTasks.length} eligible tasks for user`);
+            console.log(`DEBUG: User dependency check: ${userQueuedTasks?.length || 0} queued, ${userReadyTasks.length} ready`);
 
             const updatePayload: any = {
               status: "In Progress",
