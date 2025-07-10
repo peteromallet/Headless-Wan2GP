@@ -112,15 +112,10 @@ serve(async (req) => {
   }
 
   try {
-    // Get the task with its dependency info
+    // Get the task info first
     const { data: taskData, error: taskError } = await supabaseAdmin
       .from("tasks")
-      .select(`
-        id, 
-        dependant_on, 
-        project_id,
-        predecessor:dependant_on(id, status, output_location)
-      `)
+      .select("id, dependant_on, project_id")
       .eq("id", task_id)
       .single();
 
@@ -165,14 +160,32 @@ serve(async (req) => {
       });
     }
 
-    // Has dependency - check if it's complete and has output
-    const predecessor = taskData.predecessor;
-    if (!predecessor || predecessor.status !== "Complete" || !predecessor.output_location) {
+    // Get the predecessor task details
+    const { data: predecessorData, error: predecessorError } = await supabaseAdmin
+      .from("tasks")
+      .select("id, status, output_location")
+      .eq("id", taskData.dependant_on)
+      .single();
+
+    if (predecessorError) {
+      console.error("Predecessor lookup error:", predecessorError);
+      // Dependency exists but predecessor task not found
+      return new Response(JSON.stringify({ 
+        predecessor_id: taskData.dependant_on,
+        output_location: null,
+        status: "not_found"
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    if (predecessorData.status !== "Complete" || !predecessorData.output_location) {
       // Dependency exists but not complete or no output
       return new Response(JSON.stringify({ 
         predecessor_id: taskData.dependant_on,
         output_location: null,
-        status: predecessor?.status || "unknown"
+        status: predecessorData.status
       }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
@@ -180,10 +193,10 @@ serve(async (req) => {
     }
 
     // Dependency is complete with output
-    console.log(`Found predecessor output: ${predecessor.id} -> ${predecessor.output_location}`);
+    console.log(`Found predecessor output: ${predecessorData.id} -> ${predecessorData.output_location}`);
     return new Response(JSON.stringify({ 
-      predecessor_id: predecessor.id,
-      output_location: predecessor.output_location
+      predecessor_id: predecessorData.id,
+      output_location: predecessorData.output_location
     }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
