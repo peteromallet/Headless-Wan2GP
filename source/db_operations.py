@@ -30,6 +30,7 @@ SUPABASE_CLIENT: SupabaseClient | None = None
 SUPABASE_EDGE_COMPLETE_TASK_URL: str | None = None  # Optional override for edge function
 SUPABASE_ACCESS_TOKEN: str | None = None # Will be set by headless.py
 SUPABASE_EDGE_CREATE_TASK_URL: str | None = None # Will be set by headless.py
+SUPABASE_EDGE_CLAIM_TASK_URL: str | None = None # Will be set by headless.py
 
 sqlite_lock = threading.Lock()
 
@@ -190,6 +191,24 @@ def _migrate_sqlite_schema(db_path_str: str):
             else:
                 dprint("SQLite Migration: 'idx_dependant_on' index already exists.")
 
+            # --- Add generation_started_at column if not exists ---
+            generation_started_at_column_exists = 'generation_started_at' in columns
+            if not generation_started_at_column_exists:
+                dprint("SQLite Migration: 'generation_started_at' column not found. Adding it.")
+                cursor.execute("ALTER TABLE tasks ADD COLUMN generation_started_at TEXT NULL")
+                dprint("SQLite Migration: 'generation_started_at' column added.")
+            else:
+                dprint("SQLite Migration: 'generation_started_at' column already exists.")
+
+            # --- Add generation_processed_at column if not exists ---
+            generation_processed_at_column_exists = 'generation_processed_at' in columns
+            if not generation_processed_at_column_exists:
+                dprint("SQLite Migration: 'generation_processed_at' column not found. Adding it.")
+                cursor.execute("ALTER TABLE tasks ADD COLUMN generation_processed_at TEXT NULL")
+                dprint("SQLite Migration: 'generation_processed_at' column added.")
+            else:
+                dprint("SQLite Migration: 'generation_processed_at' column already exists.")
+
             # Populate task_type from params if it's NULL (for old rows or newly added column)
             dprint("SQLite Migration: Attempting to populate NULL 'task_type' from 'params' JSON...")
             cursor.execute("SELECT id, params FROM tasks WHERE task_type IS NULL")
@@ -262,6 +281,8 @@ def _init_db_sqlite(db_path_str: str):
                 output_location TEXT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NULL,
+                generation_started_at TEXT NULL,
+                generation_processed_at TEXT NULL,
                 project_id TEXT NOT NULL,
                 FOREIGN KEY (project_id) REFERENCES projects(id)
             )
@@ -297,8 +318,20 @@ def get_oldest_queued_task_sqlite(db_path_str: str):
         cursor.execute(sql_query, query_params)
         task_row = cursor.fetchone()
         if task_row:
+            task_id = task_row[0]
             dprint(f"SQLite: Fetched raw task_row: {task_row}")
-            return {"task_id": task_row[0], "params": json.loads(task_row[1]), "task_type": task_row[2], "project_id": task_row[3]}
+            
+            # Update status to IN_PROGRESS and set generation_started_at
+            current_utc_iso_ts = datetime.datetime.utcnow().isoformat() + "Z"
+            cursor.execute("""
+                UPDATE tasks 
+                SET status = ?, 
+                    updated_at = ?, 
+                    generation_started_at = ?
+                WHERE id = ?
+            """, (STATUS_IN_PROGRESS, current_utc_iso_ts, current_utc_iso_ts, task_id))
+            
+            return {"task_id": task_id, "params": json.loads(task_row[1]), "task_type": task_row[2], "project_id": task_row[3]}
         return None
     
     try:
@@ -320,11 +353,11 @@ def update_task_status_sqlite(db_path_str: str, task_id: str, status: str, outpu
                            (output_location_val, current_utc_iso_ts_loc_update, task_id))
             conn.commit()  # Explicitly commit the output_location update
 
-            # Step 2: Update status and updated_at for the status change
+            # Step 2: Update status, updated_at, and generation_processed_at for the completion
             current_utc_iso_ts_status_update = datetime.datetime.utcnow().isoformat() + "Z"
             dprint(f"SQLite Update (Split Step 2): Updating status for {task_id} to {status}")
-            cursor.execute("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
-                           (status, current_utc_iso_ts_status_update, task_id))
+            cursor.execute("UPDATE tasks SET status = ?, updated_at = ?, generation_processed_at = ? WHERE id = ?",
+                           (status, current_utc_iso_ts_status_update, current_utc_iso_ts_status_update, task_id))
             # The final commit for this status update will be handled by execute_sqlite_with_retry
 
         elif status == STATUS_FAILED and output_location_val is not None: # output_location_val is error message here
@@ -417,13 +450,45 @@ def init_db_supabase(): # Renamed from init_db_postgres
         sys.exit(1)
 
 def get_oldest_queued_task_supabase(): # Renamed from get_oldest_queued_task_postgres
-    """Fetches the oldest task via Supabase RPC using func_claim_task."""
+    """Fetches the oldest task via Supabase Edge Function or RPC fallback."""
     if not SUPABASE_CLIENT:
         print("[ERROR] Supabase client not initialized. Cannot get task.")
         return None
+    
+    # Try Edge Function first if URL is available
+    edge_url = (
+        SUPABASE_EDGE_CLAIM_TASK_URL 
+        or os.getenv('SUPABASE_EDGE_CLAIM_TASK_URL')
+        or (f"{SUPABASE_URL.rstrip('/')}/functions/v1/claim-next-task" if SUPABASE_URL else None)
+    )
+    
+    if edge_url and SUPABASE_ACCESS_TOKEN:
+        try:
+            dprint(f"DEBUG get_oldest_queued_task_supabase: Trying Edge Function at {edge_url}")
+            headers = {
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {SUPABASE_ACCESS_TOKEN}'
+            }
+            
+            resp = httpx.post(edge_url, json={}, headers=headers, timeout=15)
+            dprint(f"Edge Function response status: {resp.status_code}")
+            
+            if resp.status_code == 200:
+                task_data = resp.json()
+                dprint(f"Edge Function claimed task: {task_data}")
+                return task_data  # Already in the expected format
+            elif resp.status_code == 204:
+                dprint("Edge Function: No queued tasks available")
+                return None
+            else:
+                dprint(f"Edge Function returned {resp.status_code}: {resp.text}. Falling back to RPC.")
+        except Exception as e_edge:
+            dprint(f"Edge Function call failed: {e_edge}. Falling back to RPC.")
+    
+    # Fallback to RPC
     try:
         worker_id = f"worker_{os.getpid()}" # Example worker ID
-        dprint(f"DEBUG get_oldest_queued_task_supabase: About to call RPC func_claim_task.")
+        dprint(f"DEBUG get_oldest_queued_task_supabase: Falling back to RPC func_claim_task.")
         dprint(f"DEBUG get_oldest_queued_task_supabase: PG_TABLE_NAME = '{PG_TABLE_NAME}' (type: {type(PG_TABLE_NAME)})")
         dprint(f"DEBUG get_oldest_queued_task_supabase: worker_id = '{worker_id}' (type: {type(worker_id)})")
         
