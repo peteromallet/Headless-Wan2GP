@@ -816,28 +816,24 @@ def main():
     # This block sets DB_TYPE, SQLITE_DB_PATH, SUPABASE_CLIENT, etc. in the db_ops module
     if cli_args.db_type == "supabase" and cli_args.supabase_url and cli_args.supabase_access_token:
         try:
-            # --- New PAT-based Supabase client initialization ---
-            # Personal Access Tokens (PATs) are used directly as Bearer tokens and don't have
-            # a "session" that can be set. We must initialize the client and then manually
-            # set the Authorization header for the sub-clients (postgrest, storage).
-            supabase_anon_key_for_client = cli_args.supabase_anon_key or env_supabase_anon_key
+            # --- New PAT/JWT-based Supabase client initialization ---
+            # For PATs and user JWTs, we primarily use edge functions and avoid direct 
+            # Supabase client authentication which expects specific JWT formats.
+            # We'll create a client with the service key for internal operations,
+            # but use the access token in headers for edge function calls.
             
-            if not supabase_anon_key_for_client:
-                raise ValueError("When using db-type 'supabase' with an access token, the Supabase anon key is required. Provide it via --supabase-anon-key or the SUPABASE_ANON_KEY environment variable.")
+            # Use service key for admin operations if available, otherwise anon key
+            client_key = env_supabase_key or cli_args.supabase_anon_key or env_supabase_anon_key
+            
+            if not client_key:
+                raise ValueError("Need either service key or anon key for Supabase client initialization.")
 
-            dprint(f"Supabase: Initializing client for {cli_args.supabase_url} with anon key.")
-            temp_supabase_client = create_client(cli_args.supabase_url, supabase_anon_key_for_client)
-
-            dprint(f"Supabase: Authenticating sub-clients with provided access token (PAT).")
-            # Manually set the auth token for PostgREST (database)
-            temp_supabase_client.postgrest.auth(cli_args.supabase_access_token)
-            dprint("Supabase: PostgREST client authenticated.")
-
-            # Manually set the auth token for Storage by updating the main client's headers
-            temp_supabase_client.options.headers.update({
-                "Authorization": f"Bearer {cli_args.supabase_access_token}"
-            })
-            dprint("Supabase: Storage client headers updated for authentication.")
+            dprint(f"Supabase: Initializing client for {cli_args.supabase_url}.")
+            temp_supabase_client = create_client(cli_args.supabase_url, client_key)
+            
+            # For PATs and user tokens, we'll primarily rely on edge functions
+            # The access token will be passed in Authorization headers
+            dprint(f"Supabase: Client initialized. Access token will be used in edge function calls.")
 
             # --- Assign to db_ops globals on success ---
             db_ops.DB_TYPE = "supabase"
@@ -846,7 +842,7 @@ def main():
             db_ops.SUPABASE_SERVICE_KEY = env_supabase_key # Keep service key if present
             db_ops.SUPABASE_VIDEO_BUCKET = env_supabase_bucket
             db_ops.SUPABASE_CLIENT = temp_supabase_client
-            # Also store the token itself for use in Edge Function calls etc.
+            # Store the access token for use in Edge Function calls
             db_ops.SUPABASE_ACCESS_TOKEN = cli_args.supabase_access_token
 
             # Local globals for convenience
@@ -855,7 +851,7 @@ def main():
             SUPABASE_VIDEO_BUCKET = env_supabase_bucket
 
         except Exception as e:
-            print(f"[ERROR] Failed to initialize and authenticate Supabase client: {e}")
+            print(f"[ERROR] Failed to initialize Supabase client: {e}")
             traceback.print_exc()
             print("Falling back to SQLite due to Supabase client initialization error.")
             db_ops.DB_TYPE = "sqlite"
