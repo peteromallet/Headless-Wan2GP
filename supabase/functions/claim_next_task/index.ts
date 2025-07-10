@@ -139,52 +139,76 @@ serve(async (req) => {
     let rpcResponse;
     
     if (isServiceRole) {
-      // Service role: claim any available task from any project
-      console.log("Claiming task as service role (any project)...");
+      // Service role: claim any available task from any project atomically
+      console.log("Service role: Executing atomic find-and-claim for all tasks");
       
-      const { data, error } = await supabaseAdmin
-        .from("tasks")
-        .select("*")
-        .eq("status", "Queued")
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .single();
+      const serviceUpdatePayload = {
+        status: "In Progress" as const,
+        worker_id: workerId,  // Service role gets worker_id for tracking
+        updated_at: new Date().toISOString()
+      };
 
-      if (error && error.code !== "PGRST116") { // PGRST116 = no rows
-        throw error;
+      // First, find eligible tasks with dependency checking
+      const { data: eligibleTasks, error: findError } = await supabaseAdmin
+        .from("tasks")
+        .select(`
+          id, params, task_type, project_id, created_at,
+          dependency:dependant_on(id, status)
+        `)
+        .eq("status", "Queued")
+        .order("created_at", { ascending: true });
+
+      if (findError) {
+        throw findError;
       }
 
-      if (data) {
-        // Found a task - claim it atomically
-        const { data: updateData, error: updateError } = await supabaseAdmin
+      // Filter to tasks with no dependency OR completed dependency
+      const readyTasks = eligibleTasks?.filter(task => 
+        !task.dependant_on || task.dependency?.status === "Complete"
+      ) || [];
+
+      let updateData: any = null;
+      let updateError: any = null;
+
+      if (readyTasks.length > 0) {
+        const taskToTake = readyTasks[0];
+        
+        // Atomically claim the first eligible task
+        const result = await supabaseAdmin
           .from("tasks")
-          .update({
-            status: "In Progress",
-            worker_id: workerId,
-            updated_at: new Date().toISOString()
-          })
-          .eq("id", data.id)
-          .eq("status", "Queued") // Prevent race conditions
+          .update(serviceUpdatePayload)
+          .eq("id", taskToTake.id)
+          .eq("status", "Queued") // Double-check it's still queued
           .select()
           .single();
-
-        if (updateError || !updateData) {
-          // Task was claimed by someone else, no task available
-          rpcResponse = { data: [], error: null };
-        } else {
-          // Successfully claimed
-          rpcResponse = {
-            data: [{
-              task_id_out: updateData.id,
-              params_out: updateData.params,
-              task_type_out: updateData.task_type,
-              project_id_out: updateData.project_id
-            }],
-            error: null
-          };
-        }
+          
+        updateData = result.data;
+        updateError = result.error;
       } else {
-        // No tasks available
+        // No eligible tasks found - set error to indicate no rows
+        updateError = { code: "PGRST116", message: "No eligible tasks found" };
+      }
+
+      console.log(`Service role atomic claim result - error: ${updateError?.message || updateError?.code || 'none'}, data: ${updateData ? 'claimed task ' + updateData.id : 'no data'}`);
+
+      if (updateError && updateError.code !== "PGRST116") { // PGRST116 = no rows
+        console.error("Service role atomic claim failed:", updateError);
+        throw updateError;
+      }
+
+      if (updateData) {
+        console.log(`Service role successfully claimed task ${updateData.id} atomically`);
+        rpcResponse = {
+          data: [{
+            task_id_out: updateData.id,
+            params_out: updateData.params,
+            task_type_out: updateData.task_type,
+            project_id_out: updateData.project_id
+          }],
+          error: null
+        };
+      } else {
+        console.log("Service role: No queued tasks available for atomic claiming");
         rpcResponse = { data: [], error: null };
       }
     } else {
@@ -210,61 +234,81 @@ serve(async (req) => {
             console.log("No project IDs to search - user has projects but they have no IDs?");
             rpcResponse = { data: [], error: null };
           } else {
-            // Query for queued tasks from user's projects
-            console.log(`DEBUG: Executing task query with status='Queued' and project_id IN [${projectIds.length} projects]`);
-            const { data, error } = await supabaseAdmin
+            // Find eligible tasks with dependency checking for user projects
+            console.log(`DEBUG: Finding eligible tasks with dependency checking for ${projectIds.length} projects`);
+            
+            const { data: userEligibleTasks, error: userFindError } = await supabaseAdmin
               .from("tasks")
-              .select("*")
+              .select(`
+                id, params, task_type, project_id, created_at,
+                dependency:dependant_on(id, status)
+              `)
               .eq("status", "Queued")
               .in("project_id", projectIds)
-              .order("created_at", { ascending: true })
-              .limit(1)
-              .single();
+              .order("created_at", { ascending: true });
 
-            console.log(`DEBUG: Task query result - error: ${error?.message || 'none'}, data: ${data ? 'found task ' + data.id : 'no data'}`);
-            
-                        if (error && error.code !== "PGRST116") {
-              console.error("Task query failed:", error);
-              throw error;
+            if (userFindError) {
+              throw userFindError;
             }
 
-           if (data) {
-             console.log(`DEBUG: Found queued task ${data.id} to claim`);
-             // Found a task - claim it atomically
-             const { data: updateData, error: updateError } = await supabaseAdmin
-               .from("tasks")
-               .update({
-                 status: "In Progress",
-                 worker_id: workerId,
-                 updated_at: new Date().toISOString()
-               })
-               .eq("id", data.id)
-               .eq("status", "Queued") // Prevent race conditions
-               .select()
-               .single();
+            // Filter to tasks with no dependency OR completed dependency
+            const userReadyTasks = userEligibleTasks?.filter(task => 
+              !task.dependant_on || task.dependency?.status === "Complete"
+            ) || [];
 
-             if (updateError || !updateData) {
-               // Task was claimed by someone else, no task available
-               console.log("Task was claimed by someone else");
-               rpcResponse = { data: [], error: null };
-             } else {
-               // Successfully claimed
-               console.log(`Successfully claimed task ${updateData.id}`);
-               rpcResponse = {
-                 data: [{
-                   task_id_out: updateData.id,
-                   params_out: updateData.params,
-                   task_type_out: updateData.task_type,
-                   project_id_out: updateData.project_id
-                 }],
-                 error: null
-               };
-             }
-           } else {
-             // No tasks available
-             console.log("No queued tasks found for user's projects");
-             rpcResponse = { data: [], error: null };
-           }
+            console.log(`DEBUG: Found ${userReadyTasks.length} eligible tasks for user`);
+
+            const updatePayload: any = {
+              status: "In Progress",
+              updated_at: new Date().toISOString()
+            };
+            
+            let updateData: any = null;
+            let updateError: any = null;
+
+            if (userReadyTasks.length > 0) {
+              const taskToTake = userReadyTasks[0];
+              
+              // Atomically claim the first eligible task
+              const result = await supabaseAdmin
+                .from("tasks")
+                .update(updatePayload)
+                .eq("id", taskToTake.id)
+                .eq("status", "Queued") // Double-check it's still queued
+                .select()
+                .single();
+                
+              updateData = result.data;
+              updateError = result.error;
+            } else {
+              // No eligible tasks found
+              updateError = { code: "PGRST116", message: "No eligible tasks found for user" };
+            }
+
+            console.log(`DEBUG: User atomic claim result - error: ${updateError?.message || updateError?.code || 'none'}, data: ${updateData ? 'claimed task ' + updateData.id : 'no data'}`);
+            
+            if (updateError && updateError.code !== "PGRST116") { // PGRST116 = no rows
+              console.error("User atomic claim failed:", updateError);
+              throw updateError;
+            }
+
+            if (updateData) {
+              // Successfully claimed atomically
+              console.log(`Successfully claimed task ${updateData.id} atomically for user`);
+              rpcResponse = {
+                data: [{
+                  task_id_out: updateData.id,
+                  params_out: updateData.params,
+                  task_type_out: updateData.task_type,
+                  project_id_out: updateData.project_id
+                }],
+                error: null
+              };
+            } else {
+              // No tasks available or all were claimed by others
+              console.log("No queued tasks available for user atomic claiming");
+              rpcResponse = { data: [], error: null };
+            }
          }
         }
       } catch (e) {

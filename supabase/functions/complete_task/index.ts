@@ -128,17 +128,65 @@ serve(async (req) => {
         return new Response("Task not found", { status: 404 });
       }
 
-      if (taskData.project_id !== callerId) {
-        console.error(`Task ${task_id} belongs to ${taskData.project_id}, not ${callerId}`);
+      // Check if user owns the project that this task belongs to
+      const { data: projectData, error: projectError } = await supabaseAdmin
+        .from("projects")
+        .select("user_id")
+        .eq("id", taskData.project_id)
+        .single();
+
+      if (projectError) {
+        console.error("Project lookup error:", projectError);
+        return new Response("Project not found", { status: 404 });
+      }
+
+      if (projectData.user_id !== callerId) {
+        console.error(`Task ${task_id} belongs to project ${taskData.project_id} owned by ${projectData.user_id}, not user ${callerId}`);
         return new Response("Forbidden: Task does not belong to user", { status: 403 });
       }
+
+      console.log(`Task ${task_id} ownership verified: user ${callerId} owns project ${taskData.project_id}`);
     }
 
     // 5) Decode the base64 file data
     const fileBuffer = Uint8Array.from(atob(file_data), c => c.charCodeAt(0));
     
-    // 6) Determine the storage path (with user ID prefix for RLS compliance)
-    const userId = callerId || 'system'; // Use callerId or 'system' for service role
+    // 6) Determine the storage path
+    let userId: string;
+    if (isServiceRole) {
+      // For service role, we need to determine the appropriate user folder
+      // Get the task to find which project (and user) it belongs to
+      const { data: taskData, error: taskError } = await supabaseAdmin
+        .from("tasks")
+        .select("project_id")
+        .eq("id", task_id)
+        .single();
+
+      if (taskError) {
+        console.error("Task lookup error for storage path:", taskError);
+        return new Response("Task not found", { status: 404 });
+      }
+
+      // Get the project owner
+      const { data: projectData, error: projectError } = await supabaseAdmin
+        .from("projects")
+        .select("user_id")
+        .eq("id", taskData.project_id)
+        .single();
+
+      if (projectError) {
+        console.error("Project lookup error for storage path:", projectError);
+        // Fallback to system folder if we can't determine owner
+        userId = 'system';
+      } else {
+        userId = projectData.user_id;
+      }
+      console.log(`Service role storing file for task ${task_id} in user ${userId}'s folder`);
+    } else {
+      // For user tokens, use the authenticated user's ID
+      userId = callerId!;
+    }
+    
     const objectPath = `${userId}/${filename}`;
     
     // 7) Upload to Supabase Storage

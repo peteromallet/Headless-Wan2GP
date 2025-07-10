@@ -651,27 +651,25 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 msg = f"Seg {segment_idx}: Continue video path {path_to_previous_segment_video_output_for_guide} invalid."
                 print(f"[ERROR Task {segment_task_id_str}]: {msg}"); return False, msg
         elif is_subsequent_segment:
-            # Get predecessor task ID from current task's depends_on field using db_ops
-            task_dependency_id = db_ops.get_task_dependency(segment_task_id_str)
+            # Get predecessor task ID and its output location in a single call using Edge Function (or fallback for SQLite)
+            task_dependency_id, raw_path_from_db = db_ops.get_predecessor_output_via_edge_function(segment_task_id_str)
             
-            if task_dependency_id:
-                dprint(f"Seg {segment_idx}: Task {segment_task_id_str} depends on {task_dependency_id}. Fetching its output for guide video.")
+            if task_dependency_id and raw_path_from_db:
+                dprint(f"Seg {segment_idx}: Task {segment_task_id_str} depends on {task_dependency_id} with output: {raw_path_from_db}")
                 # path_to_previous_segment_video_output_for_guide will be relative ("files/...") if from SQLite and stored that way
                 # or absolute if from Supabase or stored absolutely in SQLite.
-                raw_path_from_db = db_ops.get_task_output_location_from_db(task_dependency_id)
-                
-                if raw_path_from_db:
-                    if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and raw_path_from_db.startswith("files/"):
-                        sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
-                        path_to_previous_segment_video_output_for_guide = str((sqlite_db_parent / "public" / raw_path_from_db).resolve())
-                        dprint(f"Seg {segment_idx}: Resolved SQLite relative path from DB '{raw_path_from_db}' to absolute path '{path_to_previous_segment_video_output_for_guide}'")
-                    else:
-                        # Path from DB is already absolute (Supabase) or an old absolute SQLite path
-                        path_to_previous_segment_video_output_for_guide = raw_path_from_db
+                if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and raw_path_from_db.startswith("files/"):
+                    sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
+                    path_to_previous_segment_video_output_for_guide = str((sqlite_db_parent / "public" / raw_path_from_db).resolve())
+                    dprint(f"Seg {segment_idx}: Resolved SQLite relative path from DB '{raw_path_from_db}' to absolute path '{path_to_previous_segment_video_output_for_guide}'")
                 else:
-                    path_to_previous_segment_video_output_for_guide = None # Task found, but no output_location
+                    # Path from DB is already absolute (Supabase) or an old absolute SQLite path
+                    path_to_previous_segment_video_output_for_guide = raw_path_from_db
+            elif task_dependency_id and not raw_path_from_db:
+                dprint(f"Seg {segment_idx}: Found dependency task {task_dependency_id} but no output_location available.")
+                path_to_previous_segment_video_output_for_guide = None
             else:
-                dprint(f"Seg {segment_idx}: Could not find a valid 'depends_on' task ID for {segment_task_id_str}. Cannot create guide video based on predecessor.")
+                dprint(f"Seg {segment_idx}: No dependency found for task {segment_task_id_str}. Cannot create guide video based on predecessor.")
                 path_to_previous_segment_video_output_for_guide = None
  
             # --- New: Handle Supabase public URLs by downloading them locally for guide processing ---
