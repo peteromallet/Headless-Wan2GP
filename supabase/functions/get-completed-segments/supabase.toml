@@ -1,2 +1,2 @@
-[functions."get-completed-segments"]
+[functions.get-completed-segments]
 verify_jwt = false 
