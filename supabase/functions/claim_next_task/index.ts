@@ -139,8 +139,8 @@ serve(async (req) => {
     let rpcResponse;
     
     if (isServiceRole) {
-      // Service role: claim any available task (no user restrictions)
-      console.log("Claiming task as service role...");
+      // Service role: claim any available task from any project
+      console.log("Claiming task as service role (any project)...");
       
       const { data, error } = await supabaseAdmin
         .from("tasks")
@@ -244,8 +244,8 @@ serve(async (req) => {
           rpcResponse = { data: [], error: null };
         }
       } catch (e) {
-        console.error("Error claiming task for user:", e);
-        rpcResponse = { data: [], error: e };
+        console.error("Error claiming user task:", e);
+        rpcResponse = { data: [], error: null };
       }
     }
 
