@@ -1355,6 +1355,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             print(f"[ERROR Task {stitch_task_id_str}]: {msg}")
             return False, msg
 
+        project_id_for_stitch = stitch_params.get("project_id")
         current_run_base_output_dir_str = stitch_params.get("current_run_base_output_dir", 
                                                             full_orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve())))
         current_run_base_output_dir = Path(current_run_base_output_dir_str)
@@ -1422,7 +1423,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             dprint(f"[DEBUG] Stitch fetch attempt {attempt+1}/{max_stitch_fetch_retries} for run_id: {orchestrator_run_id}")
             
             try:
-                completed_segment_outputs_from_db = db_ops.get_completed_segment_outputs_for_stitch(orchestrator_run_id) or []
+                completed_segment_outputs_from_db = db_ops.get_completed_segment_outputs_for_stitch(orchestrator_run_id, project_id=project_id_for_stitch) or []
                 print(f"[IMMEDIATE DEBUG] DB query returned: {completed_segment_outputs_from_db}")
             except Exception as e_db_query:
                 print(f"[IMMEDIATE DEBUG] DB query failed: {e_db_query}")
