@@ -502,20 +502,20 @@ def get_oldest_queued_task_supabase(): # Renamed from get_oldest_queued_task_pos
     # Fallback to RPC (only for JWT tokens)
     try:
         worker_id = f"worker_{os.getpid()}" # Example worker ID
-        dprint(f"DEBUG get_oldest_queued_task_supabase: Falling back to RPC func_claim_task.")
+        dprint(f"DEBUG get_oldest_queued_task_supabase: Falling back to RPC func_claim_available_task.")
         dprint(f"DEBUG get_oldest_queued_task_supabase: PG_TABLE_NAME = '{PG_TABLE_NAME}' (type: {type(PG_TABLE_NAME)})")
         dprint(f"DEBUG get_oldest_queued_task_supabase: worker_id = '{worker_id}' (type: {type(worker_id)})")
         
         response = SUPABASE_CLIENT.rpc(
-            "func_claim_task", 
+            "func_claim_available_task", 
             {"p_table_name": PG_TABLE_NAME, "p_worker_id": worker_id}
         ).execute()
         
-        dprint(f"Supabase RPC func_claim_task response data: {response.data}")
+        dprint(f"Supabase RPC func_claim_available_task response data: {response.data}")
 
         if response.data and len(response.data) > 0:
             task_data = response.data[0] # RPC should return a single row or empty
-            dprint(f"Supabase RPC: Raw task_data from func_claim_task: {task_data}") # DEBUG ADDED
+            dprint(f"Supabase RPC: Raw task_data from func_claim_available_task: {task_data}") # DEBUG ADDED
             # Ensure the RPC returns task_id_out, params_out, task_type_out, and project_id_out
             if task_data.get("task_id_out") and task_data.get("params_out") is not None and task_data.get("task_type_out") is not None:
                 dprint(f"Supabase RPC: Claimed task {task_data['task_id_out']} of type {task_data['task_type_out']}")
@@ -526,13 +526,13 @@ def get_oldest_queued_task_supabase(): # Renamed from get_oldest_queued_task_pos
                     "project_id": task_data.get("project_id_out")  # Include project_id from RPC response
                 }
             else:
-                dprint("Supabase RPC: func_claim_task returned but no task was claimed or required fields (task_id_out, params_out, task_type_out) are missing.")
+                dprint("Supabase RPC: func_claim_available_task returned but no task was claimed or required fields (task_id_out, params_out, task_type_out) are missing.")
                 return None
         else:
-            dprint("Supabase RPC: No task claimed or empty response from func_claim_task.")
+            dprint("Supabase RPC: No task claimed or empty response from func_claim_available_task.")
             return None
     except Exception as e:
-        print(f"[ERROR] Supabase RPC func_claim_task failed: {e}")
+        print(f"[ERROR] Supabase RPC func_claim_available_task failed: {e}")
         traceback.print_exc()
         return None
 
