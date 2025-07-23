@@ -88,6 +88,8 @@ def parse_args():
                                help="How often (in seconds) to check tasks.json for new tasks.")
     pgroup_server.add_argument("--debug", action="store_true",
                                help="Enable verbose debug logging (prints additional diagnostics)")
+    pgroup_server.add_argument("--worker", type=str, default=None,
+                               help="Worker name/ID - creates a log file named {worker}.log in the logs folder")
     pgroup_server.add_argument("--save-logging", type=str, nargs='?', const='logs/headless.log', default=None,
                                help="Save all logging output to a file (in addition to console output). Optionally specify path, defaults to 'logs/headless.log'")
     pgroup_server.add_argument("--delete-db", action="store_true",
@@ -752,6 +754,13 @@ def main():
         cli_args.save_logging = str(default_logs_dir / f"debug_{timestamp}.log")
     # ------------------------------------------------------------------
 
+    # Handle --worker parameter for worker-specific logging
+    if cli_args.worker and not cli_args.save_logging:
+        default_logs_dir = Path("logs")
+        default_logs_dir.mkdir(parents=True, exist_ok=True)
+        cli_args.save_logging = str(default_logs_dir / f"{cli_args.worker}.log")
+    # ------------------------------------------------------------------
+
     # --- Handle --delete-db flag ---
     if cli_args.delete_db:
         db_file_to_delete = cli_args.db_file
@@ -805,7 +814,10 @@ def main():
         # Redirect stdout to our dual writer
         sys.stdout = DualWriter(log_file_path)
         
-        print(f"[LOGGING] All output will be saved to: {log_file_path.resolve()}")
+        if cli_args.worker:
+            print(f"[WORKER LOGGING] Worker '{cli_args.worker}' output will be saved to: {log_file_path.resolve()}")
+        else:
+            print(f"[LOGGING] All output will be saved to: {log_file_path.resolve()}")
         
         # Ensure cleanup on exit
         import atexit
@@ -881,6 +893,8 @@ def main():
     main_output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"WanGP Headless Server Started.")
+    if cli_args.worker:
+        print(f"Worker ID: {cli_args.worker}")
     if db_ops.DB_TYPE == "supabase":
         print(f"Monitoring Supabase (PostgreSQL backend) table: {db_ops.PG_TABLE_NAME}")
     else: # SQLite
