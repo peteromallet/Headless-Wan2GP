@@ -439,32 +439,36 @@ def update_task_status(task_id: str, status: str, output_location: str | None = 
         raise
 
 def init_db_supabase(): # Renamed from init_db_postgres
-    """Initializes the PostgreSQL tasks table via Supabase RPC if it doesn't exist."""
+    """Check if the Supabase tasks table exists (assuming it's already set up)."""
     if not SUPABASE_CLIENT:
-        print("[ERROR] Supabase client not initialized. Cannot initialize database table.")
+        print("[ERROR] Supabase client not initialized. Cannot check database table.")
         sys.exit(1)
     try:
-        # RPC call to the SQL function func_initialize_tasks_table
-        # IMPORTANT: The func_initialize_tasks_table SQL function itself
-        # must be updated to include "task_type TEXT NOT NULL" and "dependant_on TEXT NULL"
-        # along with an index "idx_dependant_on" on the "dependant_on" column in its
-        # CREATE TABLE statement for the specified p_table_name.
-        SUPABASE_CLIENT.rpc("func_initialize_tasks_table", {"p_table_name": PG_TABLE_NAME}).execute()
-        print(f"Supabase RPC: Table '{PG_TABLE_NAME}' initialization requested.")
-        # Note: RPC for DDL might not return specific confirmation beyond successful execution.
-        # You might need to add a SELECT to confirm table existence if strict feedback is needed.
-    except Exception as e: # Broader exception for Supabase/PostgREST errors
-        print(f"[ERROR] Supabase RPC for table initialization failed: {e}")
-        traceback.print_exc()
-        sys.exit(1)
+        # Simply check if the tasks table exists by querying it
+        # Since the table already exists, we don't need to create it
+        result = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("count", count="exact").limit(1).execute()
+        print(f"Supabase: Table '{PG_TABLE_NAME}' exists and accessible (count: {result.count})")
+        return True
+    except Exception as e: 
+        print(f"[ERROR] Supabase table check failed: {e}")
+        # Don't exit - the table might exist but have different permissions
+        # Let the actual operations try and fail gracefully
+        return False
 
-def get_oldest_queued_task_supabase(): # Renamed from get_oldest_queued_task_postgres
-    """Fetches the oldest task via Supabase Edge Function or RPC fallback."""
+def get_oldest_queued_task_supabase(worker_id: str = None): # Renamed from get_oldest_queued_task_postgres
+    """Fetches the oldest task via Supabase Edge Function only."""
     if not SUPABASE_CLIENT:
         print("[ERROR] Supabase client not initialized. Cannot get task.")
         return None
     
-    # Try Edge Function first if URL is available
+    # Use provided worker_id or use the specific GPU worker ID
+    if not worker_id:
+        worker_id = "gpu-20250723_221138-afa8403b"
+        dprint(f"DEBUG: No worker_id provided, using default GPU worker: {worker_id}")
+    else:
+        dprint(f"DEBUG: Using provided worker_id: {worker_id}")
+    
+    # Use Edge Function exclusively
     edge_url = (
         SUPABASE_EDGE_CLAIM_TASK_URL 
         or os.getenv('SUPABASE_EDGE_CLAIM_TASK_URL')
@@ -473,13 +477,18 @@ def get_oldest_queued_task_supabase(): # Renamed from get_oldest_queued_task_pos
     
     if edge_url and SUPABASE_ACCESS_TOKEN:
         try:
-            dprint(f"DEBUG get_oldest_queued_task_supabase: Trying Edge Function at {edge_url}")
+            dprint(f"DEBUG get_oldest_queued_task_supabase: Calling Edge Function at {edge_url}")
+            dprint(f"DEBUG: Using worker_id: {worker_id}")
+            
             headers = {
                 'Content-Type': 'application/json',
                 'Authorization': f'Bearer {SUPABASE_ACCESS_TOKEN}'
             }
             
-            resp = httpx.post(edge_url, json={}, headers=headers, timeout=15)
+            # Pass worker_id in the request body for edge function to use
+            payload = {"worker_id": worker_id}
+            
+            resp = httpx.post(edge_url, json=payload, headers=headers, timeout=15)
             dprint(f"Edge Function response status: {resp.status_code}")
             
             if resp.status_code == 200:
@@ -490,170 +499,120 @@ def get_oldest_queued_task_supabase(): # Renamed from get_oldest_queued_task_pos
                 dprint("Edge Function: No queued tasks available")
                 return None
             else:
-                dprint(f"Edge Function returned {resp.status_code}: {resp.text}. Falling back to RPC.")
-        except Exception as e_edge:
-            dprint(f"Edge Function call failed: {e_edge}. Falling back to RPC.")
-    
-    # Check if we're using a PAT token - if so, skip RPC fallback since it won't work
-    if SUPABASE_ACCESS_TOKEN and not _is_jwt_token(SUPABASE_ACCESS_TOKEN):
-        dprint("Access token appears to be a PAT, not a JWT. Skipping RPC fallback as it requires JWT authentication.")
-        return None
-    
-    # Fallback to RPC (only for JWT tokens)
-    try:
-        worker_id = f"worker_{os.getpid()}" # Example worker ID
-        dprint(f"DEBUG get_oldest_queued_task_supabase: Falling back to RPC func_claim_available_task.")
-        dprint(f"DEBUG get_oldest_queued_task_supabase: PG_TABLE_NAME = '{PG_TABLE_NAME}' (type: {type(PG_TABLE_NAME)})")
-        dprint(f"DEBUG get_oldest_queued_task_supabase: worker_id = '{worker_id}' (type: {type(worker_id)})")
-        
-        response = SUPABASE_CLIENT.rpc(
-            "func_claim_available_task", 
-            {"p_table_name": PG_TABLE_NAME, "p_worker_id": worker_id}
-        ).execute()
-        
-        dprint(f"Supabase RPC func_claim_available_task response data: {response.data}")
-
-        if response.data and len(response.data) > 0:
-            task_data = response.data[0] # RPC should return a single row or empty
-            dprint(f"Supabase RPC: Raw task_data from func_claim_available_task: {task_data}") # DEBUG ADDED
-            # Ensure the RPC returns task_id_out, params_out, task_type_out, and project_id_out
-            if task_data.get("task_id_out") and task_data.get("params_out") is not None and task_data.get("task_type_out") is not None:
-                dprint(f"Supabase RPC: Claimed task {task_data['task_id_out']} of type {task_data['task_type_out']}")
-                return {
-                    "task_id": task_data["task_id_out"], 
-                    "params": task_data["params_out"], 
-                    "task_type": task_data["task_type_out"],
-                    "project_id": task_data.get("project_id_out")  # Include project_id from RPC response
-                }
-            else:
-                dprint("Supabase RPC: func_claim_available_task returned but no task was claimed or required fields (task_id_out, params_out, task_type_out) are missing.")
+                dprint(f"Edge Function returned {resp.status_code}: {resp.text}")
                 return None
-        else:
-            dprint("Supabase RPC: No task claimed or empty response from func_claim_available_task.")
+        except Exception as e_edge:
+            dprint(f"Edge Function call failed: {e_edge}")
             return None
-    except Exception as e:
-        print(f"[ERROR] Supabase RPC func_claim_available_task failed: {e}")
-        traceback.print_exc()
+    else:
+        dprint("ERROR: No edge function URL or access token available for task claiming")
         return None
 
 def update_task_status_supabase(task_id_str, status_str, output_location_val=None): # Renamed from update_task_status_postgres
-    """Updates a task's status via Supabase RPC using func_update_task_status."""
+    """Updates a task's status via Supabase Edge Functions only."""
     dprint(f"[DEBUG] update_task_status_supabase called: task_id={task_id_str}, status={status_str}, output_location={output_location_val}")
     
     if not SUPABASE_CLIENT:
         print("[ERROR] Supabase client not initialized. Cannot update task status.")
         return
 
-    # --- Prefer edge function for COMPLETE state ---
+    # --- Use edge functions for ALL status updates ---
     if status_str == STATUS_COMPLETE and output_location_val is not None:
-        print(f"[IMMEDIATE DEBUG] Task {task_id_str} being marked COMPLETE, trying Edge Function first")
-        print(f"[IMMEDIATE DEBUG] output_location_val: {output_location_val}")
-        dprint(f"[DEBUG] Task {task_id_str} being marked COMPLETE, trying Edge Function first")
-        # Build edge URL (env override > global var > default pattern)
+        # Use complete-task edge function for completion with file
         edge_url = (
             SUPABASE_EDGE_COMPLETE_TASK_URL
             or (os.getenv("SUPABASE_EDGE_COMPLETE_TASK_URL") or None)
             or (f"{SUPABASE_URL.rstrip('/')}/functions/v1/complete-task" if SUPABASE_URL else None)
         )
-        print(f"[IMMEDIATE DEBUG] edge_url: {edge_url}")
-
-        if edge_url:
-            try:
-                # Check if output_location_val is a local file path
-                output_path = Path(output_location_val)
-                print(f"[IMMEDIATE DEBUG] output_path: {output_path}")
-                print(f"[IMMEDIATE DEBUG] output_path.exists(): {output_path.exists()}")
-                print(f"[IMMEDIATE DEBUG] output_path.is_file(): {output_path.is_file() if output_path.exists() else 'N/A'}")
-                
-                if output_path.exists() and output_path.is_file():
-                    print(f"[IMMEDIATE DEBUG] File exists, preparing for upload")
-                    # Read the file and encode as base64
-                    import base64
-                    with open(output_path, 'rb') as f:
-                        file_data = base64.b64encode(f.read()).decode('utf-8')
-                    
-                    print(f"[IMMEDIATE DEBUG] File size: {len(file_data)} base64 chars")
-                    
-                    # Use the globally stored access token
-                    jwt = SUPABASE_ACCESS_TOKEN
-                    print(f"[IMMEDIATE DEBUG] JWT present: {jwt is not None}")
-
-                    headers = {"Content-Type": "application/json"}
-                    if jwt:
-                        headers["Authorization"] = f"Bearer {jwt}"
-
-                    payload = {
-                        "task_id": task_id_str, 
-                        "file_data": file_data,
-                        "filename": output_path.name
-                    }
-                    print(f"[IMMEDIATE DEBUG] Calling Edge Function with filename: {output_path.name}")
-                    dprint(f"[DEBUG] Calling Edge Function with file upload for task {task_id_str}")
-                    dprint(f"Supabase Edge call >>> POST {edge_url} with file: {output_path.name}")
-                    resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)  # Increased timeout for file upload
-
-                    print(f"[IMMEDIATE DEBUG] Edge Function response status: {resp.status_code}")
-                    print(f"[IMMEDIATE DEBUG] Edge Function response text: {resp.text}")
-                    
-                    if resp.status_code == 200:
-                        print(f"[IMMEDIATE DEBUG] Edge function SUCCESS for task {task_id_str}")
-                        dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE with file upload")
-                        dprint(f"Edge function completed task {task_id_str} → status COMPLETE with file upload")
-                        return  # Success, no further RPC needed
-                    else:
-                        print(f"[IMMEDIATE DEBUG] Edge function FAILED for task {task_id_str}: {resp.status_code}")
-                        dprint(f"[DEBUG] Edge function FAILED for task {task_id_str}: {resp.status_code}")
-                        dprint(
-                            f"Edge function returned {resp.status_code}: {resp.text}. Falling back to RPC."
-                        )
-                else:
-                    print(f"[IMMEDIATE DEBUG] Not a local file, treating as URL")
-                    # Not a local file, treat as URL and use old logic
-                    payload = {"task_id": task_id_str, "output_location": output_location_val}
-                    dprint(f"[DEBUG] Calling Edge Function with URL for task {task_id_str}")
-                    dprint(f"Supabase Edge call >>> POST {edge_url} payload={payload}")
-                    
-                    jwt = SUPABASE_ACCESS_TOKEN
-                    headers = {"Content-Type": "application/json"}
-                    if jwt:
-                        headers["Authorization"] = f"Bearer {jwt}"
-                    
-                    resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
-
-                    if resp.status_code == 200:
-                        dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE")
-                        dprint(f"Edge function completed task {task_id_str} → status COMPLETE")
-                        return  # Success, no further RPC needed
-                    else:
-                        dprint(f"[DEBUG] Edge function FAILED for task {task_id_str}: {resp.status_code}")
-                        dprint(
-                            f"Edge function returned {resp.status_code}: {resp.text}. Falling back to RPC."
-                        )
-            except Exception as e_edge:
-                print(f"[IMMEDIATE DEBUG] Edge function EXCEPTION for task {task_id_str}: {e_edge}")
-                dprint(f"[DEBUG] Edge function EXCEPTION for task {task_id_str}: {e_edge}")
-                dprint(f"Edge function call failed: {e_edge}. Falling back to RPC.")
-        else:
-            print(f"[IMMEDIATE DEBUG] No edge_url available")
-
-    # --- Fallback to RPC for other states or if Edge Function fails ---
-    dprint(f"[DEBUG] Using RPC fallback for task {task_id_str}")
-    try:
-        params = {
-            "p_table_name": PG_TABLE_NAME,
-            "p_task_id": task_id_str,
-            "p_status": status_str
-        }
-        if output_location_val is not None:
-            params["p_output_location"] = output_location_val
         
-        dprint(f"[DEBUG] Calling RPC func_update_task_status for task {task_id_str}")
-        SUPABASE_CLIENT.rpc("func_update_task_status", params).execute()
-        dprint(f"[DEBUG] RPC SUCCESS for task {task_id_str} → status {status_str}")
-        dprint(f"Supabase RPC: Updated status of task {task_id_str} to {status_str}. Output: {output_location_val if output_location_val else 'N/A'}")
-    except Exception as e:
-        dprint(f"[DEBUG] RPC FAILED for task {task_id_str}: {e}")
-        print(f"[ERROR] Supabase RPC func_update_task_status for {task_id_str} failed: {e}")
+        if not edge_url:
+            print(f"[ERROR] No complete-task edge function URL available")
+            return
+
+        try:
+            # Check if output_location_val is a local file path
+            output_path = Path(output_location_val)
+            
+            if output_path.exists() and output_path.is_file():
+                # Read the file and encode as base64
+                import base64
+                with open(output_path, 'rb') as f:
+                    file_data = base64.b64encode(f.read()).decode('utf-8')
+                
+                headers = {"Content-Type": "application/json"}
+                if SUPABASE_ACCESS_TOKEN:
+                    headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
+
+                payload = {
+                    "task_id": task_id_str, 
+                    "file_data": file_data,
+                    "filename": output_path.name
+                }
+                dprint(f"[DEBUG] Calling complete-task Edge Function with file upload for task {task_id_str}")
+                resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)
+                
+                if resp.status_code == 200:
+                    dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE with file upload")
+                    return
+                else:
+                    print(f"[ERROR] complete-task edge function failed: {resp.status_code} - {resp.text}")
+                    return
+            else:
+                # Not a local file, treat as URL
+                payload = {"task_id": task_id_str, "output_location": output_location_val}
+                
+                headers = {"Content-Type": "application/json"}
+                if SUPABASE_ACCESS_TOKEN:
+                    headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
+                
+                resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
+
+                if resp.status_code == 200:
+                    dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE")
+                    return
+                else:
+                    print(f"[ERROR] complete-task edge function failed: {resp.status_code} - {resp.text}")
+                    return
+        except Exception as e_edge:
+            print(f"[ERROR] complete-task edge function exception: {e_edge}")
+            return
+    else:
+        # Use update-task-status edge function for all other status updates
+        edge_url = (
+            os.getenv("SUPABASE_EDGE_UPDATE_TASK_URL") 
+            or (f"{SUPABASE_URL.rstrip('/')}/functions/v1/update-task-status" if SUPABASE_URL else None)
+        )
+        
+        if not edge_url:
+            print(f"[ERROR] No update-task-status edge function URL available")
+            return
+            
+        try:
+            headers = {"Content-Type": "application/json"}
+            if SUPABASE_ACCESS_TOKEN:
+                headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
+            
+            payload = {
+                "task_id": task_id_str,
+                "status": status_str
+            }
+            
+            if output_location_val:
+                payload["output_location"] = output_location_val
+            
+            dprint(f"[DEBUG] Calling update-task-status Edge Function for task {task_id_str} → {status_str}")
+            resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
+            
+            if resp.status_code == 200:
+                dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status {status_str}")
+                return
+            else:
+                print(f"[ERROR] update-task-status edge function failed: {resp.status_code} - {resp.text}")
+                return
+                
+        except Exception as e:
+            print(f"[ERROR] update-task-status edge function exception: {e}")
+            return
 
 def _migrate_supabase_schema():
     """Applies necessary schema migrations to an existing Supabase/PostgreSQL database via RPC."""
@@ -1167,61 +1126,59 @@ def get_abs_path_from_db_path(db_path: str, dprint) -> Path | None:
         dprint(f"Warning: Resolved path '{resolved_path}' from DB path '{db_path}' does not exist.")
         return None
 
-def upload_to_supabase_storage(local_file_path: Path, supabase_object_name: str, bucket_name: str) -> str | None:
-    """Uploads a file to Supabase storage and returns its public URL."""
+def upload_to_supabase_storage(file_path, bucket_name="image_uploads", custom_path=None):
+    """Upload a file to Supabase storage with improved error handling."""
     if not SUPABASE_CLIENT:
-        print("[ERROR] Supabase client not initialized. Cannot upload to storage.")
-        return None
-    if not bucket_name:
-        print("[ERROR] Supabase bucket name not configured. Cannot upload to storage.")
+        print("[ERROR] Supabase client not initialized. Cannot upload file.")
         return None
 
     try:
-        # Since we are no longer using set_session, get_user() will not work.
-        # We must decode the JWT to get the user ID for the path prefix.
-        user_id = _get_user_id_from_jwt(SUPABASE_ACCESS_TOKEN)
-        
-        # Determine final object path respecting default RLS (name must start with auth.uid())
-        final_object_name = supabase_object_name
-        if user_id:
-            # RLS policy for storage requires the path to be prefixed with the user's ID.
-            if not supabase_object_name.startswith(f"{user_id}/"):
-                final_object_name = f"{user_id}/{supabase_object_name}"
-                dprint(f"Adjusted object path to satisfy RLS: {final_object_name}")
-        else:
-            # If we can't get a user ID, the upload will likely fail due to RLS.
-            # We proceed anyway and let the error from Supabase be the indicator.
-            dprint(f"Warning: Could not determine user ID from JWT. Upload to '{final_object_name}' may violate RLS.")
-            
-        dprint(f"Uploading {local_file_path} to Supabase bucket '{bucket_name}' as '{final_object_name}'...")
-        with open(local_file_path, 'rb') as f:
-            # Upsert to overwrite if exists
-            res = SUPABASE_CLIENT.storage.from_(bucket_name).upload(
-                path=final_object_name,
-                file=f,
-                file_options={"cache-control": "3600", "upsert": "true"} 
-            )
-        
-        dprint(f"Supabase upload response status: {res.status_code}")
-        # A 200 status code indicates success.
-        if res.status_code == 200:
-            public_url_response = SUPABASE_CLIENT.storage.from_(bucket_name).get_public_url(final_object_name)
-            dprint(f"Supabase get_public_url response: {public_url_response}")
-            if isinstance(public_url_response, str):
-                 print(f"Successfully uploaded to Supabase. Public URL: {public_url_response}")
-                 return public_url_response
-            else:
-                 print(f"[ERROR] Supabase upload succeeded but failed to get public URL. Raw response: {public_url_response}")
-                 return None
-        else:
-            try:
-                error_details = res.json()
-                print(f"[ERROR] Supabase upload failed with status {res.status_code}: {error_details}")
-            except Exception:
-                print(f"[ERROR] Supabase upload failed with status {res.status_code}. Response: {res.text}")
+        # Ensure file exists
+        if not os.path.exists(file_path):
+            print(f"[ERROR] File does not exist: {file_path}")
             return None
+
+        file_name = os.path.basename(file_path)
+        storage_path = custom_path or f"system/{file_name}"
+        
+        dprint(f"Uploading {file_path} to {bucket_name}/{storage_path}")
+
+        # Read file data
+        with open(file_path, 'rb') as f:
+            file_data = f.read()
+
+        # Upload to Supabase storage
+        res = SUPABASE_CLIENT.storage.from_(bucket_name).upload(storage_path, file_data)
+        
+        # Handle the new UploadResponse API
+        if hasattr(res, 'error') and res.error:
+            print(f"Supabase upload error: {res.error}")
+            return None
+        elif hasattr(res, 'data') and res.data:
+            # Success case - get the public URL
+            public_url = SUPABASE_CLIENT.storage.from_(bucket_name).get_public_url(storage_path)
+            dprint(f"Supabase upload successful. Public URL: {public_url}")
+            return public_url
+        else:
+            # Try to get public URL anyway (upload might have succeeded)
+            try:
+                public_url = SUPABASE_CLIENT.storage.from_(bucket_name).get_public_url(storage_path)
+                dprint(f"Upload completed, public URL: {public_url}")
+                return public_url
+            except Exception as url_error:
+                print(f"[ERROR] Could not get public URL after upload: {url_error}")
+                return None
 
     except Exception as e:
         print(f"[ERROR] An exception occurred during Supabase upload: {e}")
-        traceback.print_exc()
         return None 
+
+def mark_task_failed_supabase(task_id_str, error_message):
+    """Marks a task as Failed with an error message using direct database update."""
+    dprint(f"Marking task {task_id_str} as Failed with message: {error_message}")
+    if not SUPABASE_CLIENT:
+        print("[ERROR] Supabase client not initialized. Cannot mark task failed.")
+        return
+    
+    # Use the standard update function which now uses direct database updates for non-COMPLETE statuses
+    update_task_status_supabase(task_id_str, STATUS_FAILED, error_message) 

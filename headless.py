@@ -1019,7 +1019,7 @@ def main():
 
             if db_ops.DB_TYPE == "supabase":
                 dprint(f"Checking for queued tasks in Supabase (PostgreSQL backend) table {db_ops.PG_TABLE_NAME} via Supabase RPC...")
-                task_info = db_ops.get_oldest_queued_task_supabase()
+                task_info = db_ops.get_oldest_queued_task_supabase(worker_id=cli_args.worker)
                 dprint(f"Supabase task_info: {task_info}") # ADDED DPRINT
                 if task_info:
                     current_task_id_for_status_update = task_info["task_id"]
