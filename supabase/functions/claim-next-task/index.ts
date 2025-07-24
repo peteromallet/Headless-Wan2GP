@@ -154,8 +154,8 @@ serve(async (req) => {
   }
 
   try {
-    // Call the appropriate RPC function based on token type
-    let rpcResponse;
+    // Execute database operation based on token type
+    let claimResponse;
     
     if (isServiceRole) {
       // Service role: claim any available task from any project atomically
@@ -364,13 +364,13 @@ serve(async (req) => {
     }
 
     // Check RPC response
-    if (rpcResponse.error) {
+          if (claimResponse.error) {
       console.error("RPC error:", rpcResponse.error);
       return new Response(`Database error: ${rpcResponse.error.message}`, { status: 500 });
     }
 
     // Check if we got a task
-    if (!rpcResponse.data || rpcResponse.data.length === 0) {
+          if (!claimResponse.data || claimResponse.data.length === 0) {
       console.log("No queued tasks available");
       return new Response(null, { status: 204 });
     }

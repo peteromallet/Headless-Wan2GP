@@ -88,7 +88,7 @@
 * **headless.py** – Headless service that polls the `tasks` database, claims work, and drives the Wan2GP generator (`wgp.py`). Includes extra handlers for OpenPose and RIFE interpolation tasks and can upload outputs to Supabase storage. **NEW**: Now supports both SQLite and Supabase backends via `--db-type` flag.
 * **add_task.py** – Lightweight CLI helper to queue a single new task into SQLite/Supabase. Accepts a JSON payload (or file) and inserts it into the `tasks` table.
 * **generate_test_tasks.py** – Developer utility that back-fills the database with synthetic images/prompts for integration testing and local benchmarking.
-* **test_supabase_headless.py** – **NEW**: Test script to verify Supabase connection, RPC functions, and authentication before running the full headless worker.
+* **tests/test_travel_workflow_db_edge_functions.py** – **NEW**: Comprehensive test script to verify Supabase Edge Functions, authentication, and database operations for the headless worker.
 
 ## Supabase Upload System
 
@@ -118,7 +118,7 @@
 This is the main application package.
 
 * **common_utils.py** – Reusable helpers (file downloads, ffmpeg helpers, MediaPipe keypoint interpolation, debug utilities, etc.). **UPDATED**: Now includes generalized Supabase upload functions (`prepare_output_path_with_upload`, `upload_and_get_final_output_location`) used by all task types.
-* **db_operations.py** – Handles all database interactions for both SQLite and Supabase. **UPDATED**: Now includes Supabase client initialization, RPC function wrappers, and automatic backend selection based on `DB_TYPE`.
+* **db_operations.py** – Handles all database interactions for both SQLite and Supabase. **UPDATED**: Now includes Supabase client initialization, Edge Function integration, and automatic backend selection based on `DB_TYPE`.
 * **specialized_handlers.py** – Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation. **UPDATED**: Uses Supabase-compatible upload functions for all outputs.
 * **video_utils.py** – Provides utilities for video manipulation like cross-fading, frame extraction, and color matching.
 * **wgp_utils.py** – Thin wrapper around `Wan2GP.wgp` that standardises parameter names, handles LoRA quirks (e.g. CausVid, LightI2X), and exposes the single `generate_single_video` helper used by every task handler. **UPDATED**: Now includes comprehensive debugging throughout the generation pipeline with detailed frame count validation.
