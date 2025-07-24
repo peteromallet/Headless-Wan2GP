@@ -615,32 +615,9 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
             return
 
 def _migrate_supabase_schema():
-    """Applies necessary schema migrations to an existing Supabase/PostgreSQL database via RPC."""
-    if not SUPABASE_CLIENT:
-        print("[ERROR] Supabase Migration: Supabase client not initialized. Cannot run migration.")
-        return
-
-    dprint(f"Supabase Migration: Requesting schema migration via RPC 'func_migrate_tasks_for_task_type' for table {PG_TABLE_NAME}...")
-    try:
-
-        # IMPORTANT: The func_migrate_tasks_for_task_type SQL function itself (or a new one like func_migrate_tasks_add_dependant_on)
-        # must be extended to perform:
-        # ALTER TABLE {p_table_name} ADD COLUMN IF NOT EXISTS dependant_on TEXT NULL;
-        # CREATE INDEX IF NOT EXISTS idx_dependant_on ON {p_table_name}(dependant_on);
-        # It should also handle renaming 'depends_on' to 'dependant_on' if the old (previously incorrect) misspelled column 'depends_on' exists.
-        response = SUPABASE_CLIENT.rpc("func_migrate_tasks_for_task_type", {"p_table_name": PG_TABLE_NAME}).execute()
-        
-        # Improved response handling based on Supabase Python client v2+ structure
-        if response.error:
-            print(f"[ERROR] Supabase Migration: RPC 'func_migrate_tasks_for_task_type' returned an error: {response.error.message} (Code: {response.error.code}, Details: {response.error.details})")
-        elif response.data:
-            dprint(f"Supabase Migration: RPC 'func_migrate_tasks_for_task_type' executed. Response data: {response.data}")
-        else:
-            dprint("Supabase Migration: RPC 'func_migrate_tasks_for_task_type' executed. (No specific data or error in response, check RPC logs if issues)")
-            
-    except Exception as e:
-        print(f"[ERROR] Supabase Migration: Failed to execute RPC 'func_migrate_tasks_for_task_type': {e}")
-        traceback.print_exc()
+    """Legacy migration function - no longer used. Edge Function architecture complete."""
+    dprint("Supabase Migration: Migration to Edge Functions complete. Schema migrations handled externally.")
+    return  # No-op - migrations complete
 
 def _run_db_migrations():
     """Runs database migrations based on the configured DB_TYPE."""
@@ -651,7 +628,7 @@ def _run_db_migrations():
         else:
             print("[ERROR] DB Migration: SQLITE_DB_PATH not set. Skipping SQLite migration.")
     elif DB_TYPE == "supabase":
-        # The Supabase schema is expected to be managed externally. Skipping automatic RPC migrations.
+        # The Supabase schema is managed externally. Edge Function architecture complete.
         dprint("DB Migrations: Skipping Supabase migrations (table assumed to exist).")
         return
     else:
@@ -673,7 +650,7 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
     project_id = task_payload.get("project_id", "default_project_id")
 
     if DB_TYPE == "supabase":
-        # Only use Edge Function - no RPC fallback
+        # Use Edge Function exclusively
         
         # Build Edge URL – env var override > global constant > default pattern
         edge_url = (
@@ -767,7 +744,7 @@ def poll_task_status(task_id: str, poll_interval_seconds: int = 10, timeout_seco
                 time.sleep(poll_interval_seconds)
                 continue
             try:
-                # Assuming a simple select here. An RPC could also be used.
+                # Direct table query for polling status
                 resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("status, output_location").eq("id", task_id).single().execute()
                 if resp.data:
                     status = resp.data.get("status")
