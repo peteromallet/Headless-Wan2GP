@@ -41,6 +41,17 @@ serve(async (req) => {
     return new Response("Server configuration error", { status: 500 });
   }
 
+  // Parse request body to get worker_id if provided
+  let requestBody: any = {};
+  try {
+    const bodyText = await req.text();
+    if (bodyText) {
+      requestBody = JSON.parse(bodyText);
+    }
+  } catch (e) {
+    console.log("No valid JSON body provided, using default worker_id");
+  }
+
   // Create admin client for database operations
   const supabaseAdmin = createClient(supabaseUrl, serviceKey);
 
@@ -131,8 +142,16 @@ serve(async (req) => {
     }
   }
 
-  // Generate a unique worker ID for this request
-  const workerId = `edge_${crypto.randomUUID()}`;
+  // Handle worker_id based on token type
+  let workerId: string | null = null;
+  if (isServiceRole) {
+    // Service role: use provided worker_id or generate one
+    workerId = requestBody.worker_id || `edge_${crypto.randomUUID()}`;
+    console.log(`Service role using worker_id: ${workerId}`);
+  } else {
+    // User/PAT: no worker_id needed (individual users don't have worker IDs)
+    console.log(`User token: not using worker_id`);
+  }
 
   try {
     // Call the appropriate RPC function based on token type
@@ -287,6 +306,7 @@ serve(async (req) => {
             const updatePayload: any = {
               status: "In Progress",
               updated_at: new Date().toISOString()
+              // Note: No worker_id for user claims - individual users don't have worker IDs
             };
             
             let updateData: any = null;

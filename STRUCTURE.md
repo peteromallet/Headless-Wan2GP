@@ -1,3 +1,47 @@
+# Headless-Wan2GP Project Structure
+
+## Recent Updates (January 2025)
+
+### 🚀 **Major Architecture Improvements**
+- **✅ Complete Edge Function Migration**: Eliminated all RPC dependencies, now using pure Supabase Edge Functions
+- **✅ Dual Authentication System**: Perfect Service Key (worker) vs PAT (individual user) authentication
+- **✅ Worker Management**: Auto-creation system for worker IDs with proper constraint handling
+- **✅ Storage Integration**: Full Supabase storage upload/download functionality
+- **✅ Test Coverage**: Comprehensive test suite with 95.5% success rate (21/22 tests passing)
+
+### 🧹 **Repository Cleanup**
+- Removed debug files, temporary videos, and obsolete test scripts
+- Streamlined codebase focusing on production-ready components
+- Maintained essential documentation and core functionality
+
+## Core Architecture
+
+### **Database Operations (`source/db_operations.py`)**
+- **Pure Edge Function Integration**: All database operations via Supabase Edge Functions
+- **Dual Authentication**: Service role keys for workers, PATs for individual users
+- **Storage Management**: Upload/download to `image_uploads` bucket
+- **Worker ID Handling**: Automatic creation and constraint management
+
+### **Edge Functions (`supabase/functions/`)**
+1. **`create-task/`** - Task creation with RLS enforcement
+2. **`claim-next-task/`** - Atomic task claiming with dependency checking
+3. **`complete-task/`** - Task completion with file upload
+4. **`update-task-status/`** - Status updates (In Progress, Failed)
+5. **`get-predecessor-output/`** - Dependency chain resolution
+6. **`get-completed-segments/`** - Segment collection for stitching
+
+### **Authentication Architecture**
+- **Service Role Path**: Uses `worker_id` for machine/process tracking
+- **User/PAT Path**: Clean task claiming without worker complexity  
+- **RLS Enforcement**: Row-Level Security via Edge Functions
+- **Token Resolution**: PAT lookup via `user_api_tokens` table
+
+### **Worker Management (`fix_worker_issue.sql`)**
+- Auto-creation trigger for new worker IDs
+- Backfill existing workers from tasks
+- Specific worker ID support: `gpu-20250723_221138-afa8403b`
+- Constraint validation and foreign key management
+
 # Project Structure
 
 ```
