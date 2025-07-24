@@ -125,6 +125,38 @@ def _is_jwt_token(token_str: str) -> bool:
     parts = token_str.split('.')
     return len(parts) == 3
 
+def _mark_task_failed_via_edge_function(task_id_str: str, error_message: str):
+    """Mark a task as failed using the update-task-status Edge Function"""
+    try:
+        edge_url = (
+            os.getenv("SUPABASE_EDGE_UPDATE_TASK_URL") 
+            or (f"{SUPABASE_URL.rstrip('/')}/functions/v1/update-task-status" if SUPABASE_URL else None)
+        )
+        
+        if not edge_url:
+            print(f"[ERROR] No update-task-status edge function URL available for marking task {task_id_str} as failed")
+            return
+            
+        headers = {"Content-Type": "application/json"}
+        if SUPABASE_ACCESS_TOKEN:
+            headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
+        
+        payload = {
+            "task_id": task_id_str,
+            "status": STATUS_FAILED,
+            "output_location": error_message
+        }
+        
+        resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
+        
+        if resp.status_code == 200:
+            dprint(f"[DEBUG] Successfully marked task {task_id_str} as Failed via Edge Function")
+        else:
+            print(f"[ERROR] Failed to mark task {task_id_str} as Failed: {resp.status_code} - {resp.text}")
+            
+    except Exception as e:
+        print(f"[ERROR] Exception marking task {task_id_str} as Failed: {e}")
+
 # -----------------------------------------------------------------------------
 # Public Database Functions
 # -----------------------------------------------------------------------------
@@ -506,7 +538,7 @@ def get_oldest_queued_task_supabase(worker_id: str = None): # Renamed from get_o
             return None
     else:
         dprint("ERROR: No edge function URL or access token available for task claiming")
-        return None
+        return None are
 
 def update_task_status_supabase(task_id_str, status_str, output_location_val=None): # Renamed from update_task_status_postgres
     """Updates a task's status via Supabase Edge Functions only."""
@@ -555,7 +587,10 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                     dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE with file upload")
                     return
                 else:
-                    print(f"[ERROR] complete-task edge function failed: {resp.status_code} - {resp.text}")
+                    error_msg = f"complete-task edge function failed: {resp.status_code} - {resp.text}"
+                    print(f"[ERROR] {error_msg}")
+                    # Use update-task-status edge function to mark as failed
+                    _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
                     return
             else:
                 # Not a local file, treat as URL
@@ -571,7 +606,10 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                     dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE")
                     return
                 else:
-                    print(f"[ERROR] complete-task edge function failed: {resp.status_code} - {resp.text}")
+                    error_msg = f"complete-task edge function failed: {resp.status_code} - {resp.text}"
+                    print(f"[ERROR] {error_msg}")
+                    # Use update-task-status edge function to mark as failed
+                    _mark_task_failed_via_edge_function(task_id_str, f"Completion failed: {error_msg}")
                     return
         except Exception as e_edge:
             print(f"[ERROR] complete-task edge function exception: {e_edge}")
