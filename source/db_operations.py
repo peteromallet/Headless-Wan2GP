@@ -538,7 +538,7 @@ def get_oldest_queued_task_supabase(worker_id: str = None): # Renamed from get_o
             return None
     else:
         dprint("ERROR: No edge function URL or access token available for task claiming")
-        return None are
+        return None
 
 def update_task_status_supabase(task_id_str, status_str, output_location_val=None): # Renamed from update_task_status_postgres
     """Updates a task's status via Supabase Edge Functions only."""

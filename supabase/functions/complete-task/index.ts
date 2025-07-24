@@ -36,12 +36,16 @@ serve(async (req) => {
 
   const { task_id, file_data, filename } = body;
   
+  console.log(`[COMPLETE-TASK-DEBUG] Received request with task_id type: ${typeof task_id}, value: ${JSON.stringify(task_id)}`);
+  console.log(`[COMPLETE-TASK-DEBUG] Body keys: ${Object.keys(body)}`);
+  
   if (!task_id || !file_data || !filename) {
     return new Response("task_id, file_data (base64), and filename required", { status: 400 });
   }
 
   // Convert task_id to string early to avoid UUID casting issues
   const taskIdString = String(task_id);
+  console.log(`[COMPLETE-TASK-DEBUG] Converted task_id to string: ${taskIdString}`);
 
   // Extract authorization header
   const authHeader = req.headers.get("Authorization");
@@ -122,7 +126,8 @@ serve(async (req) => {
   try {
     // 4) If user token, verify task ownership
     if (!isServiceRole && callerId) {
-      console.log(`Verifying task ${taskIdString} belongs to user ${callerId}...`);
+      console.log(`[COMPLETE-TASK-DEBUG] Verifying task ${taskIdString} belongs to user ${callerId}...`);
+      console.log(`[COMPLETE-TASK-DEBUG] taskIdString type: ${typeof taskIdString}, value: ${taskIdString}`);
       
       const { data: taskData, error: taskError } = await supabaseAdmin
         .from("tasks")
@@ -163,6 +168,9 @@ serve(async (req) => {
     if (isServiceRole) {
       // For service role, we need to determine the appropriate user folder
       // Get the task to find which project (and user) it belongs to
+      console.log(`[COMPLETE-TASK-DEBUG] Service role - looking up task ${taskIdString} for storage path determination`);
+      console.log(`[COMPLETE-TASK-DEBUG] taskIdString type: ${typeof taskIdString}, value: ${taskIdString}`);
+      
       const { data: taskData, error: taskError } = await supabaseAdmin
         .from("tasks")
         .select("project_id")
@@ -216,8 +224,9 @@ serve(async (req) => {
     
     const publicUrl = urlData.publicUrl;
 
-    // 9) Update the database with the public URL
-    // Note: Explicitly cast task_id to string to avoid "cannot cast type jsonb to uuid" error
+        // 9) Update the database with the public URL
+    console.log(`[COMPLETE-TASK-DEBUG] Updating task ${taskIdString} to Complete status`);
+    
     const { error: dbError } = await supabaseAdmin
       .from("tasks")
       .update({
@@ -229,15 +238,20 @@ serve(async (req) => {
       .eq("status", "In Progress");
 
     if (dbError) {
-      console.error("Database update error:", dbError);
+      console.error("[COMPLETE-TASK-DEBUG] Database update error:", dbError);
       // If DB update fails, we should clean up the uploaded file
       await supabaseAdmin.storage.from('image_uploads').remove([objectPath]);
       return new Response(`Database update failed: ${dbError.message}`, { status: 500 });
     }
+    
+    console.log(`[COMPLETE-TASK-DEBUG] Database update successful for task ${taskIdString}`);
 
     // 10) Check if this task completes an orchestrator workflow
     try {
       // Get the task details to check if it's a final task in an orchestrator workflow
+      console.log(`[COMPLETE-TASK-DEBUG] Checking orchestrator workflow for task ${taskIdString}`);
+      console.log(`[COMPLETE-TASK-DEBUG] taskIdString type: ${typeof taskIdString}, value: ${taskIdString}`);
+      
       const { data: taskData, error: taskError } = await supabaseAdmin
         .from("tasks")
         .select("task_type, params")
@@ -254,10 +268,12 @@ serve(async (req) => {
         );
 
         if (isFinalTask && params?.orchestrator_task_id_ref) {
-          console.log(`Task ${taskIdString} is a final ${task_type} task. Marking orchestrator ${params.orchestrator_task_id_ref} as complete.`);
+          console.log(`[COMPLETE-TASK-DEBUG] Task ${taskIdString} is a final ${task_type} task. Marking orchestrator ${params.orchestrator_task_id_ref} as complete.`);
           
           // Update the orchestrator task to Complete status with the same output location
           const orchestratorIdString = String(params.orchestrator_task_id_ref);
+          console.log(`[COMPLETE-TASK-DEBUG] Orchestrator ID string: ${orchestratorIdString}, type: ${typeof orchestratorIdString}`);
+          
           const { error: orchError } = await supabaseAdmin
             .from("tasks")
             .update({
@@ -269,10 +285,11 @@ serve(async (req) => {
             .eq("status", "In Progress"); // Only update if still in progress
 
           if (orchError) {
-            console.error(`Failed to update orchestrator ${params.orchestrator_task_id_ref}:`, orchError);
+            console.error(`[COMPLETE-TASK-DEBUG] Failed to update orchestrator ${params.orchestrator_task_id_ref}:`, orchError);
+            console.error(`[COMPLETE-TASK-DEBUG] Orchestrator error details:`, JSON.stringify(orchError, null, 2));
             // Don't fail the whole request, just log the error
           } else {
-            console.log(`Successfully marked orchestrator ${params.orchestrator_task_id_ref} as complete.`);
+            console.log(`[COMPLETE-TASK-DEBUG] Successfully marked orchestrator ${params.orchestrator_task_id_ref} as complete.`);
           }
         }
       }
@@ -281,19 +298,24 @@ serve(async (req) => {
       console.error("Error checking for orchestrator completion:", orchCheckError);
     }
 
-    console.log(`Successfully completed task ${taskIdString} by ${isServiceRole ? 'service-role' : `user ${callerId}`}`);
+    console.log(`[COMPLETE-TASK-DEBUG] Successfully completed task ${taskIdString} by ${isServiceRole ? 'service-role' : `user ${callerId}`}`);
 
-    return new Response(JSON.stringify({ 
+    const responseData = { 
       success: true, 
       public_url: publicUrl,
       message: "Task completed and file uploaded successfully" 
-    }), {
+    };
+    console.log(`[COMPLETE-TASK-DEBUG] Returning success response: ${JSON.stringify(responseData)}`);
+
+    return new Response(JSON.stringify(responseData), {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });
 
   } catch (error) {
-    console.error("Edge function error:", error);
+    console.error("[COMPLETE-TASK-DEBUG] Edge function error:", error);
+    console.error("[COMPLETE-TASK-DEBUG] Error stack:", error.stack);
+    console.error("[COMPLETE-TASK-DEBUG] Error details:", JSON.stringify(error, null, 2));
     return new Response(`Internal error: ${error.message}`, { status: 500 });
   }
 });
