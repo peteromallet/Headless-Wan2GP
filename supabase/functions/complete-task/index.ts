@@ -1,3 +1,7 @@
+// deno-lint-ignore-file
+// @ts-ignore
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+declare const Deno: any;
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 
@@ -35,6 +39,9 @@ serve(async (req) => {
   if (!task_id || !file_data || !filename) {
     return new Response("task_id, file_data (base64), and filename required", { status: 400 });
   }
+
+  // Convert task_id to string early to avoid UUID casting issues
+  const taskIdString = String(task_id);
 
   // Extract authorization header
   const authHeader = req.headers.get("Authorization");
@@ -115,12 +122,12 @@ serve(async (req) => {
   try {
     // 4) If user token, verify task ownership
     if (!isServiceRole && callerId) {
-      console.log(`Verifying task ${task_id} belongs to user ${callerId}...`);
+      console.log(`Verifying task ${taskIdString} belongs to user ${callerId}...`);
       
       const { data: taskData, error: taskError } = await supabaseAdmin
         .from("tasks")
         .select("project_id")
-        .eq("id", task_id)
+        .eq("id", taskIdString)
         .single();
 
       if (taskError) {
@@ -141,11 +148,11 @@ serve(async (req) => {
       }
 
       if (projectData.user_id !== callerId) {
-        console.error(`Task ${task_id} belongs to project ${taskData.project_id} owned by ${projectData.user_id}, not user ${callerId}`);
+        console.error(`Task ${taskIdString} belongs to project ${taskData.project_id} owned by ${projectData.user_id}, not user ${callerId}`);
         return new Response("Forbidden: Task does not belong to user", { status: 403 });
       }
 
-      console.log(`Task ${task_id} ownership verified: user ${callerId} owns project ${taskData.project_id}`);
+      console.log(`Task ${taskIdString} ownership verified: user ${callerId} owns project ${taskData.project_id}`);
     }
 
     // 5) Decode the base64 file data
@@ -159,7 +166,7 @@ serve(async (req) => {
       const { data: taskData, error: taskError } = await supabaseAdmin
         .from("tasks")
         .select("project_id")
-        .eq("id", task_id)
+        .eq("id", taskIdString)
         .single();
 
       if (taskError) {
@@ -181,7 +188,7 @@ serve(async (req) => {
       } else {
         userId = projectData.user_id;
       }
-      console.log(`Service role storing file for task ${task_id} in user ${userId}'s folder`);
+      console.log(`Service role storing file for task ${taskIdString} in user ${userId}'s folder`);
     } else {
       // For user tokens, use the authenticated user's ID
       userId = callerId!;
@@ -210,6 +217,7 @@ serve(async (req) => {
     const publicUrl = urlData.publicUrl;
 
     // 9) Update the database with the public URL
+    // Note: Explicitly cast task_id to string to avoid "cannot cast type jsonb to uuid" error
     const { error: dbError } = await supabaseAdmin
       .from("tasks")
       .update({
@@ -217,7 +225,7 @@ serve(async (req) => {
         output_location: publicUrl,
         generation_processed_at: new Date().toISOString()
       })
-      .eq("id", task_id)
+      .eq("id", taskIdString)
       .eq("status", "In Progress");
 
     if (dbError) {
@@ -233,7 +241,7 @@ serve(async (req) => {
       const { data: taskData, error: taskError } = await supabaseAdmin
         .from("tasks")
         .select("task_type, params")
-        .eq("id", task_id)
+        .eq("id", taskIdString)
         .single();
 
       if (!taskError && taskData) {
@@ -246,9 +254,10 @@ serve(async (req) => {
         );
 
         if (isFinalTask && params?.orchestrator_task_id_ref) {
-          console.log(`Task ${task_id} is a final ${task_type} task. Marking orchestrator ${params.orchestrator_task_id_ref} as complete.`);
+          console.log(`Task ${taskIdString} is a final ${task_type} task. Marking orchestrator ${params.orchestrator_task_id_ref} as complete.`);
           
           // Update the orchestrator task to Complete status with the same output location
+          const orchestratorIdString = String(params.orchestrator_task_id_ref);
           const { error: orchError } = await supabaseAdmin
             .from("tasks")
             .update({
@@ -256,7 +265,7 @@ serve(async (req) => {
               output_location: publicUrl,
               generation_processed_at: new Date().toISOString()
             })
-            .eq("id", params.orchestrator_task_id_ref)
+            .eq("id", orchestratorIdString)
             .eq("status", "In Progress"); // Only update if still in progress
 
           if (orchError) {
@@ -272,7 +281,7 @@ serve(async (req) => {
       console.error("Error checking for orchestrator completion:", orchCheckError);
     }
 
-    console.log(`Successfully completed task ${task_id} by ${isServiceRole ? 'service-role' : `user ${callerId}`}`);
+    console.log(`Successfully completed task ${taskIdString} by ${isServiceRole ? 'service-role' : `user ${callerId}`}`);
 
     return new Response(JSON.stringify({ 
       success: true, 
