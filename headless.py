@@ -796,7 +796,7 @@ def main():
         class DualWriter:
             def __init__(self, log_file_path):
                 self.terminal = sys.stdout
-                self.log_file = open(log_file_path, 'w', encoding='utf-8')
+                self.log_file = open(log_file_path, 'a', encoding='utf-8')
                 
             def write(self, message):
                 self.terminal.write(message)
