@@ -130,6 +130,7 @@ Task-specific wrappers around the bulky upstream logic. These are imported by `h
 * **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images. Builds guide videos, queues generation tasks, stitches outputs. **UPDATED**: Final stitched videos are uploaded to Supabase when configured. **NEW**: Extensive debugging system with `debug_video_analysis()` function that tracks frame counts, file sizes, and processing steps throughout the entire orchestrator → segments → stitching pipeline.
 * **different_perspective.py** – Generates a new perspective for a single image using an OpenPose or depth-driven guide video plus optional RIFE interpolation for smoothness. **UPDATED**: Final posed images are uploaded to Supabase when configured.
 * **single_image.py** – Minimal handler for one-off image-to-video generation without travel or pose manipulation. **UPDATED**: Generated images are uploaded to Supabase when configured.
+* **magic_edit.py** – **NEW**: Processes images through Replicate's black-forest-labs/flux-kontext-dev-lora model for scene transformations. Supports conditional InScene LoRA usage via `in_scene` parameter (true for scene consistency, false for creative freedom). Integrates with Supabase storage for output handling.
 * **__init__.py** – Re-exports public APIs (`run_travel_between_images_task`, `run_single_image_task`, `run_different_perspective_task`) and common utilities for convenient importing.
 
 ## Additional runtime artefacts & folders
@@ -220,6 +221,7 @@ The submodule is currently pinned to commit `6706709` ("optimization for i2v wit
 | Travel stitch        | `_handle_travel_stitch_task`       | " " |
 | Single image video   | `run_single_image_task`            | `sm_functions/single_image.py` |
 | Different perspective | `run_different_perspective_task`   | `sm_functions/different_perspective.py` |
+| Magic edit           | `_handle_magic_edit_task`          | `sm_functions/magic_edit.py` |
 | OpenPose mask video  | `handle_openpose_task`             | `specialized_handlers.py` |
 | RIFE interpolation   | `handle_rife_task`                 | `specialized_handlers.py` |
 

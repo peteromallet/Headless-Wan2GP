@@ -57,6 +57,7 @@ from source.common_utils import (
 from source.sm_functions import travel_between_images as tbi
 from source.sm_functions import different_perspective as dp
 from source.sm_functions import single_image as si
+from source.sm_functions import magic_edit as me
 # --- End SM_RESTRUCTURE imports ---
 
 
@@ -283,6 +284,14 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
             task_id=task_id,
             image_download_dir=image_download_dir,
             apply_reward_lora=apply_reward_lora,
+            dprint=dprint
+        )
+    elif task_type == "magic_edit":
+        print(f"[Task ID: {task_id}] Identified as 'magic_edit' task.")
+        return me._handle_magic_edit_task(
+            task_params_from_db=task_params_dict,
+            main_output_dir_base=main_output_dir_base,
+            task_id=task_id,
             dprint=dprint
         )
 

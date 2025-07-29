@@ -41,6 +41,7 @@ python-dotenv  # For .env file management
 
 # ===== Utilities =====
 requests  # For downloading LoRAs and videos
+replicate  # For magic edit tasks via Replicate API
 tqdm
 easydict
 ftfy
