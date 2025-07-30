@@ -922,7 +922,6 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # ------------------------------------------------------------------
         # Ensure sensible defaults for critical generation params
         # ------------------------------------------------------------------
-        causvid_enabled = bool(segment_params.get("use_causvid_lora", False) or full_orchestrator_payload.get("apply_causvid", False) or full_orchestrator_payload.get("use_causvid_lora", False))
         lighti2x_enabled = bool(segment_params.get("use_lighti2x_lora", False) or full_orchestrator_payload.get("use_lighti2x_lora", False))
 
         num_inference_steps = (
@@ -932,13 +931,10 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             or full_orchestrator_payload.get("steps")  # Check for "steps" as alternative
             or wgp_payload.get("num_inference_steps")  # Check wgp_payload after JSON override
             or wgp_payload.get("steps")  # Check for "steps" in wgp_payload
-            or (9 if causvid_enabled else (5 if lighti2x_enabled else 30))
+            or (5 if lighti2x_enabled else 30)
         )
 
-        if causvid_enabled:
-            guidance_scale_default = 1.0
-            flow_shift_default = 1.0
-        elif lighti2x_enabled:
+        if lighti2x_enabled:
             guidance_scale_default = 1.0
             flow_shift_default = 5.0
         else:
