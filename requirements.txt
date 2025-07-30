@@ -9,6 +9,8 @@ tokenizers>=0.20.3
 diffusers>=0.31.0
 accelerate>=1.1.1
 peft>=0.15.0  # Updated from 0.14.0 to fix compatibility with diffusers
+huggingface_hub>=0.25.0  # For reliable model/LoRA downloads with checksums
+safetensors>=0.4.0  # For LoRA integrity verification
 timm
 einops
 numpy>=1.23.5,<2
