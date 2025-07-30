@@ -1383,8 +1383,18 @@ def generate_different_perspective_debug_video_summary(
 def download_file(url, dest_folder, filename):
     dest_path = Path(dest_folder) / filename
     if dest_path.exists():
-        print(f"[INFO] File {filename} already exists in {dest_folder}.")
-        return True
+        # Validate existing file before assuming it's good
+        if filename.endswith('.safetensors') or 'lora' in filename.lower():
+            is_valid, validation_msg = validate_lora_file(dest_path, filename)
+            if is_valid:
+                print(f"[INFO] File {filename} already exists and is valid in {dest_folder}. {validation_msg}")
+                return True
+            else:
+                print(f"[WARNING] Existing file {filename} failed validation ({validation_msg}). Re-downloading...")
+                dest_path.unlink()
+        else:
+            print(f"[INFO] File {filename} already exists in {dest_folder}.")
+            return True
     
     # Use huggingface_hub for HuggingFace URLs for better reliability
     if "huggingface.co" in url:
@@ -1420,7 +1430,16 @@ def download_file(url, dest_folder, filename):
                     import shutil
                     shutil.copy2(downloaded_path, dest_path)
                 
-                print(f"Successfully downloaded {filename} with integrity verification.")
+                # Validate the downloaded file
+                if filename.endswith('.safetensors') or 'lora' in filename.lower():
+                    is_valid, validation_msg = validate_lora_file(dest_path, filename)
+                    if not is_valid:
+                        print(f"[ERROR] Downloaded file {filename} failed validation: {validation_msg}")
+                        dest_path.unlink(missing_ok=True)
+                        return False
+                    print(f"Successfully downloaded and validated {filename}. {validation_msg}")
+                else:
+                    print(f"Successfully downloaded {filename} with integrity verification.")
                 return True
                 
         except ImportError:
@@ -1451,21 +1470,31 @@ def download_file(url, dest_folder, filename):
             dest_path.unlink(missing_ok=True)
             return False
         
-        # For safetensors files, try to verify they can be opened
-        if filename.endswith('.safetensors'):
-            try:
-                import safetensors.torch as st
-                with st.safe_open(dest_path, framework="pt") as f:
-                    pass  # Just verify it can be opened
-                print(f"Successfully downloaded and verified safetensors file {filename}.")
-            except ImportError:
-                print(f"[WARNING] safetensors not available for verification of {filename}")
-            except Exception as e:
-                print(f"[ERROR] Downloaded safetensors file {filename} appears corrupted: {e}")
+        # Use comprehensive validation for LoRA files
+        if filename.endswith('.safetensors') or 'lora' in filename.lower():
+            is_valid, validation_msg = validate_lora_file(dest_path, filename)
+            if not is_valid:
+                print(f"[ERROR] Downloaded file {filename} failed validation: {validation_msg}")
                 dest_path.unlink(missing_ok=True)
                 return False
+            print(f"Successfully downloaded and validated {filename}. {validation_msg}")
+        else:
+            # For non-LoRA safetensors files, do basic format check
+            if filename.endswith('.safetensors'):
+                try:
+                    import safetensors.torch as st
+                    with st.safe_open(dest_path, framework="pt") as f:
+                        pass  # Just verify it can be opened
+                    print(f"Successfully downloaded and verified safetensors file {filename}.")
+                except ImportError:
+                    print(f"[WARNING] safetensors not available for verification of {filename}")
+                except Exception as e:
+                    print(f"[ERROR] Downloaded safetensors file {filename} appears corrupted: {e}")
+                    dest_path.unlink(missing_ok=True)
+                    return False
+            else:
+                print(f"Successfully downloaded {filename}.")
         
-        print(f"Successfully downloaded {filename}.")
         return True
         
     except Exception as e:
@@ -1550,9 +1579,8 @@ def download_image_if_url(image_url_or_path: str, download_target_dir: Path | st
             dprint(f"Task {task_id_for_logging}: General error processing image URL {image_url_or_path}: {e_gen}. Returning original path.")
             return image_url_or_path
     else:
-        # Not a downloadable URL or no target directory specified
-        if parsed_url.scheme in ['http', 'https'] and not download_target_dir:
-             dprint(f"Task {task_id_for_logging}: Image path {image_url_or_path} is a URL, but no download_target_dir provided. Using original path.")
+        # Not an HTTP/HTTPS URL or no download directory specified
+        dprint(f"Task {task_id_for_logging}: Not downloading image (not URL or no target dir): {image_url_or_path}")
         return image_url_or_path
 
 def image_to_frame(image_path_str: str | Path, target_resolution_wh: tuple[int, int] | None = None, task_id_for_logging: str | None = "generic_task", image_download_dir: Path | str | None = None) -> np.ndarray | None:
@@ -2273,5 +2301,144 @@ def report_orchestrator_failure(task_params_dict: dict, error_msg: str, dprint: 
         dprint(
             f"[report_orchestrator_failure] Failed to update orchestrator status for {orchestrator_id}: {e_update}"
         )
+
+def validate_lora_file(file_path: Path, filename: str) -> tuple[bool, str]:
+    """
+    Validates a LoRA file for size and format integrity.
+    
+    Returns:
+        (is_valid, error_message)
+    """
+    if not file_path.exists():
+        return False, f"File does not exist: {file_path}"
+    
+    file_size = file_path.stat().st_size
+    
+    # Known LoRA size ranges (in bytes)
+    # These are based on common LoRA architectures and rank sizes
+    LORA_SIZE_RANGES = {
+        # Very small LoRAs (rank 4-8)
+        'tiny': (1_000_000, 50_000_000),      # 1MB - 50MB
+        # Standard LoRAs (rank 16-32) 
+        'standard': (50_000_000, 500_000_000),  # 50MB - 500MB
+        # Large LoRAs (rank 64+) or full model fine-tunes
+        'large': (500_000_000, 5_000_000_000), # 500MB - 5GB
+        # Extremely large (full model weights)
+        'xlarge': (5_000_000_000, 50_000_000_000)  # 5GB - 50GB
+    }
+    
+    # Check if file size is within any reasonable range
+    in_valid_range = any(
+        min_size <= file_size <= max_size 
+        for min_size, max_size in LORA_SIZE_RANGES.values()
+    )
+    
+    if not in_valid_range:
+        if file_size < 1_000_000:  # Less than 1MB
+            return False, f"File too small ({file_size:,} bytes) - likely corrupted or incomplete download"
+        elif file_size > 50_000_000_000:  # More than 50GB
+            return False, f"File too large ({file_size:,} bytes) - likely not a LoRA file"
+    
+    # For safetensors files, try to open and inspect
+    if filename.endswith('.safetensors'):
+        try:
+            import safetensors.torch as st
+            with st.safe_open(file_path, framework="pt") as f:
+                # Get metadata to verify it's actually a LoRA
+                metadata = f.metadata()
+                keys = list(f.keys())
+                
+                # LoRAs typically have keys like "lora_down.weight", "lora_up.weight", etc.
+                lora_indicators = ['lora_down', 'lora_up', 'lora.down', 'lora.up', 'lora_A', 'lora_B']
+                has_lora_keys = any(indicator in key for key in keys for indicator in lora_indicators)
+                
+                if not has_lora_keys and len(keys) > 100:
+                    # Might be a full model checkpoint rather than a LoRA
+                    print(f"[WARNING] {filename} appears to be a full model checkpoint ({len(keys)} tensors) rather than a LoRA")
+                elif not has_lora_keys:
+                    print(f"[WARNING] {filename} doesn't appear to contain LoRA weights (no lora_* keys found)")
+                
+                # Check for reasonable number of parameters
+                if len(keys) == 0:
+                    return False, "Safetensors file contains no tensors"
+                elif len(keys) > 10000:
+                    print(f"[WARNING] {filename} contains many tensors ({len(keys)}) - might be a full model")
+                    
+        except ImportError:
+            print(f"[WARNING] safetensors not available for detailed validation of {filename}")
+        except Exception as e:
+            return False, f"Safetensors file appears corrupted: {e}"
+    
+    # Additional checks for common corruption patterns
+    if file_size == 0:
+        return False, "File is empty"
+    
+    # For binary files, check they don't start with common error HTML patterns
+    try:
+        with open(file_path, 'rb') as f:
+            first_bytes = f.read(1024)
+            if first_bytes.startswith(b'<!DOCTYPE html') or first_bytes.startswith(b'<html'):
+                return False, "File appears to be an HTML error page rather than a LoRA file"
+    except Exception:
+        pass
+    
+    return True, f"File validated successfully ({file_size:,} bytes)"
+
+def check_loras_in_directory(lora_dir: Path | str, fix_issues: bool = False) -> dict:
+    """
+    Checks all LoRA files in a directory for integrity issues.
+    
+    Args:
+        lora_dir: Directory containing LoRA files
+        fix_issues: If True, removes corrupted files
+        
+    Returns:
+        Dictionary with validation results
+    """
+    lora_dir = Path(lora_dir)
+    if not lora_dir.exists():
+        return {"error": f"Directory does not exist: {lora_dir}"}
+    
+    results = {
+        "total_files": 0,
+        "valid_files": 0,
+        "invalid_files": 0,
+        "issues": [],
+        "summary": []
+    }
+    
+    # Look for LoRA-like files
+    lora_extensions = ['.safetensors', '.bin', '.pt', '.pth']
+    lora_files = []
+    
+    for ext in lora_extensions:
+        lora_files.extend(lora_dir.glob(f"*{ext}"))
+        lora_files.extend(lora_dir.glob(f"**/*{ext}"))  # Include subdirectories
+    
+    # Filter to likely LoRA files
+    lora_files = [f for f in lora_files if 'lora' in f.name.lower() or f.suffix == '.safetensors']
+    
+    results["total_files"] = len(lora_files)
+    
+    for lora_file in lora_files:
+        is_valid, validation_msg = validate_lora_file(lora_file, lora_file.name)
+        
+        if is_valid:
+            results["valid_files"] += 1
+            results["summary"].append(f"✓ {lora_file.name}: {validation_msg}")
+        else:
+            results["invalid_files"] += 1
+            issue_msg = f"✗ {lora_file.name}: {validation_msg}"
+            results["issues"].append(issue_msg)
+            results["summary"].append(issue_msg)
+            
+            if fix_issues:
+                try:
+                    lora_file.unlink()
+                    results["summary"].append(f"  → Removed corrupted file: {lora_file.name}")
+                except Exception as e:
+                    results["summary"].append(f"  → Failed to remove {lora_file.name}: {e}")
+    
+    return results
 
 # --------------------------------------------------------------------------------------------------
