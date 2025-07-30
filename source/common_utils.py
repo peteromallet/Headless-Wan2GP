@@ -1385,16 +1385,89 @@ def download_file(url, dest_folder, filename):
     if dest_path.exists():
         print(f"[INFO] File {filename} already exists in {dest_folder}.")
         return True
+    
+    # Use huggingface_hub for HuggingFace URLs for better reliability
+    if "huggingface.co" in url:
+        try:
+            from huggingface_hub import hf_hub_download
+            from urllib.parse import urlparse
+            
+            # Parse HuggingFace URL to extract repo_id and filename
+            # Format: https://huggingface.co/USER/REPO/resolve/BRANCH/FILENAME
+            parsed = urlparse(url)
+            path_parts = parsed.path.strip('/').split('/')
+            
+            if len(path_parts) >= 4 and path_parts[2] == 'resolve':
+                repo_id = f"{path_parts[0]}/{path_parts[1]}"
+                branch = path_parts[3] if len(path_parts) > 4 else "main"
+                hf_filename = '/'.join(path_parts[4:]) if len(path_parts) > 4 else filename
+                
+                print(f"Downloading {filename} from HuggingFace repo {repo_id} using hf_hub_download...")
+                
+                # Download using huggingface_hub with automatic checksums and resumption
+                downloaded_path = hf_hub_download(
+                    repo_id=repo_id,
+                    filename=hf_filename,
+                    revision=branch,
+                    cache_dir=str(dest_folder),
+                    resume_download=True,
+                    local_files_only=False
+                )
+                
+                # Copy from HF cache to target location if different
+                if Path(downloaded_path) != dest_path:
+                    dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    import shutil
+                    shutil.copy2(downloaded_path, dest_path)
+                
+                print(f"Successfully downloaded {filename} with integrity verification.")
+                return True
+                
+        except ImportError:
+            print(f"[WARNING] huggingface_hub not available, falling back to requests for {url}")
+        except Exception as e:
+            print(f"[WARNING] HuggingFace download failed for {filename}: {e}, falling back to requests")
+    
+    # Fallback to requests with basic integrity checks
     try:
         print(f"Downloading {filename} from {url} to {dest_folder}...")
         response = requests.get(url, stream=True)
         response.raise_for_status() # Raise an exception for HTTP errors
+        
+        # Get expected content length for verification
+        expected_size = int(response.headers.get('content-length', 0))
+        
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         with open(dest_path, 'wb') as f:
+            downloaded_size = 0
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
+                downloaded_size += len(chunk)
+        
+        # Verify download integrity
+        actual_size = dest_path.stat().st_size
+        if expected_size > 0 and actual_size != expected_size:
+            print(f"[ERROR] Size mismatch for {filename}: expected {expected_size}, got {actual_size}")
+            dest_path.unlink(missing_ok=True)
+            return False
+        
+        # For safetensors files, try to verify they can be opened
+        if filename.endswith('.safetensors'):
+            try:
+                import safetensors.torch as st
+                with st.safe_open(dest_path, framework="pt") as f:
+                    pass  # Just verify it can be opened
+                print(f"Successfully downloaded and verified safetensors file {filename}.")
+            except ImportError:
+                print(f"[WARNING] safetensors not available for verification of {filename}")
+            except Exception as e:
+                print(f"[ERROR] Downloaded safetensors file {filename} appears corrupted: {e}")
+                dest_path.unlink(missing_ok=True)
+                return False
+        
         print(f"Successfully downloaded {filename}.")
         return True
+        
     except Exception as e:
         print(f"[ERROR] Failed to download {filename}: {e}")
         if dest_path.exists(): # Attempt to clean up partial download
