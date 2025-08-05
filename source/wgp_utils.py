@@ -394,21 +394,30 @@ def generate_single_video(
                 print(f"[WGP_VACE_DEBUG] Applying surgical fix for VACE config resolution")
                 
                 def vace_load_models_wrapper(model_type):
+                    print(f"[WGP_VACE_DEBUG] load_models() wrapper called with model_type='{model_type}'")
+                    
                     # For VACE models, resolve to base type for load_models() only
                     if model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
+                        print(f"[WGP_VACE_DEBUG] VACE model detected: '{model_type}' - resolving to base type")
                         try:
                             base_urls = wgp_mod.get_model_recursive_prop(model_type, "URLs", return_list=False)
+                            print(f"[WGP_VACE_DEBUG] Retrieved URLs property: '{base_urls}' (type: {type(base_urls)})")
+                            
                             if isinstance(base_urls, str) and base_urls in ["t2v", "i2v"]:
                                 print(f"[WGP_VACE_DEBUG] load_models() override: '{model_type}' → base_type '{base_urls}' for config resolution")
-                                # Get base model type using WGP's own logic
-                                resolved_base_type = wgp_mod.get_base_model_type(base_urls) 
-                                print(f"[WGP_VACE_DEBUG] Final base_model_type for load_wan_model: '{resolved_base_type}'")
                                 # Call original load_models with base type for proper config resolution
                                 return original_load_models(base_urls)
+                            else:
+                                print(f"[WGP_VACE_DEBUG] URLs property not suitable for resolution: {base_urls}")
                         except Exception as e:
                             print(f"[WARNING] VACE base type resolution failed: {e}")
+                            import traceback
+                            traceback.print_exc()
+                    else:
+                        print(f"[WGP_VACE_DEBUG] Non-VACE model: '{model_type}' - using normal behavior")
                     
-                    # For non-VACE models, use normal behavior
+                    # For non-VACE models or fallback, use normal behavior
+                    print(f"[WGP_VACE_DEBUG] Calling original load_models('{model_type}')")
                     return original_load_models(model_type)
                 
                 # Temporarily replace load_models function

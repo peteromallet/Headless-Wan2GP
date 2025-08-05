@@ -1850,6 +1850,19 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
     if model_type_override:
         model_type_key = model_type_override
         print(f"[DEBUG] build_task_state: using model_type_override='{model_type_key}'")
+        
+        # [VACE_FIX] For VACE models, resolve to their underlying base type for WGP compatibility
+        # VACE models should use their base model type (t2v) for configuration, not the composite type
+        if model_type_key in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
+            # Get the URLs field to find the true base model type
+            try:
+                vace_urls = wgp_mod.get_model_recursive_prop(model_type_key, "URLs", return_list=False)
+                if isinstance(vace_urls, str) and vace_urls in ["t2v", "i2v"]:
+                    original_model_type = model_type_key
+                    model_type_key = vace_urls  # Use the base model type for WGP
+                    print(f"[VACE_FIX] Resolved VACE model '{original_model_type}' → base_type '{model_type_key}' for WGP compatibility")
+            except Exception as e:
+                print(f"[WARNING] Could not resolve VACE base type for '{model_type_key}': {e}")
     else:
         model_type_key = wgp_mod.get_model_type(model_filename)
         if not model_type_key:
