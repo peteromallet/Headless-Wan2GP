@@ -1838,7 +1838,7 @@ def _apply_special_lora_settings(task_id: str, lora_type: str, lora_basename: st
     ui_defaults["loras_multipliers"] = " ".join(multipliers_list)
 
 # --- SM_RESTRUCTURE: Function moved from headless.py ---
-def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False):
+def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False, model_type_override: str = None):
     state = {
         "model_filename": model_filename,
         "validate_success": 1,
@@ -1846,12 +1846,16 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         "gen": {"queue": [], "file_list": [], "file_settings_list": [], "prompt_no": 1, "prompts_max": 1},
         "loras": all_loras_for_model,
     }
-    model_type_key = wgp_mod.get_model_type(model_filename)
-    if not model_type_key:
-        print(f"[ERROR] Could not determine model type from filename: {model_filename}")
-        model_type_key = "t2v"  # Fallback to known good model type
-    
-    print(f"[DEBUG] build_task_state: model_filename='{model_filename}' → model_type='{model_type_key}'")
+    # [VACE_FIX] Use model_type_override if provided, otherwise derive from filename
+    if model_type_override:
+        model_type_key = model_type_override
+        print(f"[DEBUG] build_task_state: using model_type_override='{model_type_key}'")
+    else:
+        model_type_key = wgp_mod.get_model_type(model_filename)
+        if not model_type_key:
+            print(f"[ERROR] Could not determine model type from filename: {model_filename}")
+            model_type_key = "t2v"  # Fallback to known good model type
+        print(f"[DEBUG] build_task_state: model_filename='{model_filename}' → model_type='{model_type_key}'")
     ui_defaults = wgp_mod.get_default_settings(model_type_key).copy()
 
     # Override with task_params from JSON, but preserve some crucial ones if CausVid is used
