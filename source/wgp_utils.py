@@ -223,57 +223,77 @@ def generate_single_video(
             print(f"[WGP_GENERATION_DEBUG]   seed: {ui_params.get('seed')}")
             print(f"[WGP_GENERATION_DEBUG]   num_inference_steps: {ui_params.get('num_inference_steps')}")
             
-            # Call the actual WGP generation
-            wgp_mod.generate_video(
-                task=gen_task_placeholder,
-                send_cmd=send_cmd_debug,
-                prompt=ui_params["prompt"],
-                negative_prompt=ui_params.get("negative_prompt", ""),
-                resolution=ui_params["resolution"],
-                video_length=ui_params.get("video_length", video_length),
-                seed=ui_params["seed"],
-                num_inference_steps=ui_params.get("num_inference_steps", num_inference_steps),
-                guidance_scale=ui_params.get("guidance_scale", guidance_scale),
-                flow_shift=ui_params.get("flow_shift", flow_shift),
-                video_guide=ui_params.get("video_guide"),
-                video_mask=ui_params.get("video_mask"),
-                image_refs=ui_params.get("image_refs"),
-                video_prompt_type=ui_params.get("video_prompt_type", video_prompt_type),
-                activated_loras=ui_params.get("activated_loras", []),
-                loras_multipliers=ui_params.get("loras_multipliers", ""),
-                state=state,
-                model_filename=model_filename,
-                # Add other parameters as needed
-                audio_guidance_scale=ui_params.get("audio_guidance_scale", 5.0),
-                embedded_guidance_scale=ui_params.get("embedded_guidance_scale", 6.0),
-                repeat_generation=ui_params.get("repeat_generation", 1),
-                multi_images_gen_type=ui_params.get("multi_images_gen_type", 0),
-                tea_cache_setting=ui_params.get("tea_cache_setting", 0.0),
-                tea_cache_start_step_perc=ui_params.get("tea_cache_start_step_perc", 0),
-                image_prompt_type=ui_params.get("image_prompt_type", "T"),
-                image_start=[wgp_mod.convert_image(img) for img in ui_params.get("image_start", [])],
-                image_end=[wgp_mod.convert_image(img) for img in ui_params.get("image_end", [])],
-                model_mode=ui_params.get("model_mode", 0),
-                video_source=ui_params.get("video_source"),
-                keep_frames_video_source=ui_params.get("keep_frames_video_source", ""),
-                keep_frames_video_guide=ui_params.get("keep_frames_video_guide", ""),
-                audio_guide=ui_params.get("audio_guide"),
-                sliding_window_size=ui_params.get("sliding_window_size", 81),
-                sliding_window_overlap=ui_params.get("sliding_window_overlap", 5),
-                sliding_window_overlap_noise=ui_params.get("sliding_window_overlap_noise", 20),
-                sliding_window_discard_last_frames=ui_params.get("sliding_window_discard_last_frames", 0),
-                remove_background_images_ref=ui_params.get("remove_background_images_ref", False),
-                temporal_upsampling=ui_params.get("temporal_upsampling", ""),
-                spatial_upsampling=ui_params.get("spatial_upsampling", ""),
-                RIFLEx_setting=ui_params.get("RIFLEx_setting", 0),
-                slg_switch=ui_params.get("slg_switch", 0),
-                slg_layers=ui_params.get("slg_layers", [9]),
-                slg_start_perc=ui_params.get("slg_start_perc", 10),
-                slg_end_perc=ui_params.get("slg_end_perc", 90),
-                cfg_star_switch=ui_params.get("cfg_star_switch", 0),
-                cfg_zero_step=ui_params.get("cfg_zero_step", -1),
-                prompt_enhancer=ui_params.get("prompt_enhancer", "")
-            )
+            # Call the actual WGP generation with dynamic parameter filtering
+            import inspect
+            
+            # Get the actual parameters that generate_video accepts
+            generate_video_signature = inspect.signature(wgp_mod.generate_video)
+            supported_params = set(generate_video_signature.parameters.keys())
+            
+            # Core parameters that we always want to pass
+            call_params = {
+                "task": gen_task_placeholder,
+                "send_cmd": send_cmd_debug,
+                "prompt": ui_params["prompt"],
+                "negative_prompt": ui_params.get("negative_prompt", ""),
+                "resolution": ui_params["resolution"],
+                "video_length": ui_params.get("video_length", video_length),
+                "seed": ui_params["seed"],
+                "num_inference_steps": ui_params.get("num_inference_steps", num_inference_steps),
+                "guidance_scale": ui_params.get("guidance_scale", guidance_scale),
+                "flow_shift": ui_params.get("flow_shift", flow_shift),
+                "video_guide": ui_params.get("video_guide"),
+                "video_mask": ui_params.get("video_mask"),
+                "image_refs": ui_params.get("image_refs"),
+                "video_prompt_type": ui_params.get("video_prompt_type", video_prompt_type),
+                "activated_loras": ui_params.get("activated_loras", []),
+                "loras_multipliers": ui_params.get("loras_multipliers", ""),
+                "state": state,
+                "model_filename": model_filename,
+            }
+            
+            # Optional parameters that may not be supported in all WGP versions
+            optional_params = {
+                "audio_guidance_scale": ui_params.get("audio_guidance_scale", 5.0),
+                "embedded_guidance_scale": ui_params.get("embedded_guidance_scale", 6.0),
+                "repeat_generation": ui_params.get("repeat_generation", 1),
+                "multi_images_gen_type": ui_params.get("multi_images_gen_type", 0),
+                "tea_cache_setting": ui_params.get("tea_cache_setting", 0.0),
+                "tea_cache_start_step_perc": ui_params.get("tea_cache_start_step_perc", 0),
+                "image_prompt_type": ui_params.get("image_prompt_type", "T"),
+                "image_start": [wgp_mod.convert_image(img) for img in ui_params.get("image_start", [])],
+                "image_end": [wgp_mod.convert_image(img) for img in ui_params.get("image_end", [])],
+                "model_mode": ui_params.get("model_mode", 0),
+                "video_source": ui_params.get("video_source"),
+                "keep_frames_video_source": ui_params.get("keep_frames_video_source", ""),
+                "keep_frames_video_guide": ui_params.get("keep_frames_video_guide", ""),
+                "audio_guide": ui_params.get("audio_guide"),
+                "sliding_window_size": ui_params.get("sliding_window_size", 81),
+                "sliding_window_overlap": ui_params.get("sliding_window_overlap", 5),
+                "sliding_window_overlap_noise": ui_params.get("sliding_window_overlap_noise", 20),
+                "sliding_window_discard_last_frames": ui_params.get("sliding_window_discard_last_frames", 0),
+                "remove_background_images_ref": ui_params.get("remove_background_images_ref", False),
+                "temporal_upsampling": ui_params.get("temporal_upsampling", ""),
+                "spatial_upsampling": ui_params.get("spatial_upsampling", ""),
+                "RIFLEx_setting": ui_params.get("RIFLEx_setting", 0),
+                "slg_switch": ui_params.get("slg_switch", 0),
+                "slg_layers": ui_params.get("slg_layers", [9]),
+                "slg_start_perc": ui_params.get("slg_start_perc", 10),
+                "slg_end_perc": ui_params.get("slg_end_perc", 90),
+                "cfg_star_switch": ui_params.get("cfg_star_switch", 0),
+                "cfg_zero_step": ui_params.get("cfg_zero_step", -1),
+                "prompt_enhancer": ui_params.get("prompt_enhancer", "")
+            }
+            
+            # Only include optional parameters that are actually supported
+            for param_name, param_value in optional_params.items():
+                if param_name in supported_params:
+                    call_params[param_name] = param_value
+                else:
+                    print(f"[WGP_GENERATION_DEBUG] Skipping unsupported parameter: {param_name}")
+            
+            print(f"[WGP_GENERATION_DEBUG] Calling generate_video with {len(call_params)} parameters")
+            wgp_mod.generate_video(**call_params)
             
             print(f"[WGP_GENERATION_DEBUG] WGP generation call completed")
             
