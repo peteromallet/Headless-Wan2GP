@@ -375,8 +375,8 @@ class HeadlessTaskQueue:
         # Convert task parameters to WanOrchestrator format
         wgp_params = self._convert_to_wgp_task(task)
         
-        # Remove model and prompt from params since they're passed separately
-        generation_params = {k: v for k, v in wgp_params.items() if k not in ["model", "prompt"]}
+        # Remove model from params since it's passed separately
+        generation_params = {k: v for k, v in wgp_params.items() if k != "model"}
         
         # Determine generation type and delegate
         try:
@@ -454,8 +454,8 @@ class HeadlessTaskQueue:
         the WanOrchestrator generate methods.
         """
         # Start with base parameters
+        # Initialize with model only; prompt will be passed separately when invoking generate_* methods
         wgp_params = {
-            "prompt": task.prompt,
             "model": task.model,
         }
         
