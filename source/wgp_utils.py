@@ -69,6 +69,7 @@ def generate_single_video(
     guidance_scale: float = 5.0,
     flow_shift: float = 3.0,
     model_filename: str = None,
+    model_name: str = None,  # ← NEW: Original model name for proper type detection
     video_guide: str = None,
     video_mask: str = None,
     image_refs: list = None,
@@ -156,7 +157,10 @@ def generate_single_video(
         from .common_utils import get_lora_dir_from_filename
         lora_dir_for_active_model = get_lora_dir_from_filename(wgp_mod, model_filename)
         # Get model type for setup_loras (it needs model_type, not model_filename)
-        model_type = wgp_mod.get_model_type(model_filename) if model_filename else "t2v"
+        # [VACE_FIX] Use original model_name for proper type detection, fallback to filename-based detection
+        effective_model_name = model_name if model_name else model_filename
+        model_type = effective_model_name if effective_model_name and not effective_model_name.endswith('.safetensors') else (wgp_mod.get_model_type(model_filename) if model_filename else "t2v")
+        print(f"[WGP_VACE_DEBUG] Model type determination: effective_model_name='{effective_model_name}' → model_type='{model_type}'")
         all_loras_for_active_model, _, _, _, _, _, _ = wgp_mod.setup_loras(
             model_type, None, lora_dir_for_active_model, "", None
         )
@@ -164,13 +168,15 @@ def generate_single_video(
         print(f"[WGP_GENERATION_DEBUG] LoRA setup complete. Available LoRAs: {len(all_loras_for_active_model) if all_loras_for_active_model else 0}")
         
         # Build state and UI params
+        # [VACE_FIX] Pass the correct model_type to ensure proper model definition lookup
         state, ui_params = build_task_state(
             wgp_mod, 
             model_filename, 
             task_params_dict, 
             all_loras_for_active_model, 
             None,  # image_download_dir
-            apply_reward_lora=apply_reward_lora
+            apply_reward_lora=apply_reward_lora,
+            model_type_override=model_type  # ← Use the corrected model type
         )
         
         print(f"[WGP_GENERATION_DEBUG] State and UI params built")

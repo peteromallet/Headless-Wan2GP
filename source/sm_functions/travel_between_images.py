@@ -1020,9 +1020,10 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
              num_inference_steps=num_inference_steps,
              guidance_scale=guidance_scale_default,
              flow_shift=flow_shift_default,
-             # Resolve the actual model .safetensors file that WGP expects – the
-             # orchestrator payload only contains the shorthand model alias
-             # (e.g. "vace_14B").
+             # [VACE_FIX] Pass both model_name (for proper model type detection) and model_filename (for file loading)
+             # The orchestrator payload contains the model alias (e.g. "vace_14B") which determines the model type,
+             # while model_filename resolves to the actual .safetensors file for loading
+             model_name=full_orchestrator_payload["model_name"],  # ← Preserve original model type 
              model_filename=wgp_mod.get_model_filename(
                  full_orchestrator_payload["model_name"],
                  wgp_mod.transformer_quantization,
