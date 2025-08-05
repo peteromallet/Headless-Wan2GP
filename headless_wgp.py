@@ -63,7 +63,7 @@ class WanOrchestrator:
         # Apply sensible defaults (mirrors typical UI defaults)
         self._apply_changes(
             self.state,
-            transformer_types_choices=["t2v"],   # default to T2V model family
+            transformer_types_choices="t2v",   # default to T2V model family
             transformer_dtype_policy_choice="auto",
             text_encoder_quantization_choice="bf16",
             VAE_precision_choice="fp32",
@@ -74,8 +74,7 @@ class WanOrchestrator:
             profile_choice="balanced",
             vae_config_choice="default",
             metadata_choice="none",
-            quantization_choice="int8",
-            preload_model_policy_choice=[]  # Empty list - don't preload models
+            quantization_choice="int8"
         )
         self.current_model = None
         print(f"✅ WanOrchestrator initialized with WGP at {wan_root}")
