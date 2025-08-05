@@ -1,0 +1,11 @@
+{
+	"model":
+	{
+		"name": "Multitalk 480p",
+		"architecture" : "multitalk",
+		"modules": ["multitalk"],
+		"description": "The Multitalk model corresponds to the original Wan image 2 video model combined with the Multitalk module. It lets you have up to two people have a conversation.",
+		"URLs": "i2v",
+		"teacache_coefficients" : [-3.02331670e+02,  2.23948934e+02, -5.25463970e+01,  5.87348440e+00, -2.01973289e-01]
+	}
+}
