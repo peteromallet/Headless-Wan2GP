@@ -849,6 +849,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # Compute video_prompt_type for wgp: Check if we're using a VACE model for proper ControlNet activation
         model_name = full_orchestrator_payload["model_name"]
         is_vace_model = wgp_mod.test_vace_module(model_name)
+        dprint(f"[VACEDetection] Seg {segment_idx}: Model '{model_name}' -> VACE detected: {is_vace_model}")
 
         if is_vace_model:
             # For travel between images, default to frame masking rather than preprocessing
@@ -861,7 +862,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     "VM" +                                           # VACE + Mask control (video guide passed through)
                     ("I" if safe_vace_image_ref_paths_for_wgp else "")  # Image refs if present
                 )
-                dprint(f"Seg {segment_idx}: Using VACE with video guide + frame masking -> video_prompt_type: '{video_prompt_type_str}'")
+                dprint(f"[VACEActivated] Seg {segment_idx}: Using VACE with video guide + frame masking -> video_prompt_type: '{video_prompt_type_str}'")
             else:
                 # Explicit preprocessing requested (P=Pose, D=Depth, L=Flow, etc.)
                 video_prompt_type_str = (
@@ -869,7 +870,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     ("M" if mask_video_path_for_wgp else "") +      # Mask if present  
                     ("I" if safe_vace_image_ref_paths_for_wgp else "")  # Image refs if present
                 )
-                dprint(f"Seg {segment_idx}: Using VACE ControlNet with preprocessing '{preprocessing_code}' -> video_prompt_type: '{video_prompt_type_str}'")
+                dprint(f"[VACEActivated] Seg {segment_idx}: Using VACE ControlNet with preprocessing '{preprocessing_code}' -> video_prompt_type: '{video_prompt_type_str}'")
         else:
             # Fallback for non-VACE models: use 'U' for unprocessed RGB to provide direct pixel-level control.
             # Add 'M' if a mask video is attached, and 'I' when reference images are supplied so that VACE models
@@ -881,7 +882,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 ("M" if mask_video_path_for_wgp else "") +
                 ("I" if safe_vace_image_ref_paths_for_wgp else "")
             )
-            dprint(f"Seg {segment_idx}: Using non-VACE model -> video_prompt_type: '{video_prompt_type_str}'")
+            dprint(f"[VACESkipped] Seg {segment_idx}: Using non-VACE model -> video_prompt_type: '{video_prompt_type_str}'")
         
         wgp_payload = {
             "task_id": wgp_inline_task_id, # ID for this specific WGP generation operation
@@ -939,6 +940,12 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         }
 
         dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Invoking WGP generation via centralized wrapper (task_id for WGP op: {wgp_inline_task_id})")
+        
+        # Log VACE control weights if using VACE
+        if is_vace_model:
+            control_weight = full_orchestrator_payload.get("control_net_weight", 1.0)
+            control_weight2 = full_orchestrator_payload.get("control_net_weight2", 1.0)
+            dprint(f"[VACEWeights] Seg {segment_idx}: control_net_weight={control_weight}, control_net_weight2={control_weight2}")
         
         # Process additional LoRAs using shared function
         processed_additional_loras = {}
