@@ -311,7 +311,7 @@ def generate_single_video(
                 "NAG_alpha": ui_params.get("NAG_alpha", 0.0),
                 "apg_switch": ui_params.get("apg_switch", 0),
                 "min_frames_if_references": ui_params.get("min_frames_if_references", 1),
-                "model_type": wgp_mod.get_model_type(model_filename) or "t2v",
+                "model_type": model_type,
                 "mode": ui_params.get("mode", "generation"),
             }
             
