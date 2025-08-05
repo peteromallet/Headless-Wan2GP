@@ -58,6 +58,8 @@ from source.sm_functions import travel_between_images as tbi
 from source.sm_functions import different_perspective as dp
 from source.sm_functions import single_image as si
 from source.sm_functions import magic_edit as me
+# --- New Queue-based Architecture Imports ---
+from headless_model_management import HeadlessTaskQueue, GenerationTask
 # --- End SM_RESTRUCTURE imports ---
 
 
@@ -72,6 +74,147 @@ def dprint(msg: str):
     if debug_mode:
         # Prefix with timestamp for easier tracing
         print(f"[DEBUG {datetime.datetime.now().isoformat()}] {msg}")
+
+# -----------------------------------------------------------------------------
+# Queue-based Task Processing Functions
+# -----------------------------------------------------------------------------
+
+def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: str) -> GenerationTask:
+    """
+    Convert a database task row to a GenerationTask object for the queue system.
+    
+    Args:
+        db_task_params: Task parameters from the database
+        task_id: Task ID from the database
+        task_type: Task type (used to determine model if not explicitly set)
+        
+    Returns:
+        GenerationTask object ready for queue processing
+        
+    Raises:
+        ValueError: If required parameters are missing or invalid
+    """
+    dprint(f"Converting DB task {task_id} to GenerationTask")
+    
+    # Extract basic parameters
+    prompt = db_task_params.get("prompt", "")
+    if not prompt:
+        raise ValueError(f"Task {task_id}: prompt is required")
+    
+    # Determine model - prefer explicit model param, otherwise infer from task_type
+    model = db_task_params.get("model")
+    if not model:
+        # Map task types to model keys
+        task_type_to_model = {
+            "generate_video": "t2v",  # Default T2V
+            "vace": "vace_14B", 
+            "flux": "flux",
+            "t2v": "t2v",
+            "i2v": "i2v_14B",
+            "hunyuan": "hunyuan",
+            "ltxv": "ltxv_13B"
+        }
+        model = task_type_to_model.get(task_type, "t2v")  # Default to T2V
+    
+    # Create clean parameters dict for generation
+    generation_params = {}
+    
+    # Core generation parameters
+    param_whitelist = {
+        "negative_prompt", "resolution", "video_length", "num_inference_steps", 
+        "guidance_scale", "seed", "embedded_guidance_scale", "flow_shift",
+        "audio_guidance_scale", "repeat_generation", "multi_images_gen_type",
+        
+        # VACE parameters
+        "video_guide", "video_mask", "video_guide2", "video_mask2", 
+        "video_prompt_type", "control_net_weight", "control_net_weight2",
+        "keep_frames_video_guide", "video_guide_outpainting", "mask_expand",
+        
+        # Image parameters
+        "image_prompt_type", "image_start", "image_end", "image_refs", 
+        "frames_positions", "image_guide", "image_mask",
+        
+        # Video source parameters  
+        "model_mode", "video_source", "keep_frames_video_source",
+        
+        # Audio parameters
+        "audio_guide", "audio_guide2", "audio_source", "audio_prompt_type", "speakers_locations",
+        
+        # LoRA parameters
+        "activated_loras", "loras_multipliers", "additional_loras", "use_causvid_lora", "use_lighti2x_lora",
+        
+        # Advanced parameters
+        "tea_cache_setting", "tea_cache_start_step_perc", "RIFLEx_setting", 
+        "slg_switch", "slg_layers", "slg_start_perc", "slg_end_perc",
+        "cfg_star_switch", "cfg_zero_step", "prompt_enhancer",
+        
+        # Sliding window parameters
+        "sliding_window_size", "sliding_window_overlap", "sliding_window_overlap_noise",
+        "sliding_window_discard_last_frames",
+        
+        # Post-processing parameters
+        "remove_background_images_ref", "temporal_upsampling", "spatial_upsampling",
+        "film_grain_intensity", "film_grain_saturation",
+        
+        # Output parameters
+        "output_dir", "custom_output_dir",
+        
+        # Special flags
+        "apply_reward_lora"
+    }
+    
+    # Copy whitelisted parameters
+    for param in param_whitelist:
+        if param in db_task_params:
+            generation_params[param] = db_task_params[param]
+    
+    # Handle LoRA parameter format conversion
+    if "activated_loras" in generation_params:
+        loras = generation_params["activated_loras"]
+        if isinstance(loras, str):
+            # Convert comma-separated string to list
+            generation_params["lora_names"] = [lora.strip() for lora in loras.split(",") if lora.strip()]
+        elif isinstance(loras, list):
+            generation_params["lora_names"] = loras
+        del generation_params["activated_loras"]  # Remove old format
+    
+    if "loras_multipliers" in generation_params:
+        multipliers = generation_params["loras_multipliers"]
+        if isinstance(multipliers, str):
+            # Convert comma-separated string to list of floats
+            generation_params["lora_multipliers"] = [float(x.strip()) for x in multipliers.split(",") if x.strip()]
+        # Keep as-is if already a list
+    
+    # Set default values for common parameters if not specified
+    defaults = {
+        "resolution": "1280x720",
+        "video_length": 49,
+        "num_inference_steps": 25,
+        "guidance_scale": 7.5,
+        "seed": -1,  # Random seed
+        "negative_prompt": "",
+    }
+    
+    for param, default_value in defaults.items():
+        if param not in generation_params:
+            generation_params[param] = default_value
+    
+    # Determine task priority (orchestrator tasks get higher priority)
+    priority = db_task_params.get("priority", 0)
+    if task_type.endswith("_orchestrator"):
+        priority = max(priority, 10)  # Boost orchestrator priority
+    
+    # Create and return GenerationTask
+    generation_task = GenerationTask(
+        id=task_id,
+        model=model,
+        prompt=prompt,
+        parameters=generation_params,
+        priority=priority
+    )
+    
+    dprint(f"Created GenerationTask for {task_id}: model={model}, priority={priority}")
+    return generation_task
 
 # -----------------------------------------------------------------------------
 # 1. Parse arguments for the server
@@ -106,6 +249,10 @@ def parse_args():
                                help="Generate and pass a mask video where frames that are re-used remain unmasked while new frames are masked (enabled by default).")
     pgroup_server.add_argument("--no-mask-active-frames", dest="mask_active_frames", action="store_false",
                                help="Disable automatic mask video generation.")
+    pgroup_server.add_argument("--use-task-queue", action="store_true", default=False,
+                               help="Use the new queue-based task processing system (EXPERIMENTAL). When enabled, generation tasks are processed through a memory-efficient queue system.")
+    pgroup_server.add_argument("--queue-workers", type=int, default=1,
+                               help="Number of queue workers for task processing (default: 1, recommended for GPU systems)")
     
     # --- New Supabase-related arguments ---
     pgroup_server.add_argument("--db-type", type=str, choices=["sqlite", "supabase"], default="sqlite",
@@ -232,7 +379,7 @@ def _ensure_lora_downloaded(task_id: str, lora_name: str, lora_url: str, target_
 # 6. Process a single task dictionary from the tasks.json list
 # -----------------------------------------------------------------------------
 
-def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True):
+def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True, task_queue: HeadlessTaskQueue = None):
     dprint(f"--- Entering process_single_task ---")
     dprint(f"Task Type: {task_type}")
     dprint(f"Project ID for task: {project_id_for_task}") # Added dprint for project_id
@@ -311,57 +458,122 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         print(f"[Task ID: {task_id}] Identified as 'rife_interpolate_images' task.")
         generation_success, output_location_to_db = handle_rife_interpolate_task(wgp_mod, task_params_dict, main_output_dir_base, task_id, dprint)
 
-    # Default handling for standard wgp tasks (original logic)
+    # Default handling for standard wgp tasks
     else:
-        task_model_type_logical = task_params_dict.get("model", "t2v")
-        model_filename_for_task = wgp_mod.get_model_filename(task_model_type_logical,
-                                                             wgp_mod.transformer_quantization,
-                                                             wgp_mod.transformer_dtype_policy)
-        custom_output_dir = task_params_dict.get("output_dir")
-        
-        if apply_reward_lora:
-            print(f"[Task ID: {task_id}] --apply-reward-lora flag is active. Checking and downloading reward LoRA.")
-            # Use shared helper (reward LoRA download never fails)
-            reward_url = "https://huggingface.co/peteromallet/Wan2.1-Fun-14B-InP-MPS_reward_lora_diffusers/resolve/main/Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors"
-            _ensure_lora_downloaded(task_id, "Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors", 
-                                  reward_url, Path(wgp_mod.get_lora_dir(model_filename_for_task)), {}, "dummy_key")
-
-        effective_image_download_dir = image_download_dir
-
-        if effective_image_download_dir is None:
-            if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
-                try:
-                    sqlite_db_path_obj = Path(db_ops.SQLITE_DB_PATH).resolve()
-                    if sqlite_db_path_obj.is_file():
-                        sqlite_db_parent_dir = sqlite_db_path_obj.parent
-                        candidate_download_dir = sqlite_db_parent_dir / "public" / "data" / "image_downloads" / task_id
-                        candidate_download_dir.mkdir(parents=True, exist_ok=True)
-                        effective_image_download_dir = str(candidate_download_dir.resolve())
-                        dprint(f"Task {task_id}: Determined SQLite-based image_download_dir for standard task: {effective_image_download_dir}")
+        # NEW QUEUE-BASED PROCESSING: Delegate to task queue if available
+        if task_queue is not None:
+            dprint(f"[Task ID: {task_id}] Using queue-based processing system")
+            
+            try:
+                # Create GenerationTask object from DB parameters
+                generation_task = db_task_to_generation_task(task_params_dict, task_id, task_type)
+                
+                # Apply global flags to task parameters
+                if apply_reward_lora:
+                    generation_task.parameters["apply_reward_lora"] = True
+                if colour_match_videos:
+                    generation_task.parameters["colour_match_videos"] = True
+                if mask_active_frames:
+                    generation_task.parameters["mask_active_frames"] = True
+                
+                # Submit task to queue
+                submitted_task_id = task_queue.submit_task(generation_task)
+                print(f"[Task ID: {task_id}] Submitted to generation queue as {submitted_task_id}")
+                
+                # Block until task completion (simple synchronous approach for now)
+                max_wait_time = 3600  # 1 hour max wait
+                wait_interval = 2  # Check every 2 seconds
+                elapsed_time = 0
+                
+                while elapsed_time < max_wait_time:
+                    status = task_queue.get_task_status(task_id)
+                    if status is None:
+                        print(f"[ERROR Task ID: {task_id}] Task status became None, assuming failure")
+                        generation_success = False
+                        output_location_to_db = "Error: Task status became None during processing"
+                        break
+                        
+                    if status.status == "completed":
+                        generation_success = True
+                        output_location_to_db = status.result_path
+                        processing_time = status.processing_time or 0
+                        print(f"[Task ID: {task_id}] Queue processing completed in {processing_time:.1f}s")
+                        print(f"[Task ID: {task_id}] Output: {output_location_to_db}")
+                        break
+                    elif status.status == "failed":
+                        generation_success = False
+                        output_location_to_db = status.error_message or "Generation failed without specific error message"
+                        print(f"[ERROR Task ID: {task_id}] Queue processing failed: {output_location_to_db}")
+                        break
                     else:
-                        dprint(f"Task {task_id}: SQLITE_DB_PATH '{db_ops.SQLITE_DB_PATH}' is not a file. Cannot determine parent for image_download_dir.")        
-                except Exception as e_idir_sqlite:
-                    dprint(f"Task {task_id}: Could not create SQLite-based image_download_dir for standard task: {e_idir_sqlite}.")
+                        # Still processing
+                        dprint(f"[Task ID: {task_id}] Queue status: {status.status}, waiting...")
+                        time.sleep(wait_interval)
+                        elapsed_time += wait_interval
+                else:
+                    # Timeout reached
+                    print(f"[ERROR Task ID: {task_id}] Queue processing timeout after {max_wait_time}s")
+                    generation_success = False
+                    output_location_to_db = f"Error: Processing timeout after {max_wait_time} seconds"
+                
+            except Exception as e_queue:
+                print(f"[ERROR Task ID: {task_id}] Queue processing error: {e_queue}")
+                traceback.print_exc()
+                generation_success = False
+                output_location_to_db = f"Error: Queue processing failed - {str(e_queue)}"
+                
+        # LEGACY PROCESSING: Original wgp.py integration (fallback when queue not available)
+        if task_queue is None:
+            dprint(f"[Task ID: {task_id}] Using legacy processing system")
+            task_model_type_logical = task_params_dict.get("model", "t2v")
+            model_filename_for_task = wgp_mod.get_model_filename(task_model_type_logical,
+                                                                 wgp_mod.transformer_quantization,
+                                                                 wgp_mod.transformer_dtype_policy)
+            custom_output_dir = task_params_dict.get("output_dir")
+            
+            if apply_reward_lora:
+                print(f"[Task ID: {task_id}] --apply-reward-lora flag is active. Checking and downloading reward LoRA.")
+                # Use shared helper (reward LoRA download never fails)
+                reward_url = "https://huggingface.co/peteromallet/Wan2.1-Fun-14B-InP-MPS_reward_lora_diffusers/resolve/main/Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors"
+                _ensure_lora_downloaded(task_id, "Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors", 
+                                      reward_url, Path(wgp_mod.get_lora_dir(model_filename_for_task)), {}, "dummy_key")
 
-        # Handle special LoRA downloads using shared helper
-        base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
-        
-        if task_params_dict.get("use_causvid_lora", False):
-            _ensure_lora_downloaded(
-                task_id, "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
-                "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
-                base_lora_dir_for_model, task_params_dict, "use_causvid_lora",
-                model_filename_for_task, ["14b", "t2v"]
-            )
+            effective_image_download_dir = image_download_dir
 
-        if task_params_dict.get("use_lighti2x_lora", False):
-            _ensure_lora_downloaded(
-                task_id, "wan_lcm_r16_fp32_comfy.safetensors",
-                "https://huggingface.co/peteromallet/ad_motion_loras/resolve/main/wan_lcm_r16_fp32_comfy.safetensors",
-                base_lora_dir_for_model, task_params_dict, "use_lighti2x_lora"
-            )
+            if effective_image_download_dir is None:
+                if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH:
+                    try:
+                        sqlite_db_path_obj = Path(db_ops.SQLITE_DB_PATH).resolve()
+                        if sqlite_db_path_obj.is_file():
+                            sqlite_db_parent_dir = sqlite_db_path_obj.parent
+                            candidate_download_dir = sqlite_db_parent_dir / "public" / "data" / "image_downloads" / task_id
+                            candidate_download_dir.mkdir(parents=True, exist_ok=True)
+                            effective_image_download_dir = str(candidate_download_dir.resolve())
+                            dprint(f"Task {task_id}: Determined SQLite-based image_download_dir for standard task: {effective_image_download_dir}")
+                        else:
+                            dprint(f"Task {task_id}: SQLITE_DB_PATH '{db_ops.SQLITE_DB_PATH}' is not a file. Cannot determine parent for image_download_dir.")        
+                    except Exception as e_idir_sqlite:
+                        dprint(f"Task {task_id}: Could not create SQLite-based image_download_dir for standard task: {e_idir_sqlite}.")
 
-        additional_loras = task_params_dict.get("additional_loras", {})
+            # Handle special LoRA downloads using shared helper
+            base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
+            
+            if task_params_dict.get("use_causvid_lora", False):
+                _ensure_lora_downloaded(
+                    task_id, "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
+                    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
+                    base_lora_dir_for_model, task_params_dict, "use_causvid_lora",
+                    model_filename_for_task, ["14b", "t2v"]
+                )
+
+            if task_params_dict.get("use_lighti2x_lora", False):
+                _ensure_lora_downloaded(
+                    task_id, "wan_lcm_r16_fp32_comfy.safetensors",
+                    "https://huggingface.co/peteromallet/ad_motion_loras/resolve/main/wan_lcm_r16_fp32_comfy.safetensors",
+                    base_lora_dir_for_model, task_params_dict, "use_lighti2x_lora"
+                )
+
+            additional_loras = task_params_dict.get("additional_loras", {})
         if additional_loras:
             dprint(f"[Task ID: {task_id}] Processing additional LoRAs: {additional_loras}")
             processed_loras = {}
@@ -1010,6 +1222,29 @@ def main():
         print(f"[WARNING] Headless: An error occurred while ensuring LoRA directories: {e_lora_dir}")
     # --- End LoRA directory check ---
 
+    # --- Initialize Task Queue System (if enabled) ---
+    task_queue = None
+    if cli_args.use_task_queue:
+        print(f"[INFO] Initializing queue-based task processing system...")
+        wan_dir = str(Path(__file__).parent / "Wan2GP")
+        if not Path(wan_dir).exists():
+            wan_dir = str(Path(__file__).parent)  # Fallback if Wan2GP is in current dir
+        
+        try:
+            task_queue = HeadlessTaskQueue(wan_dir=wan_dir, max_workers=cli_args.queue_workers)
+            task_queue.start()
+            print(f"[INFO] Task queue initialized with {cli_args.queue_workers} workers")
+            print(f"[INFO] Queue system will handle generation tasks efficiently with model reuse")
+        except Exception as e_queue_init:
+            print(f"[ERROR] Failed to initialize task queue: {e_queue_init}")
+            traceback.print_exc()
+            print("[WARNING] Falling back to legacy task processing")
+            task_queue = None
+            cli_args.use_task_queue = False
+    else:
+        print(f"[INFO] Using legacy task processing (--use-task-queue not specified)")
+    # --- End Task Queue Initialization ---
+
     try:
         # --- Add a one-time diagnostic log for task counts ---
         if db_ops.DB_TYPE == "sqlite" and debug_mode:
@@ -1113,7 +1348,8 @@ def main():
                 image_download_dir=segment_image_download_dir,
                 apply_reward_lora=cli_args.apply_reward_lora,
                 colour_match_videos=cli_args.colour_match_videos,
-                mask_active_frames=cli_args.mask_active_frames
+                mask_active_frames=cli_args.mask_active_frames,
+                task_queue=task_queue
             )
 
             if task_succeeded:
@@ -1159,6 +1395,16 @@ def main():
     except KeyboardInterrupt:
         print("\nServer shutting down gracefully...")
     finally:
+        # Shutdown task queue first (if it was initialized)
+        if task_queue is not None:
+            try:
+                print("Shutting down task queue...")
+                task_queue.stop(timeout=30.0)
+                print("Task queue shutdown complete.")
+            except Exception as e_queue_shutdown:
+                print(f"Error during task queue shutdown: {e_queue_shutdown}")
+        
+        # Legacy wgp cleanup
         if hasattr(wgp_mod, 'offloadobj') and wgp_mod.offloadobj is not None:
             try:
                 print("Attempting to release wgp.py offload object...")
