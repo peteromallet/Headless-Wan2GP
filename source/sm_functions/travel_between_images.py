@@ -355,7 +355,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
     
     return generation_success, output_message_for_orchestrator_db
 
-def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True, *, process_single_task, dprint):
+def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True, *, process_single_task, dprint, task_queue=None):
     dprint(f"_handle_travel_segment_task: Starting for {segment_task_id_str}")
     dprint(f"Segment task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
     # task_params_from_db contains what was enqueued for this specific segment,
@@ -1008,46 +1008,102 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             guidance_scale_default = full_orchestrator_payload.get("guidance_scale", 5.0)
             flow_shift_default = full_orchestrator_payload.get("flow_shift", 3.0)
 
-        # Use the centralized WGP wrapper instead of process_single_task
-        generation_success, wgp_output_path_or_msg = generate_single_video(
-             wgp_mod=wgp_mod,
-             task_id=wgp_inline_task_id,
-             prompt=prompt_for_wgp,
-             negative_prompt=negative_prompt_for_wgp,
-             resolution=f"{parsed_res_wh[0]}x{parsed_res_wh[1]}",
-             video_length=final_frames_for_wgp_generation,
-             seed=segment_params["seed_to_use"],
-             num_inference_steps=num_inference_steps,
-             guidance_scale=guidance_scale_default,
-             flow_shift=flow_shift_default,
-             # [VACE_FIX] Pass both model_name (for proper model type detection) and model_filename (for file loading)
-             # The orchestrator payload contains the model alias (e.g. "vace_14B") which determines the model type,
-             # while model_filename resolves to the actual .safetensors file for loading
-             model_name=full_orchestrator_payload["model_name"],  # ← Preserve original model type 
-             model_filename=wgp_mod.get_model_filename(
-                 full_orchestrator_payload["model_name"],
-                 wgp_mod.transformer_quantization,
-                 wgp_mod.transformer_dtype_policy,
-             ),
-             video_guide=str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
-             video_mask=str(mask_video_path_for_wgp.resolve()) if mask_video_path_for_wgp else None,
-             image_refs=safe_vace_image_ref_paths_for_wgp,
-             use_causvid_lora=full_orchestrator_payload.get("apply_causvid", False) or full_orchestrator_payload.get("use_causvid_lora", False),
-             use_lighti2x_lora=full_orchestrator_payload.get("use_lighti2x_lora", False) or segment_params.get("use_lighti2x_lora", False),
-             apply_reward_lora=effective_apply_reward_lora,
-             additional_loras=processed_additional_loras,
-             video_prompt_type=video_prompt_type_str,
-             control_net_weight=full_orchestrator_payload.get("control_net_weight", 1.0),
-             control_net_weight2=full_orchestrator_payload.get("control_net_weight2", 1.0),
-             dprint=dprint,
-             **({k: v for k, v in wgp_payload.items() if k not in [
-                 'task_id', 'prompt', 'negative_prompt', 'resolution', 'frames', 'seed',
-                 'model', 'model_filename', 'video_guide', 'video_mask', 'image_refs',
-                 'use_causvid_lora', 'apply_reward_lora', 'additional_loras', 'video_prompt_type',
-                 'use_lighti2x_lora', 'control_net_weight', 'control_net_weight2',
-                 'num_inference_steps', 'guidance_scale', 'flow_shift'
-             ]})
-         )
+        # Use the new task queue system if available, otherwise fall back to legacy wgp_utils
+        if task_queue is not None:
+            dprint(f"[WGP_DEBUG] Using new task queue system for generation")
+            from headless_model_management import GenerationTask
+            
+            # Create a GenerationTask for the queue system
+            generation_task = GenerationTask(
+                id=wgp_inline_task_id,
+                model=full_orchestrator_payload["model_name"],
+                prompt=prompt_for_wgp,
+                parameters={
+                    "negative_prompt": negative_prompt_for_wgp,
+                    "resolution": f"{parsed_res_wh[0]}x{parsed_res_wh[1]}",
+                    "video_length": final_frames_for_wgp_generation,
+                    "seed": segment_params["seed_to_use"],
+                    "num_inference_steps": num_inference_steps,
+                    "guidance_scale": guidance_scale_default,
+                    "flow_shift": flow_shift_default,
+                    "video_guide": str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
+                    "video_mask": str(mask_video_path_for_wgp.resolve()) if mask_video_path_for_wgp else None,
+                    "video_prompt_type": video_prompt_type_str,
+                    "control_net_weight": full_orchestrator_payload.get("control_net_weight", 1.0),
+                    "control_net_weight2": full_orchestrator_payload.get("control_net_weight2", 1.0),
+                    # Add any additional parameters from wgp_payload
+                    **{k: v for k, v in wgp_payload.items() if k not in [
+                        'task_id', 'prompt', 'negative_prompt', 'resolution', 'frames', 'seed',
+                        'model', 'model_filename', 'video_guide', 'video_mask', 'image_refs',
+                        'use_causvid_lora', 'apply_reward_lora', 'additional_loras', 'video_prompt_type',
+                        'use_lighti2x_lora', 'control_net_weight', 'control_net_weight2',
+                        'num_inference_steps', 'guidance_scale', 'flow_shift'
+                    ]}
+                }
+            )
+            
+            # Submit task and wait for completion
+            task_queue.submit_task(generation_task)
+            
+            # Poll for completion (blocking)
+            import time
+            while True:
+                task_status = task_queue.get_task_status(wgp_inline_task_id)
+                if task_status.status == "completed":
+                    generation_success = True
+                    wgp_output_path_or_msg = task_status.result_path
+                    dprint(f"[WGP_DEBUG] Task queue generation completed: {wgp_output_path_or_msg}")
+                    break
+                elif task_status.status == "failed":
+                    generation_success = False
+                    wgp_output_path_or_msg = f"Generation failed: {task_status.error_message}"
+                    dprint(f"[WGP_DEBUG] Task queue generation failed: {task_status.error_message}")
+                    break
+                else:
+                    dprint(f"[WGP_DEBUG] Task queue generation in progress: {task_status.status}")
+                    time.sleep(1.0)
+        else:
+            dprint(f"[WGP_DEBUG] Using legacy wgp_utils for generation")
+            # Use the centralized WGP wrapper instead of process_single_task
+            generation_success, wgp_output_path_or_msg = generate_single_video(
+                 wgp_mod=wgp_mod,
+                 task_id=wgp_inline_task_id,
+                 prompt=prompt_for_wgp,
+                 negative_prompt=negative_prompt_for_wgp,
+                 resolution=f"{parsed_res_wh[0]}x{parsed_res_wh[1]}",
+                 video_length=final_frames_for_wgp_generation,
+                 seed=segment_params["seed_to_use"],
+                 num_inference_steps=num_inference_steps,
+                 guidance_scale=guidance_scale_default,
+                 flow_shift=flow_shift_default,
+                 # [VACE_FIX] Pass both model_name (for proper model type detection) and model_filename (for file loading)
+                 # The orchestrator payload contains the model alias (e.g. "vace_14B") which determines the model type,
+                 # while model_filename resolves to the actual .safetensors file for loading
+                 model_name=full_orchestrator_payload["model_name"],  # ← Preserve original model type 
+                 model_filename=wgp_mod.get_model_filename(
+                     full_orchestrator_payload["model_name"],
+                     wgp_mod.transformer_quantization,
+                     wgp_mod.transformer_dtype_policy,
+                 ),
+                 video_guide=str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
+                 video_mask=str(mask_video_path_for_wgp.resolve()) if mask_video_path_for_wgp else None,
+                 image_refs=safe_vace_image_ref_paths_for_wgp,
+                 use_causvid_lora=full_orchestrator_payload.get("apply_causvid", False) or full_orchestrator_payload.get("use_causvid_lora", False),
+                 use_lighti2x_lora=full_orchestrator_payload.get("use_lighti2x_lora", False) or segment_params.get("use_lighti2x_lora", False),
+                 apply_reward_lora=effective_apply_reward_lora,
+                 additional_loras=processed_additional_loras,
+                 video_prompt_type=video_prompt_type_str,
+                 control_net_weight=full_orchestrator_payload.get("control_net_weight", 1.0),
+                 control_net_weight2=full_orchestrator_payload.get("control_net_weight2", 1.0),
+                 dprint=dprint,
+                 **({k: v for k, v in wgp_payload.items() if k not in [
+                     'task_id', 'prompt', 'negative_prompt', 'resolution', 'frames', 'seed',
+                     'model', 'model_filename', 'video_guide', 'video_mask', 'image_refs',
+                     'use_causvid_lora', 'apply_reward_lora', 'additional_loras', 'video_prompt_type',
+                     'use_lighti2x_lora', 'control_net_weight', 'control_net_weight2',
+                     'num_inference_steps', 'guidance_scale', 'flow_shift'
+                 ]})
+             )
 
         print(f"[WGP_DEBUG] Segment {segment_idx}: GENERATION RESULT")
         print(f"[WGP_DEBUG]   generation_success: {generation_success}")
