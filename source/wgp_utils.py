@@ -167,7 +167,7 @@ def generate_single_video(
         
         print(f"[WGP_GENERATION_DEBUG] LoRA setup complete. Available LoRAs: {len(all_loras_for_active_model) if all_loras_for_active_model else 0}")
         
-        # Build state and UI params
+        # Build state and UI params  
         # [VACE_FIX] Pass the correct model_type to ensure proper model definition lookup
         state, ui_params = build_task_state(
             wgp_mod, 
@@ -178,6 +178,12 @@ def generate_single_video(
             apply_reward_lora=apply_reward_lora,
             model_type_override=model_type  # ← Use the corrected model type
         )
+        
+        # [VACE_FIX] Store the original model type for VACE detection 
+        # while using the resolved base type for WGP configuration
+        if model_name and model_name in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
+            ui_params["original_model_type"] = model_name  # Keep for VACE detection
+            print(f"[WGP_VACE_DEBUG] Preserved original_model_type='{model_name}' for VACE detection")
         
         print(f"[WGP_GENERATION_DEBUG] State and UI params built")
         print(f"[WGP_GENERATION_DEBUG] Final ui_params video_length: {ui_params.get('video_length', 'NOT_SET')}")
@@ -311,7 +317,7 @@ def generate_single_video(
                 "NAG_alpha": ui_params.get("NAG_alpha", 0.0),
                 "apg_switch": ui_params.get("apg_switch", 0),
                 "min_frames_if_references": ui_params.get("min_frames_if_references", 1),
-                "model_type": model_type,
+                "model_type": ui_params.get("original_model_type", model_type),  # Use original for VACE detection
                 "mode": ui_params.get("mode", "generation"),
             }
             
