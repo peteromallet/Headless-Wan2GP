@@ -98,7 +98,12 @@ class WanOrchestrator:
         print(f"📋 Loaded model: {model_key} ({family})")
 
     def _create_vace_fixed_generate_video(self, original_generate_video):
-        """Create a wrapper around generate_video that applies our VACE fix."""
+        """Create a wrapper around generate_video that applies our VACE fix.
+        
+        For VACE models, we need to patch get_base_model_type to return 't2v'
+        during load_models() so the base transformer uses configs/t2v.json,
+        while still passing the VACE model name so its modules get loaded.
+        """
         def vace_fixed_generate_video(*args, **kwargs):
             # Extract model_type from kwargs
             model_type = kwargs.get('model_type')
@@ -106,31 +111,35 @@ class WanOrchestrator:
             if model_type and model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
                 print(f"[HEADLESS_WGP_VACE_DEBUG] Applying VACE fix for model: {model_type}")
                 
-                # Import wgp module to access load_models
+                # Import wgp module to access get_base_model_type
                 import wgp as wgp_mod
-                original_load_models = wgp_mod.load_models
+                original_get_base_model_type = wgp_mod.get_base_model_type
                 
-                def vace_load_models_wrapper(load_model_type):
-                    print(f"[HEADLESS_WGP_VACE_DEBUG] load_models() wrapper called with model_type='{load_model_type}'")
-                    
-                    if load_model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
-                        print(f"[HEADLESS_WGP_VACE_DEBUG] VACE model detected: '{load_model_type}' - resolving to base type")
-                        print(f"[HEADLESS_WGP_VACE_DEBUG] load_models() override: '{load_model_type}' → base_type 't2v' for config resolution")
-                        # Call original load_models with t2v for proper config resolution
-                        return original_load_models("t2v")
+                def patched_get_base_model_type(mt):
+                    """Return 't2v' for VACE models so they use the T2V config."""
+                    if mt in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
+                        print(f"[HEADLESS_WGP_VACE_DEBUG] get_base_model_type('{mt}') → 't2v' (patched)")
+                        return "t2v"
                     else:
-                        print(f"[HEADLESS_WGP_VACE_DEBUG] Non-VACE model: '{load_model_type}' - using normal behavior")
-                        return original_load_models(load_model_type)
+                        result = original_get_base_model_type(mt)
+                        print(f"[HEADLESS_WGP_VACE_DEBUG] get_base_model_type('{mt}') → '{result}' (original)")
+                        return result
                 
-                # Temporarily replace load_models function
-                wgp_mod.load_models = vace_load_models_wrapper
+                # Temporarily replace get_base_model_type function
+                wgp_mod.get_base_model_type = patched_get_base_model_type
+                print(f"[HEADLESS_WGP_VACE_DEBUG] Patched get_base_model_type to return 't2v' for VACE models")
                 
                 try:
+                    # Call original generate_video which will:
+                    # 1. Call load_models("vace_14B") 
+                    # 2. load_models will call get_base_model_type("vace_14B") → "t2v"
+                    # 3. Base transformer loads with configs/t2v.json
+                    # 4. VACE module loads from modules list in vace_14B.json
                     return original_generate_video(*args, **kwargs)
                 finally:
-                    # Restore original load_models function
-                    wgp_mod.load_models = original_load_models
-                    print(f"[HEADLESS_WGP_VACE_DEBUG] Restored original load_models function")
+                    # Restore original get_base_model_type function
+                    wgp_mod.get_base_model_type = original_get_base_model_type
+                    print(f"[HEADLESS_WGP_VACE_DEBUG] Restored original get_base_model_type function")
             else:
                 # Non-VACE model, call directly
                 return original_generate_video(*args, **kwargs)
