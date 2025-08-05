@@ -527,9 +527,14 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         if task_queue is None:
             dprint(f"[Task ID: {task_id}] Using legacy processing system")
             task_model_type_logical = task_params_dict.get("model", "t2v")
+            print(f"[DEBUG] Task {task_id}: task_model_type_logical = {task_model_type_logical}")
+            print(f"[DEBUG] Task {task_id}: transformer_quantization = {wgp_mod.transformer_quantization}")
+            print(f"[DEBUG] Task {task_id}: transformer_dtype_policy = {wgp_mod.transformer_dtype_policy}")
+            
             model_filename_for_task = wgp_mod.get_model_filename(task_model_type_logical,
                                                                  wgp_mod.transformer_quantization,
                                                                  wgp_mod.transformer_dtype_policy)
+            print(f"[DEBUG] Task {task_id}: model_filename_for_task = '{model_filename_for_task}'")
             custom_output_dir = task_params_dict.get("output_dir")
             
             if apply_reward_lora:
@@ -644,7 +649,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
 
         lora_dir_for_active_model = get_lora_dir_from_filename(wgp_mod, model_filename_for_task)
         # setup_loras needs model_type, not model_filename
-        model_type_for_task = wgp_mod.get_model_type(model_filename_for_task) if model_filename_for_task else "wan_t2v_14B"
+        model_type_for_task = wgp_mod.get_model_type(model_filename_for_task) if model_filename_for_task else "t2v"
         all_loras_for_active_model, _, _, _, _, _, _ = wgp_mod.setup_loras(
             model_type_for_task, None, lora_dir_for_active_model, "", None
         )
