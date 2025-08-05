@@ -1171,8 +1171,17 @@ def main():
     sys.argv = ["Wan2GP/wgp.py"]  # Prevent wgp.py from parsing headless.py CLI args
     patch_gradio()
 
-    # Import wgp from the Wan2GP sub-package
-    from Wan2GP import wgp as wgp_mod
+    # Change to WGP directory so it can find its defaults/*.json files
+    original_cwd = os.getcwd()
+    os.chdir("Wan2GP")
+    
+    try:
+        # Import wgp from the current directory (now Wan2GP)
+        import wgp as wgp_mod
+        print(f"[DEBUG] WGP imported successfully. Found {len(wgp_mod.models_def)} model definitions.")
+    finally:
+        # Restore original working directory
+        os.chdir(original_cwd)
 
     # Apply wgp.py global config overrides
     if cli_args.wgp_attention_mode is not None: wgp_mod.attention_mode = cli_args.wgp_attention_mode
