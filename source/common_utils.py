@@ -1847,7 +1847,12 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         "loras": all_loras_for_model,
     }
     model_type_key = wgp_mod.get_model_type(model_filename)
-    ui_defaults = wgp_mod.get_default_settings(model_filename).copy()
+    if not model_type_key:
+        print(f"[ERROR] Could not determine model type from filename: {model_filename}")
+        model_type_key = "t2v"  # Fallback to known good model type
+    
+    print(f"[DEBUG] build_task_state: model_filename='{model_filename}' → model_type='{model_type_key}'")
+    ui_defaults = wgp_mod.get_default_settings(model_type_key).copy()
 
     # Override with task_params from JSON, but preserve some crucial ones if CausVid is used
     causvid_active = task_params_dict.get("use_causvid_lora", False)
