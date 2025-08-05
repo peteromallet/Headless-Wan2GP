@@ -164,9 +164,23 @@ def generate_single_video(
         print(f"[WGP_GENERATION_DEBUG] LoRA setup complete. Available LoRAs: {len(all_loras_for_active_model) if all_loras_for_active_model else 0}")
         
         # Build state and UI params
+        # If model_filename is empty, generate it from model_type for build_task_state
+        effective_model_filename = model_filename
+        if not effective_model_filename:
+            try:
+                effective_model_filename = wgp_mod.get_model_filename(
+                    model_type, 
+                    wgp_mod.transformer_quantization if hasattr(wgp_mod, 'transformer_quantization') else "int8",
+                    wgp_mod.transformer_dtype_policy if hasattr(wgp_mod, 'transformer_dtype_policy') else ""
+                )
+                print(f"[WGP_GENERATION_DEBUG] Generated model_filename: {effective_model_filename}")
+            except Exception as e:
+                print(f"[WGP_GENERATION_DEBUG] Warning: Could not generate model_filename: {e}")
+                effective_model_filename = model_type  # Fallback to model_type
+        
         state, ui_params = build_task_state(
             wgp_mod, 
-            model_filename, 
+            effective_model_filename, 
             task_params_dict, 
             all_loras_for_active_model, 
             None,  # image_download_dir
