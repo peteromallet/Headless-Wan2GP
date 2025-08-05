@@ -250,6 +250,43 @@ def generate_single_video(
                 "loras_multipliers": ui_params.get("loras_multipliers", ""),
                 "state": state,
                 "model_filename": model_filename,
+                
+                # Required parameters that were missing - adding defaults
+                "image_mode": ui_params.get("image_mode", 0),
+                "batch_size": ui_params.get("batch_size", 1),
+                "force_fps": ui_params.get("force_fps", 0),
+                "guidance2_scale": ui_params.get("guidance2_scale", 1.0),
+                "switch_threshold": ui_params.get("switch_threshold", 0.5),
+                "sample_solver": ui_params.get("sample_solver", "euler"),
+                "multi_prompts_gen_type": ui_params.get("multi_prompts_gen_type", 0),
+                "skip_steps_cache_type": ui_params.get("skip_steps_cache_type", 0),
+                "skip_steps_multiplier": ui_params.get("skip_steps_multiplier", 1.0),
+                "skip_steps_start_step_perc": ui_params.get("skip_steps_start_step_perc", 0),
+                "frames_positions": ui_params.get("frames_positions", []),
+                "image_guide": ui_params.get("image_guide"),
+                "denoising_strength": ui_params.get("denoising_strength", 1.0),
+                "video_guide_outpainting": ui_params.get("video_guide_outpainting", ""),
+                "image_mask": ui_params.get("image_mask"),
+                "control_net_weight": ui_params.get("control_net_weight", 1.0),
+                "control_net_weight2": ui_params.get("control_net_weight2", 1.0),
+                "mask_expand": ui_params.get("mask_expand", 0),
+                "audio_guide2": ui_params.get("audio_guide2"),
+                "audio_source": ui_params.get("audio_source", ""),
+                "audio_prompt_type": ui_params.get("audio_prompt_type", "T"),
+                "speakers_locations": ui_params.get("speakers_locations", []),
+                "sliding_window_color_correction_strength": ui_params.get("sliding_window_color_correction_strength", 0.0),
+                "film_grain_intensity": ui_params.get("film_grain_intensity", 0.0),
+                "film_grain_saturation": ui_params.get("film_grain_saturation", 1.0),
+                "MMAudio_setting": ui_params.get("MMAudio_setting", 0),
+                "MMAudio_prompt": ui_params.get("MMAudio_prompt", ""),
+                "MMAudio_neg_prompt": ui_params.get("MMAudio_neg_prompt", ""),
+                "NAG_scale": ui_params.get("NAG_scale", 1.0),
+                "NAG_tau": ui_params.get("NAG_tau", 1.0),
+                "NAG_alpha": ui_params.get("NAG_alpha", 0.0),
+                "apg_switch": ui_params.get("apg_switch", 0),
+                "min_frames_if_references": ui_params.get("min_frames_if_references", 1),
+                "model_type": wgp_mod.get_model_type(model_filename) or "t2v",
+                "mode": ui_params.get("mode", 0),
             }
             
             # Optional parameters that may not be supported in all WGP versions
@@ -293,6 +330,7 @@ def generate_single_video(
                     print(f"[WGP_GENERATION_DEBUG] Skipping unsupported parameter: {param_name}")
             
             print(f"[WGP_GENERATION_DEBUG] Calling generate_video with {len(call_params)} parameters")
+            print(f"[WGP_GENERATION_DEBUG] Required parameters added: model_type={call_params.get('model_type')}, batch_size={call_params.get('batch_size')}, sample_solver={call_params.get('sample_solver')}")
             wgp_mod.generate_video(**call_params)
             
             print(f"[WGP_GENERATION_DEBUG] WGP generation call completed")
