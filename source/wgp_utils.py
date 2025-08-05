@@ -259,7 +259,7 @@ def generate_single_video(
                 "switch_threshold": ui_params.get("switch_threshold", 0.5),
                 "sample_solver": ui_params.get("sample_solver", "euler"),
                 "multi_prompts_gen_type": ui_params.get("multi_prompts_gen_type", 0),
-                "skip_steps_cache_type": ui_params.get("skip_steps_cache_type", 0),
+                "skip_steps_cache_type": ui_params.get("skip_steps_cache_type", ""),
                 "skip_steps_multiplier": ui_params.get("skip_steps_multiplier", 1.0),
                 "skip_steps_start_step_perc": ui_params.get("skip_steps_start_step_perc", 0),
                 "frames_positions": ui_params.get("frames_positions", []),
