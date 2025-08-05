@@ -90,13 +90,15 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
             except Exception as e_refs:
                 dprint(f"Single image task {task_id}: Warning - failed to load reference images: {e_refs}")
         
-        # Determine model filename for LoRA handling
-        dprint(f"Single image task {task_id}: model_name='{model_name}'")
+        # Convert logical model name to actual model type using WGP's model_signatures
+        actual_model_type = getattr(wgp_mod, 'model_signatures', {}).get(model_name, model_name)
+        dprint(f"Single image task {task_id}: model_name='{model_name}' → actual_model_type='{actual_model_type}'")
         dprint(f"Single image task {task_id}: transformer_quantization='{wgp_mod.transformer_quantization}'")
         dprint(f"Single image task {task_id}: transformer_dtype_policy='{wgp_mod.transformer_dtype_policy}'")
         
+        # Determine model filename for LoRA handling
         model_filename_for_task = wgp_mod.get_model_filename(
-            model_name,
+            actual_model_type,
             wgp_mod.transformer_quantization,
             wgp_mod.transformer_dtype_policy
         )

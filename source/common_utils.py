@@ -69,7 +69,9 @@ def get_lora_dir_from_filename(wgp_mod, model_filename: str) -> str:
         
     if not model_type:
         print(f"[WARNING] Could not determine model type from: {model_filename}")
-        model_type = "t2v"  # Default fallback - valid WGP model type
+        # Convert logical name to actual model type using WGP's model_signatures
+        logical_fallback = "t2v"
+        model_type = getattr(wgp_mod, 'model_signatures', {}).get(logical_fallback, logical_fallback)
         
     print(f"[DEBUG] LoRA directory lookup: {model_filename} → {model_type}")
     return wgp_mod.get_lora_dir(model_type)
