@@ -156,7 +156,7 @@ def generate_single_video(
         from .common_utils import get_lora_dir_from_filename
         lora_dir_for_active_model = get_lora_dir_from_filename(wgp_mod, model_filename)
         # Get model type for setup_loras (it needs model_type, not model_filename)
-        model_type = wgp_mod.get_model_type(model_filename) if model_filename else "wan_t2v_14B"
+        model_type = wgp_mod.get_model_type(model_filename) if model_filename else "t2v"
         all_loras_for_active_model, _, _, _, _, _, _ = wgp_mod.setup_loras(
             model_type, None, lora_dir_for_active_model, "", None
         )
