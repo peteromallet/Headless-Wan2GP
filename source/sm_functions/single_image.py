@@ -91,11 +91,16 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
                 dprint(f"Single image task {task_id}: Warning - failed to load reference images: {e_refs}")
         
         # Determine model filename for LoRA handling
+        dprint(f"Single image task {task_id}: model_name='{model_name}'")
+        dprint(f"Single image task {task_id}: transformer_quantization='{wgp_mod.transformer_quantization}'")
+        dprint(f"Single image task {task_id}: transformer_dtype_policy='{wgp_mod.transformer_dtype_policy}'")
+        
         model_filename_for_task = wgp_mod.get_model_filename(
             model_name,
             wgp_mod.transformer_quantization,
             wgp_mod.transformer_dtype_policy
         )
+        dprint(f"Single image task {task_id}: model_filename_for_task='{model_filename_for_task}'")
         
         # Handle additional LoRAs using shared function
         processed_additional_loras = {}
