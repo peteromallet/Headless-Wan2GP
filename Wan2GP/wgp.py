@@ -4316,7 +4316,17 @@ def generate_video(
     t2v = base_model_type in ["t2v"]
     recam = base_model_type in ["recam_1.3B"]
     ltxv = "ltxv" in model_filename
-    vace =  test_vace_module(base_model_type) 
+    print(f"[WGP_VACE_DEBUG] === Model Type Detection ===")
+    print(f"[WGP_VACE_DEBUG] model_filename: '{model_filename}'")
+    print(f"[WGP_VACE_DEBUG] model_type: '{model_type}'")
+    print(f"[WGP_VACE_DEBUG] base_model_type: '{base_model_type}'")
+    print(f"[WGP_VACE_DEBUG] Calling get_base_model_type('{model_type}')...")
+    computed_base_model_type = get_base_model_type(model_type)
+    print(f"[WGP_VACE_DEBUG] get_base_model_type returned: '{computed_base_model_type}'")
+    print(f"[WGP_VACE_DEBUG] Calling test_vace_module('{base_model_type}')...")
+    vace =  test_vace_module(base_model_type)
+    print(f"[WGP_VACE_DEBUG] test_vace_module returned: {vace} (type: {type(vace)})")
+    print(f"[WGP_VACE_DEBUG] VACE models supported: ['vace_14B', 'vace_1.3B', 'vace_multitalk_14B']")
     phantom = "phantom" in model_filename
     hunyuan_t2v = "hunyuan_video_720" in model_filename
     hunyuan_i2v = "hunyuan_video_i2v" in model_filename
@@ -4665,6 +4675,14 @@ def generate_video(
                     if pre_video_guide != None:
                         src_video = torch.cat( [pre_video_guide, src_video], dim=1) 
 
+            # Debug: Check vace variable state before VACE processing
+            print(f"[WGP_VACE_DEBUG] === VACE Variable Check ===")
+            print(f"[WGP_VACE_DEBUG] vace variable value: {vace}")
+            print(f"[WGP_VACE_DEBUG] vace variable type: {type(vace)}")
+            print(f"[WGP_VACE_DEBUG] bool(vace): {bool(vace)}")
+            print(f"[WGP_VACE_DEBUG] video_prompt_type: '{video_prompt_type}'")
+            print(f"[WGP_VACE_DEBUG] model_type: '{model_type}'")
+            
             if vace :
                 print(f"[WGP_VACE_DEBUG] === VACE Processing Activated ===")
                 print(f"[WGP_VACE_DEBUG] video_prompt_type received: '{video_prompt_type}'")
