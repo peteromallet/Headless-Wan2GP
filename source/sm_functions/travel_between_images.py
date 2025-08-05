@@ -568,6 +568,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # -------------------------------------------------------------
         #   Generate mask video for active/inactive frames if enabled
         # -------------------------------------------------------------
+        # --- Generate Mask Video for Active Frame Control ---
+        # This mask video controls which frames VACE should actively generate vs. reuse
         mask_video_path_for_wgp: Path | None = None  # default
         if mask_active_frames:
             try:
@@ -624,13 +626,26 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     dprint=dprint
                 )
                 
-                if created_mask_vid:
+                if created_mask_vid and created_mask_vid.exists():
                     mask_video_path_for_wgp = created_mask_vid
-                    dprint(f"Seg {segment_idx}: mask video generated at {mask_video_path_for_wgp}")
+                    # Verify mask video properties match guide video
+                    try:
+                        from ..common_utils import get_video_frame_count_and_fps
+                        mask_frames, mask_fps = get_video_frame_count_and_fps(str(mask_video_path_for_wgp))
+                        dprint(f"Seg {segment_idx}: Mask video generated - {mask_frames} frames @ {mask_fps}fps -> {mask_video_path_for_wgp}")
+                        
+                        # Warn if frame count mismatch
+                        if mask_frames != total_frames_for_segment:
+                            dprint(f"[WARNING] Seg {segment_idx}: Mask frame count ({mask_frames}) != target ({total_frames_for_segment})")
+                    except Exception as e_verify:
+                        dprint(f"[WARNING] Seg {segment_idx}: Could not verify mask video properties: {e_verify}")
                 else:
-                    dprint(f"[WARNING] Seg {segment_idx}: Failed to generate mask video.")
+                    dprint(f"[ERROR] Seg {segment_idx}: Mask video generation failed or file does not exist.")
+                    # Continue without mask - VACE can still work with just video guide
+                    mask_video_path_for_wgp = None
             except Exception as e_mask_gen2:
-                dprint(f"[WARNING] Seg {segment_idx}: Mask video generation error: {e_mask_gen2}")
+                dprint(f"[ERROR] Seg {segment_idx}: Mask video generation error: {e_mask_gen2}")
+                mask_video_path_for_wgp = None
 
         try: # Parsing fade params
             fade_in_p = json.loads(fade_in_duration_str)
@@ -856,21 +871,28 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             # This lets VACE focus on the key frames while masking unused intermediate frames
             preprocessing_code = full_orchestrator_payload.get("vace_preprocessing", "M")  # Default to Mask-only
             
-            if preprocessing_code == "M":
-                # Pure masking mode - use VACE with video guide and mask control
-                video_prompt_type_str = (
-                    "VM" +                                           # VACE + Mask control (video guide passed through)
-                    ("I" if safe_vace_image_ref_paths_for_wgp else "")  # Image refs if present
-                )
-                dprint(f"[VACEActivated] Seg {segment_idx}: Using VACE with video guide + frame masking -> video_prompt_type: '{video_prompt_type_str}'")
-            else:
+            # Build video_prompt_type based on available inputs and requested preprocessing
+            vpt_components = ["V"]  # Always start with V for VACE
+            
+            if preprocessing_code != "M":
                 # Explicit preprocessing requested (P=Pose, D=Depth, L=Flow, etc.)
-                video_prompt_type_str = (
-                    f"V{preprocessing_code}" +                       # VACE + Preprocessing (VP, VD, VL, etc.)
-                    ("M" if mask_video_path_for_wgp else "") +      # Mask if present  
-                    ("I" if safe_vace_image_ref_paths_for_wgp else "")  # Image refs if present
-                )
-                dprint(f"[VACEActivated] Seg {segment_idx}: Using VACE ControlNet with preprocessing '{preprocessing_code}' -> video_prompt_type: '{video_prompt_type_str}'")
+                vpt_components.append(preprocessing_code)
+                dprint(f"[VACEActivated] Seg {segment_idx}: Using VACE ControlNet with preprocessing '{preprocessing_code}'")
+            else:
+                dprint(f"[VACEActivated] Seg {segment_idx}: Using VACE with raw video guide (no preprocessing)")
+            
+            # Add mask component if mask video exists
+            if mask_video_path_for_wgp:
+                vpt_components.append("M")
+                dprint(f"[VACEActivated] Seg {segment_idx}: Adding mask control - mask video: {mask_video_path_for_wgp}")
+            
+            # Add image refs component if present
+            if safe_vace_image_ref_paths_for_wgp:
+                vpt_components.append("I")
+                dprint(f"[VACEActivated] Seg {segment_idx}: Adding image references: {len(safe_vace_image_ref_paths_for_wgp)} images")
+            
+            video_prompt_type_str = "".join(vpt_components)
+            dprint(f"[VACEActivated] Seg {segment_idx}: Final video_prompt_type: '{video_prompt_type_str}'")
         else:
             # Fallback for non-VACE models: use 'U' for unprocessed RGB to provide direct pixel-level control.
             # Add 'M' if a mask video is attached, and 'I' when reference images are supplied so that VACE models

@@ -9,6 +9,7 @@
 - **✅ Storage Integration**: Full Supabase storage upload/download functionality
 - **✅ Test Coverage**: Comprehensive test suite with 95.5% success rate (21/22 tests passing)
 - **✅ VACE ControlNet Integration**: Proper VACE ControlNet activation with preprocessing support
+- **✅ VACE Processing Optimization**: Enhanced travel_between_images.py with intelligent frame masking and component-based video_prompt_type construction
 
 ### 🧹 **Repository Cleanup & Organization**
 - **Organized tests:** Moved comprehensive test suite to `tests/` directory
