@@ -393,32 +393,57 @@ def generate_single_video(
             if vace_model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
                 print(f"[WGP_VACE_DEBUG] Applying surgical fix for VACE config resolution")
                 
+                # Log current model definition details
+                try:
+                    vace_def = wgp_mod.get_model_recursive_prop(vace_model_type, return_list=False)
+                    print(f"[WGP_VACE_DEBUG] Current VACE model definition: {vace_def}")
+                    
+                    # Check what modules are defined for this VACE model
+                    modules = wgp_mod.get_model_recursive_prop(vace_model_type, "modules", return_list=True) 
+                    print(f"[WGP_VACE_DEBUG] VACE model modules: {modules}")
+                    
+                    # Check the architecture
+                    architecture = wgp_mod.get_model_recursive_prop(vace_model_type, "architecture", return_list=False)
+                    print(f"[WGP_VACE_DEBUG] VACE model architecture: {architecture}")
+                    
+                except Exception as e:
+                    print(f"[WGP_VACE_DEBUG] Could not retrieve VACE model definition: {e}")
+                
                 def vace_load_models_wrapper(model_type):
                     print(f"[WGP_VACE_DEBUG] load_models() wrapper called with model_type='{model_type}'")
                     
                     # For VACE models, resolve to base type for load_models() only
-                    if model_type.startswith("vace_") or model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
+                    if model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
                         print(f"[WGP_VACE_DEBUG] VACE model detected: '{model_type}' - resolving to base type")
                         try:
-                            # Try to get the URLs field which should contain the base type
-                            try:
-                                base_urls = wgp_mod.get_model_recursive_prop(model_type, "URLs", return_list=False)
-                                print(f"[WGP_VACE_DEBUG] Retrieved URLs property: '{base_urls}' (type: {type(base_urls)})")
-                                
-                                if isinstance(base_urls, str) and not base_urls.startswith("http"):
-                                    # URLs field contains a base model type reference (e.g., "t2v", "t2v_2_2")
-                                    base_type = base_urls
-                                else:
-                                    # URLs field contains actual URLs or is a list, fall back to t2v
-                                    base_type = "t2v"
-                                    print(f"[WGP_VACE_DEBUG] URLs field not a base type reference, using fallback: t2v")
-                            except Exception as e:
-                                print(f"[WGP_VACE_DEBUG] Could not retrieve URLs property: {e}")
-                                base_type = "t2v"  # Fallback to standard T2V
+                            # VACE models should use t2v as base for config resolution
+                            # This is the correct base type regardless of which VACE variant is loaded
+                            print(f"[WGP_VACE_DEBUG] load_models() override: '{model_type}' → base_type 't2v' for config resolution")
                             
-                            print(f"[WGP_VACE_DEBUG] load_models() override: '{model_type}' → base_type '{base_type}' for config resolution")
-                            # Call original load_models with correct base type for proper config resolution
-                            return original_load_models(base_type)
+                            # Log what we're about to call
+                            print(f"[WGP_VACE_DEBUG] About to call original_load_models('t2v')")
+                            print(f"[WGP_VACE_DEBUG] Original model_type was: '{model_type}'")
+                            
+                            # Call original load_models with t2v for proper config resolution
+                            result = original_load_models("t2v")
+                            
+                            # Log what we got back
+                            print(f"[WGP_VACE_DEBUG] original_load_models('t2v') returned: {type(result)}")
+                            if hasattr(result, '__len__') and len(result) == 2:
+                                print(f"[WGP_VACE_DEBUG] Result appears to be (model, pipeline) tuple")
+                                print(f"[WGP_VACE_DEBUG] Model type: {type(result[0])}")
+                                print(f"[WGP_VACE_DEBUG] Pipeline type: {type(result[1])}")
+                                if hasattr(result[0], 'model') and hasattr(result[0].model, '__class__'):
+                                    print(f"[WGP_VACE_DEBUG] Inner model class: {result[0].model.__class__.__name__}")
+                                    # Check if VACE components exist
+                                    vace_attrs = ['vace_patch_embedding', 'vace_controlnet', 'vace_model']
+                                    for attr in vace_attrs:
+                                        has_attr = hasattr(result[0].model, attr)
+                                        print(f"[WGP_VACE_DEBUG] Model has {attr}: {has_attr}")
+                            
+                            print(f"[WGP_VACE_DEBUG] Returning result from t2v load_models")
+                            return result
+                            
                         except Exception as e:
                             print(f"[WARNING] VACE base type resolution failed: {e}")
                             import traceback
