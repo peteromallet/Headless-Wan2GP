@@ -454,8 +454,8 @@ class HeadlessTaskQueue:
         the WanOrchestrator generate methods.
         """
         # Start with base parameters
-        # Initialize with model only; prompt will be passed separately when invoking generate_* methods
         wgp_params = {
+            "prompt": task.prompt,
             "model": task.model,
         }
         

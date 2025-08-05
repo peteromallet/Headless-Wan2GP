@@ -1215,14 +1215,6 @@ def main():
     if cli_args.wgp_mixed_precision is not None: wgp_mod.server_config["mixed_precision"] = cli_args.wgp_mixed_precision
     if cli_args.wgp_preload_policy is not None:
         wgp_mod.server_config["preload_model_policy"] = [flag.strip() for flag in cli_args.wgp_preload_policy.split(',')]
-    else:
-        # Ensure preload_model_policy is always a list, never None or int
-        if "preload_model_policy" not in wgp_mod.server_config or not isinstance(wgp_mod.server_config["preload_model_policy"], list):
-            wgp_mod.server_config["preload_model_policy"] = []
-    
-    # Ensure transformer_types is always a list to prevent character iteration
-    if "transformer_types" not in wgp_mod.server_config or not isinstance(wgp_mod.server_config["transformer_types"], list):
-        wgp_mod.server_config["transformer_types"] = []
 
     # --- Ensure common support models from wgp.py are downloaded early --- 
     try:
