@@ -153,9 +153,16 @@ def generate_single_video(
         print(f"[WGP_GENERATION_DEBUG] Built task_params_dict with {len(task_params_dict)} parameters")
         
         # Get LoRA directory and setup
-        lora_dir_for_active_model = wgp_mod.get_lora_dir(model_filename)
+        # Convert model filename to model type for LoRA directory lookup
+        model_type = wgp_mod.get_model_type(model_filename) if model_filename else None
+        if not model_type:
+            print(f"[WGP_GENERATION_DEBUG] Warning: Could not determine model type from filename: {model_filename}")
+            model_type = "wan_t2v_14B"  # Default fallback
+        
+        print(f"[WGP_GENERATION_DEBUG] Model type: {model_type}")
+        lora_dir_for_active_model = wgp_mod.get_lora_dir(model_type)
         all_loras_for_active_model, _, _, _, _, _, _ = wgp_mod.setup_loras(
-            model_filename, None, lora_dir_for_active_model, "", None
+            model_type, None, lora_dir_for_active_model, "", None
         )
         
         print(f"[WGP_GENERATION_DEBUG] LoRA setup complete. Available LoRAs: {len(all_loras_for_active_model) if all_loras_for_active_model else 0}")
