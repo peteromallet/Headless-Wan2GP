@@ -90,17 +90,23 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
             except Exception as e_refs:
                 dprint(f"Single image task {task_id}: Warning - failed to load reference images: {e_refs}")
         
-        # Convert logical model name to actual model type using WGP's model_signatures
-        actual_model_type = getattr(wgp_mod, 'model_signatures', {}).get(model_name, model_name)
-        dprint(f"Single image task {task_id}: model_name='{model_name}' → actual_model_type='{actual_model_type}'")
+        # Use model_name directly - it should match JSON files in defaults/ directory
+        actual_model_type = model_name
+        dprint(f"Single image task {task_id}: using model_type='{actual_model_type}'")
         dprint(f"Single image task {task_id}: transformer_quantization='{wgp_mod.transformer_quantization}'")
-        dprint(f"Single image task {task_id}: transformer_dtype_policy='{wgp_mod.transformer_dtype_policy}'")
+        # Fix empty transformer_dtype_policy which causes get_model_filename to fail
+        dtype_policy = wgp_mod.transformer_dtype_policy
+        if not dtype_policy:
+            dtype_policy = "auto"  # Use default value
+            dprint(f"Single image task {task_id}: transformer_dtype_policy was empty, using default: '{dtype_policy}'")
+        else:
+            dprint(f"Single image task {task_id}: transformer_dtype_policy='{dtype_policy}'")
         
         # Determine model filename for LoRA handling
         model_filename_for_task = wgp_mod.get_model_filename(
             actual_model_type,
             wgp_mod.transformer_quantization,
-            wgp_mod.transformer_dtype_policy
+            dtype_policy
         )
         dprint(f"Single image task {task_id}: model_filename_for_task='{model_filename_for_task}'")
         
