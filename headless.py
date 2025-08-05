@@ -250,8 +250,8 @@ def parse_args():
                                help="Generate and pass a mask video where frames that are re-used remain unmasked while new frames are masked (enabled by default).")
     pgroup_server.add_argument("--no-mask-active-frames", dest="mask_active_frames", action="store_false",
                                help="Disable automatic mask video generation.")
-    pgroup_server.add_argument("--use-task-queue", action="store_true", default=False,
-                               help="Use the new queue-based task processing system (EXPERIMENTAL). When enabled, generation tasks are processed through a memory-efficient queue system.")
+    pgroup_server.add_argument("--use-legacy", action="store_true", default=False,
+                               help="Use legacy task processing (DEPRECATED). By default, the new queue-based task processing system is used.")
     pgroup_server.add_argument("--queue-workers", type=int, default=1,
                                help="Number of queue workers for task processing (default: 1, recommended for GPU systems)")
     
@@ -1257,10 +1257,10 @@ def main():
         print(f"[WARNING] Headless: An error occurred while ensuring LoRA directories: {e_lora_dir}")
     # --- End LoRA directory check ---
 
-    # --- Initialize Task Queue System (if enabled) ---
+    # --- Initialize Task Queue System (default) ---
     task_queue = None
-    if cli_args.use_task_queue:
-        print(f"[INFO] Initializing queue-based task processing system...")
+    if not cli_args.use_legacy:
+        print(f"[INFO] Initializing queue-based task processing system (default)...")
         wan_dir = str(Path(__file__).parent / "Wan2GP")
         if not Path(wan_dir).exists():
             wan_dir = str(Path(__file__).parent)  # Fallback if Wan2GP is in current dir
@@ -1275,9 +1275,9 @@ def main():
             traceback.print_exc()
             print("[WARNING] Falling back to legacy task processing")
             task_queue = None
-            cli_args.use_task_queue = False
+            cli_args.use_legacy = True
     else:
-        print(f"[INFO] Using legacy task processing (--use-task-queue not specified)")
+        print(f"[INFO] Using legacy task processing (--use-legacy specified - DEPRECATED)")
     # --- End Task Queue Initialization ---
 
     try:
