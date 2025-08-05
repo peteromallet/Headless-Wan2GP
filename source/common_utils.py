@@ -45,6 +45,35 @@ def dprint(msg: str):
 
 # --- Helper Functions ---
 
+def get_lora_dir_from_filename(wgp_mod, model_filename: str) -> str:
+    """
+    Centralized helper to get LoRA directory from model filename.
+    Properly converts model_filename to model_type before calling get_lora_dir.
+    
+    Args:
+        wgp_mod: WGP module instance
+        model_filename: Model filename or model type
+        
+    Returns:
+        LoRA directory path
+        
+    Raises:
+        Exception: If model type cannot be determined
+    """
+    # If it's already a model type (not a filename), use directly
+    if model_filename and not model_filename.endswith('.safetensors'):
+        model_type = model_filename
+    else:
+        # Convert filename to model type
+        model_type = wgp_mod.get_model_type(model_filename) if model_filename else None
+        
+    if not model_type:
+        print(f"[WARNING] Could not determine model type from: {model_filename}")
+        model_type = "wan_t2v_14B"  # Default fallback
+        
+    print(f"[DEBUG] LoRA directory lookup: {model_filename} → {model_type}")
+    return wgp_mod.get_lora_dir(model_type)
+
 def snap_resolution_to_model_grid(parsed_res: tuple[int, int]) -> tuple[int, int]:
     """
     Snaps resolution to model grid requirements (multiples of 16).
@@ -116,7 +145,7 @@ def process_additional_loras_shared(
     
     try:
         import urllib.parse
-        base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
+        base_lora_dir_for_model = Path(get_lora_dir_from_filename(wgp_mod, model_filename_for_task))
         base_lora_dir_for_model.mkdir(parents=True, exist_ok=True)
         wan2gp_lora_root = Path("Wan2GP/loras")
         wan2gp_lora_root.mkdir(parents=True, exist_ok=True)
