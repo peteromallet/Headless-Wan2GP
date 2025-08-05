@@ -74,7 +74,8 @@ class WanOrchestrator:
             profile_choice="balanced",
             vae_config_choice="default",
             metadata_choice="none",
-            quantization_choice="int8"
+            quantization_choice="int8",
+            preload_model_policy_choice=[]  # Empty list - don't preload models
         )
         self.current_model = None
         print(f"✅ WanOrchestrator initialized with WGP at {wan_root}")
