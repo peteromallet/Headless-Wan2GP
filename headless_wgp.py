@@ -323,114 +323,222 @@ class WanOrchestrator:
                 
                 try:
                     result = self._generate_video(
-                task=task,
-                send_cmd=send_cmd,
-                state=self.state,
-                
-                # Core parameters
-                model_type=self.current_model,
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                resolution=resolution,
-                video_length=actual_video_length,
-                batch_size=actual_batch_size,
-                seed=seed,
-                force_fps=24,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=actual_guidance,
-                guidance2_scale=actual_guidance,
-                switch_threshold=0.5,
-                embedded_guidance_scale=embedded_guidance_scale if is_flux else 0.0,
-                image_mode=image_mode,
-                
-                # VACE control parameters
-                video_guide=video_guide,
-                video_mask=video_mask,
-                video_guide2=video_guide2,  # NEW: Secondary guide
-                video_mask2=video_mask2,    # NEW: Secondary mask
-                video_prompt_type=video_prompt_type,
-                control_net_weight=control_net_weight,
-                control_net_weight2=control_net_weight2,
-                denoising_strength=1.0,
-                
-                # LoRA parameters
-                activated_loras=activated_loras,
-                loras_multipliers=loras_multipliers_list,
-                
-                # Standard defaults for other parameters
-                audio_guidance_scale=1.0,
-                flow_shift=7.0,
-                sample_solver="euler",
-                repeat_generation=1,
-                multi_prompts_gen_type="sequential",
-                multi_images_gen_type="sequential",
-                skip_steps_cache_type="none",
-                skip_steps_multiplier=1.0,
-                skip_steps_start_step_perc=0.0,
-                
-                # Image parameters
-                image_prompt_type="disabled",
-                image_start=None,
-                image_end=None,
-                image_refs=[],
-                frames_positions=[],
-                image_guide=None,
-                image_mask=None,
-                
-                # Video parameters
-                model_mode="generate",
-                video_source=None,
-                keep_frames_video_source="",
-                keep_frames_video_guide="",
-                video_guide_outpainting=[0,0,0,0],
-                mask_expand=0,
-                
-                # Audio parameters (disabled)
-                audio_guide=None,
-                audio_guide2=None,
-                audio_source=None,
-                audio_prompt_type="disabled",
-                speakers_locations="",
-                
-                # Sliding window (auto-computed)
-                sliding_window_size=0,
-                sliding_window_overlap=0,
-                sliding_window_color_correction_strength=0.0,
-                sliding_window_overlap_noise=0.1,
-                sliding_window_discard_last_frames=0,
-                
-                # Post-processing (disabled)
-                remove_background_images_ref=0,
-                temporal_upsampling=1.0,
-                spatial_upsampling=1.0,
-                film_grain_intensity=0.0,
-                film_grain_saturation=0.0,
-                MMAudio_setting="disabled",
-                MMAudio_prompt="",
-                MMAudio_neg_prompt="",
-                
-                # Advanced parameters (defaults)
-                RIFLEx_setting=0,
-                NAG_scale=0.0,
-                NAG_tau=1.0,
-                NAG_alpha=0.0,
-                slg_switch=0,
-                slg_layers="",
-                slg_start_perc=0.0,
-                slg_end_perc=100.0,
-                apg_switch=0,
-                cfg_star_switch=0,
-                cfg_zero_step=0,
-                prompt_enhancer=0,
-                min_frames_if_references=9,
-                
-                # Mode and filename
-                mode="generate",
-                model_filename="",
-                
-                # Additional kwargs
-                **kwargs
-            )
+                        task=task,
+                        send_cmd=send_cmd,
+                        state=self.state,
+                        
+                        # Core parameters
+                        model_type=self.current_model,
+                        prompt=prompt,
+                        negative_prompt=negative_prompt,
+                        resolution=resolution,
+                        video_length=actual_video_length,
+                        batch_size=actual_batch_size,
+                        seed=seed,
+                        force_fps=24,
+                        num_inference_steps=num_inference_steps,
+                        guidance_scale=actual_guidance,
+                        guidance2_scale=actual_guidance,
+                        switch_threshold=0.5,
+                        embedded_guidance_scale=embedded_guidance_scale if is_flux else 0.0,
+                        image_mode=image_mode,
+                        
+                        # VACE control parameters
+                        video_guide=video_guide,
+                        video_mask=video_mask,
+                        video_guide2=video_guide2,  # NEW: Secondary guide
+                        video_mask2=video_mask2,    # NEW: Secondary mask
+                        video_prompt_type=video_prompt_type,
+                        control_net_weight=control_net_weight,
+                        control_net_weight2=control_net_weight2,
+                        denoising_strength=1.0,
+                        
+                        # LoRA parameters
+                        activated_loras=activated_loras,
+                        loras_multipliers=loras_multipliers_list,
+                        
+                        # Standard defaults for other parameters
+                        audio_guidance_scale=1.0,
+                        flow_shift=7.0,
+                        sample_solver="euler",
+                        repeat_generation=1,
+                        multi_prompts_gen_type="sequential",
+                        multi_images_gen_type="sequential",
+                        skip_steps_cache_type="none",
+                        skip_steps_multiplier=1.0,
+                        skip_steps_start_step_perc=0.0,
+                        
+                        # Image parameters
+                        image_prompt_type="disabled",
+                        image_start=None,
+                        image_end=None,
+                        image_refs=[],
+                        frames_positions=[],
+                        image_guide=None,
+                        image_mask=None,
+                        
+                        # Video parameters
+                        model_mode="generate",
+                        video_source=None,
+                        keep_frames_video_source="",
+                        keep_frames_video_guide="",
+                        video_guide_outpainting=[0,0,0,0],
+                        mask_expand=0,
+                        
+                        # Audio parameters (disabled)
+                        audio_guide=None,
+                        audio_guide2=None,
+                        audio_source=None,
+                        audio_prompt_type="disabled",
+                        speakers_locations="",
+                        
+                        # Sliding window (auto-computed)
+                        sliding_window_size=0,
+                        sliding_window_overlap=0,
+                        sliding_window_color_correction_strength=0.0,
+                        sliding_window_overlap_noise=0.1,
+                        sliding_window_discard_last_frames=0,
+                        
+                        # Post-processing (disabled)
+                        remove_background_images_ref=0,
+                        temporal_upsampling=1.0,
+                        spatial_upsampling=1.0,
+                        film_grain_intensity=0.0,
+                        film_grain_saturation=0.0,
+                        MMAudio_setting="disabled",
+                        MMAudio_prompt="",
+                        MMAudio_neg_prompt="",
+                        
+                        # Advanced parameters (defaults)
+                        RIFLEx_setting=0,
+                        NAG_scale=0.0,
+                        NAG_tau=1.0,
+                        NAG_alpha=0.0,
+                        slg_switch=0,
+                        slg_layers="",
+                        slg_start_perc=0.0,
+                        slg_end_perc=100.0,
+                        apg_switch=0,
+                        cfg_star_switch=0,
+                        cfg_zero_step=0,
+                        prompt_enhancer=0,
+                        min_frames_if_references=9,
+                        
+                        # Mode and filename
+                        mode="generate",
+                        model_filename="",
+                        
+                        # Additional kwargs
+                        **kwargs
+                    )
+                finally:
+                    # Restore original load_models function
+                    wgp_mod.load_models = original_load_models
+                    print(f"[HEADLESS_WGP_VACE_DEBUG] Restored original load_models function")
+            else:
+                # Non-VACE model, call directly
+                result = self._generate_video(
+                    task=task,
+                    send_cmd=send_cmd,
+                    state=self.state,
+                    
+                    # Core parameters
+                    model_type=self.current_model,
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    resolution=resolution,
+                    video_length=actual_video_length,
+                    batch_size=actual_batch_size,
+                    seed=seed,
+                    force_fps=24,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=actual_guidance,
+                    guidance2_scale=guidance_scale2,
+                    switch_threshold=0.5,
+                    audio_guidance_scale=3.0,
+                    flow_shift=flow_shift,
+                    sample_solver=sample_solver,
+                    embedded_guidance_scale=embedded_guidance_scale,
+                    repeat_generation=1,
+                    
+                    # Multi-generation settings
+                    multi_prompts_gen_type="batch",
+                    multi_images_gen_type="batch",
+                    skip_steps_cache_type="disabled",
+                    skip_steps_multiplier=1.0,
+                    skip_steps_start_step_perc=0.0,
+                    
+                    # LoRA settings
+                    activated_loras=activated_loras,
+                    loras_multipliers=lora_multipliers,
+                    
+                    # Image/Video inputs
+                    image_prompt_type=image_prompt_type,
+                    image_start=image_start,
+                    image_end=image_end,
+                    model_mode=model_mode,
+                    video_source=video_source,
+                    keep_frames_video_source="",
+                    video_prompt_type=video_prompt_type,
+                    image_refs=image_refs,
+                    frames_positions="",
+                    video_guide=video_guide,
+                    image_guide="",
+                    keep_frames_video_guide="",
+                    denoising_strength=denoising_strength,
+                    video_guide_outpainting="0,0,0,0",
+                    video_mask=video_mask,
+                    image_mask="",
+                    control_net_weight=control_net_weight,
+                    control_net_weight2=control_net_weight2,
+                    mask_expand=0,
+                    
+                    # Audio settings
+                    audio_guide="",
+                    audio_guide2="",
+                    audio_source="",
+                    audio_prompt_type="",
+                    speakers_locations="",
+                    
+                    # Sliding window (disabled)
+                    sliding_window_size=0,
+                    sliding_window_overlap=0,
+                    sliding_window_color_correction_strength=0.0,
+                    sliding_window_overlap_noise=0.0,
+                    sliding_window_discard_last_frames=0,
+                    
+                    # Post-processing (disabled)
+                    remove_background_images_ref=0,
+                    temporal_upsampling=1.0,
+                    spatial_upsampling=1.0,
+                    film_grain_intensity=0.0,
+                    film_grain_saturation=0.0,
+                    MMAudio_setting="disabled",
+                    MMAudio_prompt="",
+                    MMAudio_neg_prompt="",
+                    
+                    # Advanced parameters (defaults)
+                    RIFLEx_setting=0,
+                    NAG_scale=0.0,
+                    NAG_tau=1.0,
+                    NAG_alpha=0.0,
+                    slg_switch=0,
+                    slg_layers="",
+                    slg_start_perc=0.0,
+                    slg_end_perc=100.0,
+                    apg_switch=0,
+                    cfg_star_switch=0,
+                    cfg_zero_step=0,
+                    prompt_enhancer=0,
+                    min_frames_if_references=9,
+                    
+                    # Mode and filename
+                    mode="generate",
+                    model_filename="",
+                    
+                    # Additional kwargs
+                    **kwargs
+                )
             
             print(f"✅ {model_type_desc} generation completed")
             print(f"💾 Output saved to: {result}")
