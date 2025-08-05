@@ -720,6 +720,8 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                 video_guide=ui_params.get("video_guide", None),
                 keep_frames_video_guide=ui_params.get("keep_frames_video_guide", ""),
                 video_mask=ui_params.get("video_mask", None),
+                control_net_weight=ui_params.get("control_net_weight", 1.0),
+                control_net_weight2=ui_params.get("control_net_weight2", 1.0),
                 audio_guide=ui_params.get("audio_guide", None),
                 sliding_window_size=ui_params.get("sliding_window_size", 81),
                 sliding_window_overlap=ui_params.get("sliding_window_overlap", 5),
