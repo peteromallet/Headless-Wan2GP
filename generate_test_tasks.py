@@ -101,8 +101,8 @@ def make_orchestrator_payload(*, run_id: str,
         "frame_overlap_expanded": [FRAME_OVERLAP_DEFAULT] * num_segments,
         "fps_helpers": FPS,
         "vace_image_refs_to_prepare_by_headless": vace_image_refs,  # None instead of empty list
-        # VACE ControlNet configuration
-        "vace_preprocessing": "P",  # P=Pose, D=Depth, L=Flow, etc.
+        # VACE ControlNet configuration  
+        "vace_preprocessing": "M",  # M=Mask-only (default), P=Pose, D=Depth, L=Flow, etc.
         "control_net_weight": 1.0,  # Strength of primary control
         "control_net_weight2": 1.0,  # Strength of secondary control (for dual encoding)
         "fade_in_params_json_str": json.dumps({
