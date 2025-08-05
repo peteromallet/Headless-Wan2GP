@@ -397,14 +397,28 @@ def generate_single_video(
                     print(f"[WGP_VACE_DEBUG] load_models() wrapper called with model_type='{model_type}'")
                     
                     # For VACE models, resolve to base type for load_models() only
-                    if model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
+                    if model_type.startswith("vace_") or model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
                         print(f"[WGP_VACE_DEBUG] VACE model detected: '{model_type}' - resolving to base type")
                         try:
-                            # VACE models should use t2v as base for config resolution
-                            # This is the correct base type regardless of which VACE variant is loaded
-                            print(f"[WGP_VACE_DEBUG] load_models() override: '{model_type}' → base_type 't2v' for config resolution")
-                            # Call original load_models with t2v for proper config resolution
-                            return original_load_models("t2v")
+                            # Try to get the URLs field which should contain the base type
+                            try:
+                                base_urls = wgp_mod.get_model_recursive_prop(model_type, "URLs", return_list=False)
+                                print(f"[WGP_VACE_DEBUG] Retrieved URLs property: '{base_urls}' (type: {type(base_urls)})")
+                                
+                                if isinstance(base_urls, str) and not base_urls.startswith("http"):
+                                    # URLs field contains a base model type reference (e.g., "t2v", "t2v_2_2")
+                                    base_type = base_urls
+                                else:
+                                    # URLs field contains actual URLs or is a list, fall back to t2v
+                                    base_type = "t2v"
+                                    print(f"[WGP_VACE_DEBUG] URLs field not a base type reference, using fallback: t2v")
+                            except Exception as e:
+                                print(f"[WGP_VACE_DEBUG] Could not retrieve URLs property: {e}")
+                                base_type = "t2v"  # Fallback to standard T2V
+                            
+                            print(f"[WGP_VACE_DEBUG] load_models() override: '{model_type}' → base_type '{base_type}' for config resolution")
+                            # Call original load_models with correct base type for proper config resolution
+                            return original_load_models(base_type)
                         except Exception as e:
                             print(f"[WARNING] VACE base type resolution failed: {e}")
                             import traceback
