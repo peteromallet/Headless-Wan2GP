@@ -47,10 +47,11 @@
 
 ### **VACE ControlNet Integration**
 - **Automatic Detection**: Travel system now detects VACE models and activates ControlNet processing
-- **Preprocessing Support**: Configurable preprocessing types (Pose, Depth, Flow, etc.)
-- **Video Prompt Types**: Proper `VP`, `VD`, `VL` generation instead of basic `UM`
+- **Frame Masking Default**: Uses `UM` (Unprocessed + Mask) for direct frame control in travel sequences
+- **Optional Preprocessing**: Configurable preprocessing types (P=Pose, D=Depth, L=Flow) when needed
+- **Smart Mode Selection**: Defaults to frame masking for travel, switches to preprocessing on demand
 - **Control Weights**: Support for `control_net_weight` and `control_net_weight2` parameters
-- **Enhanced Quality**: Structural awareness for much better motion transitions
+- **Enhanced Quality**: Frame-level control for smooth travel between images
 
 # Project Structure
 

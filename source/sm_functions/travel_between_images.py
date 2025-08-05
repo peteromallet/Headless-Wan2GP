@@ -851,14 +851,25 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         is_vace_model = wgp_mod.test_vace_module(model_name)
 
         if is_vace_model:
-            # Use VACE ControlNet preprocessing - extract structural info from guide video
-            preprocessing_code = full_orchestrator_payload.get("vace_preprocessing", "P")  # Default to Pose
-            video_prompt_type_str = (
-                f"V{preprocessing_code}" +                           # VACE + Preprocessing (VP, VD, VL, etc.)
-                ("M" if mask_video_path_for_wgp else "") +          # Mask if present  
-                ("I" if safe_vace_image_ref_paths_for_wgp else "")  # Image refs if present
-            )
-            dprint(f"Seg {segment_idx}: Using VACE ControlNet with preprocessing '{preprocessing_code}' -> video_prompt_type: '{video_prompt_type_str}'")
+            # For travel between images, default to frame masking rather than preprocessing
+            # This lets VACE focus on the key frames while masking unused intermediate frames
+            preprocessing_code = full_orchestrator_payload.get("vace_preprocessing", "M")  # Default to Mask-only
+            
+            if preprocessing_code == "M":
+                # Pure masking mode - use frame data directly with mask control
+                video_prompt_type_str = (
+                    "UM" +                                           # Unprocessed frames + Mask control
+                    ("I" if safe_vace_image_ref_paths_for_wgp else "")  # Image refs if present
+                )
+                dprint(f"Seg {segment_idx}: Using VACE with frame masking -> video_prompt_type: '{video_prompt_type_str}'")
+            else:
+                # Explicit preprocessing requested (P=Pose, D=Depth, L=Flow, etc.)
+                video_prompt_type_str = (
+                    f"V{preprocessing_code}" +                       # VACE + Preprocessing (VP, VD, VL, etc.)
+                    ("M" if mask_video_path_for_wgp else "") +      # Mask if present  
+                    ("I" if safe_vace_image_ref_paths_for_wgp else "")  # Image refs if present
+                )
+                dprint(f"Seg {segment_idx}: Using VACE ControlNet with preprocessing '{preprocessing_code}' -> video_prompt_type: '{video_prompt_type_str}'")
         else:
             # Fallback for non-VACE models: use 'U' for unprocessed RGB to provide direct pixel-level control.
             # Add 'M' if a mask video is attached, and 'I' when reference images are supplied so that VACE models
