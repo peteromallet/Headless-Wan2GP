@@ -254,7 +254,7 @@ def generate_single_video(
                 # Required parameters that were missing - adding defaults
                 "image_mode": ui_params.get("image_mode", 0),
                 "batch_size": ui_params.get("batch_size", 1),
-                "force_fps": ui_params.get("force_fps", 0),
+                "force_fps": ui_params.get("force_fps", ""),
                 "guidance2_scale": ui_params.get("guidance2_scale", 1.0),
                 "switch_threshold": ui_params.get("switch_threshold", 0.5),
                 "sample_solver": ui_params.get("sample_solver", "euler"),
