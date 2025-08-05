@@ -52,7 +52,8 @@ from source.common_utils import (
     load_pil_images as sm_load_pil_images,
     build_task_state,
     prepare_output_path_with_upload,
-    upload_and_get_final_output_location
+    upload_and_get_final_output_location,
+    get_lora_dir_from_filename
 )
 from source.sm_functions import travel_between_images as tbi
 from source.sm_functions import different_perspective as dp
@@ -536,7 +537,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                 # Use shared helper (reward LoRA download never fails)
                 reward_url = "https://huggingface.co/peteromallet/Wan2.1-Fun-14B-InP-MPS_reward_lora_diffusers/resolve/main/Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors"
                 _ensure_lora_downloaded(task_id, "Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors", 
-                                      reward_url, Path(wgp_mod.get_lora_dir(model_filename_for_task)), {}, "dummy_key")
+                                      reward_url, Path(get_lora_dir_from_filename(wgp_mod, model_filename_for_task)), {}, "dummy_key")
 
             effective_image_download_dir = image_download_dir
 
@@ -556,7 +557,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                         dprint(f"Task {task_id}: Could not create SQLite-based image_download_dir for standard task: {e_idir_sqlite}.")
 
             # Handle special LoRA downloads using shared helper
-            base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
+            base_lora_dir_for_model = Path(get_lora_dir_from_filename(wgp_mod, model_filename_for_task))
             
             if task_params_dict.get("use_causvid_lora", False):
                 _ensure_lora_downloaded(
@@ -641,9 +642,11 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         original_wgp_save_path = wgp_mod.save_path
         wgp_mod.save_path = str(temp_output_dir)
 
-        lora_dir_for_active_model = wgp_mod.get_lora_dir(model_filename_for_task)
+        lora_dir_for_active_model = get_lora_dir_from_filename(wgp_mod, model_filename_for_task)
+        # setup_loras needs model_type, not model_filename
+        model_type_for_task = wgp_mod.get_model_type(model_filename_for_task) if model_filename_for_task else "wan_t2v_14B"
         all_loras_for_active_model, _, _, _, _, _, _ = wgp_mod.setup_loras(
-            model_filename_for_task, None, lora_dir_for_active_model, "", None
+            model_type_for_task, None, lora_dir_for_active_model, "", None
         )
 
         state, ui_params = build_task_state(wgp_mod, model_filename_for_task, task_params_dict, all_loras_for_active_model, image_download_dir, apply_reward_lora=apply_reward_lora)
@@ -957,7 +960,7 @@ def main():
     env_db_type = os.getenv("DB_TYPE", "sqlite").lower()
     env_pg_table_name = os.getenv("POSTGRES_TABLE_NAME", "tasks")
     env_supabase_url = os.getenv("SUPABASE_URL")
-    env_supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
+    env_supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SERVICE_KEY")  # Support both names
     env_supabase_anon_key = os.getenv("SUPABASE_ANON_KEY")
     env_supabase_bucket = os.getenv("SUPABASE_VIDEO_BUCKET", "image_uploads")
     env_sqlite_db_path = os.getenv("SQLITE_DB_PATH_ENV") # Read SQLite DB path from .env
