@@ -846,16 +846,31 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         
         dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Effective prompt for WGP: '{prompt_for_wgp}'")
 
-        # Compute video_prompt_type for wgp: use 'U' for unprocessed RGB to provide direct pixel-level control.
-        # Add 'M' if a mask video is attached, and 'I' when reference images are supplied so that VACE models
-        # properly process the `image_refs` list.  Passing image refs without the 'I'
-        # flag causes Wan2GP to attempt to pre-process the paths as PIL images and
-        # raises AttributeError ('str' object has no attribute size').
-        video_prompt_type_str = (
-            "U" +
-            ("M" if mask_video_path_for_wgp else "") +
-            ("I" if safe_vace_image_ref_paths_for_wgp else "")
-        )
+        # Compute video_prompt_type for wgp: Check if we're using a VACE model for proper ControlNet activation
+        model_name = full_orchestrator_payload["model_name"]
+        is_vace_model = wgp_mod.test_vace_module(model_name)
+
+        if is_vace_model:
+            # Use VACE ControlNet preprocessing - extract structural info from guide video
+            preprocessing_code = full_orchestrator_payload.get("vace_preprocessing", "P")  # Default to Pose
+            video_prompt_type_str = (
+                f"V{preprocessing_code}" +                           # VACE + Preprocessing (VP, VD, VL, etc.)
+                ("M" if mask_video_path_for_wgp else "") +          # Mask if present  
+                ("I" if safe_vace_image_ref_paths_for_wgp else "")  # Image refs if present
+            )
+            dprint(f"Seg {segment_idx}: Using VACE ControlNet with preprocessing '{preprocessing_code}' -> video_prompt_type: '{video_prompt_type_str}'")
+        else:
+            # Fallback for non-VACE models: use 'U' for unprocessed RGB to provide direct pixel-level control.
+            # Add 'M' if a mask video is attached, and 'I' when reference images are supplied so that VACE models
+            # properly process the `image_refs` list.  Passing image refs without the 'I'
+            # flag causes Wan2GP to attempt to pre-process the paths as PIL images and
+            # raises AttributeError ('str' object has no attribute size').
+            video_prompt_type_str = (
+                "U" +
+                ("M" if mask_video_path_for_wgp else "") +
+                ("I" if safe_vace_image_ref_paths_for_wgp else "")
+            )
+            dprint(f"Seg {segment_idx}: Using non-VACE model -> video_prompt_type: '{video_prompt_type_str}'")
         
         wgp_payload = {
             "task_id": wgp_inline_task_id, # ID for this specific WGP generation operation
@@ -981,12 +996,14 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
              apply_reward_lora=effective_apply_reward_lora,
              additional_loras=processed_additional_loras,
              video_prompt_type=video_prompt_type_str,
+             control_net_weight=full_orchestrator_payload.get("control_net_weight", 1.0),
+             control_net_weight2=full_orchestrator_payload.get("control_net_weight2", 1.0),
              dprint=dprint,
              **({k: v for k, v in wgp_payload.items() if k not in [
                  'task_id', 'prompt', 'negative_prompt', 'resolution', 'frames', 'seed',
                  'model', 'model_filename', 'video_guide', 'video_mask', 'image_refs',
                  'use_causvid_lora', 'apply_reward_lora', 'additional_loras', 'video_prompt_type',
-                 'use_lighti2x_lora',
+                 'use_lighti2x_lora', 'control_net_weight', 'control_net_weight2',
                  'num_inference_steps', 'guidance_scale', 'flow_shift'
              ]})
          )

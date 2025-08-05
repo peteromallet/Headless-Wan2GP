@@ -8,6 +8,7 @@
 - **✅ Worker Management**: Auto-creation system for worker IDs with proper constraint handling
 - **✅ Storage Integration**: Full Supabase storage upload/download functionality
 - **✅ Test Coverage**: Comprehensive test suite with 95.5% success rate (21/22 tests passing)
+- **✅ VACE ControlNet Integration**: Proper VACE ControlNet activation with preprocessing support
 
 ### 🧹 **Repository Cleanup & Organization**
 - **Organized tests:** Moved comprehensive test suite to `tests/` directory
@@ -43,6 +44,13 @@
 - Backfill existing workers from tasks
 - Specific worker ID support: `gpu-20250723_221138-afa8403b`
 - Constraint validation and foreign key management
+
+### **VACE ControlNet Integration**
+- **Automatic Detection**: Travel system now detects VACE models and activates ControlNet processing
+- **Preprocessing Support**: Configurable preprocessing types (Pose, Depth, Flow, etc.)
+- **Video Prompt Types**: Proper `VP`, `VD`, `VL` generation instead of basic `UM`
+- **Control Weights**: Support for `control_net_weight` and `control_net_weight2` parameters
+- **Enhanced Quality**: Structural awareness for much better motion transitions
 
 # Project Structure
 
