@@ -567,7 +567,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
             if task_params_dict.get("use_causvid_lora", False):
                 _ensure_lora_downloaded(
                     task_id, "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
-                    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
+                    "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
                     base_lora_dir_for_model, task_params_dict, "use_causvid_lora",
                     model_filename_for_task, ["14b", "t2v"]
                 )
