@@ -25,7 +25,7 @@ try:
         sys.path.insert(0, str(project_root))
 
     # Now that root is in path, we can import from Wan2GP and source
-    from Wan2GP.rife.inference import temporal_interpolation
+    from Wan2GP.postprocessing.rife.inference import temporal_interpolation
     from source.common_utils import (
         dprint, get_video_frame_count_and_fps,
         download_image_if_url, sm_get_unique_target_path, 

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import matplotlib
-matplotlib.use('TkAgg') 
+matplotlib.use('Agg')  # Use non-GUI backend for headless environments 
 import matplotlib.pyplot as plt
 from flask import Flask, request, jsonify, render_template
 import os
