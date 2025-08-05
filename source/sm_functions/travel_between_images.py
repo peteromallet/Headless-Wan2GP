@@ -839,8 +839,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # properly process the `image_refs` list.  Passing image refs without the 'I'
         # flag causes Wan2GP to attempt to pre-process the paths as PIL images and
         # raises AttributeError ('str' object has no attribute size').
+        # Include 'U' for unprocessed RGB to provide stronger pixel-level control.
         video_prompt_type_str = (
-            "V" +
+            "VU" +
             ("M" if mask_video_path_for_wgp else "") +
             ("I" if safe_vace_image_ref_paths_for_wgp else "")
         )
