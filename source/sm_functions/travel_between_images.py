@@ -707,6 +707,12 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             # Guide video path will be handled by sm_create_guide_video_for_travel_segment using centralized logic
             guide_video_target_dir = segment_processing_dir
             dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Guide video will be created in {guide_video_target_dir}")
+            
+            # [CONTENT_DEBUG] Log what images are being used for unrelated output debugging
+            dprint(f"[CONTENT_DEBUG] Seg {segment_idx}: Input content being used:")
+            dprint(f"[CONTENT_DEBUG]   Input images resolved: {input_images_resolved_original}")
+            dprint(f"[CONTENT_DEBUG]   Current segment idx: {segment_idx}")
+            dprint(f"[CONTENT_DEBUG]   End anchor idx will be: {segment_idx + 1}")
 
             # The download is now handled inside sm_create_guide_video_for_travel_segment (via sm_image_to_frame)
             # Just pass the original paths.
@@ -833,6 +839,12 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         negative_prompt_for_wgp = ensure_valid_negative_prompt(segment_params.get("negative_prompt", " "))
         
         dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Effective prompt for WGP: '{prompt_for_wgp}'")
+        
+        # [GUIDE_CONTENT_DEBUG] Log guide and mask video paths for content verification
+        dprint(f"[GUIDE_CONTENT_DEBUG] Seg {segment_idx}: Video guide path: {guide_video_path_for_wgp}")
+        dprint(f"[GUIDE_CONTENT_DEBUG] Seg {segment_idx}: Video mask path: {mask_video_path_for_wgp}")
+        dprint(f"[GUIDE_CONTENT_DEBUG] Seg {segment_idx}: Video prompt type: {video_prompt_type_str}")
+        dprint(f"[GUIDE_CONTENT_DEBUG] Seg {segment_idx}: Empty prompt may cause generic generation - consider adding descriptive prompt")
 
         # Compute video_prompt_type for wgp: use 'U' for unprocessed RGB to provide direct pixel-level control.
         # Add 'M' if a mask video is attached, and 'I' when reference images are supplied so that VACE models
