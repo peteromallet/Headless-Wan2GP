@@ -48,11 +48,17 @@
 
 ### **VACE ControlNet Integration**
 - **Automatic Detection**: Travel system now detects VACE models and activates ControlNet processing
-- **Video + Mask Default**: Uses `VM` (VACE + Video guide + Mask) for guided frame control in travel sequences
-- **Optional Preprocessing**: Configurable preprocessing types (P=Pose, D=Depth, L=Flow) when needed
-- **Smart Mode Selection**: Defaults to video guide + masking for travel, switches to preprocessing on demand
-- **Control Weights**: Support for `control_net_weight` and `control_net_weight2` parameters
-- **Enhanced Quality**: VACE-guided frame control with video guide and selective masking
+- **Component-Based Construction**: Dynamic video_prompt_type building (V + preprocessing + M + I components)
+- **Intelligent Frame Masking**: VM (Video + Mask) for selective frame generation in travel segments
+- **Enhanced Error Handling**: Graceful fallback when mask creation fails
+- **Comprehensive Logging**: Detailed debug output for VACE component tracking
+
+### **Documentation**
+- **`VACE_Documentation.md`**: Complete technical documentation for VACE (Video Auto-Completion Enhancement) system
+  - Processing pipeline explanation (video input → preprocessing → tensor conversion → generation)
+  - All preprocessing types: Pose (P), Depth (D), Flow (L), Scribble (S), Gray (C), Inpaint (M), Identity (U)
+  - Travel-specific optimization patterns and frame masking strategies
+  - Usage examples and performance considerations
 
 # Project Structure
 
