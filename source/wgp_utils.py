@@ -326,6 +326,8 @@ def generate_single_video(
             for param_name, param_value in optional_params.items():
                 if param_name in supported_params:
                     call_params[param_name] = param_value
+                    if param_name == "image_start":
+                        print(f"[WGP_GENERATION_DEBUG] image_start type: {type(param_value)}, value: {param_value}")
                 else:
                     print(f"[WGP_GENERATION_DEBUG] Skipping unsupported parameter: {param_name}")
             
