@@ -1173,12 +1173,28 @@ def main():
 
     # Change to WGP directory so it can find its defaults/*.json files
     original_cwd = os.getcwd()
-    os.chdir("Wan2GP")
+    wgp_dir = os.path.join(original_cwd, "Wan2GP")
+    print(f"[DEBUG] Changing to WGP directory: {wgp_dir}")
+    os.chdir(wgp_dir)
     
     try:
+        # Check if defaults directory exists and has JSON files
+        defaults_dir = "defaults"
+        if os.path.exists(defaults_dir):
+            json_files = [f for f in os.listdir(defaults_dir) if f.endswith('.json')]
+            print(f"[DEBUG] Found {len(json_files)} JSON files in {defaults_dir}/")
+        else:
+            print(f"[DEBUG] WARNING: {defaults_dir}/ directory not found!")
+        
         # Import wgp from the current directory (now Wan2GP)
         import wgp as wgp_mod
         print(f"[DEBUG] WGP imported successfully. Found {len(wgp_mod.models_def)} model definitions.")
+        
+        # Debug: Show what model types are available
+        if wgp_mod.models_def:
+            model_types = list(wgp_mod.models_def.keys())[:5]  # Show first 5
+            print(f"[DEBUG] Available model types: {model_types}...")
+        
     finally:
         # Restore original working directory
         os.chdir(original_cwd)
