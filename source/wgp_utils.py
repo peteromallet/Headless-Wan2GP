@@ -222,6 +222,26 @@ def generate_single_video(
             print(f"[WGP_GENERATION_DEBUG]   resolution: {ui_params.get('resolution')}")
             print(f"[WGP_GENERATION_DEBUG]   seed: {ui_params.get('seed')}")
             print(f"[WGP_GENERATION_DEBUG]   num_inference_steps: {ui_params.get('num_inference_steps')}")
+            print(f"[WGP_VACE_DEBUG] === VACE-Specific Parameters ===")
+            print(f"[WGP_VACE_DEBUG]   video_prompt_type: '{ui_params.get('video_prompt_type')}'")
+            print(f"[WGP_VACE_DEBUG]   video_guide: {ui_params.get('video_guide')}")
+            print(f"[WGP_VACE_DEBUG]   video_mask: {ui_params.get('video_mask')}")
+            print(f"[WGP_VACE_DEBUG]   control_net_weight: {ui_params.get('control_net_weight', 1.0)}")
+            print(f"[WGP_VACE_DEBUG]   control_net_weight2: {ui_params.get('control_net_weight2', 1.0)}")
+            print(f"[WGP_VACE_DEBUG]   denoising_strength: {ui_params.get('denoising_strength', 1.0)}")
+            print(f"[WGP_VACE_DEBUG]   image_refs: {ui_params.get('image_refs')}")
+            if ui_params.get('video_guide'):
+                import os
+                vg_path = ui_params.get('video_guide')
+                print(f"[WGP_VACE_DEBUG]   video_guide exists: {os.path.exists(vg_path) if vg_path else 'None'}")
+                if vg_path and os.path.exists(vg_path):
+                    print(f"[WGP_VACE_DEBUG]   video_guide size: {os.path.getsize(vg_path)} bytes")
+            if ui_params.get('video_mask'):
+                import os
+                vm_path = ui_params.get('video_mask')
+                print(f"[WGP_VACE_DEBUG]   video_mask exists: {os.path.exists(vm_path) if vm_path else 'None'}")
+                if vm_path and os.path.exists(vm_path):
+                    print(f"[WGP_VACE_DEBUG]   video_mask size: {os.path.getsize(vm_path)} bytes")
             
             # Call the actual WGP generation with dynamic parameter filtering
             import inspect
@@ -289,6 +309,11 @@ def generate_single_video(
                 "mode": ui_params.get("mode", "generation"),
             }
             
+            # Log model type detection
+            detected_model_type = wgp_mod.get_model_type(model_filename) or "t2v"
+            print(f"[WGP_VACE_DEBUG]   model_filename: {model_filename}")
+            print(f"[WGP_VACE_DEBUG]   detected_model_type: {detected_model_type}")
+            
             # Optional parameters that may not be supported in all WGP versions
             optional_params = {
                 "audio_guidance_scale": ui_params.get("audio_guidance_scale", 5.0),
@@ -333,9 +358,23 @@ def generate_single_video(
             
             print(f"[WGP_GENERATION_DEBUG] Calling generate_video with {len(call_params)} parameters")
             print(f"[WGP_GENERATION_DEBUG] Required parameters added: model_type={call_params.get('model_type')}, batch_size={call_params.get('batch_size')}, sample_solver={call_params.get('sample_solver')}")
-            wgp_mod.generate_video(**call_params)
             
-            print(f"[WGP_GENERATION_DEBUG] WGP generation call completed")
+            # Log the actual VACE parameters being passed to WGP
+            print(f"[WGP_VACE_DEBUG] === Final VACE Parameters to WGP ===")
+            vace_params = ["video_prompt_type", "video_guide", "video_mask", "control_net_weight", "control_net_weight2", "denoising_strength", "image_refs"]
+            for param in vace_params:
+                if param in call_params:
+                    print(f"[WGP_VACE_DEBUG]   {param}: {call_params[param]}")
+            
+            print(f"[WGP_VACE_DEBUG] ===============================")
+            print(f"[WGP_GENERATION_DEBUG] === CALLING WGP.GENERATE_VIDEO ===")
+            
+            try:
+                wgp_mod.generate_video(**call_params)
+                print(f"[WGP_GENERATION_DEBUG] WGP generation call completed successfully")
+            except Exception as e:
+                print(f"[WGP_GENERATION_DEBUG] WGP generation call failed: {e}")
+                raise
             
             # Find generated video files
             generated_video_files = sorted([
