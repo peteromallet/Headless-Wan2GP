@@ -326,6 +326,10 @@ def generate_single_video(
             print(f"[WGP_VACE_DEBUG]   model_filename: {model_filename}")
             print(f"[WGP_VACE_DEBUG]   detected_model_type: {detected_model_type}")
             
+            # [VACE_FIX] This approach won't work cleanly - let's revert to the simpler solution
+            # The real issue is that WGP's load_models() expects base_model_type to be the underlying type
+            # Let's handle this in the state building instead
+            
             # Optional parameters that may not be supported in all WGP versions
             optional_params = {
                 "audio_guidance_scale": ui_params.get("audio_guidance_scale", 5.0),
@@ -381,12 +385,46 @@ def generate_single_video(
             print(f"[WGP_VACE_DEBUG] ===============================")
             print(f"[WGP_GENERATION_DEBUG] === CALLING WGP.GENERATE_VIDEO ===")
             
+            # [VACE_FIX] SURGICAL FIX: Temporarily override load_models() for VACE base type resolution
+            # This preserves all VACE behavior but fixes the config.json lookup issue in load_wan_model()
+            original_load_models = wgp_mod.load_models
+            vace_model_type = call_params.get("model_type")
+            
+            if vace_model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
+                print(f"[WGP_VACE_DEBUG] Applying surgical fix for VACE config resolution")
+                
+                def vace_load_models_wrapper(model_type):
+                    # For VACE models, resolve to base type for load_models() only
+                    if model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
+                        try:
+                            base_urls = wgp_mod.get_model_recursive_prop(model_type, "URLs", return_list=False)
+                            if isinstance(base_urls, str) and base_urls in ["t2v", "i2v"]:
+                                print(f"[WGP_VACE_DEBUG] load_models() override: '{model_type}' → base_type '{base_urls}' for config resolution")
+                                # Get base model type using WGP's own logic
+                                resolved_base_type = wgp_mod.get_base_model_type(base_urls) 
+                                print(f"[WGP_VACE_DEBUG] Final base_model_type for load_wan_model: '{resolved_base_type}'")
+                                # Call original load_models with base type for proper config resolution
+                                return original_load_models(base_urls)
+                        except Exception as e:
+                            print(f"[WARNING] VACE base type resolution failed: {e}")
+                    
+                    # For non-VACE models, use normal behavior
+                    return original_load_models(model_type)
+                
+                # Temporarily replace load_models function
+                wgp_mod.load_models = vace_load_models_wrapper
+            
             try:
                 wgp_mod.generate_video(**call_params)
                 print(f"[WGP_GENERATION_DEBUG] WGP generation call completed successfully")
             except Exception as e:
                 print(f"[WGP_GENERATION_DEBUG] WGP generation call failed: {e}")
                 raise
+            finally:
+                # [VACE_FIX] Always restore original load_models function
+                if vace_model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
+                    wgp_mod.load_models = original_load_models
+                    print(f"[WGP_VACE_DEBUG] Restored original load_models function")
             
             # Find generated video files
             generated_video_files = sorted([
