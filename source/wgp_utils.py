@@ -286,7 +286,7 @@ def generate_single_video(
                 "apg_switch": ui_params.get("apg_switch", 0),
                 "min_frames_if_references": ui_params.get("min_frames_if_references", 1),
                 "model_type": wgp_mod.get_model_type(model_filename) or "t2v",
-                "mode": ui_params.get("mode", 0),
+                "mode": ui_params.get("mode", "generation"),
             }
             
             # Optional parameters that may not be supported in all WGP versions
