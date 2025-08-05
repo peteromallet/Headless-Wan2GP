@@ -4666,10 +4666,35 @@ def generate_video(
                         src_video = torch.cat( [pre_video_guide, src_video], dim=1) 
 
             if vace :
+                print(f"[WGP_VACE_DEBUG] === VACE Processing Activated ===")
+                print(f"[WGP_VACE_DEBUG] video_prompt_type received: '{video_prompt_type}'")
+                print(f"[WGP_VACE_DEBUG] video_guide: {video_guide}")
+                print(f"[WGP_VACE_DEBUG] video_mask: {video_mask}")
+                print(f"[WGP_VACE_DEBUG] control_net_weight: {control_net_weight}")
+                print(f"[WGP_VACE_DEBUG] control_net_weight2: {control_net_weight2}")
+                print(f"[WGP_VACE_DEBUG] denoising_strength: {denoising_strength}")
+                
                 image_refs_copy = image_refs[nb_frames_positions:].copy() if image_refs != None and len(image_refs) > nb_frames_positions else None # required since prepare_source do inplace modifications
                 context_scale = [ control_net_weight]
                 video_guide_processed = video_mask_processed = video_guide_processed2 = video_mask_processed2 = None
+                
+                print(f"[WGP_VACE_DEBUG] Checking for 'V' component in video_prompt_type...")
                 if "V" in video_prompt_type:
+                    print(f"[WGP_VACE_DEBUG] 'V' component found - processing video guide")
+                    
+                    # Parse component letters
+                    preprocess_letters = filter_letters(video_prompt_type, "PDSLCMU")
+                    outside_mask_letters = filter_letters(video_prompt_type, "YWX")
+                    mask_letters = filter_letters(video_prompt_type, "M")
+                    image_ref_letters = filter_letters(video_prompt_type, "I")
+                    
+                    print(f"[WGP_VACE_DEBUG] Component analysis:")
+                    print(f"[WGP_VACE_DEBUG]   Full video_prompt_type: '{video_prompt_type}'")
+                    print(f"[WGP_VACE_DEBUG]   Preprocessing letters (PDSLCMU): '{preprocess_letters}'")
+                    print(f"[WGP_VACE_DEBUG]   Outside mask letters (YWX): '{outside_mask_letters}'")
+                    print(f"[WGP_VACE_DEBUG]   Mask letters (M): '{mask_letters}'")
+                    print(f"[WGP_VACE_DEBUG]   Image ref letters (I): '{image_ref_letters}'")
+                    
                     process_outside_mask = process_map_outside_mask.get(filter_letters(video_prompt_type, "YWX"), None)
                     preprocess_type, preprocess_type2 =  "raw", None 
                     for process_num, process_letter in enumerate( filter_letters(video_prompt_type, "PDSLCMU")):
@@ -4677,6 +4702,11 @@ def generate_video(
                             preprocess_type = process_map_video_guide.get(process_letter, "raw")
                         else:
                             preprocess_type2 = process_map_video_guide.get(process_letter, None)
+                    
+                    print(f"[WGP_VACE_DEBUG] Preprocessing decisions:")
+                    print(f"[WGP_VACE_DEBUG]   preprocess_type: '{preprocess_type}'")
+                    print(f"[WGP_VACE_DEBUG]   preprocess_type2: '{preprocess_type2}'")
+                    print(f"[WGP_VACE_DEBUG]   process_outside_mask: '{process_outside_mask}'")
                     status_info = "Extracting " + processes_names[preprocess_type]
                     extra_process_list = ([] if preprocess_type2==None else [preprocess_type2]) + ([] if process_outside_mask==None or process_outside_mask == preprocess_type else [process_outside_mask])
                     if len(extra_process_list) == 1:
@@ -4685,10 +4715,35 @@ def generate_video(
                         status_info +=  ", " + processes_names[extra_process_list[0]] + " and " + processes_names[extra_process_list[1]]
                     if preprocess_type2 is not None:
                         context_scale = [ control_net_weight /2, control_net_weight2 /2]
+                        print(f"[WGP_VACE_DEBUG] Dual processing detected - splitting control weights:")
+                        print(f"[WGP_VACE_DEBUG]   context_scale: {context_scale}")
+                    else:
+                        print(f"[WGP_VACE_DEBUG] Single processing - using full control weight: {control_net_weight}")
+                    
                     send_cmd("progress", [0, get_latest_status(state, status_info)])
+                    print(f"[WGP_VACE_DEBUG] === Starting Video Preprocessing ===")
+                    print(f"[WGP_VACE_DEBUG] Calling preprocess_video_with_mask with:")
+                    print(f"[WGP_VACE_DEBUG]   video_guide: {video_guide}")
+                    print(f"[WGP_VACE_DEBUG]   video_mask: {video_mask}")
+                    print(f"[WGP_VACE_DEBUG]   preprocess_type: '{preprocess_type}'")
+                    print(f"[WGP_VACE_DEBUG]   preprocess_type2: '{preprocess_type2}'")
+                    print(f"[WGP_VACE_DEBUG]   width: {width}, height: {height}")
+                    print(f"[WGP_VACE_DEBUG]   video_length: {video_length}")
+                    
                     video_guide_processed, video_mask_processed = preprocess_video_with_mask(video_guide, video_mask, height=image_size[0], width = image_size[1], max_frames= len(keep_frames_parsed) , start_frame = aligned_guide_start_frame, fit_canvas = sample_fit_canvas, target_fps = fps,  process_type = preprocess_type, expand_scale = mask_expand, RGB_Mask = True, negate_mask = "N" in video_prompt_type, process_outside_mask = process_outside_mask, outpainting_dims = outpainting_dims, proc_no =1 )
+                    
+                    print(f"[WGP_VACE_DEBUG] Primary preprocessing completed:")
+                    print(f"[WGP_VACE_DEBUG]   video_guide_processed: {type(video_guide_processed)} shape: {video_guide_processed.shape if video_guide_processed is not None else 'None'}")
+                    print(f"[WGP_VACE_DEBUG]   video_mask_processed: {type(video_mask_processed)} shape: {video_mask_processed.shape if video_mask_processed is not None else 'None'}")
+                    
                     if preprocess_type2 != None:
+                        print(f"[WGP_VACE_DEBUG] Starting secondary preprocessing with type: '{preprocess_type2}'")
                         video_guide_processed2, video_mask_processed2 = preprocess_video_with_mask(video_guide, video_mask, height=image_size[0], width = image_size[1], max_frames= len(keep_frames_parsed), start_frame = aligned_guide_start_frame, fit_canvas = sample_fit_canvas, target_fps = fps,  process_type = preprocess_type2, expand_scale = mask_expand, RGB_Mask = True, negate_mask = "N" in video_prompt_type, process_outside_mask = process_outside_mask, outpainting_dims = outpainting_dims, proc_no =2 )
+                        print(f"[WGP_VACE_DEBUG] Secondary preprocessing completed:")
+                        print(f"[WGP_VACE_DEBUG]   video_guide_processed2: {type(video_guide_processed2)} shape: {video_guide_processed2.shape if video_guide_processed2 is not None else 'None'}")
+                        print(f"[WGP_VACE_DEBUG]   video_mask_processed2: {type(video_mask_processed2)} shape: {video_mask_processed2.shape if video_mask_processed2 is not None else 'None'}")
+                    else:
+                        print(f"[WGP_VACE_DEBUG] No secondary preprocessing required")
 
                     if video_guide_processed != None:
                         if sample_fit_canvas != None:

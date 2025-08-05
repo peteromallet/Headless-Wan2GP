@@ -170,6 +170,19 @@ class WanOrchestrator:
         is_vace = self._is_vace()
         is_flux = self._is_flux()
         is_t2v = self._is_t2v()
+        
+        # Log model type detection and VACE parameters  
+        print(f"[HEADLESS_WGP_DEBUG] === Generate Call Analysis ===")
+        print(f"[HEADLESS_WGP_DEBUG] current_model: {self.current_model}")
+        print(f"[HEADLESS_WGP_DEBUG] is_vace: {is_vace}, is_flux: {is_flux}, is_t2v: {is_t2v}")
+        print(f"[HEADLESS_WGP_DEBUG] prompt: '{prompt}'")
+        print(f"[HEADLESS_WGP_DEBUG] resolution: {resolution}, video_length: {video_length}")
+        print(f"[HEADLESS_WGP_DEBUG] === VACE Input Parameters ===")
+        print(f"[HEADLESS_WGP_DEBUG] video_guide: {video_guide}")
+        print(f"[HEADLESS_WGP_DEBUG] video_mask: {video_mask}")
+        print(f"[HEADLESS_WGP_DEBUG] video_prompt_type: '{video_prompt_type}'")
+        print(f"[HEADLESS_WGP_DEBUG] control_net_weight: {control_net_weight}")
+        print(f"[HEADLESS_WGP_DEBUG] control_net_weight2: {control_net_weight2}")
 
         # Validate model-specific requirements
         if is_vace and not video_guide:
@@ -231,6 +244,8 @@ class WanOrchestrator:
             print(f"🎨 LoRAs: {activated_loras}")
 
         try:
+            print(f"[HEADLESS_WGP_DEBUG] === Calling WGP.generate_video directly ===")
+            print(f"[HEADLESS_WGP_DEBUG] This bypasses wgp_utils.py and calls wgp.py directly")
             result = self._generate_video(
                 task=task,
                 send_cmd=send_cmd,
