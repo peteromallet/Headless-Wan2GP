@@ -174,23 +174,25 @@ class WanOrchestrator:
             if model_type and model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
                 print(f"[HEADLESS_WGP_VACE_DEBUG] Applying VACE fix for model: {model_type}")
                 
-                # Import wgp module to access get_base_model_type
+                # Import wgp module to access load_models
                 import wgp as wgp_mod
-                original_get_base_model_type = wgp_mod.get_base_model_type
+                original_load_models = wgp_mod.load_models
                 
-                def patched_get_base_model_type(mt):
-                    """Return 't2v' for VACE models so they use the T2V config."""
-                    if mt in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
-                        print(f"[HEADLESS_WGP_VACE_DEBUG] get_base_model_type('{mt}') → 't2v' (patched)")
-                        return "t2v"
+                def vace_load_models_wrapper(model_type_param, *args, **kwargs):
+                    """Wrapper for load_models that converts VACE model types to 't2v' for config loading."""
+                    print(f"[HEADLESS_WGP_VACE_DEBUG] load_models() wrapper called with model_type='{model_type_param}'")
+                    
+                    if model_type_param in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
+                        print(f"[HEADLESS_WGP_VACE_DEBUG] VACE model detected: '{model_type_param}' - resolving to base type")
+                        resolved_type = "t2v"  # Use t2v config for VACE models
+                        print(f"[HEADLESS_WGP_VACE_DEBUG] load_models() override: '{model_type_param}' → base_type '{resolved_type}' for config resolution")
+                        return original_load_models(resolved_type, *args, **kwargs)
                     else:
-                        result = original_get_base_model_type(mt)
-                        print(f"[HEADLESS_WGP_VACE_DEBUG] get_base_model_type('{mt}') → '{result}' (original)")
-                        return result
+                        return original_load_models(model_type_param, *args, **kwargs)
                 
-                # Temporarily replace get_base_model_type function
-                wgp_mod.get_base_model_type = patched_get_base_model_type
-                print(f"[HEADLESS_WGP_VACE_DEBUG] Patched get_base_model_type to return 't2v' for VACE models")
+                # Temporarily replace load_models function (more surgical than patching get_base_model_type)
+                wgp_mod.load_models = vace_load_models_wrapper
+                print(f"[HEADLESS_WGP_VACE_DEBUG] Patched load_models to use 't2v' config for VACE models")
                 
                 try:
                     # Call original generate_video which will:
@@ -200,9 +202,9 @@ class WanOrchestrator:
                     # 4. VACE module loads from modules list in vace_14B.json
                     return original_generate_video(*args, **kwargs)
                 finally:
-                    # Restore original get_base_model_type function
-                    wgp_mod.get_base_model_type = original_get_base_model_type
-                    print(f"[HEADLESS_WGP_VACE_DEBUG] Restored original get_base_model_type function")
+                    # Restore original load_models function
+                    wgp_mod.load_models = original_load_models
+                    print(f"[HEADLESS_WGP_VACE_DEBUG] Restored original load_models function")
             else:
                 # Non-VACE model, call directly
                 return original_generate_video(*args, **kwargs)
@@ -372,40 +374,15 @@ class WanOrchestrator:
             print(f"🎨 LoRAs: {activated_loras}")
 
         try:
-            print(f"[HEADLESS_WGP_DEBUG] === Calling WGP.generate_video with VACE fix ===")
-            print(f"[HEADLESS_WGP_DEBUG] Applying VACE load_models override for proper module loading")
+            print(f"[HEADLESS_WGP_DEBUG] === Calling WGP.generate_video (improved VACE fix) ===")
             
-            # [VACE_FIX] Apply the same surgical fix as in wgp_utils.py
-            vace_model_type = self.current_model
-            if vace_model_type and vace_model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
-                print(f"[HEADLESS_WGP_VACE_DEBUG] Applying VACE fix for model: {vace_model_type}")
+            # Call the VACE-fixed generate_video (patching is now handled in wrapper)
+            result = self._generate_video(
+                task=task,
+                send_cmd=send_cmd,
+                state=self.state,
                 
-                # Import wgp module to access load_models
-                import wgp as wgp_mod
-                original_load_models = wgp_mod.load_models
-                
-                def vace_load_models_wrapper(model_type):
-                    print(f"[HEADLESS_WGP_VACE_DEBUG] load_models() wrapper called with model_type='{model_type}'")
-                    
-                    if model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
-                        print(f"[HEADLESS_WGP_VACE_DEBUG] VACE model detected: '{model_type}' - resolving to base type")
-                        print(f"[HEADLESS_WGP_VACE_DEBUG] load_models() override: '{model_type}' → base_type 't2v' for config resolution")
-                        # Call original load_models with t2v for proper config resolution
-                        return original_load_models("t2v")
-                    else:
-                        print(f"[HEADLESS_WGP_VACE_DEBUG] Non-VACE model: '{model_type}' - using normal behavior")
-                        return original_load_models(model_type)
-                
-                # Temporarily replace load_models function
-                wgp_mod.load_models = vace_load_models_wrapper
-                
-                try:
-                    result = self._generate_video(
-                        task=task,
-                        send_cmd=send_cmd,
-                        state=self.state,
-                        
-                        # Core parameters
+                # Core parameters
                         model_type=self.current_model,
                         prompt=prompt,
                         negative_prompt=negative_prompt,
