@@ -115,88 +115,13 @@ class WanOrchestrator:
         import os
         import shutil
         
-        # VACE models require a config.json next to the module file for mmgp
+        # Debug: Show model discovery for debugging
         if self._test_vace_module(model_key):
-            print(f"🔧 [CONFIG_DETECTION] VACE model '{model_key}' detected - setting up config.json for mmgp")
+            print(f"🎯 VACE model '{model_key}' detected - config files are now properly tracked in Git")
             
-            # Get absolute paths to handle different working directories
-            wgp_dir = os.path.dirname(os.path.abspath(wgp.__file__))
-            print(f"🔧 [CONFIG_PATHS] WGP directory: {wgp_dir}")
-            
-            # Create config.json directly in ckpts/ for VACE modules  
-            # Note: We don't call get_model_filename() here because that only returns
-            # the base model file. load_models() handles building the complete file list.
-            ckpts_dir = os.path.join(wgp_dir, "ckpts")
-            config_target = os.path.join(ckpts_dir, "config.json")
-            
-            if not os.path.exists(config_target):
-                print(f"🔧 [CONFIG_CREATE] Creating config.json for VACE modules at: {config_target}")
-                
-                # Embedded VACE config to avoid dependency on external files
-                vace_config = {
-                    "_class_name": "VaceWanModel",
-                    "_diffusers_version": "0.30.0",
-                    "dim": 5120,
-                    "eps": 1e-06,
-                    "ffn_dim": 13824,
-                    "freq_dim": 256,
-                    "in_dim": 16,
-                    "model_type": "t2v",
-                    "num_heads": 40,
-                    "num_layers": 40,
-                    "out_dim": 16,
-                    "text_len": 512,
-                    "vace_layers": [0, 5, 10, 15, 20, 25, 30, 35],
-                    "vace_in_dim": 96
-                }
-                
-                import json
-                os.makedirs(ckpts_dir, exist_ok=True)
-                with open(config_target, 'w') as f:
-                    json.dump(vace_config, f, indent=2)
-                print(f"🔧 [CONFIG_SUCCESS] ✅ Created {config_target}")
-            else:
-                print(f"🔧 [CONFIG_EXISTS] Config already exists: {config_target}")
-                
-            # Show where we expect mmgp to look for config.json
-            print(f"🔧 [MMGP_PATHS] Our config: {config_target}")
-            print(f"🔧 [MMGP_PATHS] VACE module: ckpts/wan2.1_Vace_14B_module_quanto_mbf16_int8.safetensors")
-            print(f"🔧 [MMGP_PATHS] mmgp might expect config.json next to the VACE module file")
-            
-            # Create config.json next to the VACE module as well
-            vace_module_dir = ckpts_dir  # VACE module is in ckpts/ too
-            vace_module_config = os.path.join(vace_module_dir, "wan2.1_Vace_14B_module_quanto_mbf16_int8.json") 
-            if not os.path.exists(vace_module_config):
-                vace_alt_config = {
-                    "_class_name": "VaceWanModel",
-                    "_diffusers_version": "0.30.0",
-                    "dim": 5120,
-                    "eps": 1e-06,
-                    "ffn_dim": 13824,
-                    "freq_dim": 256,
-                    "in_dim": 16,
-                    "model_type": "t2v",
-                    "num_heads": 40,
-                    "num_layers": 40,
-                    "out_dim": 16,
-                    "text_len": 512,
-                    "vace_layers": [0, 5, 10, 15, 20, 25, 30, 35],
-                    "vace_in_dim": 96
-                }
-                
-                import json
-                with open(vace_module_config, 'w') as f:
-                    json.dump(vace_alt_config, f, indent=2)
-                print(f"🔧 [CONFIG_ALT] ✅ Also created config next to VACE module: {vace_module_config}")
-            else:
-                print(f"🔧 [CONFIG_ALT] Config next to VACE module already exists: {vace_module_config}")
-        
-        # Debug: Show that module discovery is working correctly
         modules = wgp.get_model_recursive_prop(model_key, "modules", return_list=True)
-        print(f"🔧 [MODULE_DISCOVERY] Modules for '{model_key}': {modules}")
-        
         model_def = wgp.get_model_def(model_key)
-        print(f"🔧 [MODEL_DEF] Architecture: {model_def.get('architecture')} | Modules: {model_def.get('modules')}")
+        print(f"📋 Model Info: {model_key} | Architecture: {model_def.get('architecture')} | Modules: {modules}")
         
         # Actually load the model using WGP's proper loading flow
         # This handles VACE modules, LoRA discovery, etc.
