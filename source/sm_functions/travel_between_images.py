@@ -1297,37 +1297,31 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
         dprint(f"Chaining for WGP task {wgp_task_id} (segment {segment_idx_completed} of run {orchestrator_run_id}). Initial video: {video_to_process_abs_path}")
 
         # --- Always move WGP output to proper location first ---
-        # For SQLite, this moves the file from outputs/ to public/files/
-        # For other DBs, this ensures consistent file management
-        moved_filename = f"{orchestrator_run_id}_seg{segment_idx_completed:02d}_output{video_to_process_abs_path.suffix}"
-        moved_video_abs_path, moved_db_path = prepare_output_path(
-            task_id=wgp_task_id,
-            filename=moved_filename,
-            main_output_dir_base=Path(segment_processing_dir_for_saturation_str)
-        )
+        # Use consistent UUID-based naming and MOVE (not copy) to avoid duplicates
+        timestamp_short = datetime.now().strftime("%H%M%S")
+        unique_suffix = uuid.uuid4().hex[:6]
+        moved_filename = f"seg{segment_idx_completed:02d}_output_{timestamp_short}_{unique_suffix}{video_to_process_abs_path.suffix}"
         
-        # Copy the WGP output to the proper location
+        # Use segment processing dir directly without task_id prefixing since UUID guarantees uniqueness
+        moved_video_abs_path = Path(segment_processing_dir_for_saturation_str) / moved_filename
+        moved_video_abs_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # MOVE (not copy) the WGP output to avoid creating duplicates
         try:
             # Ensure encoder has finished writing the source file
             sm_wait_for_file_stable(video_to_process_abs_path, checks=3, interval=1.0, dprint=dprint)
 
-            shutil.copy2(video_to_process_abs_path, moved_video_abs_path)
+            shutil.move(str(video_to_process_abs_path), str(moved_video_abs_path))
             print(f"[CHAIN_DEBUG] Moved WGP output from {video_to_process_abs_path} to {moved_video_abs_path}")
             debug_video_analysis(moved_video_abs_path, f"MOVED_WGP_OUTPUT_Seg{segment_idx_completed}", wgp_task_id)
             dprint(f"Chain (Seg {segment_idx_completed}): Moved WGP output from {video_to_process_abs_path} to {moved_video_abs_path}")
             
             # Update paths for further processing
             video_to_process_abs_path = moved_video_abs_path
-            final_video_path_for_db = moved_db_path
+            final_video_path_for_db = str(moved_video_abs_path)  # Use absolute path as DB path
             
-            # Clean up original WGP output if not in debug mode
-            if not full_orchestrator_payload.get("skip_cleanup_enabled", False) and \
-               not full_orchestrator_payload.get("debug_mode_enabled", False):
-                try:
-                    Path(actual_wgp_output_video_path).unlink()
-                    dprint(f"Chain (Seg {segment_idx_completed}): Cleaned up original WGP output {actual_wgp_output_video_path}")
-                except Exception as e_cleanup:
-                    dprint(f"Chain (Seg {segment_idx_completed}): Warning - could not clean up original WGP output: {e_cleanup}")
+            # No cleanup needed since we moved (not copied) the file
+            dprint(f"Chain (Seg {segment_idx_completed}): WGP output successfully moved to final location")
                     
         except Exception as e_move:
             dprint(f"Chain (Seg {segment_idx_completed}): Warning - could not move WGP output to proper location: {e_move}. Using original path.")
@@ -2025,10 +2019,13 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             print(f"[STITCH UPSCALE] No upscaling requested (factor: {upscale_factor})")
             dprint(f"Stitch: No upscaling (factor: {upscale_factor})")
 
-        # Use prepare_output_path_with_upload to handle final video location consistently (with Supabase upload support)
-        final_video_filename = f"{orchestrator_run_id}_final{video_path_after_optional_upscale.suffix}"
+        # Use consistent UUID-based naming for final video
+        timestamp_short = datetime.now().strftime("%H%M%S")
+        unique_suffix = uuid.uuid4().hex[:6]
         if upscale_factor > 1.0:
-            final_video_filename = f"{orchestrator_run_id}_final_upscaled_{upscale_factor:.1f}x{video_path_after_optional_upscale.suffix}"
+            final_video_filename = f"travel_final_upscaled_{upscale_factor:.1f}x_{timestamp_short}_{unique_suffix}{video_path_after_optional_upscale.suffix}"
+        else:
+            final_video_filename = f"travel_final_{timestamp_short}_{unique_suffix}{video_path_after_optional_upscale.suffix}"
         
         final_video_path, initial_db_location = prepare_output_path_with_upload(
             task_id=stitch_task_id_str,
