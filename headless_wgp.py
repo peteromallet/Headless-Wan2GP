@@ -562,8 +562,6 @@ class WanOrchestrator:
                     image_refs=image_refs,
                     frames_positions="",
                     video_guide=video_guide,
-                    video_guide2=video_guide2,
-                    video_mask2=video_mask2,
                     image_guide="",
                     keep_frames_video_guide="",
                     denoising_strength=denoising_strength,
