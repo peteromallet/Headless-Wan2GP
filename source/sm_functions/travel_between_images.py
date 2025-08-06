@@ -744,6 +744,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         try: # Guide Video Creation Block
             timestamp_short = datetime.now().strftime("%H%M%S")
             unique_suffix = uuid.uuid4().hex[:6]
+            guide_video_filename = f"seg{segment_idx:02d}_vace_guide_{timestamp_short}_{unique_suffix}.mp4"
             guide_video_base_name = f"seg{segment_idx:02d}_vace_guide_{timestamp_short}_{unique_suffix}"
             input_images_resolved_original = full_orchestrator_payload["input_image_paths_resolved"]
             
@@ -831,6 +832,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             else:
                 if is_vace_model and not debug_enabled:
                     dprint(f"Task {segment_task_id_str}: VACE model detected, creating guide video (required for VACE functionality)")
+                # Create the final guide video path with UUID-based naming
+                guide_video_final_path = guide_video_target_dir / guide_video_filename
+                
                 actual_guide_video_path_for_wgp = sm_create_guide_video_for_travel_segment(
                     segment_idx_for_logging=segment_idx,
                     end_anchor_image_index=end_anchor_img_path_str_idx,
@@ -847,6 +851,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     full_orchestrator_payload=full_orchestrator_payload,
                     segment_params=segment_params,
                     single_image_journey=is_single_image_journey,
+                    predefined_output_path=guide_video_final_path,
                     dprint=dprint
                 )
         except Exception as e_guide:

@@ -619,12 +619,17 @@ def create_guide_video_for_travel_segment(
     full_orchestrator_payload: dict,
     segment_params: dict,
     single_image_journey: bool = False,
+    predefined_output_path: Path | None = None,
     *,
     dprint=print
 ) -> Path | None:
     """Creates the guide video for a travel segment with all fading and adjustments."""
     try:
-        actual_guide_video_path = sm_get_unique_target_path(output_target_dir, guide_video_base_name, ".mp4")
+        # Use predefined path if provided (for UUID-based naming), otherwise generate unique path
+        if predefined_output_path:
+            actual_guide_video_path = predefined_output_path
+        else:
+            actual_guide_video_path = sm_get_unique_target_path(output_target_dir, guide_video_base_name, ".mp4")
         gray_frame_bgr = sm_create_color_frame(parsed_res_wh, (128, 128, 128))
 
         fade_in_p = json.loads(full_orchestrator_payload["fade_in_params_json_str"])
