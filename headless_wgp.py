@@ -421,7 +421,7 @@ class WanOrchestrator:
                         
                         # LoRA parameters
                         activated_loras=activated_loras,
-                        loras_multipliers=loras_multipliers_list,
+                        loras_multipliers=loras_multipliers_str,
                         
                         # Standard defaults for other parameters
                         audio_guidance_scale=1.0,
