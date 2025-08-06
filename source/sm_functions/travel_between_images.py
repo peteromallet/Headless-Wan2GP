@@ -419,13 +419,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         segment_processing_dir = current_run_base_output_dir
         segment_processing_dir.mkdir(parents=True, exist_ok=True)
 
-        # ─── Ensure we have a directory for downloading remote images ────────────
+        # ─── Use main processing directory for image downloads (no subfolders) ────────────
         if segment_image_download_dir is None:
-            segment_image_download_dir = segment_processing_dir / "image_downloads"
-            try:
-                segment_image_download_dir.mkdir(parents=True, exist_ok=True)
-            except Exception as e_mkdir_dl:
-                dprint(f"[WARNING] Segment {segment_idx}: Could not create image_downloads dir {segment_image_download_dir}: {e_mkdir_dl}")
+            segment_image_download_dir = segment_processing_dir  # Save directly to main output dir
         dprint(f"Segment {segment_idx} (Task {segment_task_id_str}): Processing in {segment_processing_dir.resolve()} | image_download_dir={segment_image_download_dir}")
 
         # --- Color Match Reference Image Determination ---
@@ -452,10 +448,23 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     end_ref_path_for_cm = input_images_for_cm[segment_idx + 1]
             
             # Download images if they are URLs so they exist locally for the color matching function.
+            debug_enabled = full_orchestrator_payload.get("debug_mode_enabled", False)
             if start_ref_path_for_cm:
-                start_ref_path_for_cm = sm_download_image_if_url(start_ref_path_for_cm, segment_processing_dir, segment_task_id_str)
+                start_ref_path_for_cm = sm_download_image_if_url(
+                    start_ref_path_for_cm, 
+                    segment_processing_dir,  # Save directly to main output dir, no subfolder
+                    segment_task_id_str, 
+                    debug_mode=debug_enabled,
+                    descriptive_name=f"seg{segment_idx:02d}_start_ref"
+                )
             if end_ref_path_for_cm:
-                end_ref_path_for_cm = sm_download_image_if_url(end_ref_path_for_cm, segment_processing_dir, segment_task_id_str)
+                end_ref_path_for_cm = sm_download_image_if_url(
+                    end_ref_path_for_cm, 
+                    segment_processing_dir,  # Save directly to main output dir, no subfolder
+                    segment_task_id_str,
+                    debug_mode=debug_enabled,
+                    descriptive_name=f"seg{segment_idx:02d}_end_ref"
+                )
 
             dprint(f"Seg {segment_idx} CM Refs: Start='{start_ref_path_for_cm}', End='{end_ref_path_for_cm}'")
         # --- End Color Match Reference Image Determination ---
@@ -610,39 +619,45 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     f"overlap_count={frame_overlap_from_previous}, is_single_image_journey={is_single_image_journey}"
                 )
 
-                mask_filename = f"{orchestrator_run_id}_seg{segment_idx:02d}_mask.mp4"
+                # Improved mask naming: use descriptive name that shows its purpose
+                mask_filename = f"seg{segment_idx:02d}_vace_mask.mp4"
                 # Create mask video in the same directory as guide video for consistency
                 mask_out_path_tmp = segment_processing_dir / mask_filename
                 
-                # Use the generalized mask creation function
-                from ..common_utils import create_mask_video_from_inactive_indices
-                created_mask_vid = create_mask_video_from_inactive_indices(
-                    total_frames=total_frames_for_segment,
-                    resolution_wh=parsed_res_wh,
-                    inactive_frame_indices=inactive_indices,
-                    output_path=mask_out_path_tmp,
-                    fps=fps_helpers,
-                    task_id_for_logging=segment_task_id_str,
-                    dprint=dprint
-                )
-                
-                if created_mask_vid and created_mask_vid.exists():
-                    mask_video_path_for_wgp = created_mask_vid
-                    # Verify mask video properties match guide video
-                    try:
-                        from ..common_utils import get_video_frame_count_and_fps
-                        mask_frames, mask_fps = get_video_frame_count_and_fps(str(mask_video_path_for_wgp))
-                        dprint(f"Seg {segment_idx}: Mask video generated - {mask_frames} frames @ {mask_fps}fps -> {mask_video_path_for_wgp}")
-                        
-                        # Warn if frame count mismatch
-                        if mask_frames != total_frames_for_segment:
-                            dprint(f"[WARNING] Seg {segment_idx}: Mask frame count ({mask_frames}) != target ({total_frames_for_segment})")
-                    except Exception as e_verify:
-                        dprint(f"[WARNING] Seg {segment_idx}: Could not verify mask video properties: {e_verify}")
-                else:
-                    dprint(f"[ERROR] Seg {segment_idx}: Mask video generation failed or file does not exist.")
-                    # Continue without mask - VACE can still work with just video guide
+                # Only create mask video in debug mode or if explicitly needed for VACE
+                if not debug_enabled:
+                    dprint(f"Task {segment_task_id_str}: Debug mode disabled, skipping mask video creation")
                     mask_video_path_for_wgp = None
+                else:
+                    # Use the generalized mask creation function
+                    from ..common_utils import create_mask_video_from_inactive_indices
+                    created_mask_vid = create_mask_video_from_inactive_indices(
+                        total_frames=total_frames_for_segment,
+                        resolution_wh=parsed_res_wh,
+                        inactive_frame_indices=inactive_indices,
+                        output_path=mask_out_path_tmp,
+                        fps=fps_helpers,
+                        task_id_for_logging=segment_task_id_str,
+                        dprint=dprint
+                    )
+                    
+                    if created_mask_vid and created_mask_vid.exists():
+                        mask_video_path_for_wgp = created_mask_vid
+                        # Verify mask video properties match guide video
+                        try:
+                            from ..common_utils import get_video_frame_count_and_fps
+                            mask_frames, mask_fps = get_video_frame_count_and_fps(str(mask_video_path_for_wgp))
+                            dprint(f"Seg {segment_idx}: Mask video generated - {mask_frames} frames @ {mask_fps}fps -> {mask_video_path_for_wgp}")
+                            
+                            # Warn if frame count mismatch
+                            if mask_frames != total_frames_for_segment:
+                                dprint(f"[WARNING] Seg {segment_idx}: Mask frame count ({mask_frames}) != target ({total_frames_for_segment})")
+                        except Exception as e_verify:
+                            dprint(f"[WARNING] Seg {segment_idx}: Could not verify mask video properties: {e_verify}")
+                    else:
+                        dprint(f"[ERROR] Seg {segment_idx}: Mask video generation failed or file does not exist.")
+                        # Continue without mask - VACE can still work with just video guide
+                        mask_video_path_for_wgp = None
             except Exception as e_mask_gen2:
                 dprint(f"[ERROR] Seg {segment_idx}: Mask video generation error: {e_mask_gen2}")
                 mask_video_path_for_wgp = None
@@ -716,7 +731,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 print(f"[ERROR Task {segment_task_id_str}]: {msg}"); return False, msg
         
         try: # Guide Video Creation Block
-            guide_video_base_name = f"{orchestrator_run_id}_seg{segment_idx:02d}_guide"
+            guide_video_base_name = f"seg{segment_idx:02d}_vace_guide"
             input_images_resolved_original = full_orchestrator_payload["input_image_paths_resolved"]
             
             # Guide video path will be handled by sm_create_guide_video_for_travel_segment using centralized logic
@@ -773,36 +788,45 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                             start_image_for_banner,
                             segment_processing_dir,
                             segment_task_id_str,
+                            debug_mode=debug_enabled,
+                            descriptive_name="journey_start_image"
                         )
                     if end_image_for_banner:
                         end_image_for_banner = sm_download_image_if_url(
                             end_image_for_banner,
                             segment_processing_dir,
                             segment_task_id_str,
+                            debug_mode=debug_enabled,
+                            descriptive_name="journey_end_image"
                         )
 
                 except Exception as e_banner_sel:
                     dprint(f"Seg {segment_idx}: Error selecting banner images for show_input_images: {e_banner_sel}")
             # ------------------------------------------------------------------
 
-            actual_guide_video_path_for_wgp = sm_create_guide_video_for_travel_segment(
-                segment_idx_for_logging=segment_idx,
-                end_anchor_image_index=end_anchor_img_path_str_idx,
-                is_first_segment_from_scratch=is_first_segment_from_scratch,
-                total_frames_for_segment=total_frames_for_segment,
-                parsed_res_wh=parsed_res_wh,
-                fps_helpers=fps_helpers,
-                input_images_resolved_for_guide=input_images_resolved_for_guide,
-                path_to_previous_segment_video_output_for_guide=path_to_previous_segment_video_output_for_guide,
-                output_target_dir=guide_video_target_dir,
-                guide_video_base_name=guide_video_base_name,
-                segment_image_download_dir=segment_image_download_dir,
-                task_id_for_logging=segment_task_id_str, # Corrected keyword argument
-                full_orchestrator_payload=full_orchestrator_payload,
-                segment_params=segment_params,
-                single_image_journey=is_single_image_journey,
-                dprint=dprint
-            )
+            # Only create guide video in debug mode
+            if not debug_enabled:
+                dprint(f"Task {segment_task_id_str}: Debug mode disabled, skipping guide video creation")
+                actual_guide_video_path_for_wgp = None
+            else:
+                actual_guide_video_path_for_wgp = sm_create_guide_video_for_travel_segment(
+                    segment_idx_for_logging=segment_idx,
+                    end_anchor_image_index=end_anchor_img_path_str_idx,
+                    is_first_segment_from_scratch=is_first_segment_from_scratch,
+                    total_frames_for_segment=total_frames_for_segment,
+                    parsed_res_wh=parsed_res_wh,
+                    fps_helpers=fps_helpers,
+                    input_images_resolved_for_guide=input_images_resolved_for_guide,
+                    path_to_previous_segment_video_output_for_guide=path_to_previous_segment_video_output_for_guide,
+                    output_target_dir=guide_video_target_dir,
+                    guide_video_base_name=guide_video_base_name,
+                    segment_image_download_dir=segment_image_download_dir,
+                    task_id_for_logging=segment_task_id_str, # Corrected keyword argument
+                    full_orchestrator_payload=full_orchestrator_payload,
+                    segment_params=segment_params,
+                    single_image_journey=is_single_image_journey,
+                    dprint=dprint
+                )
         except Exception as e_guide:
             print(f"ERROR Task {segment_task_id_str} guide prep: {e_guide}")
             traceback.print_exc()

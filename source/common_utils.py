@@ -1550,7 +1550,7 @@ def _get_unique_target_path(target_dir: Path, base_name: str, extension: str) ->
     filename = f"{base_name}_{timestamp_short}_{unique_suffix}{extension}"
     return target_dir / filename
 
-def download_image_if_url(image_url_or_path: str, download_target_dir: Path | str | None, task_id_for_logging: str | None = "generic_task") -> str:
+def download_image_if_url(image_url_or_path: str, download_target_dir: Path | str | None, task_id_for_logging: str | None = "generic_task", debug_mode: bool = False, descriptive_name: str | None = None) -> str:
     """
     Checks if the given string is an HTTP/HTTPS URL. If so, and if download_target_dir is provided,
     downloads the image to a unique path within download_target_dir.
@@ -1561,6 +1561,11 @@ def download_image_if_url(image_url_or_path: str, download_target_dir: Path | st
 
     parsed_url = urlparse(image_url_or_path)
     if parsed_url.scheme in ['http', 'https'] and download_target_dir:
+        # If not in debug mode, return a temp path or the original URL
+        if not debug_mode:
+            dprint(f"Task {task_id_for_logging}: Debug mode disabled, skipping image download for: {image_url_or_path}")
+            return image_url_or_path
+            
         target_dir_path = Path(download_target_dir)
         try:
             target_dir_path.mkdir(parents=True, exist_ok=True)
@@ -1576,7 +1581,13 @@ def download_image_if_url(image_url_or_path: str, download_target_dir: Path | st
             if not original_suffix.startswith('.'):
                 original_suffix = '.' + original_suffix
             
-            base_name_for_download = f"downloaded_{Path(original_filename).stem[:50]}" # Limit stem length
+            # Use descriptive naming if provided, otherwise fall back to improved default
+            if descriptive_name:
+                base_name_for_download = descriptive_name[:50]  # Limit length
+            else:
+                # Improved default naming
+                cleaned_stem = Path(original_filename).stem[:30] if Path(original_filename).stem else "image"
+                base_name_for_download = f"input_{cleaned_stem}"
             
             # _get_unique_target_path expects a Path object for target_dir
             local_image_path = _get_unique_target_path(target_dir_path, base_name_for_download, original_suffix)
