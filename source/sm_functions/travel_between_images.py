@@ -1302,7 +1302,10 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
         # --- Always move WGP output to proper location first ---
         # For SQLite, this moves the file from outputs/ to public/files/
         # For other DBs, this ensures consistent file management
-        moved_filename = f"{orchestrator_run_id}_seg{segment_idx_completed:02d}_output{video_to_process_abs_path.suffix}"
+        # Use consistent UUID-based naming for moved WGP output
+        timestamp_short = datetime.now().strftime("%H%M%S")
+        unique_suffix = uuid.uuid4().hex[:6]
+        moved_filename = f"{wgp_task_id}_{orchestrator_run_id}_seg{segment_idx_completed:02d}_output_{timestamp_short}_{unique_suffix}{video_to_process_abs_path.suffix}"
         moved_video_abs_path, moved_db_path = prepare_output_path(
             task_id=wgp_task_id,
             filename=moved_filename,
