@@ -110,8 +110,48 @@ class WanOrchestrator:
         self.current_model = model_key
         self.state["model_type"] = model_key
         
+        # Initialize LoRAs for this model type
+        self._setup_loras_for_model(model_key)
+        
         family = self._get_model_family(model_key, for_ui=True)
         print(f"📋 Loaded model: {model_key} ({family})")
+    
+    def _setup_loras_for_model(self, model_type: str):
+        """Initialize LoRA discovery for a model type.
+        
+        This scans the LoRA directory and populates state with available LoRAs.
+        The actual loading/activation happens during generation.
+        """
+        try:
+            # Import WGP functions
+            import wgp
+            setup_loras = wgp.setup_loras
+            get_lora_dir = wgp.get_lora_dir
+            
+            # Discover available LoRAs (without transformer - just file discovery)
+            result = setup_loras(model_type, None, get_lora_dir(model_type), "", None)
+            if result is None:
+                # setup_loras returns None if no LoRA directory exists
+                loras, loras_names, loras_presets = [], [], {}
+            else:
+                loras, loras_names, loras_presets = result[:3]
+            
+            # Update state with discovered LoRAs
+            self.state["loras"] = loras
+            self.state["loras_names"] = loras_names
+            self.state["loras_presets"] = loras_presets
+            
+            if loras:
+                print(f"🎨 Discovered {len(loras)} LoRAs for {model_type}: {[os.path.basename(l) for l in loras[:3]]}{'...' if len(loras) > 3 else ''}")
+            else:
+                print(f"🎨 No LoRAs found for {model_type}")
+                
+        except Exception as e:
+            print(f"⚠️  LoRA discovery failed for {model_type}: {e}")
+            # Keep empty defaults to prevent crashes
+            self.state["loras"] = []
+            self.state["loras_names"] = []
+            self.state["loras_presets"] = {}
 
     def _create_vace_fixed_generate_video(self, original_generate_video):
         """Create a wrapper around generate_video that applies our VACE fix.
