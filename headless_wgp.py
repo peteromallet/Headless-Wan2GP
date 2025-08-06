@@ -63,7 +63,7 @@ class WanOrchestrator:
         # Apply sensible defaults (mirrors typical UI defaults)
         self._apply_changes(
             self.state,
-            transformer_types_choices="t2v",   # default to T2V model family
+            transformer_types_choices=["t2v"],   # default to T2V model family
             transformer_dtype_policy_choice="auto",
             text_encoder_quantization_choice="bf16",
             VAE_precision_choice="fp32",
