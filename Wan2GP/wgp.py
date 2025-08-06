@@ -2242,10 +2242,12 @@ for model_type in model_types:
 
 
 transformer_types = server_config.get("transformer_types", [])
+print(f"[DEBUG] transformer_types loaded from config: {transformer_types} (type: {type(transformer_types)})")
 # CRITICAL: Ensure transformer_types is always a list, never string
 if not isinstance(transformer_types, list):
     print(f"[WGP_CONFIG_FIX] transformer_types was {type(transformer_types)} ({transformer_types}), converting to empty list")
     transformer_types = []
+    print(f"[DEBUG] transformer_types after fix: {transformer_types} (type: {type(transformer_types)})")
 new_transformer_types = []
 for model_type in transformer_types:
     if get_model_def(model_type) == None:
@@ -2289,10 +2291,12 @@ reload_needed = False
 default_ui = server_config.get("default_ui", "t2v") 
 save_path = server_config.get("save_path", os.path.join(os.getcwd(), "gradio_outputs"))
 preload_model_policy = server_config.get("preload_model_policy", [])
+print(f"[DEBUG] preload_model_policy loaded from config: {preload_model_policy} (type: {type(preload_model_policy)})")
 # CRITICAL: Ensure preload_model_policy is always a list, never int/string
 if not isinstance(preload_model_policy, list):
     print(f"[WGP_CONFIG_FIX] preload_model_policy was {type(preload_model_policy)}, converting to empty list")
-    preload_model_policy = [] 
+    preload_model_policy = []
+    print(f"[DEBUG] preload_model_policy after fix: {preload_model_policy} (type: {type(preload_model_policy)})") 
 
 
 if args.t2v_14B or args.t2v: 
@@ -2926,6 +2930,7 @@ def load_models(model_type):
     transformer_type = model_type
     return wan_model, offloadobj 
 
+print(f"[DEBUG] About to check preload_model_policy: {preload_model_policy} (type: {type(preload_model_policy)})")
 if not "P" in preload_model_policy:
     wan_model, offloadobj, transformer = None, None, None
     reload_needed = True
