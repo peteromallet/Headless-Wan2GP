@@ -2706,10 +2706,6 @@ def setup_loras(model_type, transformer,  lora_dir, lora_preselected_preset, spl
 def load_wan_model(model_filename, model_type, base_model_type, model_def, quantizeTransformer = False, dtype = torch.bfloat16, VAE_dtype = torch.float32, mixed_precision_transformer = False, save_quantized= False):
     if test_class_i2v(base_model_type):
         cfg = WAN_CONFIGS['i2v-14B']
-    elif test_vace_module(base_model_type):
-        # VACE models are built on top of t2v but need special handling
-        # Use t2v config as base but it will be overridden by VACE config
-        cfg = WAN_CONFIGS['t2v-14B']
     else:
         cfg = WAN_CONFIGS['t2v-14B']
         # cfg = WAN_CONFIGS['t2v-1.3B']    
