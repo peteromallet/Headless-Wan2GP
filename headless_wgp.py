@@ -619,9 +619,20 @@ class WanOrchestrator:
                     **kwargs
                 )
             
-            print(f"✅ {model_type_desc} generation completed")
-            print(f"💾 Output saved to: {result}")
-            return result
+            # WGP doesn't return the path, but stores it in state["gen"]["file_list"]
+            output_path = None
+            try:
+                file_list = self.state["gen"]["file_list"]
+                if file_list:
+                    output_path = file_list[-1]  # Get the most recently generated file
+                    print(f"✅ {model_type_desc} generation completed")
+                    print(f"💾 Output saved to: {output_path}")
+                else:
+                    print(f"⚠️  {model_type_desc} generation completed but no output path found in file_list")
+            except Exception as e:
+                print(f"⚠️  Could not retrieve output path from state: {e}")
+            
+            return output_path
             
         except Exception as e:
             print(f"❌ Generation failed: {e}")
