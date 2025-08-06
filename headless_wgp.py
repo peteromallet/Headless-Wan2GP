@@ -401,7 +401,7 @@ class WanOrchestrator:
                         video_length=actual_video_length,
                         batch_size=actual_batch_size,
                         seed=seed,
-                        force_fps=24,
+                        force_fps="24",  # Must be string, not int
                         num_inference_steps=num_inference_steps,
                         guidance_scale=actual_guidance,
                         guidance2_scale=actual_guidance,
@@ -448,7 +448,7 @@ class WanOrchestrator:
                         video_source=None,
                         keep_frames_video_source="",
                         keep_frames_video_guide="",
-                        video_guide_outpainting=[0,0,0,0],
+                        video_guide_outpainting="0,0,0,0",  # Must be string, not list
                         mask_expand=0,
                         
                         # Audio parameters (disabled)
@@ -516,7 +516,7 @@ class WanOrchestrator:
                     video_length=actual_video_length,
                     batch_size=actual_batch_size,
                     seed=seed,
-                    force_fps=24,
+                    force_fps="24",  # Must be string, not int
                     num_inference_steps=num_inference_steps,
                     guidance_scale=actual_guidance,
                     guidance2_scale=guidance_scale2,
