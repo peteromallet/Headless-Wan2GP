@@ -418,7 +418,7 @@ class WanOrchestrator:
                         video_length=actual_video_length,
                         batch_size=actual_batch_size,
                         seed=seed,
-                        force_fps="24",  # Must be string, not int
+                        force_fps="auto",  # Use model default (16 fps for VACE)
                         num_inference_steps=num_inference_steps,
                         guidance_scale=actual_guidance,
                         guidance2_scale=actual_guidance,
