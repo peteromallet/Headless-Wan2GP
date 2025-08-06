@@ -77,7 +77,7 @@ class WanOrchestrator:
             save_path_choice="outputs/",
             attention_choice="auto",
             compile_choice=0,
-            profile_choice="balanced",
+            profile_choice=4,  # Profile 4: LowRAM_LowVRAM (Default)
             vae_config_choice="default",
             metadata_choice="none",
             quantization_choice="int8"
