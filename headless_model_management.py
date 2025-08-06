@@ -467,6 +467,7 @@ class HeadlessTaskQueue:
             "video_length": "video_length",
             "num_inference_steps": "num_inference_steps",
             "guidance_scale": "guidance_scale",
+            "flow_shift": "flow_shift",  # Important for CausVid/LightI2X settings
             "seed": "seed",
             "video_guide": "video_guide",
             "video_mask": "video_mask",
@@ -495,6 +496,60 @@ class HeadlessTaskQueue:
                 wgp_params["lora_multipliers"] = [float(x.strip()) for x in multipliers_str.split(",") if x.strip()]
             else:
                 wgp_params["lora_multipliers"] = task.parameters["loras_multipliers"]
+        
+        # Apply special LoRA settings (CausVid, LightI2X) if flags are present
+        use_causvid = task.parameters.get("use_causvid_lora", False)
+        use_lighti2x = task.parameters.get("use_lighti2x_lora", False)
+        
+        if use_causvid:
+            self.logger.info(f"[Task {task.task_id}] Applying CausVid LoRA settings: steps=9, guidance=1.0, flow_shift=1.0")
+            # Apply CausVid-specific parameters, but allow task to override if explicitly specified
+            if "num_inference_steps" not in wgp_params:
+                wgp_params["num_inference_steps"] = 9
+            if "guidance_scale" not in wgp_params:
+                wgp_params["guidance_scale"] = 1.0
+            if "flow_shift" not in wgp_params:
+                wgp_params["flow_shift"] = 1.0
+            
+            # Ensure CausVid LoRA is in activated list
+            current_loras = wgp_params.get("lora_names", [])
+            causvid_lora = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
+            if causvid_lora not in current_loras:
+                current_loras.append(causvid_lora)
+                wgp_params["lora_names"] = current_loras
+                
+                # Add multiplier for CausVid LoRA
+                current_multipliers = wgp_params.get("lora_multipliers", [])
+                while len(current_multipliers) < len(current_loras):
+                    current_multipliers.append(1.0)
+                wgp_params["lora_multipliers"] = current_multipliers
+        
+        if use_lighti2x:
+            self.logger.info(f"[Task {task.task_id}] Applying LightI2X LoRA settings: steps=5, guidance=1.0, flow_shift=5.0")
+            # Apply LightI2X-specific parameters
+            if "num_inference_steps" not in wgp_params:
+                wgp_params["num_inference_steps"] = 5
+            if "guidance_scale" not in wgp_params:
+                wgp_params["guidance_scale"] = 1.0
+            if "flow_shift" not in wgp_params:
+                wgp_params["flow_shift"] = 5.0
+            
+            # LightI2X-specific settings
+            wgp_params["sample_solver"] = "unipc"
+            wgp_params["denoise_strength"] = 1.0
+            
+            # Ensure LightI2X LoRA is in activated list
+            current_loras = wgp_params.get("lora_names", [])
+            lighti2x_lora = "wan_lcm_r16_fp32_comfy.safetensors"
+            if lighti2x_lora not in current_loras:
+                current_loras.append(lighti2x_lora)
+                wgp_params["lora_names"] = current_loras
+                
+                # Add multiplier for LightI2X LoRA
+                current_multipliers = wgp_params.get("lora_multipliers", [])
+                while len(current_multipliers) < len(current_loras):
+                    current_multipliers.append(1.0)
+                wgp_params["lora_multipliers"] = current_multipliers
         
         return wgp_params
     
