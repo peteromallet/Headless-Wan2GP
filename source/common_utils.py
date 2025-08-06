@@ -2122,19 +2122,13 @@ def prepare_output_path(
             output_dir_for_task = main_output_dir_base
 
             # To avoid name collisions we prefix the filename with the task_id
-            # Skip prefixing for files with unique patterns (UUID suffixes or timestamp patterns)
+            # Skip prefixing for files with UUID patterns (they guarantee uniqueness)
             import re
-            # Match UUID pattern: _HHMMSS_uuid6.ext OR timestamp pattern: _YYYYMMDDHHMMSSMMM_
-            unique_patterns = [
-                r'_\d{6}_[a-f0-9]{6}\.(mp4|png|jpg|jpeg)$',  # UUID pattern
-                r'_\d{17}_',  # Long timestamp pattern (YYYYMMDDHHMMSSMMM)
-                r'seg\d{2}_output',  # segment output pattern
-                r'travel_final',  # travel final pattern
-                r'_s\d+_colormatched',  # colormatched pattern
-            ]
-            has_unique_pattern = any(re.search(pattern, filename, re.IGNORECASE) for pattern in unique_patterns)
+            # Match UUID pattern: _HHMMSS_uuid6.ext 
+            uuid_pattern = r'_\d{6}_[a-f0-9]{6}\.(mp4|png|jpg|jpeg)$'
+            has_uuid_pattern = re.search(uuid_pattern, filename, re.IGNORECASE)
             
-            if not filename.startswith(task_id) and not has_unique_pattern:
+            if not filename.startswith(task_id) and not has_uuid_pattern:
                 filename = f"{task_id}_{filename}"
 
             dprint(
