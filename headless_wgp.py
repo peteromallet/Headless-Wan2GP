@@ -470,8 +470,8 @@ class WanOrchestrator:
                         audio_prompt_type="disabled",
                         speakers_locations="",
                         
-                        # Sliding window (auto-computed)
-                        sliding_window_size=0,
+                        # Sliding window (disabled for short videos)  
+                        sliding_window_size=129,  # Default to 129 frames (matches WGP UI default)
                         sliding_window_overlap=0,
                         sliding_window_color_correction_strength=0.0,
                         sliding_window_overlap_noise=0.1,
@@ -579,8 +579,8 @@ class WanOrchestrator:
                     audio_prompt_type="",
                     speakers_locations="",
                     
-                    # Sliding window (disabled)
-                    sliding_window_size=0,
+                    # Sliding window (disabled for short videos)
+                    sliding_window_size=129,  # Default to 129 frames (matches WGP UI default)
                     sliding_window_overlap=0,
                     sliding_window_color_correction_strength=0.0,
                     sliding_window_overlap_noise=0.0,
