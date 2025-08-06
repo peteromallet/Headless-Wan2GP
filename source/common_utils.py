@@ -1623,15 +1623,18 @@ def download_image_if_url(image_url_or_path: str, download_target_dir: Path | st
         dprint(f"Task {task_id_for_logging}: Not downloading image (not URL or no target dir): {image_url_or_path}")
         return image_url_or_path
 
-def image_to_frame(image_path_str: str | Path, target_resolution_wh: tuple[int, int] | None = None, task_id_for_logging: str | None = "generic_task", image_download_dir: Path | str | None = None) -> np.ndarray | None:
+def image_to_frame(image_path_str: str | Path, target_resolution_wh: tuple[int, int] | None = None, task_id_for_logging: str | None = "generic_task", image_download_dir: Path | str | None = None, force_download_for_functionality: bool = False) -> np.ndarray | None:
     """
     Load an image, optionally resize, and convert to BGR NumPy array.
     If image_path_str is a URL and image_download_dir is provided, it attempts to download it first.
+    
+    Args:
+        force_download_for_functionality: If True, downloads URLs even when not in debug mode (for VACE, etc.)
     """
     resolved_image_path_str = image_path_str # Default to original path
 
     if isinstance(image_path_str, str): # Only attempt download if it's a string (potentially a URL)
-        resolved_image_path_str = download_image_if_url(image_path_str, image_download_dir, task_id_for_logging)
+        resolved_image_path_str = download_image_if_url(image_path_str, image_download_dir, task_id_for_logging, debug_mode=force_download_for_functionality)
     
     image_path = Path(resolved_image_path_str)
 

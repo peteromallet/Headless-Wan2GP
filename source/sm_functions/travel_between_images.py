@@ -751,9 +751,15 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             dprint(f"[CONTENT_DEBUG]   Current segment idx: {segment_idx}")
             dprint(f"[CONTENT_DEBUG]   End anchor idx will be: {segment_idx + 1}")
 
-            # The download is now handled inside sm_create_guide_video_for_travel_segment (via sm_image_to_frame)
-            # Just pass the original paths.
-            input_images_resolved_for_guide = input_images_resolved_original
+            # Use the already downloaded local paths for guide video creation
+            # The color matching logic above has already downloaded the images we need
+            input_images_resolved_for_guide = input_images_resolved_original.copy()
+            if start_ref_path_for_cm and segment_idx < len(input_images_resolved_for_guide):
+                input_images_resolved_for_guide[segment_idx] = start_ref_path_for_cm
+            if end_ref_path_for_cm and (segment_idx + 1) < len(input_images_resolved_for_guide):
+                input_images_resolved_for_guide[segment_idx + 1] = end_ref_path_for_cm
+            
+            dprint(f"[CONTENT_DEBUG] Seg {segment_idx}: Using local paths for guide video: {input_images_resolved_for_guide}")
 
             end_anchor_img_path_str_idx = segment_idx + 1
             if full_orchestrator_payload.get("continue_from_video_resolved_path"):
