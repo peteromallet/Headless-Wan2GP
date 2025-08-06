@@ -4388,6 +4388,9 @@ def generate_video(
     frames_to_inject = []
     any_background_ref = False
     outpainting_dims = None if video_guide_outpainting== None or len(video_guide_outpainting) == 0 or video_guide_outpainting == "0 0 0 0" or video_guide_outpainting.startswith("#") else [int(v) for v in video_guide_outpainting.split(" ")] 
+    
+    # Initialize nb_frames_positions to avoid UnboundLocalError
+    nb_frames_positions = 0
 
     if image_refs is not None and len(image_refs) > 0:
         frames_positions_list = [ int(pos)-1 for pos in frames_positions.split(" ")] if frames_positions is not None and len(frames_positions)> 0 else []

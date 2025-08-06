@@ -367,7 +367,7 @@ class WanOrchestrator:
         image_end = None
         model_mode = "generate"
         video_source = ""
-        image_refs = ""
+        image_refs = []
         denoising_strength = 1.0
 
         # Create minimal task and callback objects
@@ -428,32 +428,8 @@ class WanOrchestrator:
                 print(f"[WGP_CALL_DEBUG] model_type: '{self.current_model}'")
                 print(f"[WGP_CALL_DEBUG] About to call _generate_video directly (no patching)...")
             
-            # [VACE_FIX] Apply the same surgical fix as in wgp_utils.py
-            vace_model_type = self.current_model
-            if vace_model_type and vace_model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
-                print(f"[HEADLESS_WGP_VACE_DEBUG] Applying VACE fix for model: {vace_model_type}")
-                
-                # Import wgp module to access load_models
-                import wgp as wgp_mod
-                original_load_models = wgp_mod.load_models
-                
-                def vace_load_models_wrapper(model_type):
-                    print(f"[HEADLESS_WGP_VACE_DEBUG] load_models() wrapper called with model_type='{model_type}'")
-                    
-                    if model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
-                        print(f"[HEADLESS_WGP_VACE_DEBUG] VACE model detected: '{model_type}' - resolving to base type")
-                        print(f"[HEADLESS_WGP_VACE_DEBUG] load_models() override: '{model_type}' → base_type 't2v' for config resolution")
-                        # Call original load_models with t2v for proper config resolution
-                        return original_load_models("t2v")
-                    else:
-                        print(f"[HEADLESS_WGP_VACE_DEBUG] Non-VACE model: '{model_type}' - using normal behavior")
-                        return original_load_models(model_type)
-                
-                # Temporarily replace load_models function
-                wgp_mod.load_models = vace_load_models_wrapper
-                
-                try:
-                    result = self._generate_video(
+            # Call the VACE-fixed generate_video (patching is handled in wrapper)
+            result = self._generate_video(
                         task=task,
                         send_cmd=send_cmd,
                         state=self.state,
@@ -562,118 +538,7 @@ class WanOrchestrator:
                         # Additional kwargs
                         **kwargs
                     )
-                finally:
-                    # Restore original load_models function
-                    wgp_mod.load_models = original_load_models
-                    print(f"[HEADLESS_WGP_VACE_DEBUG] Restored original load_models function")
-            else:
-                # Non-VACE model, call directly
-                result = self._generate_video(
-                    task=task,
-                    send_cmd=send_cmd,
-                    state=self.state,
-                    image_mode=image_mode,
-                    
-                    # Core parameters
-                    model_type=self.current_model,
-                    prompt=prompt,
-                    negative_prompt=negative_prompt,
-                    resolution=resolution,
-                    video_length=actual_video_length,
-                    batch_size=actual_batch_size,
-                    seed=seed,
-                    force_fps="24",  # Must be string, not int
-                    num_inference_steps=num_inference_steps,
-                    guidance_scale=actual_guidance,
-                    guidance2_scale=actual_guidance,
-                    switch_threshold=0.5,
-                    audio_guidance_scale=3.0,
-                    flow_shift=flow_shift,
-                    sample_solver=sample_solver,
-                    embedded_guidance_scale=embedded_guidance_scale,
-                    repeat_generation=1,
-                    
-                    # Multi-generation settings
-                    multi_prompts_gen_type=0,  # 0: new video, 1: sliding window
-                    multi_images_gen_type=0,  # 0: every combination, 1: match prompts
-                    skip_steps_cache_type="",  # Empty string disables caching
-                    skip_steps_multiplier=1.0,
-                    skip_steps_start_step_perc=0.0,
-                    
-                    # LoRA settings
-                    activated_loras=activated_loras,
-                    loras_multipliers=loras_multipliers_str,
-                    
-                    # Image/Video inputs
-                    image_prompt_type=image_prompt_type,
-                    image_start=image_start,
-                    image_end=image_end,
-                    model_mode=model_mode,
-                    video_source=video_source,
-                    keep_frames_video_source="",
-                    video_prompt_type=video_prompt_type,
-                    image_refs=image_refs,
-                    frames_positions="",
-                    video_guide=video_guide,
-                    video_guide2=video_guide2,  # NEW: Secondary guide
-                    video_mask2=video_mask2,    # NEW: Secondary mask
-                    image_guide="",
-                    keep_frames_video_guide="",
-                    denoising_strength=denoising_strength,
-                    video_guide_outpainting="0 0 0 0",  # Must be space-separated, not comma-separated
-                    video_mask=video_mask,
-                    image_mask="",
-                    control_net_weight=control_net_weight,
-                    control_net_weight2=control_net_weight2,
-                    mask_expand=0,
-                    
-                    # Audio settings
-                    audio_guide="",
-                    audio_guide2="",
-                    audio_source="",
-                    audio_prompt_type="",
-                    speakers_locations="",
-                    
-                    # Sliding window (disabled for short videos)
-                    sliding_window_size=129,  # Default to 129 frames (matches WGP UI default)
-                    sliding_window_overlap=0,
-                    sliding_window_color_correction_strength=0.0,
-                    sliding_window_overlap_noise=0.0,
-                    sliding_window_discard_last_frames=0,
-                    
-                    # Post-processing (disabled)
-                    remove_background_images_ref=0,
-                    temporal_upsampling="",  # Must be string, not float
-                    spatial_upsampling="",   # Must be string, not float  
-                    film_grain_intensity=0.0,
-                    film_grain_saturation=0.0,
-                    MMAudio_setting=0,       # Must be int, not string
-                    MMAudio_prompt="",
-                    MMAudio_neg_prompt="",
-                    
-                    # Advanced parameters (defaults)
-                    RIFLEx_setting=0,
-                    NAG_scale=0.0,
-                    NAG_tau=1.0,
-                    NAG_alpha=0.0,
-                    slg_switch=0,
-                    slg_layers="",
-                    slg_start_perc=0.0,
-                    slg_end_perc=100.0,
-                    apg_switch=0,
-                    cfg_star_switch=0,
-                    cfg_zero_step=0,
-                    prompt_enhancer=0,
-                    min_frames_if_references=9,
-                    
-                    # Mode and filename
-                    mode="generate",
-                    model_filename="",
-                    
-                    # Additional kwargs
-                    **kwargs
-                )
-            
+
             # WGP doesn't return the path, but stores it in state["gen"]["file_list"]
             output_path = None
             try:
@@ -741,25 +606,26 @@ class WanOrchestrator:
             control_net_weight2=control_net_weight2,
             **kwargs
         )
-    
-    def generate_flux(self, 
-                     prompt: str,
-                     num_images: int = 1,
-                     resolution: str = "1024x1024",
-                     embedded_guidance_scale: float = 3.0,
-                     **kwargs) -> str:
-        """Generate Flux images."""
+
+    def generate_flux(self, prompt: str, images: int = 4, **kwargs) -> str:
+        """Generate Flux images.
+        
+        Args:
+            prompt: Text prompt for generation
+            images: Number of images to generate (uses video_length parameter)
+            **kwargs: Additional parameters
+            
+        Returns:
+            Path to generated image(s)
+        """
         if not self._is_flux():
             print(f"⚠️  Warning: Current model {self.current_model} may not be a Flux model")
         
         return self.generate(
             prompt=prompt,
-            video_length=num_images,  # For Flux, video_length = number of images
-            resolution=resolution,
-            embedded_guidance_scale=embedded_guidance_scale,
+            video_length=images,  # For Flux, video_length = number of images
             **kwargs
         )
-
 
 # Backward compatibility
 WanContentOrchestrator = WanOrchestrator
