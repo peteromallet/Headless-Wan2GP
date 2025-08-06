@@ -570,8 +570,8 @@ class WanOrchestrator:
                     
                     # Post-processing (disabled)
                     remove_background_images_ref=0,
-                    temporal_upsampling=1.0,
-                    spatial_upsampling=1.0,
+                    temporal_upsampling="",  # Must be string, not float
+                    spatial_upsampling="",   # Must be string, not float  
                     film_grain_intensity=0.0,
                     film_grain_saturation=0.0,
                     MMAudio_setting="disabled",
