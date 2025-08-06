@@ -119,21 +119,37 @@ class WanOrchestrator:
         if self._test_vace_module(model_key):
             # Get absolute paths to handle different working directories
             wgp_dir = os.path.dirname(os.path.abspath(wgp.__file__))
-            config_source = os.path.join(wgp_dir, f"configs/{model_key}.json")
             config_target = os.path.join(wgp_dir, "ckpts/config.json")
             
             print(f"🔧 VACE Config Debug: wgp_dir={wgp_dir}")
-            print(f"🔧 VACE Config Debug: config_source={config_source} (exists: {os.path.exists(config_source)})")
             print(f"🔧 VACE Config Debug: config_target={config_target} (exists: {os.path.exists(config_target)})")
             
-            if os.path.exists(config_source) and not os.path.exists(config_target):
+            if not os.path.exists(config_target):
+                # Embedded VACE config to avoid dependency on external files
+                vace_config = {
+                    "_class_name": "VaceWanModel",
+                    "_diffusers_version": "0.30.0",
+                    "dim": 5120,
+                    "eps": 1e-06,
+                    "ffn_dim": 13824,
+                    "freq_dim": 256,
+                    "in_dim": 16,
+                    "model_type": "t2v",
+                    "num_heads": 40,
+                    "num_layers": 40,
+                    "out_dim": 16,
+                    "text_len": 512,
+                    "vace_layers": [0, 5, 10, 15, 20, 25, 30, 35],
+                    "vace_in_dim": 96
+                }
+                
+                import json
                 os.makedirs(os.path.dirname(config_target), exist_ok=True)
-                shutil.copy2(config_source, config_target)
-                print(f"🔧 Created {config_target} for VACE module loading")
-            elif os.path.exists(config_target):
-                print(f"🔧 Config already exists at {config_target}")
+                with open(config_target, 'w') as f:
+                    json.dump(vace_config, f, indent=2)
+                print(f"🔧 Created {config_target} for VACE module loading (embedded config)")
             else:
-                print(f"🔧 WARNING: Source config not found at {config_source}")
+                print(f"🔧 Config already exists at {config_target}")
         
         # Actually load the model using WGP's proper loading flow
         # This handles VACE modules, LoRA discovery, etc.
