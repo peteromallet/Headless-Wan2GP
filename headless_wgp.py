@@ -585,24 +585,17 @@ class WanOrchestrator:
         if not self._is_vace():
             print(f"⚠️  Warning: Current model {self.current_model} may not be a VACE model")
         
-        # Filter out unsupported parameters that WGP doesn't accept
-        # Note: video_guide2 and video_mask2 are not supported by the underlying generate_video function
-        generation_params = {
-            "prompt": prompt,
-            "video_guide": video_guide,
-            "video_mask": video_mask,
-            "video_prompt_type": video_prompt_type,
-            "control_net_weight": control_net_weight,
-            "control_net_weight2": control_net_weight2,
+        return self.generate(
+            prompt=prompt,
+            video_guide=video_guide,
+            video_mask=video_mask,
+            video_guide2=video_guide2,  # Now properly supported in WGP
+            video_mask2=video_mask2,    # Now properly supported in WGP
+            video_prompt_type=video_prompt_type,
+            control_net_weight=control_net_weight,
+            control_net_weight2=control_net_weight2,
             **kwargs
-        }
-        
-        # Remove unsupported parameters
-        unsupported_params = ["video_guide2", "video_mask2"]
-        for param in unsupported_params:
-            generation_params.pop(param, None)
-        
-        return self.generate(**generation_params)
+        )
     
     def generate_flux(self, 
                      prompt: str,
