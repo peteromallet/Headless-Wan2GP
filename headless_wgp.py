@@ -122,10 +122,18 @@ class WanOrchestrator:
             config_source = os.path.join(wgp_dir, f"configs/{model_key}.json")
             config_target = os.path.join(wgp_dir, "ckpts/config.json")
             
+            print(f"🔧 VACE Config Debug: wgp_dir={wgp_dir}")
+            print(f"🔧 VACE Config Debug: config_source={config_source} (exists: {os.path.exists(config_source)})")
+            print(f"🔧 VACE Config Debug: config_target={config_target} (exists: {os.path.exists(config_target)})")
+            
             if os.path.exists(config_source) and not os.path.exists(config_target):
                 os.makedirs(os.path.dirname(config_target), exist_ok=True)
                 shutil.copy2(config_source, config_target)
                 print(f"🔧 Created {config_target} for VACE module loading")
+            elif os.path.exists(config_target):
+                print(f"🔧 Config already exists at {config_target}")
+            else:
+                print(f"🔧 WARNING: Source config not found at {config_source}")
         
         # Actually load the model using WGP's proper loading flow
         # This handles VACE modules, LoRA discovery, etc.
