@@ -497,6 +497,12 @@ class HeadlessTaskQueue:
             else:
                 wgp_params["lora_multipliers"] = task.parameters["loras_multipliers"]
         
+        # Set defaults for parameters if not already specified
+        if "flow_shift" not in wgp_params:
+            wgp_params["flow_shift"] = 3.0  # WGP default
+        if "sample_solver" not in wgp_params:
+            wgp_params["sample_solver"] = "euler"  # WGP default
+        
         # Apply special LoRA settings (CausVid, LightI2X) if flags are present
         use_causvid = task.parameters.get("use_causvid_lora", False)
         use_lighti2x = task.parameters.get("use_lighti2x_lora", False)
