@@ -66,7 +66,14 @@ class WanOrchestrator:
             },
             "loras": [],
             "loras_names": [],
-            "loras_presets": {}
+            "loras_presets": {},
+            # Additional state properties to prevent future KeyErrors
+            "validate_success": 1,      # Required for validation checks
+            "apply_success": 1,         # Required for settings application  
+            "refresh": None,            # Required for UI refresh operations
+            "all_settings": {},        # Required for settings persistence
+            "image_mode_tab": 0,       # Required for image/video mode switching
+            "prompt": ""               # Required for prompt handling
         }
         
         # Apply sensible defaults (mirrors typical UI defaults)
