@@ -1624,7 +1624,7 @@ def get_lora_dir(model_type):
             lora_dir =args.lora_dir_i2v
         if len(lora_dir) > 0:
             return lora_dir
-        root_lora_dir = "Wan2GP/loras_i2v" if i2v else "Wan2GP/loras"
+        root_lora_dir = "loras_i2v" if i2v else "loras"
 
         if  "1.3B" in model_type :
             lora_dir_1_3B = os.path.join(root_lora_dir, "1.3B")
