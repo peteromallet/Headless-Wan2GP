@@ -439,7 +439,7 @@ class WanOrchestrator:
                         image_start=None,
                         image_end=None,
                         image_refs=[],
-                        frames_positions=[],
+                        frames_positions="",  # Must be string, not list
                         image_guide=None,
                         image_mask=None,
                         
