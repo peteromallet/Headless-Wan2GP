@@ -894,10 +894,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # Define the absolute final output path for the WGP generation by process_single_task.
         # If DB_TYPE is SQLite, process_single_task will ignore this and save to public/files, returning a relative path.
         # If not SQLite, process_single_task will use this path (or its default construction) and return an absolute path.
-        # Use consistent UUID-based naming pattern for final output
-        timestamp_short = datetime.now().strftime("%H%M%S")
-        unique_suffix = uuid.uuid4().hex[:6]
-        wgp_video_filename = f"seg{segment_idx:02d}_output_{timestamp_short}_{unique_suffix}.mp4"
+        wgp_video_filename = f"{orchestrator_run_id}_seg{segment_idx:02d}_output.mp4"
         # For non-SQLite, wgp_final_output_path_for_this_segment is a suggestion for process_single_task
         # For SQLite, this specific path isn't strictly used by process_single_task for its *final* save, but can be logged.
         wgp_final_output_path_for_this_segment = segment_processing_dir / wgp_video_filename 
@@ -1302,10 +1299,7 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
         # --- Always move WGP output to proper location first ---
         # For SQLite, this moves the file from outputs/ to public/files/
         # For other DBs, this ensures consistent file management
-        # Use consistent UUID-based naming for moved WGP output
-        timestamp_short = datetime.now().strftime("%H%M%S")
-        unique_suffix = uuid.uuid4().hex[:6]
-        moved_filename = f"{wgp_task_id}_{orchestrator_run_id}_seg{segment_idx_completed:02d}_output_{timestamp_short}_{unique_suffix}{video_to_process_abs_path.suffix}"
+        moved_filename = f"{orchestrator_run_id}_seg{segment_idx_completed:02d}_output{video_to_process_abs_path.suffix}"
         moved_video_abs_path, moved_db_path = prepare_output_path(
             task_id=wgp_task_id,
             filename=moved_filename,
@@ -2032,13 +2026,9 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             dprint(f"Stitch: No upscaling (factor: {upscale_factor})")
 
         # Use prepare_output_path_with_upload to handle final video location consistently (with Supabase upload support)
-        # Use consistent UUID-based naming pattern for final output
-        timestamp_short = datetime.now().strftime("%H%M%S")
-        unique_suffix = uuid.uuid4().hex[:6]
+        final_video_filename = f"{orchestrator_run_id}_final{video_path_after_optional_upscale.suffix}"
         if upscale_factor > 1.0:
-            final_video_filename = f"travel_final_upscaled_{upscale_factor:.1f}x_{timestamp_short}_{unique_suffix}{video_path_after_optional_upscale.suffix}"
-        else:
-            final_video_filename = f"travel_final_{timestamp_short}_{unique_suffix}{video_path_after_optional_upscale.suffix}"
+            final_video_filename = f"{orchestrator_run_id}_final_upscaled_{upscale_factor:.1f}x{video_path_after_optional_upscale.suffix}"
         
         final_video_path, initial_db_location = prepare_output_path_with_upload(
             task_id=stitch_task_id_str,
