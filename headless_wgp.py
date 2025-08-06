@@ -442,8 +442,6 @@ class WanOrchestrator:
                         
                         # Standard defaults for other parameters
                         audio_guidance_scale=1.0,
-                        flow_shift=7.0,
-                        sample_solver="euler",
                         repeat_generation=1,
                         multi_prompts_gen_type=0,  # 0: new video, 1: sliding window
                         multi_images_gen_type=0,  # 0: every combination, 1: match prompts
