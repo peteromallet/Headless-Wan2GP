@@ -406,6 +406,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # FIX: Prioritize job-specific settings from orchestrator payload over server-wide CLI flags.
         effective_colour_match_enabled = full_orchestrator_payload.get("colour_match_videos", colour_match_videos)
         effective_apply_reward_lora = full_orchestrator_payload.get("apply_reward_lora", apply_reward_lora)
+        debug_enabled = segment_params.get("debug_mode_enabled", full_orchestrator_payload.get("debug_mode_enabled", False))
 
         additional_loras = full_orchestrator_payload.get("additional_loras", {})
         if additional_loras:
@@ -450,7 +451,6 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     end_ref_path_for_cm = input_images_for_cm[segment_idx + 1]
             
             # Download images if they are URLs so they exist locally for the color matching function.
-            debug_enabled = full_orchestrator_payload.get("debug_mode_enabled", False)
             if start_ref_path_for_cm:
                 start_ref_path_for_cm = sm_download_image_if_url(
                     start_ref_path_for_cm, 
