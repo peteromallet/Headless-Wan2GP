@@ -1084,7 +1084,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     dprint(f"[WGP_DEBUG] Task queue generation failed: {task_status.error_message}")
                     break
                 else:
-                    dprint(f"[WGP_DEBUG] Task queue generation in progress: {task_status.status}")
+                    # Removed verbose progress log to reduce noise
                     time.sleep(1.0)
         else:
             dprint(f"[WGP_DEBUG] Using legacy wgp_utils for generation")
