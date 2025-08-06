@@ -117,11 +117,13 @@ class WanOrchestrator:
         
         # VACE models require a config.json in the ckpts directory for mmgp
         if self._test_vace_module(model_key):
-            config_source = f"configs/{model_key}.json"
-            config_target = "ckpts/config.json"
+            # Get absolute paths to handle different working directories
+            wgp_dir = os.path.dirname(os.path.abspath(wgp.__file__))
+            config_source = os.path.join(wgp_dir, f"configs/{model_key}.json")
+            config_target = os.path.join(wgp_dir, "ckpts/config.json")
             
             if os.path.exists(config_source) and not os.path.exists(config_target):
-                os.makedirs("ckpts", exist_ok=True)
+                os.makedirs(os.path.dirname(config_target), exist_ok=True)
                 shutil.copy2(config_source, config_target)
                 print(f"🔧 Created {config_target} for VACE module loading")
         
