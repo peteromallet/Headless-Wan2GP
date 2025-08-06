@@ -161,53 +161,14 @@ class WanOrchestrator:
             self.state["loras_presets"] = {}
 
     def _create_vace_fixed_generate_video(self, original_generate_video):
-        """Create a wrapper around generate_video that applies our VACE fix.
+        """Create a wrapper around generate_video for VACE models.
         
-        For VACE models, we need to patch get_base_model_type to return 't2v'
-        during load_models() so the base transformer uses configs/t2v.json,
-        while still passing the VACE model name so its modules get loaded.
+        VACE models are built on top of t2v and need special handling.
+        We've fixed load_wan_model in wgp.py to properly detect VACE models.
         """
         def vace_fixed_generate_video(*args, **kwargs):
-            # Extract model_type from kwargs
-            model_type = kwargs.get('model_type')
-            
-            if model_type and model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
-                print(f"[HEADLESS_WGP_VACE_DEBUG] Applying VACE fix for model: {model_type}")
-                
-                # Import wgp module to access load_models
-                import wgp as wgp_mod
-                original_load_models = wgp_mod.load_models
-                
-                # We need to patch get_base_model_type ONLY during load_models
-                # This allows the VACE modules to load while using T2V config
-                original_get_base_model_type = wgp_mod.get_base_model_type
-                
-                def vace_get_base_model_type_wrapper(model_type_param):
-                    """Return 't2v' for VACE models during config resolution."""
-                    if model_type_param in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
-                        print(f"[VACE_LOAD_DEBUG] get_base_model_type('{model_type_param}') → 't2v' (patched for config)")
-                        return "t2v"
-                    else:
-                        return original_get_base_model_type(model_type_param)
-                
-                # Temporarily replace get_base_model_type function
-                wgp_mod.get_base_model_type = vace_get_base_model_type_wrapper
-                print(f"[HEADLESS_WGP_VACE_DEBUG] Patched get_base_model_type to return 't2v' for VACE config resolution")
-                
-                try:
-                    # Call original generate_video which will:
-                    # 1. Call load_models("vace_14B") 
-                    # 2. load_models will call get_base_model_type("vace_14B") → "t2v"
-                    # 3. Base transformer loads with configs/t2v.json
-                    # 4. VACE module loads from modules list in vace_14B.json
-                    return original_generate_video(*args, **kwargs)
-                finally:
-                    # Restore original get_base_model_type function
-                    wgp_mod.get_base_model_type = original_get_base_model_type
-                    print(f"[HEADLESS_WGP_VACE_DEBUG] Restored original get_base_model_type function")
-            else:
-                # Non-VACE model, call directly
-                return original_generate_video(*args, **kwargs)
+            # No patching needed anymore - wgp.py now handles VACE correctly
+            return original_generate_video(*args, **kwargs)
         
         return vace_fixed_generate_video
 
