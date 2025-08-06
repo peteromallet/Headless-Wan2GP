@@ -2124,7 +2124,12 @@ def prepare_output_path(
             output_dir_for_task = main_output_dir_base
 
             # To avoid name collisions we prefix the filename with the task_id
-            if not filename.startswith(task_id):
+            # Skip prefixing for UUID-based filenames (they already guarantee uniqueness)
+            import re
+            uuid_pattern = r'_\d{6}_[a-f0-9]{6}\.(mp4|png|jpg|jpeg)$'
+            has_uuid_suffix = re.search(uuid_pattern, filename, re.IGNORECASE)
+            
+            if not filename.startswith(task_id) and not has_uuid_suffix:
                 filename = f"{task_id}_{filename}"
 
             dprint(
