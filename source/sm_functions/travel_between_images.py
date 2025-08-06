@@ -1325,6 +1325,8 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                     
         except Exception as e_move:
             dprint(f"Chain (Seg {segment_idx_completed}): Warning - could not move WGP output to proper location: {e_move}. Using original path.")
+            # If move failed, keep original paths for further processing
+            final_video_path_for_db = str(video_to_process_abs_path)
 
         # --- Post-generation Processing Chain ---
         # Saturation and Brightness are only applied to segments AFTER the first one.
