@@ -2242,6 +2242,10 @@ for model_type in model_types:
 
 
 transformer_types = server_config.get("transformer_types", [])
+# CRITICAL: Ensure transformer_types is always a list, never string
+if not isinstance(transformer_types, list):
+    print(f"[WGP_CONFIG_FIX] transformer_types was {type(transformer_types)} ({transformer_types}), converting to empty list")
+    transformer_types = []
 new_transformer_types = []
 for model_type in transformer_types:
     if get_model_def(model_type) == None:
@@ -2284,7 +2288,11 @@ if len(args.vae_config) > 0:
 reload_needed = False
 default_ui = server_config.get("default_ui", "t2v") 
 save_path = server_config.get("save_path", os.path.join(os.getcwd(), "gradio_outputs"))
-preload_model_policy = server_config.get("preload_model_policy", []) 
+preload_model_policy = server_config.get("preload_model_policy", [])
+# CRITICAL: Ensure preload_model_policy is always a list, never int/string
+if not isinstance(preload_model_policy, list):
+    print(f"[WGP_CONFIG_FIX] preload_model_policy was {type(preload_model_policy)}, converting to empty list")
+    preload_model_policy = [] 
 
 
 if args.t2v_14B or args.t2v: 
