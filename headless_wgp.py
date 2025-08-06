@@ -440,8 +440,8 @@ class WanOrchestrator:
                         flow_shift=7.0,
                         sample_solver="euler",
                         repeat_generation=1,
-                        multi_prompts_gen_type="sequential",
-                        multi_images_gen_type="sequential",
+                        multi_prompts_gen_type=0,  # 0: new video, 1: sliding window
+                        multi_images_gen_type=0,  # 0: every combination, 1: match prompts
                         skip_steps_cache_type="",  # Empty string disables caching
                         skip_steps_multiplier=1.0,
                         skip_steps_start_step_perc=0.0,
@@ -467,7 +467,7 @@ class WanOrchestrator:
                         audio_guide=None,
                         audio_guide2=None,
                         audio_source=None,
-                        audio_prompt_type="disabled",
+                        audio_prompt_type="",  # Empty string disables audio prompts
                         speakers_locations="",
                         
                         # Sliding window (disabled for short videos)  
@@ -541,8 +541,8 @@ class WanOrchestrator:
                     repeat_generation=1,
                     
                     # Multi-generation settings
-                    multi_prompts_gen_type="batch",
-                    multi_images_gen_type="batch",
+                    multi_prompts_gen_type=0,  # 0: new video, 1: sliding window
+                    multi_images_gen_type=0,  # 0: every combination, 1: match prompts
                     skip_steps_cache_type="",  # Empty string disables caching
                     skip_steps_multiplier=1.0,
                     skip_steps_start_step_perc=0.0,
