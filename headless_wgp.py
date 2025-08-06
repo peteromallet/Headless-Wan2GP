@@ -112,6 +112,18 @@ class WanOrchestrator:
         
         # Import WGP to call load_models
         import wgp
+        import os
+        import shutil
+        
+        # VACE models require a config.json in the ckpts directory for mmgp
+        if self._test_vace_module(model_key):
+            config_source = f"configs/{model_key}.json"
+            config_target = "ckpts/config.json"
+            
+            if os.path.exists(config_source) and not os.path.exists(config_target):
+                os.makedirs("ckpts", exist_ok=True)
+                shutil.copy2(config_source, config_target)
+                print(f"🔧 Created {config_target} for VACE module loading")
         
         # Actually load the model using WGP's proper loading flow
         # This handles VACE modules, LoRA discovery, etc.
