@@ -206,6 +206,14 @@ class WanOrchestrator:
                 print(f"🔧 [MODEL_ERROR] ❌ Expected list of model files for VACE, got: {type(model_filename)} = {model_filename}")
                 print(f"🔧 [MODEL_ERROR] VACE models should have format: [base_model, secondary?, module1, module2, ...]")
         
+        # Debug: Check what get_model_recursive_prop returns for modules
+        modules = wgp.get_model_recursive_prop(model_key, "modules", return_list=True)
+        print(f"🔧 [MODULE_DISCOVERY] get_model_recursive_prop('{model_key}', 'modules') returned: {modules}")
+        
+        # Debug: Check model definition
+        model_def = wgp.get_model_def(model_key)
+        print(f"🔧 [MODEL_DEF] Model definition for '{model_key}': {model_def}")
+        
         # Actually load the model using WGP's proper loading flow
         # This handles VACE modules, LoRA discovery, etc.
         loras, loras_names, _, _, _, _, _ = wgp.setup_loras(model_key, None, wgp.get_lora_dir(model_key), '', None)
