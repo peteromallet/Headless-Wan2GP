@@ -131,12 +131,12 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
                 dprint(f"Single image task {task_id}: {causvid_lora_name} already exists")
                 
         if task_params_from_db.get("use_lighti2x_lora", False):
-            lighti2x_lora_name = "wan_lcm_r16_fp32_comfy.safetensors"
+            lighti2x_lora_name = "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors"
             lighti2x_target_path = base_lora_dir_for_model / lighti2x_lora_name
             
             if not lighti2x_target_path.exists():
                 dprint(f"Single image task {task_id}: {lighti2x_lora_name} not found. Attempting download...")
-                lighti2x_url = "https://huggingface.co/peteromallet/ad_motion_loras/resolve/main/wan_lcm_r16_fp32_comfy.safetensors"
+                lighti2x_url = "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors"
                 
                 if not download_file(lighti2x_url, base_lora_dir_for_model, lighti2x_lora_name):
                     dprint(f"Single image task {task_id}: WARNING - Failed to download {lighti2x_lora_name}. Proceeding without LightI2X LoRA.")

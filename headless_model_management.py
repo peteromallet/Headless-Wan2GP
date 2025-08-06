@@ -546,7 +546,7 @@ class HeadlessTaskQueue:
             
             # Ensure LightI2X LoRA is in activated list
             current_loras = wgp_params.get("lora_names", [])
-            lighti2x_lora = "wan_lcm_r16_fp32_comfy.safetensors"
+            lighti2x_lora = "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors"
             if lighti2x_lora not in current_loras:
                 current_loras.append(lighti2x_lora)
                 wgp_params["lora_names"] = current_loras

@@ -574,8 +574,8 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
 
             if task_params_dict.get("use_lighti2x_lora", False):
                 _ensure_lora_downloaded(
-                    task_id, "wan_lcm_r16_fp32_comfy.safetensors",
-                    "https://huggingface.co/peteromallet/ad_motion_loras/resolve/main/wan_lcm_r16_fp32_comfy.safetensors",
+                    task_id, "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
+                    "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
                     base_lora_dir_for_model, task_params_dict, "use_lighti2x_lora"
                 )
 
