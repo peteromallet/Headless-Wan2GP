@@ -2128,7 +2128,6 @@ def prepare_output_path(
             unique_patterns = [
                 r'_\d{6}_[a-f0-9]{6}\.(mp4|png|jpg|jpeg)$',  # UUID pattern
                 r'_\d{17}_',  # Long timestamp pattern (YYYYMMDDHHMMSSMMM)
-                r'\d{17}_seg\d{2}_output',  # timestamp + segment output pattern (20250806183912906_seg00_output)
                 r'seg\d{2}_output',  # segment output pattern
                 r'travel_final',  # travel final pattern
                 r'_s\d+_colormatched',  # colormatched pattern
