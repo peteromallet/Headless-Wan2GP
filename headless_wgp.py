@@ -115,41 +115,61 @@ class WanOrchestrator:
         import os
         import shutil
         
-        # VACE models require a config.json in the ckpts directory for mmgp
+        # VACE models require a config.json next to the module file for mmgp
         if self._test_vace_module(model_key):
             # Get absolute paths to handle different working directories
             wgp_dir = os.path.dirname(os.path.abspath(wgp.__file__))
-            config_target = os.path.join(wgp_dir, "ckpts/config.json")
             
-            print(f"🔧 VACE Config Debug: wgp_dir={wgp_dir}")
-            print(f"🔧 VACE Config Debug: config_target={config_target} (exists: {os.path.exists(config_target)})")
-            
-            if not os.path.exists(config_target):
-                # Embedded VACE config to avoid dependency on external files
-                vace_config = {
-                    "_class_name": "VaceWanModel",
-                    "_diffusers_version": "0.30.0",
-                    "dim": 5120,
-                    "eps": 1e-06,
-                    "ffn_dim": 13824,
-                    "freq_dim": 256,
-                    "in_dim": 16,
-                    "model_type": "t2v",
-                    "num_heads": 40,
-                    "num_layers": 40,
-                    "out_dim": 16,
-                    "text_len": 512,
-                    "vace_layers": [0, 5, 10, 15, 20, 25, 30, 35],
-                    "vace_in_dim": 96
-                }
+            # Find the VACE module file path from the model definition
+            model_filename = wgp.get_model_filename(model_key)
+            if isinstance(model_filename, list) and len(model_filename) > 2:
+                # Get the VACE module file (should be at index 2 or later)
+                vace_module_file = None
+                for module_file in model_filename[2:]:
+                    if 'vace' in module_file.lower():
+                        vace_module_file = module_file
+                        break
                 
-                import json
-                os.makedirs(os.path.dirname(config_target), exist_ok=True)
-                with open(config_target, 'w') as f:
-                    json.dump(vace_config, f, indent=2)
-                print(f"🔧 Created {config_target} for VACE module loading (embedded config)")
+                if vace_module_file:
+                    # Place config.json in the same directory as the VACE module
+                    module_dir = os.path.dirname(os.path.join(wgp_dir, vace_module_file))
+                    config_target = os.path.join(module_dir, "config.json")
+                    
+                    print(f"🔧 VACE Config Debug: wgp_dir={wgp_dir}")
+                    print(f"🔧 VACE Config Debug: vace_module_file={vace_module_file}")
+                    print(f"🔧 VACE Config Debug: module_dir={module_dir}")
+                    print(f"🔧 VACE Config Debug: config_target={config_target} (exists: {os.path.exists(config_target)})")
+                    
+                    if not os.path.exists(config_target):
+                        # Embedded VACE config to avoid dependency on external files
+                        vace_config = {
+                            "_class_name": "VaceWanModel",
+                            "_diffusers_version": "0.30.0",
+                            "dim": 5120,
+                            "eps": 1e-06,
+                            "ffn_dim": 13824,
+                            "freq_dim": 256,
+                            "in_dim": 16,
+                            "model_type": "t2v",
+                            "num_heads": 40,
+                            "num_layers": 40,
+                            "out_dim": 16,
+                            "text_len": 512,
+                            "vace_layers": [0, 5, 10, 15, 20, 25, 30, 35],
+                            "vace_in_dim": 96
+                        }
+                        
+                        import json
+                        os.makedirs(module_dir, exist_ok=True)
+                        with open(config_target, 'w') as f:
+                            json.dump(vace_config, f, indent=2)
+                        print(f"🔧 Created {config_target} next to VACE module (embedded config)")
+                    else:
+                        print(f"🔧 Config already exists at {config_target}")
+                else:
+                    print(f"🔧 WARNING: No VACE module file found in model_filename: {model_filename}")
             else:
-                print(f"🔧 Config already exists at {config_target}")
+                print(f"🔧 WARNING: Expected list of model files for VACE, got: {model_filename}")
         
         # Actually load the model using WGP's proper loading flow
         # This handles VACE modules, LoRA discovery, etc.
