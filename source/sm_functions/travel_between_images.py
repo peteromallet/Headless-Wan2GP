@@ -5,6 +5,8 @@ import traceback
 from pathlib import Path
 import time
 import subprocess
+import uuid
+from datetime import datetime
 
 try:
     import cv2
@@ -623,8 +625,10 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 model_name = full_orchestrator_payload.get("model_name", "")
                 is_vace_model = "vace" in model_name.lower()
 
-                # Improved mask naming: use descriptive name that shows its purpose
-                mask_filename = f"seg{segment_idx:02d}_vace_mask.mp4"
+                # Improved mask naming: use descriptive name with timestamp and UUID
+                timestamp_short = datetime.now().strftime("%H%M%S")
+                unique_suffix = uuid.uuid4().hex[:6]
+                mask_filename = f"seg{segment_idx:02d}_vace_mask_{timestamp_short}_{unique_suffix}.mp4"
                 # Create mask video in the same directory as guide video for consistency
                 mask_out_path_tmp = segment_processing_dir / mask_filename
                 
@@ -738,7 +742,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 print(f"[ERROR Task {segment_task_id_str}]: {msg}"); return False, msg
         
         try: # Guide Video Creation Block
-            guide_video_base_name = f"seg{segment_idx:02d}_vace_guide"
+            timestamp_short = datetime.now().strftime("%H%M%S")
+            unique_suffix = uuid.uuid4().hex[:6]
+            guide_video_base_name = f"seg{segment_idx:02d}_vace_guide_{timestamp_short}_{unique_suffix}"
             input_images_resolved_original = full_orchestrator_payload["input_image_paths_resolved"]
             
             # Guide video path will be handled by sm_create_guide_video_for_travel_segment using centralized logic
