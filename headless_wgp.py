@@ -62,7 +62,9 @@ class WanOrchestrator:
                 "queue": [],
                 "file_list": [],
                 "file_settings_list": [],
-                "selected": 0
+                "selected": 0,
+                "prompt_no": 1,
+                "prompts_max": 1
             },
             "loras": [],
             "loras_names": [],
