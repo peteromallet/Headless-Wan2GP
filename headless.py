@@ -1192,6 +1192,14 @@ def main():
         import wgp as wgp_mod
         print(f"[DEBUG] WGP imported successfully. Found {len(wgp_mod.models_def)} model definitions.")
         
+        # CRITICAL: Force correct config values immediately after import to override any bad existing config
+        if not isinstance(wgp_mod.server_config.get("transformer_types"), list):
+            print(f"[DEBUG] Fixing transformer_types: was {type(wgp_mod.server_config.get('transformer_types'))}, setting to []")
+            wgp_mod.server_config["transformer_types"] = []
+        if not isinstance(wgp_mod.server_config.get("preload_model_policy"), list):
+            print(f"[DEBUG] Fixing preload_model_policy: was {type(wgp_mod.server_config.get('preload_model_policy'))}, setting to []")
+            wgp_mod.server_config["preload_model_policy"] = []
+        
         # Debug: Show what model types are available
         if wgp_mod.models_def:
             model_types = list(wgp_mod.models_def.keys())[:5]  # Show first 5
