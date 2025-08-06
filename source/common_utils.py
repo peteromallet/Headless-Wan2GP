@@ -1561,10 +1561,8 @@ def download_image_if_url(image_url_or_path: str, download_target_dir: Path | st
 
     parsed_url = urlparse(image_url_or_path)
     if parsed_url.scheme in ['http', 'https'] and download_target_dir:
-        # If not in debug mode, return a temp path or the original URL
-        if not debug_mode:
-            dprint(f"Task {task_id_for_logging}: Debug mode disabled, skipping image download for: {image_url_or_path}")
-            return image_url_or_path
+        # Always download URLs when download_target_dir is provided
+        # Debug mode only affects logging verbosity and file retention
             
         target_dir_path = Path(download_target_dir)
         try:
@@ -1623,7 +1621,7 @@ def download_image_if_url(image_url_or_path: str, download_target_dir: Path | st
         dprint(f"Task {task_id_for_logging}: Not downloading image (not URL or no target dir): {image_url_or_path}")
         return image_url_or_path
 
-def image_to_frame(image_path_str: str | Path, target_resolution_wh: tuple[int, int] | None = None, task_id_for_logging: str | None = "generic_task", image_download_dir: Path | str | None = None) -> np.ndarray | None:
+def image_to_frame(image_path_str: str | Path, target_resolution_wh: tuple[int, int] | None = None, task_id_for_logging: str | None = "generic_task", image_download_dir: Path | str | None = None, debug_mode: bool = False) -> np.ndarray | None:
     """
     Load an image, optionally resize, and convert to BGR NumPy array.
     If image_path_str is a URL and image_download_dir is provided, it attempts to download it first.
@@ -1631,7 +1629,7 @@ def image_to_frame(image_path_str: str | Path, target_resolution_wh: tuple[int, 
     resolved_image_path_str = image_path_str # Default to original path
 
     if isinstance(image_path_str, str): # Only attempt download if it's a string (potentially a URL)
-        resolved_image_path_str = download_image_if_url(image_path_str, image_download_dir, task_id_for_logging)
+        resolved_image_path_str = download_image_if_url(image_path_str, image_download_dir, task_id_for_logging, debug_mode)
     
     image_path = Path(resolved_image_path_str)
 

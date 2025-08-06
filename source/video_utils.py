@@ -630,6 +630,10 @@ def create_guide_video_for_travel_segment(
             actual_guide_video_path = predefined_output_path
         else:
             actual_guide_video_path = sm_get_unique_target_path(output_target_dir, guide_video_base_name, ".mp4")
+        
+        # Extract debug mode from orchestrator payload or segment params
+        debug_mode = segment_params.get("debug_mode_enabled", full_orchestrator_payload.get("debug_mode_enabled", False))
+        
         gray_frame_bgr = sm_create_color_frame(parsed_res_wh, (128, 128, 128))
 
         fade_in_p = json.loads(full_orchestrator_payload["fade_in_params_json_str"])
@@ -658,7 +662,7 @@ def create_guide_video_for_travel_segment(
             else:
                  raise ValueError(f"Seg {segment_idx_for_logging}: End anchor index {end_anchor_image_index} out of bounds for input images list ({len(input_images_resolved_for_guide)} images available).")
             
-            end_anchor_frame_np = sm_image_to_frame(end_anchor_img_path_str, parsed_res_wh, task_id_for_logging=task_id_for_logging, image_download_dir=segment_image_download_dir)
+            end_anchor_frame_np = sm_image_to_frame(end_anchor_img_path_str, parsed_res_wh, task_id_for_logging=task_id_for_logging, image_download_dir=segment_image_download_dir, debug_mode=debug_mode)
             if end_anchor_frame_np is None: raise ValueError(f"Failed to load end anchor image: {end_anchor_img_path_str}")
         
         num_end_anchor_duplicates = 1
@@ -666,7 +670,7 @@ def create_guide_video_for_travel_segment(
 
         if is_first_segment_from_scratch:
             start_anchor_img_path_str = input_images_resolved_for_guide[0]
-            start_anchor_frame_np = sm_image_to_frame(start_anchor_img_path_str, parsed_res_wh, task_id_for_logging=task_id_for_logging, image_download_dir=segment_image_download_dir)
+            start_anchor_frame_np = sm_image_to_frame(start_anchor_img_path_str, parsed_res_wh, task_id_for_logging=task_id_for_logging, image_download_dir=segment_image_download_dir, debug_mode=debug_mode)
             if start_anchor_frame_np is None: raise ValueError(f"Failed to load start anchor: {start_anchor_img_path_str}")
             if frames_for_guide_list: frames_for_guide_list[0] = start_anchor_frame_np.copy()
 
