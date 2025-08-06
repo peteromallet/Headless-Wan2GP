@@ -174,23 +174,30 @@ class WanOrchestrator:
             if model_type and model_type in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
                 print(f"[HEADLESS_WGP_VACE_DEBUG] Applying VACE fix for model: {model_type}")
                 
-                # Import wgp module to access get_base_model_type
+                # Import wgp module to access load_models
                 import wgp as wgp_mod
-                original_get_base_model_type = wgp_mod.get_base_model_type
+                original_load_models = wgp_mod.load_models
                 
-                def patched_get_base_model_type(mt):
-                    """Return 't2v' for VACE models so they use the T2V config."""
-                    if mt in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
-                        print(f"[HEADLESS_WGP_VACE_DEBUG] get_base_model_type('{mt}') → 't2v' (patched)")
-                        return "t2v"
-                    else:
-                        result = original_get_base_model_type(mt)
-                        print(f"[HEADLESS_WGP_VACE_DEBUG] get_base_model_type('{mt}') → '{result}' (original)")
+                def vace_load_models_wrapper(model_type_param, *args, **kwargs):
+                    """Wrapper for load_models that converts VACE model types to 't2v' for config loading."""
+                    print(f"[VACE_LOAD_DEBUG] load_models() wrapper called with model_type='{model_type_param}'")
+                    print(f"[VACE_LOAD_DEBUG] args: {args}")
+                    print(f"[VACE_LOAD_DEBUG] kwargs: {list(kwargs.keys())}")
+                    
+                    if model_type_param in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
+                        print(f"[VACE_LOAD_DEBUG] ✅ VACE model detected: '{model_type_param}' - converting for config resolution")
+                        resolved_type = "t2v"  # Use t2v config for VACE models
+                        print(f"[VACE_LOAD_DEBUG] 🔄 load_models() override: '{model_type_param}' → '{resolved_type}' for config loading")
+                        result = original_load_models(resolved_type, *args, **kwargs)
+                        print(f"[VACE_LOAD_DEBUG] ✅ load_models() completed successfully for VACE model")
                         return result
+                    else:
+                        print(f"[VACE_LOAD_DEBUG] ➡️  Non-VACE model, passing through unchanged")
+                        return original_load_models(model_type_param, *args, **kwargs)
                 
-                # Temporarily replace get_base_model_type function
-                wgp_mod.get_base_model_type = patched_get_base_model_type
-                print(f"[HEADLESS_WGP_VACE_DEBUG] Patched get_base_model_type to return 't2v' for VACE models")
+                # Temporarily replace load_models function (more surgical than patching get_base_model_type)
+                wgp_mod.load_models = vace_load_models_wrapper
+                print(f"[HEADLESS_WGP_VACE_DEBUG] Patched load_models to use 't2v' config for VACE models")
                 
                 try:
                     # Call original generate_video which will:
@@ -200,9 +207,9 @@ class WanOrchestrator:
                     # 4. VACE module loads from modules list in vace_14B.json
                     return original_generate_video(*args, **kwargs)
                 finally:
-                    # Restore original get_base_model_type function
-                    wgp_mod.get_base_model_type = original_get_base_model_type
-                    print(f"[HEADLESS_WGP_VACE_DEBUG] Restored original get_base_model_type function")
+                    # Restore original load_models function
+                    wgp_mod.load_models = original_load_models
+                    print(f"[HEADLESS_WGP_VACE_DEBUG] Restored original load_models function")
             else:
                 # Non-VACE model, call directly
                 return original_generate_video(*args, **kwargs)
@@ -280,9 +287,25 @@ class WanOrchestrator:
         if not self.current_model:
             raise RuntimeError("No model loaded. Call load_model() first.")
 
+        # Test VACE module detection with detailed logging
+        print(f"[VACE_MODULE_DEBUG] === VACE Module Detection Test ===")
+        print(f"[VACE_MODULE_DEBUG] current_model: '{self.current_model}'")
+        
+        # Test the actual function calls we use
+        base_model_type = self._get_base_model_type(self.current_model)
+        print(f"[VACE_MODULE_DEBUG] _get_base_model_type('{self.current_model}') → '{base_model_type}'")
+        
+        vace_test_result = self._test_vace_module(self.current_model)
+        print(f"[VACE_MODULE_DEBUG] _test_vace_module('{self.current_model}') → {vace_test_result}")
+        
         is_vace = self._is_vace()
         is_flux = self._is_flux()
         is_t2v = self._is_t2v()
+        
+        print(f"[VACE_MODULE_DEBUG] Final detection results:")
+        print(f"[VACE_MODULE_DEBUG]   is_vace: {is_vace} {'✅' if is_vace else '❌'}")
+        print(f"[VACE_MODULE_DEBUG]   is_flux: {is_flux}")
+        print(f"[VACE_MODULE_DEBUG]   is_t2v: {is_t2v}")
         
         # Log model type detection and VACE parameters  
         print(f"[HEADLESS_WGP_DEBUG] === Generate Call Analysis ===")
@@ -293,6 +316,8 @@ class WanOrchestrator:
         print(f"[HEADLESS_WGP_DEBUG] === VACE Input Parameters ===")
         print(f"[HEADLESS_WGP_DEBUG] video_guide: {video_guide}")
         print(f"[HEADLESS_WGP_DEBUG] video_mask: {video_mask}")
+        print(f"[HEADLESS_WGP_DEBUG] video_guide2: {video_guide2}")
+        print(f"[HEADLESS_WGP_DEBUG] video_mask2: {video_mask2}")
         print(f"[HEADLESS_WGP_DEBUG] video_prompt_type: '{video_prompt_type}'")
         print(f"[HEADLESS_WGP_DEBUG] control_net_weight: {control_net_weight}")
         print(f"[HEADLESS_WGP_DEBUG] control_net_weight2: {control_net_weight2}")
@@ -334,6 +359,17 @@ class WanOrchestrator:
         else:
             loras_multipliers_str = ""
 
+        # Define missing variables with defaults
+        flow_shift = 7.0
+        sample_solver = "euler"
+        image_prompt_type = "disabled"
+        image_start = None
+        image_end = None
+        model_mode = "generate"
+        video_source = ""
+        image_refs = ""
+        denoising_strength = 1.0
+
         # Create minimal task and callback objects
         task = {"id": 1, "params": {}, "repeats": 1}
         
@@ -374,6 +410,23 @@ class WanOrchestrator:
         try:
             print(f"[HEADLESS_WGP_DEBUG] === Calling WGP.generate_video with VACE fix ===")
             print(f"[HEADLESS_WGP_DEBUG] Applying VACE load_models override for proper module loading")
+            
+            # Log critical VACE parameters being passed to WGP
+            if is_vace:
+                print(f"[WGP_CALL_DEBUG] === VACE Parameters to WGP ===")
+                print(f"[WGP_CALL_DEBUG] model_type: '{self.current_model}'")
+                print(f"[WGP_CALL_DEBUG] video_guide: {video_guide}")
+                print(f"[WGP_CALL_DEBUG] video_mask: {video_mask}")
+                print(f"[WGP_CALL_DEBUG] video_guide2: {video_guide2}")
+                print(f"[WGP_CALL_DEBUG] video_mask2: {video_mask2}")
+                print(f"[WGP_CALL_DEBUG] video_prompt_type: '{video_prompt_type}'")
+                print(f"[WGP_CALL_DEBUG] control_net_weight: {control_net_weight}")
+                print(f"[WGP_CALL_DEBUG] control_net_weight2: {control_net_weight2}")
+                print(f"[WGP_CALL_DEBUG] About to call _generate_video with VACE patching...")
+            else:
+                print(f"[WGP_CALL_DEBUG] === Non-VACE Parameters to WGP ===")
+                print(f"[WGP_CALL_DEBUG] model_type: '{self.current_model}'")
+                print(f"[WGP_CALL_DEBUG] About to call _generate_video directly (no patching)...")
             
             # [VACE_FIX] Apply the same surgical fix as in wgp_utils.py
             vace_model_type = self.current_model
@@ -532,7 +585,7 @@ class WanOrchestrator:
                     force_fps="24",  # Must be string, not int
                     num_inference_steps=num_inference_steps,
                     guidance_scale=actual_guidance,
-                    guidance2_scale=guidance_scale2,
+                    guidance2_scale=actual_guidance,
                     switch_threshold=0.5,
                     audio_guidance_scale=3.0,
                     flow_shift=flow_shift,
@@ -562,6 +615,8 @@ class WanOrchestrator:
                     image_refs=image_refs,
                     frames_positions="",
                     video_guide=video_guide,
+                    video_guide2=video_guide2,  # NEW: Secondary guide
+                    video_mask2=video_mask2,    # NEW: Secondary mask
                     image_guide="",
                     keep_frames_video_guide="",
                     denoising_strength=denoising_strength,
