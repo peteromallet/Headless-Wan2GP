@@ -1055,6 +1055,10 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     "video_prompt_type": video_prompt_type_str,
                     "control_net_weight": full_orchestrator_payload.get("control_net_weight", 1.0),
                     "control_net_weight2": full_orchestrator_payload.get("control_net_weight2", 1.0),
+                    # Include special LoRA flags that drive parameter optimization
+                    "use_causvid_lora": full_orchestrator_payload.get("apply_causvid", False) or full_orchestrator_payload.get("use_causvid_lora", False),
+                    "use_lighti2x_lora": full_orchestrator_payload.get("use_lighti2x_lora", False) or segment_params.get("use_lighti2x_lora", False),
+                    "apply_reward_lora": effective_apply_reward_lora,
                     # Add any additional parameters from wgp_payload
                     **{k: v for k, v in wgp_payload.items() if k not in [
                         'task_id', 'prompt', 'negative_prompt', 'resolution', 'frames', 'seed',
