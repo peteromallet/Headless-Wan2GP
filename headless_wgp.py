@@ -157,6 +157,38 @@ class WanOrchestrator:
                 print(f"🔧 [CONFIG_SUCCESS] ✅ Created {config_target}")
             else:
                 print(f"🔧 [CONFIG_EXISTS] Config already exists: {config_target}")
+                
+            # Show where we expect mmgp to look for config.json
+            print(f"🔧 [MMGP_PATHS] Our config: {config_target}")
+            print(f"🔧 [MMGP_PATHS] VACE module: ckpts/wan2.1_Vace_14B_module_quanto_mbf16_int8.safetensors")
+            print(f"🔧 [MMGP_PATHS] mmgp might expect config.json next to the VACE module file")
+            
+            # Create config.json next to the VACE module as well
+            vace_module_dir = ckpts_dir  # VACE module is in ckpts/ too
+            vace_module_config = os.path.join(vace_module_dir, "wan2.1_Vace_14B_module_quanto_mbf16_int8.json") 
+            if not os.path.exists(vace_module_config):
+                vace_config = {
+                    "_class_name": "VaceWanModel",
+                    "_diffusers_version": "0.30.0",
+                    "dim": 5120,
+                    "eps": 1e-06,
+                    "ffn_dim": 13824,
+                    "freq_dim": 256,
+                    "in_dim": 16,
+                    "model_type": "t2v",
+                    "num_heads": 40,
+                    "num_layers": 40,
+                    "out_dim": 16,
+                    "text_len": 512,
+                    "vace_layers": [0, 5, 10, 15, 20, 25, 30, 35],
+                    "vace_in_dim": 96
+                }
+                
+                with open(vace_module_config, 'w') as f:
+                    json.dump(vace_config, f, indent=2)
+                print(f"🔧 [CONFIG_ALT] ✅ Also created config next to VACE module: {vace_module_config}")
+            else:
+                print(f"🔧 [CONFIG_ALT] Config next to VACE module already exists: {vace_module_config}")
         
         # Debug: Show that module discovery is working correctly
         modules = wgp.get_model_recursive_prop(model_key, "modules", return_list=True)
