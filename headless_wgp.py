@@ -323,9 +323,14 @@ class WanOrchestrator:
             control_net_weight = 0.0
             control_net_weight2 = 0.0
 
-        # Prepare LoRA parameters
+        # Prepare LoRA parameters  
         activated_loras = lora_names if lora_names else []
-        loras_multipliers_list = lora_multipliers if lora_multipliers else []
+        # WGP expects loras_multipliers as string, not list
+        if lora_multipliers:
+            # Convert list of floats to space-separated string
+            loras_multipliers_str = " ".join(str(m) for m in lora_multipliers)
+        else:
+            loras_multipliers_str = ""
 
         # Create minimal task and callback objects
         task = {"id": 1, "params": {}, "repeats": 1}
@@ -531,7 +536,7 @@ class WanOrchestrator:
                     
                     # LoRA settings
                     activated_loras=activated_loras,
-                    loras_multipliers=lora_multipliers,
+                    loras_multipliers=loras_multipliers_str,
                     
                     # Image/Video inputs
                     image_prompt_type=image_prompt_type,
