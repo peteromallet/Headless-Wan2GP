@@ -167,7 +167,7 @@ class WanOrchestrator:
             vace_module_dir = ckpts_dir  # VACE module is in ckpts/ too
             vace_module_config = os.path.join(vace_module_dir, "wan2.1_Vace_14B_module_quanto_mbf16_int8.json") 
             if not os.path.exists(vace_module_config):
-                vace_config = {
+                vace_alt_config = {
                     "_class_name": "VaceWanModel",
                     "_diffusers_version": "0.30.0",
                     "dim": 5120,
@@ -184,8 +184,9 @@ class WanOrchestrator:
                     "vace_in_dim": 96
                 }
                 
+                import json
                 with open(vace_module_config, 'w') as f:
-                    json.dump(vace_config, f, indent=2)
+                    json.dump(vace_alt_config, f, indent=2)
                 print(f"🔧 [CONFIG_ALT] ✅ Also created config next to VACE module: {vace_module_config}")
             else:
                 print(f"🔧 [CONFIG_ALT] Config next to VACE module already exists: {vace_module_config}")
