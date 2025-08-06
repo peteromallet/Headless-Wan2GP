@@ -442,7 +442,7 @@ class WanOrchestrator:
                         repeat_generation=1,
                         multi_prompts_gen_type="sequential",
                         multi_images_gen_type="sequential",
-                        skip_steps_cache_type="none",
+                        skip_steps_cache_type="",  # Empty string disables caching
                         skip_steps_multiplier=1.0,
                         skip_steps_start_step_perc=0.0,
                         
@@ -543,7 +543,7 @@ class WanOrchestrator:
                     # Multi-generation settings
                     multi_prompts_gen_type="batch",
                     multi_images_gen_type="batch",
-                    skip_steps_cache_type="disabled",
+                    skip_steps_cache_type="",  # Empty string disables caching
                     skip_steps_multiplier=1.0,
                     skip_steps_start_step_perc=0.0,
                     
