@@ -502,7 +502,7 @@ class HeadlessTaskQueue:
         use_lighti2x = task.parameters.get("use_lighti2x_lora", False)
         
         if use_causvid:
-            self.logger.info(f"[Task {task.task_id}] Applying CausVid LoRA settings: steps=9, guidance=1.0, flow_shift=1.0")
+            self.logger.info(f"[Task {task.id}] Applying CausVid LoRA settings: steps=9, guidance=1.0, flow_shift=1.0")
             # Apply CausVid-specific parameters, but allow task to override if explicitly specified
             if "num_inference_steps" not in wgp_params:
                 wgp_params["num_inference_steps"] = 9
@@ -525,7 +525,7 @@ class HeadlessTaskQueue:
                 wgp_params["lora_multipliers"] = current_multipliers
         
         if use_lighti2x:
-            self.logger.info(f"[Task {task.task_id}] Applying LightI2X LoRA settings: steps=5, guidance=1.0, flow_shift=5.0")
+            self.logger.info(f"[Task {task.id}] Applying LightI2X LoRA settings: steps=5, guidance=1.0, flow_shift=5.0")
             # Apply LightI2X-specific parameters
             if "num_inference_steps" not in wgp_params:
                 wgp_params["num_inference_steps"] = 5
