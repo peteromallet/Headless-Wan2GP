@@ -63,7 +63,10 @@ class WanOrchestrator:
                 "file_list": [],
                 "file_settings_list": [],
                 "selected": 0
-            }
+            },
+            "loras": [],
+            "loras_names": [],
+            "loras_presets": {}
         }
         
         # Apply sensible defaults (mirrors typical UI defaults)
