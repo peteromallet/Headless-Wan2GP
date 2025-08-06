@@ -448,7 +448,7 @@ class WanOrchestrator:
                         video_source=None,
                         keep_frames_video_source="",
                         keep_frames_video_guide="",
-                        video_guide_outpainting="0,0,0,0",  # Must be string, not list
+                        video_guide_outpainting="0 0 0 0",  # Must be space-separated, not comma-separated
                         mask_expand=0,
                         
                         # Audio parameters (disabled)
