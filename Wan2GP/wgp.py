@@ -4771,7 +4771,12 @@ def generate_video(
                     
                     if preprocess_type2 != None:
                         print(f"[WGP_VACE_DEBUG] Starting secondary preprocessing with type: '{preprocess_type2}'")
-                        video_guide_processed2, video_mask_processed2 = preprocess_video_with_mask(video_guide, video_mask, height=image_size[0], width = image_size[1], max_frames= len(keep_frames_parsed), start_frame = aligned_guide_start_frame, fit_canvas = sample_fit_canvas, target_fps = fps,  process_type = preprocess_type2, expand_scale = mask_expand, RGB_Mask = True, negate_mask = "N" in video_prompt_type, process_outside_mask = process_outside_mask, outpainting_dims = outpainting_dims, proc_no =2 )
+                        # Use video_guide2 and video_mask2 for secondary preprocessing if provided, otherwise fallback to primary
+                        secondary_guide = video_guide2 if video_guide2 else video_guide
+                        secondary_mask = video_mask2 if video_mask2 else video_mask
+                        print(f"[WGP_VACE_DEBUG]   Using secondary guide: {'video_guide2' if video_guide2 else 'video_guide (fallback)'}")
+                        print(f"[WGP_VACE_DEBUG]   Using secondary mask: {'video_mask2' if video_mask2 else 'video_mask (fallback)'}")
+                        video_guide_processed2, video_mask_processed2 = preprocess_video_with_mask(secondary_guide, secondary_mask, height=image_size[0], width = image_size[1], max_frames= len(keep_frames_parsed), start_frame = aligned_guide_start_frame, fit_canvas = sample_fit_canvas, target_fps = fps,  process_type = preprocess_type2, expand_scale = mask_expand, RGB_Mask = True, negate_mask = "N" in video_prompt_type, process_outside_mask = process_outside_mask, outpainting_dims = outpainting_dims, proc_no =2 )
                         print(f"[WGP_VACE_DEBUG] Secondary preprocessing completed:")
                         print(f"[WGP_VACE_DEBUG]   video_guide_processed2: {type(video_guide_processed2)} shape: {video_guide_processed2.shape if video_guide_processed2 is not None else 'None'}")
                         print(f"[WGP_VACE_DEBUG]   video_mask_processed2: {type(video_mask_processed2)} shape: {video_mask_processed2.shape if video_mask_processed2 is not None else 'None'}")
