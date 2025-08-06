@@ -619,16 +619,23 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     f"overlap_count={frame_overlap_from_previous}, is_single_image_journey={is_single_image_journey}"
                 )
 
+                # Determine if this is a VACE model (needed for both mask and guide video decisions)
+                model_name = full_orchestrator_payload.get("model_name", "")
+                is_vace_model = "vace" in model_name.lower()
+
                 # Improved mask naming: use descriptive name that shows its purpose
                 mask_filename = f"seg{segment_idx:02d}_vace_mask.mp4"
                 # Create mask video in the same directory as guide video for consistency
                 mask_out_path_tmp = segment_processing_dir / mask_filename
                 
-                # Only create mask video in debug mode or if explicitly needed for VACE
-                if not debug_enabled:
-                    dprint(f"Task {segment_task_id_str}: Debug mode disabled, skipping mask video creation")
+                # Always create mask video for VACE models (required for functionality)
+                # For non-VACE models, only create in debug mode
+                if not debug_enabled and not is_vace_model:
+                    dprint(f"Task {segment_task_id_str}: Debug mode disabled and non-VACE model, skipping mask video creation")
                     mask_video_path_for_wgp = None
                 else:
+                    if is_vace_model and not debug_enabled:
+                        dprint(f"Task {segment_task_id_str}: VACE model detected, creating mask video (required for VACE functionality)")
                     # Use the generalized mask creation function
                     from ..common_utils import create_mask_video_from_inactive_indices
                     created_mask_vid = create_mask_video_from_inactive_indices(
@@ -804,11 +811,14 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     dprint(f"Seg {segment_idx}: Error selecting banner images for show_input_images: {e_banner_sel}")
             # ------------------------------------------------------------------
 
-            # Only create guide video in debug mode
-            if not debug_enabled:
-                dprint(f"Task {segment_task_id_str}: Debug mode disabled, skipping guide video creation")
+            # Always create guide video for VACE models (required for functionality)
+            # For non-VACE models, only create in debug mode
+            if not debug_enabled and not is_vace_model:
+                dprint(f"Task {segment_task_id_str}: Debug mode disabled and non-VACE model, skipping guide video creation")
                 actual_guide_video_path_for_wgp = None
             else:
+                if is_vace_model and not debug_enabled:
+                    dprint(f"Task {segment_task_id_str}: VACE model detected, creating guide video (required for VACE functionality)")
                 actual_guide_video_path_for_wgp = sm_create_guide_video_for_travel_segment(
                     segment_idx_for_logging=segment_idx,
                     end_anchor_image_index=end_anchor_img_path_str_idx,
