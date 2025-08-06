@@ -335,7 +335,7 @@ class WanOrchestrator:
         # Create minimal task and callback objects
         task = {"id": 1, "params": {}, "repeats": 1}
         
-        def send_cmd(cmd: str, data):
+        def send_cmd(cmd: str, data=None):
             if cmd == "status":
                 print(f"📊 Status: {data}")
             elif cmd == "progress":
@@ -344,6 +344,16 @@ class WanOrchestrator:
                     print(f"⏳ Progress: {progress}% - {status}")
                 else:
                     print(f"⏳ Progress: {data}")
+            elif cmd == "output":
+                print("📤 Output generated")
+            elif cmd == "exit":
+                print("🏁 Generation completed")
+            elif cmd == "error":
+                print(f"❌ Error: {data}")
+            elif cmd == "info":
+                print(f"ℹ️  Info: {data}")
+            elif cmd == "preview":
+                print("🖼️  Preview updated")
 
         # Generate content type description
         content_type = "images" if is_flux else "video"
