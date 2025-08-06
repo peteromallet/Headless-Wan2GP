@@ -479,11 +479,11 @@ class WanOrchestrator:
                         
                         # Post-processing (disabled)
                         remove_background_images_ref=0,
-                        temporal_upsampling=1.0,
-                        spatial_upsampling=1.0,
+                        temporal_upsampling="",  # Must be string, not float
+                        spatial_upsampling="",   # Must be string, not float
                         film_grain_intensity=0.0,
                         film_grain_saturation=0.0,
-                        MMAudio_setting="disabled",
+                        MMAudio_setting=0,       # Must be int, not string
                         MMAudio_prompt="",
                         MMAudio_neg_prompt="",
                         
@@ -564,7 +564,7 @@ class WanOrchestrator:
                     image_guide="",
                     keep_frames_video_guide="",
                     denoising_strength=denoising_strength,
-                    video_guide_outpainting="0,0,0,0",
+                    video_guide_outpainting="0 0 0 0",  # Must be space-separated, not comma-separated
                     video_mask=video_mask,
                     image_mask="",
                     control_net_weight=control_net_weight,
@@ -591,7 +591,7 @@ class WanOrchestrator:
                     spatial_upsampling="",   # Must be string, not float  
                     film_grain_intensity=0.0,
                     film_grain_saturation=0.0,
-                    MMAudio_setting="disabled",
+                    MMAudio_setting=0,       # Must be int, not string
                     MMAudio_prompt="",
                     MMAudio_neg_prompt="",
                     
