@@ -95,10 +95,11 @@ class WanOrchestrator:
             quantization_choice="int8"
         )
         self.current_model = None
+        self.offloadobj = None  # Store WGP's offload object
         print(f"✅ WanOrchestrator initialized with WGP at {wan_root}")
 
     def load_model(self, model_key: str):
-        """Load and validate a model type.
+        """Load and validate a model type using WGP's load_models function.
         
         Args:
             model_key: Model identifier (e.g., "t2v", "vace_14B", "flux")
@@ -109,11 +110,21 @@ class WanOrchestrator:
         if self._get_base_model_type(model_key) is None:
             raise ValueError(f"Unknown model: {model_key}")
         
+        # Import WGP to call load_models
+        import wgp
+        
+        # Actually load the model using WGP's proper loading flow
+        # This handles VACE modules, LoRA discovery, etc.
+        loras, loras_names, _, _, _, _, _ = wgp.setup_loras(model_key, None, wgp.get_lora_dir(model_key), '', None)
+        print(f"🎨 Discovered {len(loras)} LoRAs for {model_key}: {loras_names}")
+        wan_model, self.offloadobj = wgp.load_models(model_key)
+        
         self.current_model = model_key
         self.state["model_type"] = model_key
         
-        # Initialize LoRAs for this model type
-        self._setup_loras_for_model(model_key)
+        # Store the loaded model globally for WGP to use
+        wgp.wan_model = wan_model
+        wgp.offloadobj = self.offloadobj
         
         family = self._get_model_family(model_key, for_ui=True)
         print(f"📋 Loaded model: {model_key} ({family})")
@@ -163,11 +174,10 @@ class WanOrchestrator:
     def _create_vace_fixed_generate_video(self, original_generate_video):
         """Create a wrapper around generate_video for VACE models.
         
-        VACE models are built on top of t2v and need special handling.
-        We've fixed load_wan_model in wgp.py to properly detect VACE models.
+        VACE models are properly loaded via load_models() now, so no special handling needed.
         """
         def vace_fixed_generate_video(*args, **kwargs):
-            # No patching needed anymore - wgp.py now handles VACE correctly
+            # VACE modules are now properly loaded via load_models() - no patching needed
             return original_generate_video(*args, **kwargs)
         
         return vace_fixed_generate_video
