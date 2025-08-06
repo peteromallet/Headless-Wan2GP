@@ -3996,6 +3996,12 @@ def edit_video(
         audio_tracks = [audio_source]
 
     with lock:
+        # Initialize GUI-specific properties for headless mode compatibility
+        if "file_list" not in gen:
+            gen["file_list"] = []
+        if "file_settings_list" not in gen:
+            gen["file_settings_list"] = []
+        
         file_list = gen["file_list"]
         file_settings_list = gen["file_settings_list"]
 
@@ -4216,6 +4222,12 @@ def generate_video(
         edit_video(send_cmd, state, mode, video_source, seed, temporal_upsampling, spatial_upsampling, film_grain_intensity, film_grain_saturation, MMAudio_setting, MMAudio_prompt, MMAudio_neg_prompt, repeat_generation, audio_source)
         return
     with lock:
+        # Initialize GUI-specific properties for headless mode compatibility
+        if "file_list" not in gen:
+            gen["file_list"] = []
+        if "file_settings_list" not in gen:
+            gen["file_settings_list"] = []
+        
         file_list = gen["file_list"]
         file_settings_list = gen["file_settings_list"]
 
