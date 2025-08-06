@@ -119,7 +119,8 @@ class WanOrchestrator:
     def _setup_loras_for_model(self, model_type: str):
         """Initialize LoRA discovery for a model type.
         
-        This scans the LoRA directory and populates state with available LoRAs.
+        This matches WGP's exact setup_loras call pattern from generate_video_tab.
+        Scans the LoRA directory and populates state with available LoRAs.
         The actual loading/activation happens during generation.
         """
         try:
@@ -128,18 +129,22 @@ class WanOrchestrator:
             setup_loras = wgp.setup_loras
             get_lora_dir = wgp.get_lora_dir
             
-            # Discover available LoRAs (without transformer - just file discovery)
-            result = setup_loras(model_type, None, get_lora_dir(model_type), "", None)
-            if result is None:
-                # setup_loras returns None if no LoRA directory exists
-                loras, loras_names, loras_presets = [], [], {}
-            else:
-                loras, loras_names, loras_presets = result[:3]
+            # Use exact same call pattern as WGP's generate_video_tab (line 6941)
+            # setup_loras(model_type, transformer, lora_dir, lora_preselected_preset, split_linear_modules_map)
+            preset_to_load = ""  # No preset in headless mode (equivalent to lora_preselected_preset)
             
-            # Update state with discovered LoRAs
+            loras, loras_names, loras_presets, default_loras_choices, default_loras_multis_str, default_lora_preset_prompt, default_lora_preset = setup_loras(
+                model_type,           # Same as WGP
+                None,                 # transformer=None for discovery phase (same as WGP)
+                get_lora_dir(model_type),  # lora_dir (same as WGP)
+                preset_to_load,       # lora_preselected_preset="" (same as WGP)
+                None                  # split_linear_modules_map=None (same as WGP)
+            )
+            
+            # Update state with discovered LoRAs - exact same pattern as WGP (lines 6943-6945)
             self.state["loras"] = loras
-            self.state["loras_names"] = loras_names
             self.state["loras_presets"] = loras_presets
+            self.state["loras_names"] = loras_names
             
             if loras:
                 print(f"🎨 Discovered {len(loras)} LoRAs for {model_type}: {[os.path.basename(l) for l in loras[:3]]}{'...' if len(loras) > 3 else ''}")
