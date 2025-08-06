@@ -57,7 +57,13 @@ class WanOrchestrator:
             "model_filename": "",
             "advanced": False,
             "last_model_per_family": {},
-            "last_resolution_per_group": {}
+            "last_resolution_per_group": {},
+            "gen": {
+                "queue": [],
+                "file_list": [],
+                "file_settings_list": [],
+                "selected": 0
+            }
         }
         
         # Apply sensible defaults (mirrors typical UI defaults)
