@@ -4306,6 +4306,16 @@ def generate_video(
         loras_list_mult_choices_nums, loras_slists, errors =  parse_loras_multipliers(loras_multipliers, len(activated_loras), num_inference_steps, merge_slist= loras_slists )
         if len(errors) > 0: raise Exception(f"Error parsing Loras: {errors}")
         loras_selected += [ os.path.join(lora_dir, lora) for lora in activated_loras]
+    
+    # CRITICAL FIX: Process activated_loras parameter independently of UI state
+    # This ensures LoRAs passed from headless mode get loaded even when state["loras"] is empty
+    if len(activated_loras) > 0 and len(loras) == 0:
+        print(f"[CausVidDebugTrace] WGP: Processing activated_loras from headless mode")
+        loras_list_mult_choices_nums, loras_slists, errors = parse_loras_multipliers(loras_multipliers, len(activated_loras), num_inference_steps, merge_slist=loras_slists)
+        if len(errors) > 0: 
+            raise Exception(f"Error parsing activated LoRAs: {errors}")
+        loras_selected += [os.path.join(lora_dir, lora) for lora in activated_loras]
+        print(f"[CausVidDebugTrace] WGP: Added {len(activated_loras)} LoRAs from activated_loras parameter")
 
     # [CausVidDebugTrace] Add detailed LoRA parameter analysis
     print(f"[CausVidDebugTrace] WGP: LoRA parameter analysis:")
