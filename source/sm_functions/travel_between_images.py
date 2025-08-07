@@ -1105,6 +1105,16 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             causvid_flag = full_orchestrator_payload.get("apply_causvid", False) or full_orchestrator_payload.get("use_causvid_lora", False)
             lighti2x_flag = full_orchestrator_payload.get("use_lighti2x_lora", False) or segment_params.get("use_lighti2x_lora", False)
             
+            # ADDITIONAL LORAS: Prepare LoRA names and multipliers for generation
+            additional_lora_names = []
+            additional_lora_multipliers = []
+            if processed_additional_loras:
+                dprint(f"[CausVidDebugTrace] Segment {segment_idx}: Including {len(processed_additional_loras)} additional LoRAs:")
+                for lora_name, multiplier in processed_additional_loras.items():
+                    additional_lora_names.append(lora_name)
+                    additional_lora_multipliers.append(multiplier)
+                    dprint(f"[CausVidDebugTrace]   Additional LoRA: {lora_name} (multiplier: {multiplier})")
+            
             dprint(f"[CausVidDebugTrace] Segment {segment_idx}: Creating GenerationTask with:")
             dprint(f"[CausVidDebugTrace]   num_inference_steps: {num_inference_steps}")
             dprint(f"[CausVidDebugTrace]   guidance_scale: {guidance_scale_default}")
@@ -1112,6 +1122,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             dprint(f"[CausVidDebugTrace]   use_causvid_lora flag: {causvid_flag}")
             dprint(f"[CausVidDebugTrace]   use_lighti2x_lora flag: {lighti2x_flag}")
             dprint(f"[CausVidDebugTrace]   apply_reward_lora flag: {effective_apply_reward_lora}")
+            dprint(f"[CausVidDebugTrace]   additional_lora_names: {additional_lora_names}")
+            dprint(f"[CausVidDebugTrace]   additional_lora_multipliers: {additional_lora_multipliers}")
             
             # Create a GenerationTask for the queue system
             generation_task = GenerationTask(
@@ -1135,6 +1147,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     "use_causvid_lora": causvid_flag,
                     "use_lighti2x_lora": lighti2x_flag,
                     "apply_reward_lora": effective_apply_reward_lora,
+                    # ADDITIONAL LORAS: Include processed additional LoRAs
+                    "additional_lora_names": additional_lora_names,
+                    "additional_lora_multipliers": additional_lora_multipliers,
                     # Add any additional parameters from wgp_payload
                     **{k: v for k, v in wgp_payload.items() if k not in [
                         'task_id', 'prompt', 'negative_prompt', 'resolution', 'frames', 'seed',
