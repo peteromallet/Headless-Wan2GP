@@ -294,7 +294,7 @@ This debugging system provides comprehensive visibility into the video generatio
 ### Special LoRA Flags
 
 * **`use_causvid_lora`** – Enables CausVid LoRA with 9 steps, guidance 1.0, flow-shift 1.0. Auto-downloads from HuggingFace if missing.
-* **`use_lighti2x_lora`** – Enables LightI2X LoRA with 5 steps, guidance 1.0, flow-shift 5.0, Tea Cache disabled. Auto-downloads from HuggingFace if missing.
+* **`use_lighti2x_lora`** – Enables LightI2X LoRA with 6 steps, guidance 1.0, flow-shift 5.0, Tea Cache disabled. Auto-downloads from HuggingFace if missing.
 
 Both flags automatically configure optimal generation parameters and handle LoRA downloads/activation.
 

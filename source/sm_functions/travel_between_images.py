@@ -1066,7 +1066,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             num_inference_steps = (
                 segment_params.get("num_inference_steps")
                 or segment_params.get("steps")  # Allow explicit segment override
-                or 5  # LightI2X optimized steps
+                or 6  # LightI2X optimized steps
             )
             guidance_scale_default = 1.0  # LightI2X optimized guidance
             flow_shift_default = 5.0      # LightI2X optimized flow_shift

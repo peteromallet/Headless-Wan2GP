@@ -2006,7 +2006,7 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         _apply_special_lora_settings(
             current_task_id_for_log, "LightI2X",
             "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors", 
-            default_steps=4, guidance_scale=1.0, flow_shift=5.0,
+            default_steps=6, guidance_scale=1.0, flow_shift=5.0,
             ui_defaults=ui_defaults, task_params_dict=task_params_dict,
             tea_cache_setting=0.0
         )
