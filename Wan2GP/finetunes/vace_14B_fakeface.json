@@ -11,8 +11,11 @@
         "URLs2": [
             "https://huggingface.co/CCP6/FakeVace2.2/resolve/main/Fake-Vace2.2-Low_fp8_e4m3fn.safetensors"
         ],
-        "loras": [],
-        "loras_multipliers": "",
+        "loras": [
+            "https://huggingface.co/CCP6/FakeVace2.2/resolve/main/Wan2.2-Lightning_T2V-A14B-4steps-lora_HIGH_fp16.safetensors",
+            "https://huggingface.co/CCP6/FakeVace2.2/resolve/main/Wan2.2-Lightning_T2V-A14B-4steps-lora_LOW_fp16.safetensors"
+        ],
+        "loras_multipliers": ["0.9;0", "0;0.9"],
 		"group": "wan2_2",
 		"auto_quantize": false,
 		"fp8_quantized": true
