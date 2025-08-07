@@ -174,7 +174,8 @@ class WanOrchestrator:
             
         modules = wgp.get_model_recursive_prop(model_key, "modules", return_list=True)
         model_def = wgp.get_model_def(model_key)
-        model_logger.debug(f"Model Info: {model_key} | Architecture: {model_def.get('architecture')} | Modules: {modules}")
+        architecture = model_def.get('architecture') if model_def else 'unknown'
+        model_logger.debug(f"Model Info: {model_key} | Architecture: {architecture} | Modules: {modules}")
         
         # Actually load the model using WGP's proper loading flow
         # This handles VACE modules, LoRA discovery, etc.
