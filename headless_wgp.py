@@ -485,47 +485,57 @@ class WanOrchestrator:
             generation_logger.info(f"[CausVidDebugTrace]   activated_loras: {activated_loras}")
             generation_logger.info(f"[CausVidDebugTrace]   loras_multipliers_str: {loras_multipliers_str}")
             
-            # Call the VACE-fixed generate_video (patching is handled in wrapper)
-            result = self._generate_video(
-                        task=task,
-                        send_cmd=send_cmd,
-                        state=self.state,
-                        
-                        # Core parameters
-                        model_type=self.current_model,
-                        prompt=prompt,
-                        negative_prompt=negative_prompt,
-                        resolution=resolution,
-                        video_length=actual_video_length,
-                        batch_size=actual_batch_size,
-                        seed=seed,
-                        force_fps="auto",  # Use model default (16 fps for VACE)
-                        num_inference_steps=num_inference_steps,
-                        guidance_scale=actual_guidance,
-                        guidance2_scale=actual_guidance,
-                        switch_threshold=0.5,
-                        embedded_guidance_scale=embedded_guidance_scale if is_flux else 0.0,
-                        image_mode=image_mode,
-                        
-                        # VACE control parameters
-                        video_guide=video_guide,
-                        video_mask=video_mask,
-                        video_guide2=video_guide2,  # NEW: Secondary guide
-                        video_mask2=video_mask2,    # NEW: Secondary mask
-                        video_prompt_type=video_prompt_type,
-                        control_net_weight=control_net_weight,
-                        control_net_weight2=control_net_weight2,
-                        denoising_strength=1.0,
-                        
-                        # LoRA parameters
-                        activated_loras=activated_loras,
-                        loras_multipliers=loras_multipliers_str,
-                        
-                        # Standard defaults for other parameters
-                        audio_guidance_scale=1.0,
-                        repeat_generation=1,
-                        multi_prompts_gen_type=0,  # 0: new video, 1: sliding window
-                        multi_images_gen_type=0,  # 0: every combination, 1: match prompts
+            # ARCHITECTURAL FIX: Pre-populate WGP UI state for LoRA compatibility
+            # WGP was designed for UI usage where state["loras"] gets populated through UI
+            # In headless mode, we need to pre-populate this state to ensure LoRA loading works
+            original_loras = self.state.get("loras", [])
+            if activated_loras and len(activated_loras) > 0:
+                generation_logger.info(f"[CausVidDebugTrace] WanOrchestrator: Pre-populating WGP state with {len(activated_loras)} LoRAs")
+                self.state["loras"] = activated_loras.copy()  # Populate UI state for WGP compatibility
+                generation_logger.debug(f"[CausVidDebugTrace] WanOrchestrator: state['loras'] = {self.state['loras']}")
+            
+            try:
+                # Call the VACE-fixed generate_video (patching is handled in wrapper)
+                result = self._generate_video(
+                            task=task,
+                            send_cmd=send_cmd,
+                            state=self.state,
+                            
+                            # Core parameters
+                            model_type=self.current_model,
+                            prompt=prompt,
+                            negative_prompt=negative_prompt,
+                            resolution=resolution,
+                            video_length=actual_video_length,
+                            batch_size=actual_batch_size,
+                            seed=seed,
+                            force_fps="auto",  # Use model default (16 fps for VACE)
+                            num_inference_steps=num_inference_steps,
+                            guidance_scale=actual_guidance,
+                            guidance2_scale=actual_guidance,
+                            switch_threshold=0.5,
+                            embedded_guidance_scale=embedded_guidance_scale if is_flux else 0.0,
+                            image_mode=image_mode,
+                            
+                            # VACE control parameters
+                            video_guide=video_guide,
+                            video_mask=video_mask,
+                            video_guide2=video_guide2,  # NEW: Secondary guide
+                            video_mask2=video_mask2,    # NEW: Secondary mask
+                            video_prompt_type=video_prompt_type,
+                            control_net_weight=control_net_weight,
+                            control_net_weight2=control_net_weight2,
+                            denoising_strength=1.0,
+                            
+                            # LoRA parameters
+                            activated_loras=activated_loras,
+                            loras_multipliers=loras_multipliers_str,
+                            
+                            # Standard defaults for other parameters
+                            audio_guidance_scale=1.0,
+                            repeat_generation=1,
+                            multi_prompts_gen_type=0,  # 0: new video, 1: sliding window
+                            multi_images_gen_type=0,  # 0: every combination, 1: match prompts
                         skip_steps_cache_type="",  # Empty string disables caching
                         skip_steps_multiplier=1.0,
                         skip_steps_start_step_perc=0.0,
@@ -593,6 +603,12 @@ class WanOrchestrator:
                         # Additional kwargs
                         **kwargs
                     )
+            
+            finally:
+                # ARCHITECTURAL FIX: Restore original UI state after generation
+                if activated_loras and len(activated_loras) > 0:
+                    self.state["loras"] = original_loras  # Restore original state
+                    generation_logger.debug(f"[CausVidDebugTrace] WanOrchestrator: Restored original state['loras'] = {self.state['loras']}")
 
             # WGP doesn't return the path, but stores it in state["gen"]["file_list"]
             output_path = None
