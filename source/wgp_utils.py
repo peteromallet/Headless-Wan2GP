@@ -72,6 +72,8 @@ def generate_single_video(
     model_name: str = None,  # ← NEW: Original model name for proper type detection
     video_guide: str = None,
     video_mask: str = None,
+    video_guide2: str = None,  # ← NEW: Secondary guide for dual encoding
+    video_mask2: str = None,   # ← NEW: Secondary mask for dual encoding
     image_refs: list = None,
     use_causvid_lora: bool = False,
     use_lighti2x_lora: bool = False,
@@ -101,6 +103,8 @@ def generate_single_video(
     print(f"[WGP_GENERATION_DEBUG]   use_lighti2x_lora: {use_lighti2x_lora}")
     print(f"[WGP_GENERATION_DEBUG]   video_guide: {video_guide}")
     print(f"[WGP_GENERATION_DEBUG]   video_mask: {video_mask}")
+    print(f"[WGP_GENERATION_DEBUG]   video_guide2: {video_guide2}")
+    print(f"[WGP_GENERATION_DEBUG]   video_mask2: {video_mask2}")
     print(f"[WGP_GENERATION_DEBUG]   video_prompt_type: {video_prompt_type}")
     
     try:
@@ -142,6 +146,8 @@ def generate_single_video(
             "flow_shift": flow_shift,
             "video_guide_path": video_guide,
             "video_mask": video_mask,
+            "video_guide2": video_guide2,
+            "video_mask2": video_mask2,
             "image_refs_paths": image_refs,
             "video_prompt_type": video_prompt_type,
             "use_causvid_lora": use_causvid_lora,
@@ -276,6 +282,8 @@ def generate_single_video(
                 "flow_shift": ui_params.get("flow_shift", flow_shift),
                 "video_guide": ui_params.get("video_guide"),
                 "video_mask": ui_params.get("video_mask"),
+                "video_guide2": ui_params.get("video_guide2"),
+                "video_mask2": ui_params.get("video_mask2"),
                 "image_refs": ui_params.get("image_refs"),
                 "video_prompt_type": ui_params.get("video_prompt_type", video_prompt_type),
                 "activated_loras": ui_params.get("activated_loras", []),
