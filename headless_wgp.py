@@ -123,6 +123,25 @@ class WanOrchestrator:
         # This follows the exact pattern from wgp.py's generate_video function (lines 4249-4254)
         if hasattr(wgp, 'wan_model') and wgp.wan_model is not None:
             model_logger.debug(f"Offloading previous model before loading {model_key}")
+            
+            # CRITICAL: Unload LoRAs from transformers before model cleanup
+            # This prevents LoRA conflicts when switching between models
+            try:
+                # Get transformer models if they exist
+                trans = wgp.get_transformer_model(wgp.wan_model)
+                trans2 = wgp.get_transformer_model(wgp.wan_model, 2)
+                
+                # Unload LoRAs following WGP cleanup pattern (lines 5147-5149)
+                if trans is not None:
+                    wgp.offload.unload_loras_from_model(trans)
+                    model_logger.debug(f"Unloaded LoRAs from primary transformer")
+                if trans2 is not None:
+                    wgp.offload.unload_loras_from_model(trans2)
+                    model_logger.debug(f"Unloaded LoRAs from secondary transformer")
+                    
+            except Exception as e:
+                model_logger.warning(f"LoRA cleanup failed (non-critical): {e}")
+            
             wgp.wan_model = None
             
             if hasattr(wgp, 'offloadobj') and wgp.offloadobj is not None:
@@ -135,7 +154,7 @@ class WanOrchestrator:
                 self.offloadobj = None
                 
             gc.collect()
-            model_logger.debug(f"Previous model offloaded successfully")
+            model_logger.debug(f"Previous model and LoRAs offloaded successfully")
         
         # Debug: Show model discovery for debugging
         if self._test_vace_module(model_key):
