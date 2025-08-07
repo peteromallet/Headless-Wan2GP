@@ -1,0 +1,39 @@
+{
+    "model": {
+        "name": "FakeFace Vace Experimental Cocktail 14B",
+        "architecture": "vace_14B",
+        "modules": [
+            "vace_14B"
+        ],
+        "description": "This model has been created on the fly using the FakeFace model weights and the Loras of FusioniX. The weight of the Detail Enhancer Lora has been reduced to improve identity preservation. There is so far only PARTIAL support of Vace 2.1 which is currently used.",
+        "URLs": [
+            "https://huggingface.co/CCP6/FakeVace2.2/resolve/main/Fake-Vace2.2-High_fp8_e4m3fn.safetensors"
+        ],
+        "URLs2": [
+            "https://huggingface.co/CCP6/FakeVace2.2/resolve/main/Fake-Vace2.2-Low_fp8_e4m3fn.safetensors"
+        ],
+		"loras": [
+        "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
+        "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/DetailEnhancerV1.safetensors",
+        "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_AccVid_T2V_14B_lora_rank32_fp16.safetensors",
+        "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_T2V_14B_MoviiGen_lora_rank32_fp16.safetensors",
+        "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors"
+		],
+		"loras_multipliers": [1, 0.2, 0.5, 0.5, 3.0],
+		"group": "wan2_2"
+    },
+    "num_inference_steps": 6,
+    "guidance_scale": 3,
+    "guidance2_scale": 1,
+    "flow_shift": 3.0,
+    "sample_solver": "dpm++",
+    "control_net_weight": 1.3,
+    "control_net_weight2": 1.0,
+    "sampler_cfg_presets": {
+        "euler": {"guidance_scale": 1.0, "flow_shift": 2.0},
+        "unipc": {"guidance_scale": 1.2, "flow_shift": 2.5},
+        "dpm++": {"guidance_scale": 3.0, "guidance2_scale": 1.0, "flow_shift": 3.0, "num_inference_steps": 6},
+        "causvid": {"guidance_scale": 1.0, "flow_shift": 1.0}
+    },
+	"switch_threshold" : 875	
+}
