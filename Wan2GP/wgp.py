@@ -4306,6 +4306,16 @@ def generate_video(
         lora_dir = get_lora_dir(model_type)
         loras_selected += [ os.path.join(lora_dir, lora) for lora in activated_loras]
 
+    # [CausVidDebugTrace] Add detailed LoRA parameter analysis
+    print(f"[CausVidDebugTrace] WGP: LoRA parameter analysis:")
+    print(f"[CausVidDebugTrace]   activated_loras received: {activated_loras}")
+    print(f"[CausVidDebugTrace]   activated_loras type: {type(activated_loras)}")
+    print(f"[CausVidDebugTrace]   lora_dir: {lora_dir}")
+    print(f"[CausVidDebugTrace]   transformer_loras_filenames: {transformer_loras_filenames}")
+    print(f"[CausVidDebugTrace]   extra_loras_transformers: {extra_loras_transformers}")
+    print(f"[CausVidDebugTrace]   loras_selected final: {loras_selected}")
+    print(f"[CausVidDebugTrace]   len(loras_selected): {len(loras_selected)}")
+    
     if len(loras_selected) > 0:
         print(f"[CausVidDebugTrace] WGP: Loading {len(loras_selected)} LoRAs into model:")
         for i, lora_path in enumerate(loras_selected):
