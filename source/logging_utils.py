@@ -103,6 +103,10 @@ class ComponentLogger:
     
     def status(self, message: str, task_id: Optional[str] = None):
         status(self.component, message, task_id)
+    
+    def info(self, message: str, task_id: Optional[str] = None):
+        """Alias for essential() to maintain compatibility with standard logging."""
+        essential(self.component, message, task_id)
 
 # Pre-configured loggers for main components
 headless_logger = ComponentLogger("HEADLESS")
