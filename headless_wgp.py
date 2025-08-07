@@ -189,6 +189,12 @@ class WanOrchestrator:
         wgp.wan_model = wan_model
         wgp.offloadobj = self.offloadobj
         
+        # CRITICAL: Update WGP's global transformer_type tracking
+        # This prevents WGP from thinking it needs to reload the model on every generation
+        wgp.transformer_type = model_key
+        wgp.reload_needed = False  # Mark that reload is no longer needed
+        model_logger.debug(f"Updated WGP transformer_type tracking to: {model_key}, reload_needed=False")
+        
         family = self._get_model_family(model_key, for_ui=True)
         model_logger.success(f"Loaded model: {model_key} ({family})")
     
