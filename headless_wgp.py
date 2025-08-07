@@ -100,8 +100,7 @@ class WanOrchestrator:
             profile_choice=4,  # Profile 4: LowRAM_LowVRAM (Default)
             vae_config_choice="default",
             metadata_choice="none",
-            quantization_choice="int8",
-            preload_model_policy_choice=["S"]  # Smart preloading for model switching
+            quantization_choice="int8"
         )
         self.current_model = None
         self.offloadobj = None  # Store WGP's offload object
@@ -140,18 +139,19 @@ class WanOrchestrator:
             model_def["settings"] = settings
         
     def load_model(self, model_key: str):
-        """Load and validate a model type using WGP's native functions.
+        """Load and validate a model type using WGP's exact generation-time pattern.
         
         Args:
             model_key: Model identifier (e.g., "t2v", "vace_14B", "flux")
             
-        Raises:
-            ValueError: If model_key is not recognized
+        This replicates the exact model loading logic from WGP's generate_video function
+        (lines 4249-4258) rather than the UI preloading function.
         """
         if self._get_base_model_type(model_key) is None:
             raise ValueError(f"Unknown model: {model_key}")
         
         import wgp
+        import gc
         
         # Debug: Check if model definition is missing and diagnose why
         model_def = wgp.get_model_def(model_key)
@@ -183,28 +183,30 @@ class WanOrchestrator:
         modules = wgp.get_model_recursive_prop(model_key, "modules", return_list=True)
         model_logger.debug(f"Model Info: {model_key} | Architecture: {architecture} | Modules: {modules}")
         
-        # Create a state object that WGP functions expect
-        temp_state = {"model_type": model_key}
-        
-        # Use WGP's actual preload_model_when_switching function
+        # Use WGP's EXACT model loading pattern from generate_video (lines 4249-4258)
         current_model_info = f"(current: {wgp.transformer_type})" if wgp.transformer_type else "(no model loaded)"
-        if wgp.transformer_type != model_key:
-            model_logger.info(f"🔄 MODEL SWITCH: Switching from {current_model_info} to {model_key} using WGP's preload_model_when_switching")
+        
+        if model_key != wgp.transformer_type or wgp.reload_needed:
+            model_logger.info(f"🔄 MODEL SWITCH: Using WGP's generate_video pattern - switching from {current_model_info} to {model_key}")
             
-            # Call WGP's native function - it returns a generator for UI updates, we'll consume it
-            try:
-                for progress_message in wgp.preload_model_when_switching(temp_state):
-                    if progress_message and hasattr(progress_message, 'value'):
-                        model_logger.debug(f"WGP Loading: {progress_message.value}")
-                    elif isinstance(progress_message, str):
-                        model_logger.debug(f"WGP Loading: {progress_message}")
-                        
-                model_logger.info(f"✅ MODEL: WGP preload_model_when_switching completed")
-            except Exception as e:
-                model_logger.error(f"WGP preload_model_when_switching failed: {e}")
-                raise
+            # Replicate WGP's exact unloading pattern (lines 4250-4254)
+            wgp.wan_model = None
+            if wgp.offloadobj is not None:
+                wgp.offloadobj.release()
+                wgp.offloadobj = None
+            gc.collect()
+            
+            # Replicate WGP's exact loading pattern (lines 4255-4258)
+            model_logger.debug(f"Loading model {wgp.get_model_name(model_key)}...")
+            wgp.wan_model, wgp.offloadobj = wgp.load_models(model_key)
+            model_logger.debug("Model loaded")
+            wgp.reload_needed = False
+            
+            # Note: transformer_type is set automatically by load_models() at line 2929
+            
+            model_logger.info(f"✅ MODEL: Loaded using WGP's exact generate_video pattern")
         else:
-            model_logger.debug(f"📋 MODEL: Model {model_key} already loaded according to WGP transformer_type")
+            model_logger.debug(f"📋 MODEL: Model {model_key} already loaded, no switch needed")
         
         # Update our tracking to match WGP's state
         self.current_model = model_key
@@ -212,7 +214,7 @@ class WanOrchestrator:
         self.offloadobj = wgp.offloadobj  # Keep reference to WGP's offload object
         
         family = self._get_model_family(model_key, for_ui=True)
-        model_logger.success(f"✅ MODEL Loaded model: {model_key} ({family}) using WGP's native functions")
+        model_logger.success(f"✅ MODEL Loaded model: {model_key} ({family}) using WGP's exact generate_video pattern")
     
     def unload_model(self):
         """Unload the current model using WGP's native unload function."""
