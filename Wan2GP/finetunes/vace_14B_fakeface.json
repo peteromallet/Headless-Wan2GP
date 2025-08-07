@@ -13,9 +13,9 @@
         ],
         "loras": [
             "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan22-Lightning/Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_HIGH_fp16.safetensors",
-            "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan22-Lightning/Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_LOW_fp16.safetensors"
+            "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan22-Lightning/Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_HIGH_fp16.safetensors"
         ],
-        "loras_multipliers": ["1.0;0", "0;1.0"],
+        "loras_multipliers": ["0.9;0", "0;0.9"],
 		"group": "wan2_2",
 		"auto_quantize": false,
 		"fp8_quantized": true
