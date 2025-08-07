@@ -524,11 +524,6 @@ class HeadlessTaskQueue:
         if "num_inference_steps" in wgp_params:
             self.logger.info(f"[CausVidDebugTrace]   existing num_inference_steps value: {wgp_params['num_inference_steps']}")
         
-        # CONFLICT RESOLUTION: CausVid and LightI2X are mutually exclusive
-        if use_causvid and use_lighti2x:
-            self.logger.warning(f"[CausVidDebugTrace] Task {task.id}: ⚠️ CONFLICT: Both CausVid and LightI2X enabled - prioritizing CausVid")
-            use_lighti2x = False  # Disable LightI2X when both are enabled
-        
         if use_causvid:
             self.logger.info(f"[CausVidDebugTrace] Task {task.id}: CausVid LoRA detected - applying optimizations")
             self.logger.info(f"[Task {task.id}] Applying CausVid LoRA settings: steps=9, guidance=1.0, flow_shift=1.0")
@@ -573,7 +568,7 @@ class HeadlessTaskQueue:
         else:
             self.logger.info(f"[CausVidDebugTrace] Task {task.id}: CausVid NOT enabled, skipping optimizations")
         
-        elif use_lighti2x:
+        if use_lighti2x:
             self.logger.info(f"[Task {task.id}] Applying LightI2X LoRA settings: steps=6, guidance=1.0, flow_shift=5.0")
             # Apply LightI2X-specific parameters
             if "num_inference_steps" not in wgp_params:
