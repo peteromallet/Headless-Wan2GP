@@ -1196,7 +1196,6 @@ def main():
         db_ops.init_db() # Existing SQLite init
 
     # Activate global debug switch early so that all subsequent code paths can use dprint()
-    global debug_mode
     debug_mode = cli_args.debug
     db_ops.debug_mode = cli_args.debug # Also set it in the db_ops module
     dprint("Verbose debug logging enabled.")
