@@ -304,7 +304,7 @@ def generate_single_video(
                 "skip_steps_start_step_perc": ui_params.get("skip_steps_start_step_perc", 0),
                 "frames_positions": ui_params.get("frames_positions", []),
                 "image_guide": ui_params.get("image_guide"),
-                "denoising_strength": ui_params.get("denoising_strength", 1.0),
+                "denoising_strength": ui_params.get("denoising_strength", ui_params.get("denoise_strength", 1.0)),
                 "video_guide_outpainting": ui_params.get("video_guide_outpainting", ""),
                 "image_mask": ui_params.get("image_mask"),
                 "control_net_weight": ui_params.get("control_net_weight", 1.0),
