@@ -11,14 +11,10 @@
         "URLs2": [
             "https://huggingface.co/CCP6/FakeVace2.2/resolve/main/Fake-Vace2.2-Low_fp8_e4m3fn.safetensors"
         ],
-		"loras": [
-        "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
-        "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/DetailEnhancerV1.safetensors",
-        "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_AccVid_T2V_14B_lora_rank32_fp16.safetensors",
-        "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_T2V_14B_MoviiGen_lora_rank32_fp16.safetensors",
-        "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors"
-		],
-		"loras_multipliers": [1, 0.2, 0.5, 0.5, 3.0],
+        "loras": [
+            "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors"
+        ],
+        "loras_multipliers": [3.0],
 		"group": "wan2_2",
 		"auto_quantize": false,
 		"fp8_quantized": true
