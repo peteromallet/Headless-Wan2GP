@@ -606,6 +606,13 @@ class WanOrchestrator:
         if not self._is_vace():
             generation_logger.warning(f"Current model {self.current_model} may not be a VACE model")
         
+        # [CausVidDebugTrace] Log LoRA parameters at VACE level
+        generation_logger.info(f"[CausVidDebugTrace] generate_vace received kwargs: {list(kwargs.keys())}")
+        if "lora_names" in kwargs:
+            generation_logger.info(f"[CausVidDebugTrace] generate_vace lora_names: {kwargs['lora_names']}")
+        if "lora_multipliers" in kwargs:
+            generation_logger.info(f"[CausVidDebugTrace] generate_vace lora_multipliers: {kwargs['lora_multipliers']}")
+        
         return self.generate(
             prompt=prompt,
             video_guide=video_guide,
