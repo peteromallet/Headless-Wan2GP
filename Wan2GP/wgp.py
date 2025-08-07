@@ -4288,6 +4288,7 @@ def generate_video(
     parsed_keep_frames_video_source= max_source_video_frames if len(keep_frames_video_source) ==0 else int(keep_frames_video_source) 
 
     transformer_loras_filenames, transformer_loras_multipliers  = get_transformer_loras(model_type)
+    extra_loras_transformers = []  # Initialize for debug access
     if transformer_loras_filenames != None:
         loras_list_mult_choices_nums, loras_slists, errors =  parse_loras_multipliers(transformer_loras_multipliers, len(transformer_loras_filenames), num_inference_steps)
         if len(errors) > 0: raise Exception(f"Error parsing Transformer Loras: {errors}")
