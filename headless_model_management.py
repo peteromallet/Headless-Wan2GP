@@ -514,28 +514,58 @@ class HeadlessTaskQueue:
         use_causvid = task.parameters.get("use_causvid_lora", False)
         use_lighti2x = task.parameters.get("use_lighti2x_lora", False)
         
+        # [CausVidDebugTrace] Enhanced parameter inspection
+        self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Pre-processing parameter analysis:")
+        self.logger.info(f"[CausVidDebugTrace]   use_causvid: {use_causvid}")
+        self.logger.info(f"[CausVidDebugTrace]   use_lighti2x: {use_lighti2x}")
+        self.logger.info(f"[CausVidDebugTrace]   wgp_params keys before CausVid logic: {list(wgp_params.keys())}")
+        self.logger.info(f"[CausVidDebugTrace]   'num_inference_steps' in wgp_params: {'num_inference_steps' in wgp_params}")
+        if "num_inference_steps" in wgp_params:
+            self.logger.info(f"[CausVidDebugTrace]   existing num_inference_steps value: {wgp_params['num_inference_steps']}")
+        
         if use_causvid:
+            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: CausVid LoRA detected - applying optimizations")
             self.logger.info(f"[Task {task.id}] Applying CausVid LoRA settings: steps=9, guidance=1.0, flow_shift=1.0")
+            
             # Apply CausVid-specific parameters, but allow task to override if explicitly specified
             if "num_inference_steps" not in wgp_params:
                 wgp_params["num_inference_steps"] = 9
+                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Set num_inference_steps = 9 (CausVid optimization)")
+            else:
+                self.logger.warning(f"[CausVidDebugTrace] Task {task.id}: ⚠️ CausVid num_inference_steps SKIPPED - already set to {wgp_params['num_inference_steps']}")
+                
             if "guidance_scale" not in wgp_params:
                 wgp_params["guidance_scale"] = 1.0
+                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Set guidance_scale = 1.0 (CausVid optimization)")
+            else:
+                self.logger.warning(f"[CausVidDebugTrace] Task {task.id}: ⚠️ CausVid guidance_scale SKIPPED - already set to {wgp_params['guidance_scale']}")
+                
             if "flow_shift" not in wgp_params:
                 wgp_params["flow_shift"] = 1.0
+                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Set flow_shift = 1.0 (CausVid optimization)")
+            else:
+                self.logger.warning(f"[CausVidDebugTrace] Task {task.id}: ⚠️ CausVid flow_shift SKIPPED - already set to {wgp_params['flow_shift']}")
             
             # Ensure CausVid LoRA is in activated list
             current_loras = wgp_params.get("lora_names", [])
             causvid_lora = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
+            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Current LoRAs before CausVid: {current_loras}")
+            
             if causvid_lora not in current_loras:
                 current_loras.append(causvid_lora)
                 wgp_params["lora_names"] = current_loras
+                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Added CausVid LoRA to list: {current_loras}")
                 
                 # Add multiplier for CausVid LoRA
                 current_multipliers = wgp_params.get("lora_multipliers", [])
                 while len(current_multipliers) < len(current_loras):
                     current_multipliers.append(1.0)
                 wgp_params["lora_multipliers"] = current_multipliers
+                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Updated LoRA multipliers: {current_multipliers}")
+            else:
+                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: CausVid LoRA already in list at index {current_loras.index(causvid_lora)}")
+        else:
+            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: CausVid NOT enabled, skipping optimizations")
         
         if use_lighti2x:
             self.logger.info(f"[Task {task.id}] Applying LightI2X LoRA settings: steps=5, guidance=1.0, flow_shift=5.0")

@@ -4307,15 +4307,33 @@ def generate_video(
         loras_selected += [ os.path.join(lora_dir, lora) for lora in activated_loras]
 
     if len(loras_selected) > 0:
+        print(f"[CausVidDebugTrace] WGP: Loading {len(loras_selected)} LoRAs into model:")
+        for i, lora_path in enumerate(loras_selected):
+            lora_name = os.path.basename(lora_path)
+            multiplier = loras_list_mult_choices_nums[i] if i < len(loras_list_mult_choices_nums) else 1.0
+            is_causvid = "CausVid" in lora_name
+            print(f"[CausVidDebugTrace]   {i}: {lora_name} (multiplier: {multiplier}) {'🚀 CAUSVID' if is_causvid else ''}")
+        
         pinnedLora = profile !=5  # and transformer_loras_filenames == None False # # # 
         split_linear_modules_map = getattr(trans,"split_linear_modules_map", None)
+        
+        print(f"[CausVidDebugTrace] WGP: Calling offload.load_loras_into_model...")
         offload.load_loras_into_model(trans , loras_selected, loras_list_mult_choices_nums, activate_all_loras=True, preprocess_sd=get_loras_preprocessor(trans, base_model_type), pinnedLora=pinnedLora, split_linear_modules_map = split_linear_modules_map) 
+        print(f"[CausVidDebugTrace] WGP: LoRA loading completed")
+        
         errors = trans._loras_errors
         if len(errors) > 0:
             error_files = [msg for _ ,  msg  in errors]
+            print(f"[CausVidDebugTrace] WGP: ⚠️ LoRA loading errors: {error_files}")
             raise gr.Error("Error while loading Loras: " + ", ".join(error_files))
+        else:
+            print(f"[CausVidDebugTrace] WGP: ✅ All LoRAs loaded successfully")
+            
         if trans2 is not None: 
+            print(f"[CausVidDebugTrace] WGP: Syncing LoRAs to trans2 model")
             offload.sync_models_loras(trans, trans2)
+    else:
+        print(f"[CausVidDebugTrace] WGP: No LoRAs to load")
         
     seed = None if seed == -1 else seed
     # negative_prompt = "" # not applicable in the inference
@@ -4860,6 +4878,22 @@ def generate_video(
             # if False:
             
             try:
+                # [CausVidDebugTrace] Log final generation parameters
+                has_causvid = any("CausVid" in os.path.basename(lora) for lora in loras_selected) if loras_selected else False
+                print(f"[CausVidDebugTrace] WGP: Final generation parameters:")
+                print(f"[CausVidDebugTrace]   CausVid LoRA active: {has_causvid}")
+                print(f"[CausVidDebugTrace]   sampling_steps: {num_inference_steps}")
+                print(f"[CausVidDebugTrace]   guide_scale: {guidance_scale}")
+                print(f"[CausVidDebugTrace]   shift (flow_shift): {flow_shift}")
+                print(f"[CausVidDebugTrace]   sample_solver: {sample_solver}")
+                print(f"[CausVidDebugTrace]   frame_num: {(current_video_length // latent_size)* latent_size + 1}")
+                if has_causvid and num_inference_steps != 9:
+                    print(f"[CausVidDebugTrace] ⚠️ WARNING: CausVid LoRA loaded but using {num_inference_steps} steps instead of optimized 9!")
+                if has_causvid and guidance_scale != 1.0:
+                    print(f"[CausVidDebugTrace] ⚠️ WARNING: CausVid LoRA loaded but using guidance_scale {guidance_scale} instead of optimized 1.0!")
+                if has_causvid and flow_shift != 1.0:
+                    print(f"[CausVidDebugTrace] ⚠️ WARNING: CausVid LoRA loaded but using flow_shift {flow_shift} instead of optimized 1.0!")
+                
                 samples = wan_model.generate(
                     input_prompt = prompt,
                     image_start = image_start_tensor,  

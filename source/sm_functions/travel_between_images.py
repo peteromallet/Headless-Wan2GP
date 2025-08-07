@@ -1078,6 +1078,18 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             dprint(f"[WGP_DEBUG] Using new task queue system for generation")
             from headless_model_management import GenerationTask
             
+            # [CausVidDebugTrace] Log task creation parameters
+            causvid_flag = full_orchestrator_payload.get("apply_causvid", False) or full_orchestrator_payload.get("use_causvid_lora", False)
+            lighti2x_flag = full_orchestrator_payload.get("use_lighti2x_lora", False) or segment_params.get("use_lighti2x_lora", False)
+            
+            dprint(f"[CausVidDebugTrace] Segment {segment_idx}: Creating GenerationTask with:")
+            dprint(f"[CausVidDebugTrace]   num_inference_steps: {num_inference_steps}")
+            dprint(f"[CausVidDebugTrace]   guidance_scale: {guidance_scale_default}")
+            dprint(f"[CausVidDebugTrace]   flow_shift: {flow_shift_default}")
+            dprint(f"[CausVidDebugTrace]   use_causvid_lora flag: {causvid_flag}")
+            dprint(f"[CausVidDebugTrace]   use_lighti2x_lora flag: {lighti2x_flag}")
+            dprint(f"[CausVidDebugTrace]   apply_reward_lora flag: {effective_apply_reward_lora}")
+            
             # Create a GenerationTask for the queue system
             generation_task = GenerationTask(
                 id=wgp_inline_task_id,
@@ -1097,8 +1109,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     "control_net_weight": full_orchestrator_payload.get("control_net_weight", 1.0),
                     "control_net_weight2": full_orchestrator_payload.get("control_net_weight2", 1.0),
                     # Include special LoRA flags that drive parameter optimization
-                    "use_causvid_lora": full_orchestrator_payload.get("apply_causvid", False) or full_orchestrator_payload.get("use_causvid_lora", False),
-                    "use_lighti2x_lora": full_orchestrator_payload.get("use_lighti2x_lora", False) or segment_params.get("use_lighti2x_lora", False),
+                    "use_causvid_lora": causvid_flag,
+                    "use_lighti2x_lora": lighti2x_flag,
                     "apply_reward_lora": effective_apply_reward_lora,
                     # Add any additional parameters from wgp_payload
                     **{k: v for k, v in wgp_payload.items() if k not in [
@@ -2075,10 +2087,19 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             print(f"[STITCH_FINAL_ANALYSIS] Complete stitching analysis:")
             print(f"[STITCH_FINAL_ANALYSIS]   Input segments: {len(segment_video_paths_for_stitch)}")
             print(f"[STITCH_FINAL_ANALYSIS]   Overlap settings: {expanded_frame_overlaps}")
-            print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: {expected_final_length if 'expected_final_length' in locals() else 'Not calculated'}")
-            print(f"[STITCH_FINAL_ANALYSIS]   Actual final frames: {final_frame_count}")
-            if 'expected_final_length' in locals() and final_frame_count != expected_final_length:
-                print(f"[STITCH_FINAL_ANALYSIS]   ⚠️  FINAL LENGTH MISMATCH! Expected {expected_final_length}, got {final_frame_count}")
+            # Calculate expected final length for analysis
+            try:
+                # Try to calculate expected final length from stitch data
+                total_input_frames = sum(orchestrator_segment_frame_counts)
+                total_overlaps = sum(expanded_frame_overlaps)
+                expected_final_length = total_input_frames - total_overlaps
+                print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: {expected_final_length}")
+                print(f"[STITCH_FINAL_ANALYSIS]   Actual final frames: {final_frame_count}")
+                if final_frame_count != expected_final_length:
+                    print(f"[STITCH_FINAL_ANALYSIS]   ⚠️  FINAL LENGTH MISMATCH! Expected {expected_final_length}, got {final_frame_count}")
+            except Exception as e:
+                print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: Not calculated ({e})")
+                print(f"[STITCH_FINAL_ANALYSIS]   Actual final frames: {final_frame_count}")
             
             # Detailed analysis of the final video
             debug_video_analysis(final_video_path, "FINAL_STITCHED_VIDEO", stitch_task_id_str)

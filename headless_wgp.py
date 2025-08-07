@@ -426,6 +426,15 @@ class WanOrchestrator:
             else:
                 generation_logger.debug(f"Standard parameters to WGP - model: {self.current_model}")
             
+            # [CausVidDebugTrace] Log parameters being passed to generate_video
+            generation_logger.info(f"[CausVidDebugTrace] WanOrchestrator.generate calling _generate_video with:")
+            generation_logger.info(f"[CausVidDebugTrace]   model_type: {self.current_model}")
+            generation_logger.info(f"[CausVidDebugTrace]   num_inference_steps: {num_inference_steps}")
+            generation_logger.info(f"[CausVidDebugTrace]   guidance_scale: {actual_guidance}")
+            generation_logger.info(f"[CausVidDebugTrace]   guidance2_scale: {actual_guidance}")
+            generation_logger.info(f"[CausVidDebugTrace]   activated_loras: {activated_loras}")
+            generation_logger.info(f"[CausVidDebugTrace]   loras_multipliers_str: {loras_multipliers_str}")
+            
             # Call the VACE-fixed generate_video (patching is handled in wrapper)
             result = self._generate_video(
                         task=task,
