@@ -49,6 +49,11 @@ class WanOrchestrator:
             }.items():
                 if not hasattr(wgp, attr):
                     setattr(wgp, attr, default)
+            
+            # Debug: Check if model definitions are loaded
+            model_logger.debug(f"Available models after WGP import: {list(wgp.models_def.keys())}")
+            if not wgp.models_def:
+                model_logger.warning("No model definitions found - this may cause model loading issues")
                     
         except ImportError as e:
             raise ImportError(f"Failed to import wgp module. Ensure {wan_root} contains wgp.py: {e}")
