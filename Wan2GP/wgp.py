@@ -4300,10 +4300,10 @@ def generate_video(
         loras_selected += extra_loras_transformers 
 
     loras = state["loras"]
+    lora_dir = get_lora_dir(model_type)  # Move outside conditional for debug access
     if len(loras) > 0:
         loras_list_mult_choices_nums, loras_slists, errors =  parse_loras_multipliers(loras_multipliers, len(activated_loras), num_inference_steps, merge_slist= loras_slists )
         if len(errors) > 0: raise Exception(f"Error parsing Loras: {errors}")
-        lora_dir = get_lora_dir(model_type)
         loras_selected += [ os.path.join(lora_dir, lora) for lora in activated_loras]
 
     # [CausVidDebugTrace] Add detailed LoRA parameter analysis
