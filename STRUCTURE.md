@@ -13,6 +13,7 @@
 - **✅ Wan 2.2 VACE Integration**: Full support for dual-phase Wan 2.2 models with optimized VACE strength (1.3) and sampler-specific CFG presets
 - **✅ LightI2X LoRA Enhancement**: Integrated advanced step distillation LoRA at 3.0 strength for faster inference
 - **✅ Structured Logging System**: Comprehensive logging overhaul with specialized loggers for different components (orchestrator, model, generation, travel)
+- **✅ Model Memory Management**: Fixed critical model offloading issue in headless_wgp.py - now properly releases previous model memory before loading new models, preventing memory fragmentation and "stuck" generation
 
 ### 🧹 **Repository Cleanup & Organization**
 - **Organized tests:** Moved comprehensive test suite to `tests/` directory

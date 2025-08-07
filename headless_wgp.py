@@ -117,6 +117,25 @@ class WanOrchestrator:
         import wgp
         import os
         import shutil
+        import gc
+        
+        # CRITICAL: Properly offload previous model before loading new one
+        # This follows the exact pattern from wgp.py's generate_video function (lines 4249-4254)
+        if hasattr(wgp, 'wan_model') and wgp.wan_model is not None:
+            model_logger.debug(f"Offloading previous model before loading {model_key}")
+            wgp.wan_model = None
+            
+            if hasattr(wgp, 'offloadobj') and wgp.offloadobj is not None:
+                wgp.offloadobj.release()
+                wgp.offloadobj = None
+                
+            # Also clear our local reference
+            if self.offloadobj is not None:
+                self.offloadobj.release()
+                self.offloadobj = None
+                
+            gc.collect()
+            model_logger.debug(f"Previous model offloaded successfully")
         
         # Debug: Show model discovery for debugging
         if self._test_vace_module(model_key):
