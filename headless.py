@@ -13,6 +13,14 @@ directories, moves or uploads finished artefacts, and updates task status in
 the database before looping again.  It serves as the runtime backend that
 `steerable_motion.py` (and other clients) rely upon to perform heavy
 generation work.
+
+Wan 2.2 Support:
+• Default task_type "vace" now uses Wan 2.2 (vace_14B_cocktail_2_2) for 2.5x speed improvement
+• Use task_type "vace_21" to explicitly request Wan 2.1 compatibility
+• Use task_type "vace_22" to explicitly request Wan 2.2 optimizations
+• Wan 2.2 models automatically apply optimized settings (10 steps, guidance_scale=1.0, etc.)
+• Built-in acceleration LoRAs (CausVid, DetailEnhancer) are auto-enabled for Wan 2.2
+• All optimizations can be overridden by explicit task parameters
 """
 
 import argparse
@@ -61,17 +69,19 @@ from source.sm_functions import single_image as si
 from source.sm_functions import magic_edit as me
 # --- New Queue-based Architecture Imports ---
 from headless_model_management import HeadlessTaskQueue, GenerationTask
+# --- Structured Logging ---
+from source.logging_utils import headless_logger, enable_debug_mode, disable_debug_mode
 # --- End SM_RESTRUCTURE imports ---
 
 
 # -----------------------------------------------------------------------------
-# Debug / Verbose Logging Helpers
+# Debug / Verbose Logging Helpers (Legacy)
 # -----------------------------------------------------------------------------
 
 debug_mode = False  # This will be toggled on via the --debug CLI flag in main()
 
 def dprint(msg: str):
-    """Print a debug message if --debug flag is enabled."""
+    """Print a debug message if --debug flag is enabled. (Legacy - use logging_utils instead)"""
     if debug_mode:
         # Prefix with timestamp for easier tracing
         print(f"[DEBUG {datetime.datetime.now().isoformat()}] {msg}")
@@ -108,10 +118,14 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         # Map task types to model keys
         task_type_to_model = {
             "generate_video": "t2v",  # Default T2V
-            "vace": "vace_14B", 
+            "vace": "vace_14B_cocktail_2_2",  # Default to Wan 2.2 for better performance
+            "vace_21": "vace_14B",  # Explicit Wan 2.1 VACE
+            "vace_22": "vace_14B_cocktail_2_2",  # Explicit Wan 2.2 VACE
             "flux": "flux",
             "t2v": "t2v",
+            "t2v_22": "t2v_2_2",  # Wan 2.2 T2V
             "i2v": "i2v_14B",
+            "i2v_22": "i2v_2_2",  # Wan 2.2 I2V
             "hunyuan": "hunyuan",
             "ltxv": "ltxv_13B"
         }
@@ -199,6 +213,29 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
     for param, default_value in defaults.items():
         if param not in generation_params:
             generation_params[param] = default_value
+    
+    # Apply Wan 2.2 optimizations automatically (can be overridden by explicit task parameters)
+    if "2_2" in model or "cocktail_2_2" in model:
+        dprint(f"Task {task_id}: Applying Wan 2.2 optimizations for model '{model}'")
+        
+        # Wan 2.2 optimized defaults (only set if not explicitly provided)
+        wan22_optimizations = {
+            "num_inference_steps": 10,    # 2.5x faster than Wan 2.1's 25 steps
+            "guidance_scale": 1.0,        # Optimized for Wan 2.2 architecture
+            "flow_shift": 2.0,            # Better quality with Wan 2.2
+            "switch_threshold": 875,      # Dual-phase switching point
+        }
+        
+        for param, optimized_value in wan22_optimizations.items():
+            if param not in db_task_params:  # Only apply if not explicitly set in task
+                generation_params[param] = optimized_value
+                dprint(f"Task {task_id}: Applied Wan 2.2 optimization {param}={optimized_value}")
+        
+        # Auto-enable built-in acceleration LoRAs if no LoRAs explicitly specified
+        if "lora_names" not in generation_params and "activated_loras" not in db_task_params:
+            generation_params["lora_names"] = ["CausVid", "DetailEnhancerV1"]
+            generation_params["lora_multipliers"] = [1.0, 0.2]  # DetailEnhancer at reduced strength
+            dprint(f"Task {task_id}: Auto-enabled Wan 2.2 acceleration LoRAs")
     
     # Determine task priority (orchestrator tasks get higher priority)
     priority = db_task_params.get("priority", 0)
@@ -381,12 +418,14 @@ def _ensure_lora_downloaded(task_id: str, lora_name: str, lora_url: str, target_
 # -----------------------------------------------------------------------------
 
 def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True, task_queue: HeadlessTaskQueue = None):
-    dprint(f"--- Entering process_single_task ---")
-    dprint(f"Task Type: {task_type}")
-    dprint(f"Project ID for task: {project_id_for_task}") # Added dprint for project_id
-    dprint(f"Task Params (first 1000 chars): {json.dumps(task_params_dict, default=str, indent=2)[:1000]}...")
     task_id = task_params_dict.get("task_id", "unknown_task_" + str(time.time()))
-    print(f"--- Processing task ID: {task_id} of type: {task_type} ---")
+    
+    headless_logger.debug(f"Entering process_single_task", task_id=task_id)
+    headless_logger.debug(f"Task Type: {task_type}", task_id=task_id)
+    headless_logger.debug(f"Project ID: {project_id_for_task}", task_id=task_id)
+    headless_logger.debug(f"Task Params: {json.dumps(task_params_dict, default=str, indent=2)[:1000]}...", task_id=task_id)
+    
+    headless_logger.essential(f"Processing {task_type} task", task_id=task_id)
     output_location_to_db = None # Will store the final path/URL for the DB
     generation_success = False
 
@@ -394,20 +433,20 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
     # These tasks manage their own sub-task queuing and can return directly, as they
     # are either the start of a chain or a self-contained unit.
     if task_type == "travel_orchestrator":
-        print(f"[Task ID: {task_id}] Identified as 'travel_orchestrator' task.")
+        headless_logger.debug("Delegating to travel orchestrator handler", task_id=task_id)
         # Ensure the orchestrator uses the DB row ID as its canonical task_id
         task_params_dict["task_id"] = task_id
         if "orchestrator_details" in task_params_dict:
             task_params_dict["orchestrator_details"]["orchestrator_task_id"] = task_id
         return tbi._handle_travel_orchestrator_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, orchestrator_task_id_str=task_id, orchestrator_project_id=project_id_for_task, dprint=dprint)
     elif task_type == "travel_segment":
-        print(f"[Task ID: {task_id}] Identified as 'travel_segment' task.")
+        headless_logger.debug("Delegating to travel segment handler", task_id=task_id)
         return tbi._handle_travel_segment_task(wgp_mod, task_params_dict, main_output_dir_base, task_id, apply_reward_lora, colour_match_videos, mask_active_frames, process_single_task=process_single_task, dprint=dprint, task_queue=task_queue)
     elif task_type == "travel_stitch":
-        print(f"[Task ID: {task_id}] Identified as 'travel_stitch' task.")
+        headless_logger.debug("Delegating to travel stitch handler", task_id=task_id)
         return tbi._handle_travel_stitch_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, stitch_task_id_str=task_id, dprint=dprint)
     elif task_type == "different_perspective_orchestrator":
-        print(f"[Task ID: {task_id}] Identified as 'different_perspective_orchestrator' task.")
+        headless_logger.debug("Delegating to different perspective orchestrator handler", task_id=task_id)
         return dp._handle_different_perspective_orchestrator_task(
             task_params_from_db=task_params_dict,
             main_output_dir_base=main_output_dir_base,
@@ -415,7 +454,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
             dprint=dprint
         )
     elif task_type == "dp_final_gen":
-        print(f"[Task ID: {task_id}] Identified as 'dp_final_gen' task.")
+        headless_logger.debug("Delegating to different perspective final generation handler", task_id=task_id)
         return dp._handle_dp_final_gen_task(
             wgp_mod=wgp_mod,
             main_output_dir_base=main_output_dir_base,
@@ -424,7 +463,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
             dprint=dprint
         )
     elif task_type == "single_image":
-        print(f"[Task ID: {task_id}] Identified as 'single_image' task.")
+        headless_logger.debug("Delegating to single image handler", task_id=task_id)
         return si._handle_single_image_task(
             wgp_mod=wgp_mod,
             task_params_from_db=task_params_dict,
@@ -435,7 +474,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
             dprint=dprint
         )
     elif task_type == "magic_edit":
-        print(f"[Task ID: {task_id}] Identified as 'magic_edit' task.")
+        headless_logger.debug("Delegating to magic edit handler", task_id=task_id)
         return me._handle_magic_edit_task(
             task_params_from_db=task_params_dict,
             main_output_dir_base=main_output_dir_base,
@@ -448,22 +487,22 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
     # They set generation_success and output_location_to_db, then execution
     # falls through to the chaining logic at the end of this function.
     if task_type == "generate_openpose":
-        print(f"[Task ID: {task_id}] Identified as 'generate_openpose' task.")
+        headless_logger.debug("Processing OpenPose generation task", task_id=task_id)
         generation_success, output_location_to_db = handle_generate_openpose_task(task_params_dict, main_output_dir_base, task_id, dprint)
 
     elif task_type == "extract_frame":
-        print(f"[Task ID: {task_id}] Identified as 'extract_frame' task.")
+        headless_logger.debug("Processing frame extraction task", task_id=task_id)
         generation_success, output_location_to_db = handle_extract_frame_task(task_params_dict, main_output_dir_base, task_id, dprint)
 
     elif task_type == "rife_interpolate_images":
-        print(f"[Task ID: {task_id}] Identified as 'rife_interpolate_images' task.")
+        headless_logger.debug("Processing RIFE interpolation task", task_id=task_id)
         generation_success, output_location_to_db = handle_rife_interpolate_task(wgp_mod, task_params_dict, main_output_dir_base, task_id, dprint)
 
     # Default handling for standard wgp tasks
     else:
         # NEW QUEUE-BASED PROCESSING: Delegate to task queue if available
         if task_queue is not None:
-            dprint(f"[Task ID: {task_id}] Using queue-based processing system")
+            headless_logger.debug("Using queue-based processing system", task_id=task_id)
             
             try:
                 # Create GenerationTask object from DB parameters
@@ -479,7 +518,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
                 
                 # Submit task to queue
                 submitted_task_id = task_queue.submit_task(generation_task)
-                print(f"[Task ID: {task_id}] Submitted to generation queue as {submitted_task_id}")
+                headless_logger.essential(f"Submitted to generation queue as {submitted_task_id}", task_id=task_id)
                 
                 # Block until task completion (simple synchronous approach for now)
                 max_wait_time = 3600  # 1 hour max wait
@@ -963,6 +1002,18 @@ def main():
     load_dotenv() # Load .env file variables into environment
     global DB_TYPE, SQLITE_DB_PATH, SUPABASE_CLIENT, SUPABASE_VIDEO_BUCKET
 
+    # Parse CLI arguments first to determine debug mode
+    cli_args = parse_args()
+    
+    # Set up logging early based on debug flag
+    global debug_mode
+    debug_mode = cli_args.debug
+    if debug_mode:
+        enable_debug_mode()
+        headless_logger.debug("Debug mode enabled")
+    else:
+        disable_debug_mode()
+
     # Determine DB type from environment variables
     env_db_type = os.getenv("DB_TYPE", "sqlite").lower()
     env_pg_table_name = os.getenv("POSTGRES_TABLE_NAME", "tasks")
@@ -971,8 +1022,6 @@ def main():
     env_supabase_anon_key = os.getenv("SUPABASE_ANON_KEY")
     env_supabase_bucket = os.getenv("SUPABASE_VIDEO_BUCKET", "image_uploads")
     env_sqlite_db_path = os.getenv("SQLITE_DB_PATH_ENV") # Read SQLite DB path from .env
-
-    cli_args = parse_args()
 
     # ------------------------------------------------------------------
     # Auto-enable file logging when --debug flag is present
@@ -983,6 +1032,7 @@ def main():
         default_logs_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         cli_args.save_logging = str(default_logs_dir / f"debug_{timestamp}.log")
+        headless_logger.debug(f"Auto-enabled file logging: {cli_args.save_logging}")
     # ------------------------------------------------------------------
 
     # Handle --worker parameter for worker-specific logging
@@ -990,6 +1040,7 @@ def main():
         default_logs_dir = Path("logs")
         default_logs_dir.mkdir(parents=True, exist_ok=True)
         cli_args.save_logging = str(default_logs_dir / f"{cli_args.worker}.log")
+        headless_logger.debug(f"Worker-specific logging enabled: {cli_args.save_logging}")
     # ------------------------------------------------------------------
 
     # --- Handle --delete-db flag ---
@@ -1005,15 +1056,16 @@ def main():
             f"{db_file_to_delete}-shm"
         ]
         
+        headless_logger.essential("Cleaning up database files")
         for db_file in db_files_to_remove:
             if Path(db_file).exists():
                 try:
                     Path(db_file).unlink()
-                    print(f"[DELETE-DB] Removed: {db_file}")
+                    headless_logger.success(f"Removed database file: {db_file}")
                 except Exception as e:
-                    print(f"[DELETE-DB ERROR] Could not remove {db_file}: {e}")
+                    headless_logger.error(f"Could not remove database file {db_file}: {e}")
         
-        print("[DELETE-DB] Database cleanup complete. Starting fresh.")
+        headless_logger.success("Database cleanup complete. Starting fresh.")
     # --- End delete-db handling ---
 
     # --- Setup logging to file if requested ---
@@ -1046,9 +1098,9 @@ def main():
         sys.stdout = DualWriter(log_file_path)
         
         if cli_args.worker:
-            print(f"[WORKER LOGGING] Worker '{cli_args.worker}' output will be saved to: {log_file_path.resolve()}")
+            headless_logger.essential(f"Worker '{cli_args.worker}' output will be saved to: {log_file_path.resolve()}")
         else:
-            print(f"[LOGGING] All output will be saved to: {log_file_path.resolve()}")
+            headless_logger.essential(f"All output will be saved to: {log_file_path.resolve()}")
         
         # Ensure cleanup on exit
         import atexit
@@ -1071,12 +1123,12 @@ def main():
             if not client_key:
                 raise ValueError("Need either service key or anon key for Supabase client initialization.")
 
-            dprint(f"Supabase: Initializing client for {cli_args.supabase_url}.")
+            headless_logger.debug(f"Initializing Supabase client for {cli_args.supabase_url}")
             temp_supabase_client = create_client(cli_args.supabase_url, client_key)
             
             # For PATs and user tokens, we'll primarily rely on edge functions
             # The access token will be passed in Authorization headers
-            dprint(f"Supabase: Client initialized. Access token will be used in edge function calls.")
+            headless_logger.debug("Supabase client initialized. Access token will be used in edge function calls.")
 
             # --- Assign to db_ops globals on success ---
             db_ops.DB_TYPE = "supabase"
@@ -1092,16 +1144,18 @@ def main():
             DB_TYPE = "supabase"
             SUPABASE_CLIENT = temp_supabase_client
             SUPABASE_VIDEO_BUCKET = env_supabase_bucket
+            
+            headless_logger.success("Supabase client initialized successfully")
 
         except Exception as e:
-            print(f"[ERROR] Failed to initialize Supabase client: {e}")
-            traceback.print_exc()
-            print("Falling back to SQLite due to Supabase client initialization error.")
+            headless_logger.error(f"Failed to initialize Supabase client: {e}")
+            headless_logger.debug(traceback.format_exc())
+            headless_logger.warning("Falling back to SQLite due to Supabase client initialization error")
             db_ops.DB_TYPE = "sqlite"
             db_ops.SQLITE_DB_PATH = env_sqlite_db_path if env_sqlite_db_path else cli_args.db_file
     else: # Default to sqlite if .env DB_TYPE is unrecognized or not set, or if it's explicitly "sqlite"
         if cli_args.db_type != "sqlite":
-            print(f"DB_TYPE '{cli_args.db_type}' in CLI args is not recognized. Defaulting to SQLite.")
+            headless_logger.warning(f"DB_TYPE '{cli_args.db_type}' in CLI args is not recognized. Defaulting to SQLite.")
         db_ops.DB_TYPE = "sqlite"
         db_ops.SQLITE_DB_PATH = env_sqlite_db_path if env_sqlite_db_path else cli_args.db_file
         DB_TYPE = "sqlite"
@@ -1415,8 +1469,9 @@ def main():
                         db_ops.STATUS_IN_PROGRESS,
                         output_location,
                     )
-                    print(
-                        f"Task {current_task_id_for_status_update} queued child tasks; awaiting completion before finalising."
+                    headless_logger.status(
+                        f"Orchestrator task queued child tasks; awaiting completion", 
+                        task_id=current_task_id_for_status_update
                     )
                 else:
                     if db_ops.DB_TYPE == "supabase":
@@ -1431,38 +1486,42 @@ def main():
                             db_ops.STATUS_COMPLETE,
                             output_location,
                         )
-                    print(
-                        f"Task {current_task_id_for_status_update} completed successfully. Output location: {output_location}"
+                    headless_logger.success(
+                        f"Task completed successfully: {output_location}", 
+                        task_id=current_task_id_for_status_update
                     )
             else:
                 if db_ops.DB_TYPE == "supabase":
                     db_ops.update_task_status_supabase(current_task_id_for_status_update, db_ops.STATUS_FAILED, output_location)
                 else:
                     db_ops.update_task_status(current_task_id_for_status_update, db_ops.STATUS_FAILED, output_location)
-                print(f"Task {current_task_id_for_status_update} failed. Review logs for errors. Output location recorded: {output_location if output_location else 'N/A'}")
+                headless_logger.error(
+                    f"Task failed. Output: {output_location if output_location else 'N/A'}", 
+                    task_id=current_task_id_for_status_update
+                )
             
             time.sleep(1) # Brief pause before checking for the next task
 
     except KeyboardInterrupt:
-        print("\nServer shutting down gracefully...")
+        headless_logger.essential("Server shutting down gracefully...")
     finally:
         # Shutdown task queue first (if it was initialized)
         if task_queue is not None:
             try:
-                print("Shutting down task queue...")
+                headless_logger.essential("Shutting down task queue...")
                 task_queue.stop(timeout=30.0)
-                print("Task queue shutdown complete.")
+                headless_logger.success("Task queue shutdown complete")
             except Exception as e_queue_shutdown:
-                print(f"Error during task queue shutdown: {e_queue_shutdown}")
+                headless_logger.error(f"Error during task queue shutdown: {e_queue_shutdown}")
         
         # Legacy wgp cleanup
         if hasattr(wgp_mod, 'offloadobj') and wgp_mod.offloadobj is not None:
             try:
-                print("Attempting to release wgp.py offload object...")
+                headless_logger.debug("Attempting to release wgp.py offload object...")
                 wgp_mod.offloadobj.release()
             except Exception as e_release:
-                print(f"Error during offloadobj release: {e_release}")
-        print("Server stopped.")
+                headless_logger.error(f"Error during offloadobj release: {e_release}")
+        headless_logger.essential("Server stopped")
 
 
 

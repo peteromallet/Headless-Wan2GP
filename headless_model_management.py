@@ -477,6 +477,8 @@ class HeadlessTaskQueue:
             "control_net_weight": "control_net_weight",
             "control_net_weight2": "control_net_weight2",
             "embedded_guidance_scale": "embedded_guidance_scale",
+            "guidance2_scale": "guidance2_scale",
+            "sample_solver": "sample_solver",
             "lora_names": "lora_names",
             "lora_multipliers": "lora_multipliers",
         }
@@ -502,6 +504,11 @@ class HeadlessTaskQueue:
             wgp_params["flow_shift"] = 3.0  # WGP default
         if "sample_solver" not in wgp_params:
             wgp_params["sample_solver"] = "euler"  # WGP default
+        
+        # Apply sampler-specific CFG settings if available
+        sample_solver = task.parameters.get("sample_solver", wgp_params.get("sample_solver", ""))
+        if sample_solver:
+            self._apply_sampler_cfg_preset(task.model, sample_solver, wgp_params)
         
         # Apply special LoRA settings (CausVid, LightI2X) if flags are present
         use_causvid = task.parameters.get("use_causvid_lora", False)
@@ -558,6 +565,32 @@ class HeadlessTaskQueue:
                 wgp_params["lora_multipliers"] = current_multipliers
         
         return wgp_params
+    
+    def _apply_sampler_cfg_preset(self, model_key: str, sample_solver: str, wgp_params: Dict[str, Any]):
+        """Apply sampler-specific CFG and flow_shift settings from model configuration."""
+        try:
+            # Import WGP to get model definition
+            import wgp
+            model_def = wgp.get_model_def(model_key)
+            
+            # Check if model has sampler-specific presets
+            sampler_presets = model_def.get("sampler_cfg_presets", {})
+            if sample_solver in sampler_presets:
+                preset = sampler_presets[sample_solver]
+                
+                # Apply preset settings, but allow task parameters to override
+                applied_params = {}
+                for param, value in preset.items():
+                    if param not in wgp_params:  # Only apply if not explicitly set in task
+                        wgp_params[param] = value
+                        applied_params[param] = value
+                        
+                self.logger.info(f"Applied sampler '{sample_solver}' CFG preset: {applied_params}")
+            else:
+                self.logger.debug(f"No CFG preset found for sampler '{sample_solver}' in model '{model_key}'")
+                
+        except Exception as e:
+            self.logger.warning(f"Failed to apply sampler CFG preset: {e}")
     
     def _get_memory_usage(self) -> Dict[str, Any]:
         """Get current memory usage statistics."""

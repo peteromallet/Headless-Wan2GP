@@ -22,6 +22,14 @@
     "num_inference_steps": 10,
     "guidance_scale": 1,
     "flow_shift": 5,
+    "control_net_weight": 1.3,
+    "control_net_weight2": 1.0,
+    "sampler_cfg_presets": {
+        "euler": {"guidance_scale": 1.0, "flow_shift": 5.0},
+        "unipc": {"guidance_scale": 1.2, "flow_shift": 6.0},
+        "dpm++": {"guidance_scale": 1.5, "flow_shift": 7.0},
+        "causvid": {"guidance_scale": 1.0, "flow_shift": 5.0}
+    },
     "embedded_guidance_scale": 6,
     "repeat_generation": 1,
     "multi_images_gen_type": 0,

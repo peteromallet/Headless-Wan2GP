@@ -9,6 +9,9 @@ import os
 import sys
 from typing import Optional, List, Union
 
+# Import structured logging
+from source.logging_utils import orchestrator_logger, model_logger, generation_logger
+
 
 class WanOrchestrator:
     """Thin adapter around `wgp.generate_video` for easier programmatic use."""
@@ -96,7 +99,7 @@ class WanOrchestrator:
         )
         self.current_model = None
         self.offloadobj = None  # Store WGP's offload object
-        print(f"✅ WanOrchestrator initialized with WGP at {wan_root}")
+        orchestrator_logger.success(f"WanOrchestrator initialized with WGP at {wan_root}")
 
     def load_model(self, model_key: str):
         """Load and validate a model type using WGP's load_models function.
@@ -117,16 +120,16 @@ class WanOrchestrator:
         
         # Debug: Show model discovery for debugging
         if self._test_vace_module(model_key):
-            print(f"🎯 VACE model '{model_key}' detected - config files are now properly tracked in Git")
+            model_logger.debug(f"VACE model '{model_key}' detected - config files are now properly tracked in Git")
             
         modules = wgp.get_model_recursive_prop(model_key, "modules", return_list=True)
         model_def = wgp.get_model_def(model_key)
-        print(f"📋 Model Info: {model_key} | Architecture: {model_def.get('architecture')} | Modules: {modules}")
+        model_logger.debug(f"Model Info: {model_key} | Architecture: {model_def.get('architecture')} | Modules: {modules}")
         
         # Actually load the model using WGP's proper loading flow
         # This handles VACE modules, LoRA discovery, etc.
         loras, loras_names, _, _, _, _, _ = wgp.setup_loras(model_key, None, wgp.get_lora_dir(model_key), '', None)
-        print(f"🎨 Discovered {len(loras)} LoRAs for {model_key}: {loras_names}")
+        model_logger.debug(f"Discovered {len(loras)} LoRAs for {model_key}: {loras_names}")
         wan_model, self.offloadobj = wgp.load_models(model_key)
         
         self.current_model = model_key
@@ -137,7 +140,7 @@ class WanOrchestrator:
         wgp.offloadobj = self.offloadobj
         
         family = self._get_model_family(model_key, for_ui=True)
-        print(f"📋 Loaded model: {model_key} ({family})")
+        model_logger.success(f"Loaded model: {model_key} ({family})")
     
     def _setup_loras_for_model(self, model_type: str):
         """Initialize LoRA discovery for a model type.
@@ -170,12 +173,12 @@ class WanOrchestrator:
             self.state["loras_names"] = loras_names
             
             if loras:
-                print(f"🎨 Discovered {len(loras)} LoRAs for {model_type}: {[os.path.basename(l) for l in loras[:3]]}{'...' if len(loras) > 3 else ''}")
+                model_logger.debug(f"Discovered {len(loras)} LoRAs for {model_type}: {[os.path.basename(l) for l in loras[:3]]}{'...' if len(loras) > 3 else ''}")
             else:
-                print(f"🎨 No LoRAs found for {model_type}")
+                model_logger.debug(f"No LoRAs found for {model_type}")
                 
         except Exception as e:
-            print(f"⚠️  LoRA discovery failed for {model_type}: {e}")
+            model_logger.warning(f"LoRA discovery failed for {model_type}: {e}")
             # Keep empty defaults to prevent crashes
             self.state["loras"] = []
             self.state["loras_names"] = []
@@ -263,40 +266,21 @@ class WanOrchestrator:
         if not self.current_model:
             raise RuntimeError("No model loaded. Call load_model() first.")
 
-        # Test VACE module detection with detailed logging
-        print(f"[VACE_MODULE_DEBUG] === VACE Module Detection Test ===")
-        print(f"[VACE_MODULE_DEBUG] current_model: '{self.current_model}'")
-        
-        # Test the actual function calls we use
+        # Determine model types for generation
         base_model_type = self._get_base_model_type(self.current_model)
-        print(f"[VACE_MODULE_DEBUG] _get_base_model_type('{self.current_model}') → '{base_model_type}'")
-        
         vace_test_result = self._test_vace_module(self.current_model)
-        print(f"[VACE_MODULE_DEBUG] _test_vace_module('{self.current_model}') → {vace_test_result}")
         
         is_vace = self._is_vace()
         is_flux = self._is_flux()
         is_t2v = self._is_t2v()
         
-        print(f"[VACE_MODULE_DEBUG] Final detection results:")
-        print(f"[VACE_MODULE_DEBUG]   is_vace: {is_vace} {'✅' if is_vace else '❌'}")
-        print(f"[VACE_MODULE_DEBUG]   is_flux: {is_flux}")
-        print(f"[VACE_MODULE_DEBUG]   is_t2v: {is_t2v}")
+        generation_logger.debug(f"Model detection - VACE: {is_vace}, Flux: {is_flux}, T2V: {is_t2v}")
+        generation_logger.debug(f"Generation parameters - prompt: '{prompt[:50]}...', resolution: {resolution}, length: {video_length}")
         
-        # Log model type detection and VACE parameters  
-        print(f"[HEADLESS_WGP_DEBUG] === Generate Call Analysis ===")
-        print(f"[HEADLESS_WGP_DEBUG] current_model: {self.current_model}")
-        print(f"[HEADLESS_WGP_DEBUG] is_vace: {is_vace}, is_flux: {is_flux}, is_t2v: {is_t2v}")
-        print(f"[HEADLESS_WGP_DEBUG] prompt: '{prompt}'")
-        print(f"[HEADLESS_WGP_DEBUG] resolution: {resolution}, video_length: {video_length}")
-        print(f"[HEADLESS_WGP_DEBUG] === VACE Input Parameters ===")
-        print(f"[HEADLESS_WGP_DEBUG] video_guide: {video_guide}")
-        print(f"[HEADLESS_WGP_DEBUG] video_mask: {video_mask}")
-        print(f"[HEADLESS_WGP_DEBUG] video_guide2: {video_guide2}")
-        print(f"[HEADLESS_WGP_DEBUG] video_mask2: {video_mask2}")
-        print(f"[HEADLESS_WGP_DEBUG] video_prompt_type: '{video_prompt_type}'")
-        print(f"[HEADLESS_WGP_DEBUG] control_net_weight: {control_net_weight}")
-        print(f"[HEADLESS_WGP_DEBUG] control_net_weight2: {control_net_weight2}")
+        if is_vace:
+            generation_logger.debug(f"VACE parameters - guide: {video_guide}, type: {video_prompt_type}, weights: {control_net_weight}/{control_net_weight2}")
+            if video_guide2:
+                generation_logger.debug(f"VACE secondary guide: {video_guide2}")
 
         # Validate model-specific requirements
         if is_vace and not video_guide:
@@ -374,35 +358,23 @@ class WanOrchestrator:
         model_type_desc = "Flux" if is_flux else ("VACE" if is_vace else "T2V")
         count_desc = f"{video_length} {'images' if is_flux else 'frames'}"
         
-        print(f"🎬 Generating {model_type_desc} {content_type}: {resolution}, {count_desc}")
+        generation_logger.essential(f"Generating {model_type_desc} {content_type}: {resolution}, {count_desc}")
         if is_vace:
             encodings = [c for c in video_prompt_type if c in "PDSLCMUA"]
-            print(f"🎯 VACE encodings: {encodings}")
+            generation_logger.debug(f"VACE encodings: {encodings}")
             if video_guide2:
-                print(f"🎯 Using secondary guide: {video_guide2}")
+                generation_logger.debug(f"Using secondary guide: {video_guide2}")
         if activated_loras:
-            print(f"🎨 LoRAs: {activated_loras}")
+            generation_logger.debug(f"LoRAs: {activated_loras}")
 
         try:
-            print(f"[HEADLESS_WGP_DEBUG] === Calling WGP.generate_video with VACE fix ===")
-            print(f"[HEADLESS_WGP_DEBUG] Applying VACE load_models override for proper module loading")
+            generation_logger.debug("Calling WGP generate_video with VACE module support")
             
-            # Log critical VACE parameters being passed to WGP
+            # Log critical parameters being passed to WGP
             if is_vace:
-                print(f"[WGP_CALL_DEBUG] === VACE Parameters to WGP ===")
-                print(f"[WGP_CALL_DEBUG] model_type: '{self.current_model}'")
-                print(f"[WGP_CALL_DEBUG] video_guide: {video_guide}")
-                print(f"[WGP_CALL_DEBUG] video_mask: {video_mask}")
-                print(f"[WGP_CALL_DEBUG] video_guide2: {video_guide2}")
-                print(f"[WGP_CALL_DEBUG] video_mask2: {video_mask2}")
-                print(f"[WGP_CALL_DEBUG] video_prompt_type: '{video_prompt_type}'")
-                print(f"[WGP_CALL_DEBUG] control_net_weight: {control_net_weight}")
-                print(f"[WGP_CALL_DEBUG] control_net_weight2: {control_net_weight2}")
-                print(f"[WGP_CALL_DEBUG] About to call _generate_video with VACE patching...")
+                generation_logger.debug(f"VACE parameters to WGP - model: {self.current_model}, guide: {video_guide}, type: {video_prompt_type}")
             else:
-                print(f"[WGP_CALL_DEBUG] === Non-VACE Parameters to WGP ===")
-                print(f"[WGP_CALL_DEBUG] model_type: '{self.current_model}'")
-                print(f"[WGP_CALL_DEBUG] About to call _generate_video directly (no patching)...")
+                generation_logger.debug(f"Standard parameters to WGP - model: {self.current_model}")
             
             # Call the VACE-fixed generate_video (patching is handled in wrapper)
             result = self._generate_video(
@@ -519,17 +491,17 @@ class WanOrchestrator:
                 file_list = self.state["gen"]["file_list"]
                 if file_list:
                     output_path = file_list[-1]  # Get the most recently generated file
-                    print(f"✅ {model_type_desc} generation completed")
-                    print(f"💾 Output saved to: {output_path}")
+                    generation_logger.success(f"{model_type_desc} generation completed")
+                    generation_logger.essential(f"Output saved to: {output_path}")
                 else:
-                    print(f"⚠️  {model_type_desc} generation completed but no output path found in file_list")
+                    generation_logger.warning(f"{model_type_desc} generation completed but no output path found in file_list")
             except Exception as e:
-                print(f"⚠️  Could not retrieve output path from state: {e}")
+                generation_logger.warning(f"Could not retrieve output path from state: {e}")
             
             return output_path
             
         except Exception as e:
-            print(f"❌ Generation failed: {e}")
+            generation_logger.error(f"Generation failed: {e}")
             raise
 
     # Convenience methods for specific generation types
@@ -537,7 +509,7 @@ class WanOrchestrator:
     def generate_t2v(self, prompt: str, **kwargs) -> str:
         """Generate text-to-video content."""
         if not self._is_t2v():
-            print(f"⚠️  Warning: Current model {self.current_model} may not be optimized for T2V")
+            generation_logger.warning(f"Current model {self.current_model} may not be optimized for T2V")
         return self.generate(prompt=prompt, **kwargs)
     
     def generate_vace(self, 
@@ -567,7 +539,7 @@ class WanOrchestrator:
             Path to generated video file
         """
         if not self._is_vace():
-            print(f"⚠️  Warning: Current model {self.current_model} may not be a VACE model")
+            generation_logger.warning(f"Current model {self.current_model} may not be a VACE model")
         
         return self.generate(
             prompt=prompt,
@@ -593,7 +565,7 @@ class WanOrchestrator:
             Path to generated image(s)
         """
         if not self._is_flux():
-            print(f"⚠️  Warning: Current model {self.current_model} may not be a Flux model")
+            generation_logger.warning(f"Current model {self.current_model} may not be a Flux model")
         
         return self.generate(
             prompt=prompt,

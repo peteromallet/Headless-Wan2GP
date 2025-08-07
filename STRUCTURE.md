@@ -10,6 +10,9 @@
 - **✅ Test Coverage**: Comprehensive test suite with 95.5% success rate (21/22 tests passing)
 - **✅ VACE ControlNet Integration**: Proper VACE ControlNet activation with preprocessing support
 - **✅ VACE Processing Optimization**: Enhanced travel_between_images.py with intelligent frame masking and component-based video_prompt_type construction
+- **✅ Wan 2.2 VACE Integration**: Full support for dual-phase Wan 2.2 models with optimized VACE strength (1.3) and sampler-specific CFG presets
+- **✅ LightI2X LoRA Enhancement**: Integrated advanced step distillation LoRA at 3.0 strength for faster inference
+- **✅ Structured Logging System**: Comprehensive logging overhaul with specialized loggers for different components (orchestrator, model, generation, travel)
 
 ### 🧹 **Repository Cleanup & Organization**
 - **Organized tests:** Moved comprehensive test suite to `tests/` directory

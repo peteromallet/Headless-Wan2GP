@@ -8,6 +8,9 @@ import subprocess
 import uuid
 from datetime import datetime
 
+# Import structured logging
+from ..logging_utils import travel_logger
+
 try:
     import cv2
     import numpy as np
@@ -53,7 +56,7 @@ def debug_video_analysis(video_path: str | Path, label: str, task_id: str = "unk
     try:
         path_obj = Path(video_path)
         if not path_obj.exists():
-            print(f"[VIDEO_DEBUG] {label} ({task_id}): FILE MISSING - {video_path}")
+            travel_logger.debug(f"{label}: FILE MISSING - {video_path}", task_id=task_id)
             return {"exists": False, "path": str(video_path)}
         
         frame_count, fps = sm_get_video_frame_count_and_fps(str(path_obj))
@@ -70,35 +73,29 @@ def debug_video_analysis(video_path: str | Path, label: str, task_id: str = "unk
             "file_size_mb": round(file_size / (1024*1024), 2)
         }
         
-        print(f"[VIDEO_DEBUG] {label} ({task_id}):")
-        print(f"[VIDEO_DEBUG]   Path: {debug_info['path']}")
-        print(f"[VIDEO_DEBUG]   Frames: {debug_info['frame_count']}")
-        print(f"[VIDEO_DEBUG]   FPS: {debug_info['fps']}")
-        print(f"[VIDEO_DEBUG]   Duration: {debug_info['duration_seconds']:.2f}s")
-        print(f"[VIDEO_DEBUG]   Size: {debug_info['file_size_mb']} MB")
+        travel_logger.debug(f"{label}: {debug_info['frame_count']} frames, {debug_info['fps']} fps, {debug_info['duration_seconds']:.2f}s, {debug_info['file_size_mb']} MB", task_id=task_id)
         
         return debug_info
         
     except Exception as e:
-        print(f"[VIDEO_DEBUG] {label} ({task_id}): ERROR analyzing video - {e}")
+        travel_logger.debug(f"{label}: ERROR analyzing video - {e}", task_id=task_id)
         return {"exists": False, "error": str(e), "path": str(video_path)}
 
 # --- SM_RESTRUCTURE: New Handler Functions for Travel Tasks ---
 def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_base: Path, orchestrator_task_id_str: str, orchestrator_project_id: str | None, *, dprint):
-    dprint(f"_handle_travel_orchestrator_task: Starting for {orchestrator_task_id_str}")
-    dprint(f"Orchestrator Project ID: {orchestrator_project_id}") # Added dprint
-    dprint(f"Orchestrator task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
+    travel_logger.essential("Starting travel orchestrator task", task_id=orchestrator_task_id_str)
+    travel_logger.debug(f"Project ID: {orchestrator_project_id}", task_id=orchestrator_task_id_str)
+    travel_logger.debug(f"Task params: {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...", task_id=orchestrator_task_id_str)
     generation_success = False # Represents success of orchestration step
     output_message_for_orchestrator_db = f"Orchestration for {orchestrator_task_id_str} initiated."
 
     try:
         if 'orchestrator_details' not in task_params_from_db:
-            msg = f"[ERROR Task ID: {orchestrator_task_id_str}] 'orchestrator_details' not found in task_params_from_db."
-            print(msg)
-            return False, msg
+            travel_logger.error("'orchestrator_details' not found in task_params_from_db", task_id=orchestrator_task_id_str)
+            return False, "orchestrator_details missing"
         
         orchestrator_payload = task_params_from_db['orchestrator_details']
-        dprint(f"Orchestrator payload for {orchestrator_task_id_str} (first 500 chars): {json.dumps(orchestrator_payload, indent=2, default=str)[:500]}...")
+        travel_logger.debug(f"Orchestrator payload: {json.dumps(orchestrator_payload, indent=2, default=str)[:500]}...", task_id=orchestrator_task_id_str)
 
         run_id = orchestrator_payload.get("run_id", orchestrator_task_id_str)
         base_dir_for_this_run_str = orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
@@ -377,7 +374,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
 
         if orchestrator_task_id_ref is None or orchestrator_run_id is None or segment_idx is None:
             msg = f"Segment task {segment_task_id_str} missing critical orchestrator refs or segment_index."
-            print(f"[ERROR Task {segment_task_id_str}]: {msg}")
+            travel_logger.error(msg, task_id=segment_task_id_str)
             return False, msg
 
         full_orchestrator_payload = segment_params.get("full_orchestrator_payload")
@@ -1525,7 +1522,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
 
         if not all([orchestrator_task_id_ref, orchestrator_run_id, full_orchestrator_payload]):
             msg = f"Stitch task {stitch_task_id_str} missing critical orchestrator refs or full_orchestrator_payload."
-            print(f"[ERROR Task {stitch_task_id_str}]: {msg}")
+            travel_logger.error(msg, task_id=stitch_task_id_str)
             return False, msg
 
         project_id_for_stitch = stitch_params.get("project_id")
@@ -2088,8 +2085,8 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         return stitch_success, str(final_video_path.resolve())
 
     except Exception as e:
-        print(f"[ERROR] Stitch task {stitch_task_id_str}: Unexpected error during stitching: {e}")
-        traceback.print_exc()
+        travel_logger.error(f"Stitch: Unexpected error during stitching: {e}", task_id=stitch_task_id_str)
+        travel_logger.debug(traceback.format_exc(), task_id=stitch_task_id_str)
         
         # Notify orchestrator of stitch failure
         if 'orchestrator_task_id_ref' in locals() and orchestrator_task_id_ref:
