@@ -477,6 +477,7 @@ class HeadlessTaskQueue:
             "control_net_weight": "control_net_weight",
             "control_net_weight2": "control_net_weight2",
             "embedded_guidance_scale": "embedded_guidance_scale",
+            "denoise_strength": "denoising_strength",  # Map LightI2X parameter name
             "guidance2_scale": "guidance2_scale",
             "sample_solver": "sample_solver",
             "lora_names": "lora_names",
