@@ -7,11 +7,9 @@
         ],
         "description": "This model has been created on the fly using the FakeFace model weights and the Loras of FusioniX. The weight of the Detail Enhancer Lora has been reduced to improve identity preservation. There is so far only PARTIAL support of Vace 2.1 which is currently used.",
         "URLs": [
-            "https://huggingface.co/CCP6/FakeVace2.2/resolve/main/Fake-Vace2.2-High_bf16.safetensors",
             "https://huggingface.co/CCP6/FakeVace2.2/resolve/main/Fake-Vace2.2-High_fp8_e4m3fn.safetensors"
         ],
         "URLs2": [
-            "https://huggingface.co/CCP6/FakeVace2.2/resolve/main/Fake-Vace2.2-Low_bf16.safetensors",
             "https://huggingface.co/CCP6/FakeVace2.2/resolve/main/Fake-Vace2.2-Low_fp8_e4m3fn.safetensors"
         ],
 		"loras": [
@@ -23,7 +21,8 @@
 		],
 		"loras_multipliers": [1, 0.2, 0.5, 0.5, 3.0],
 		"group": "wan2_2",
-		"auto_quantize": false
+		"auto_quantize": false,
+		"fp8_quantized": true
     },
     "num_inference_steps": 6,
     "guidance_scale": 3,
