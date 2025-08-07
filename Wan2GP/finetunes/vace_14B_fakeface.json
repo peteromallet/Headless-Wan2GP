@@ -1,11 +1,10 @@
 {
     "model": {
-        "name": "FakeFace Vace Experimental Cocktail 14B",
-        "architecture": "vace_14B",
+        "name": "FakeFace Experimental Cocktail 14B",
+        "architecture": "t2v",
         "modules": [
-            "vace_14B"
         ],
-        "description": "This model has been created on the fly using the FakeFace model weights and the Loras of FusioniX. The weight of the Detail Enhancer Lora has been reduced to improve identity preservation. There is so far only PARTIAL support of Vace 2.1 which is currently used.",
+        "description": "This model uses custom FakeFace fp8 quantized weights with the cocktail LoRA combination. Configured as T2V architecture without VACE modules for fp8 compatibility. The Detail Enhancer LoRA weight has been reduced to improve identity preservation.",
         "URLs": [
             "https://huggingface.co/CCP6/FakeVace2.2/resolve/main/Fake-Vace2.2-High_fp8_e4m3fn.safetensors"
         ],
