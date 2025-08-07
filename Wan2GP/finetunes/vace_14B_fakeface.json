@@ -11,10 +11,8 @@
         "URLs2": [
             "https://huggingface.co/CCP6/FakeVace2.2/resolve/main/Fake-Vace2.2-Low_fp8_e4m3fn.safetensors"
         ],
-        "loras": [
-            "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors"
-        ],
-        "loras_multipliers": [3.0],
+        "loras": [],
+        "loras_multipliers": "",
 		"group": "wan2_2",
 		"auto_quantize": false,
 		"fp8_quantized": true
