@@ -7480,6 +7480,29 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                                     ("flowmatch causvid", "causvid"),
                                 ], visible= True, label= "Sampler Solver / Scheduler"
                             )
+                            
+                            # Apply sampler-specific CFG presets when sampler changes
+                            def apply_sampler_cfg_preset(sampler_choice):
+                                try:
+                                    model_def = get_model_def(model_type)
+                                    sampler_presets = model_def.get("sampler_cfg_presets", {})
+                                    if sampler_choice in sampler_presets:
+                                        preset = sampler_presets[sampler_choice]
+                                        return (
+                                            preset.get("guidance_scale", gr.update()), 
+                                            preset.get("guidance2_scale", gr.update()),
+                                            preset.get("flow_shift", gr.update()),
+                                            preset.get("num_inference_steps", gr.update())
+                                        )
+                                except:
+                                    pass
+                                return gr.update(), gr.update(), gr.update(), gr.update()
+                            
+                            sample_solver.change(
+                                apply_sampler_cfg_preset,
+                                inputs=[sample_solver], 
+                                outputs=[guidance_scale, guidance2_scale, flow_shift, num_inference_steps]
+                            )
 
                         with gr.Row(visible = vace) as control_net_weights_row:
                             control_net_weight = gr.Slider(0.0, 2.0, value=ui_defaults.get("control_net_weight",1), step=0.1, label="Control Net Weight #1", visible=vace)
