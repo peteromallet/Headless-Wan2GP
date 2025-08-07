@@ -122,7 +122,8 @@ class WanOrchestrator:
         # CRITICAL: Properly offload previous model before loading new one
         # This follows the exact pattern from wgp.py's generate_video function (lines 4249-4254)
         if hasattr(wgp, 'wan_model') and wgp.wan_model is not None:
-            model_logger.debug(f"Offloading previous model before loading {model_key}")
+            current_model_info = f"(current: {self.current_model})" if self.current_model else "(unknown model)"
+            model_logger.info(f"🔄 MODEL SWITCH: Offloading previous model {current_model_info} before loading {model_key}")
             
             # CRITICAL: Unload LoRAs from transformers before model cleanup
             # This prevents LoRA conflicts when switching between models
@@ -133,28 +134,39 @@ class WanOrchestrator:
                 
                 # Unload LoRAs following WGP cleanup pattern (lines 5147-5149)
                 if trans is not None:
+                    model_logger.debug(f"🧹 LORA CLEANUP: Unloading LoRAs from primary transformer")
                     wgp.offload.unload_loras_from_model(trans)
-                    model_logger.debug(f"Unloaded LoRAs from primary transformer")
+                    model_logger.debug(f"✅ LORA CLEANUP: Primary transformer LoRAs unloaded")
                 if trans2 is not None:
+                    model_logger.debug(f"🧹 LORA CLEANUP: Unloading LoRAs from secondary transformer")
                     wgp.offload.unload_loras_from_model(trans2)
-                    model_logger.debug(f"Unloaded LoRAs from secondary transformer")
+                    model_logger.debug(f"✅ LORA CLEANUP: Secondary transformer LoRAs unloaded")
                     
             except Exception as e:
-                model_logger.warning(f"LoRA cleanup failed (non-critical): {e}")
+                model_logger.warning(f"⚠️ LORA CLEANUP: LoRA cleanup failed (non-critical): {e}")
             
+            # Clear model references
+            model_logger.debug(f"🧹 MODEL CLEANUP: Clearing wan_model reference")
             wgp.wan_model = None
             
+            # Release offload objects
             if hasattr(wgp, 'offloadobj') and wgp.offloadobj is not None:
+                model_logger.debug(f"🧹 MODEL CLEANUP: Releasing global offloadobj")
                 wgp.offloadobj.release()
                 wgp.offloadobj = None
+                model_logger.debug(f"✅ MODEL CLEANUP: Global offloadobj released")
                 
             # Also clear our local reference
             if self.offloadobj is not None:
+                model_logger.debug(f"🧹 MODEL CLEANUP: Releasing local offloadobj")
                 self.offloadobj.release()
                 self.offloadobj = None
+                model_logger.debug(f"✅ MODEL CLEANUP: Local offloadobj released")
                 
+            # Force garbage collection
+            model_logger.debug(f"🧹 MODEL CLEANUP: Running garbage collection")
             gc.collect()
-            model_logger.debug(f"Previous model and LoRAs offloaded successfully")
+            model_logger.info(f"✅ MODEL SWITCH: Previous model {current_model_info} and LoRAs offloaded successfully")
         
         # Debug: Show model discovery for debugging
         if self._test_vace_module(model_key):
