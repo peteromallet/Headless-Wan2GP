@@ -568,10 +568,10 @@ class HeadlessTaskQueue:
             self.logger.info(f"[CausVidDebugTrace] Task {task.id}: CausVid NOT enabled, skipping optimizations")
         
         if use_lighti2x:
-            self.logger.info(f"[Task {task.id}] Applying LightI2X LoRA settings: steps=5, guidance=1.0, flow_shift=5.0")
+            self.logger.info(f"[Task {task.id}] Applying LightI2X LoRA settings: steps=6, guidance=1.0, flow_shift=5.0")
             # Apply LightI2X-specific parameters
             if "num_inference_steps" not in wgp_params:
-                wgp_params["num_inference_steps"] = 5
+                wgp_params["num_inference_steps"] = 6
             if "guidance_scale" not in wgp_params:
                 wgp_params["guidance_scale"] = 1.0
             if "flow_shift" not in wgp_params:

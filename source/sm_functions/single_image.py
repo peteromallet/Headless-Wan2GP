@@ -189,7 +189,7 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
                 num_inference_steps = (
                     task_params_from_db.get("steps")
                     or task_params_from_db.get("num_inference_steps")
-                    or (8 if use_causvid else (5 if use_lighti2x else 30))
+                    or (8 if use_causvid else (6 if use_lighti2x else 30))
                 )
 
                 if use_causvid:
