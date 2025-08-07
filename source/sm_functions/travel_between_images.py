@@ -1039,6 +1039,19 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # ------------------------------------------------------------------
         lighti2x_enabled = bool(segment_params.get("use_lighti2x_lora", False) or full_orchestrator_payload.get("use_lighti2x_lora", False))
 
+        # [CausVidDebugTrace] Add detailed parameter precedence logging
+        causvid_enabled = bool(full_orchestrator_payload.get("apply_causvid", False) or full_orchestrator_payload.get("use_causvid_lora", False))
+        dprint(f"[CausVidDebugTrace] Segment {segment_idx}: Parameter precedence analysis:")
+        dprint(f"[CausVidDebugTrace]   causvid_enabled: {causvid_enabled}")
+        dprint(f"[CausVidDebugTrace]   lighti2x_enabled: {lighti2x_enabled}")
+        dprint(f"[CausVidDebugTrace]   segment_params.get('num_inference_steps'): {segment_params.get('num_inference_steps')}")
+        dprint(f"[CausVidDebugTrace]   segment_params.get('steps'): {segment_params.get('steps')}")
+        dprint(f"[CausVidDebugTrace]   full_orchestrator_payload.get('num_inference_steps'): {full_orchestrator_payload.get('num_inference_steps')}")
+        dprint(f"[CausVidDebugTrace]   full_orchestrator_payload.get('steps'): {full_orchestrator_payload.get('steps')}")
+        dprint(f"[CausVidDebugTrace]   wgp_payload.get('num_inference_steps'): {wgp_payload.get('num_inference_steps')}")
+        dprint(f"[CausVidDebugTrace]   wgp_payload.get('steps'): {wgp_payload.get('steps')}")
+        dprint(f"[CausVidDebugTrace]   default would be: {5 if lighti2x_enabled else 30}")
+
         num_inference_steps = (
             segment_params.get("num_inference_steps")
             or segment_params.get("steps")  # Check for "steps" as alternative
@@ -1048,6 +1061,10 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             or wgp_payload.get("steps")  # Check for "steps" in wgp_payload
             or (5 if lighti2x_enabled else 30)
         )
+        
+        dprint(f"[CausVidDebugTrace] Segment {segment_idx}: SELECTED num_inference_steps = {num_inference_steps}")
+        if causvid_enabled and num_inference_steps != 9:
+            dprint(f"[CausVidDebugTrace] ⚠️  WARNING: CausVid enabled but using {num_inference_steps} steps instead of optimized 9 steps!")
 
         if lighti2x_enabled:
             guidance_scale_default = 1.0
