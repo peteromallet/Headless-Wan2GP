@@ -288,8 +288,13 @@ class WanOrchestrator:
         """Create a wrapper around generate_video for VACE models.
         
         VACE models are properly loaded via load_models() now, so no special handling needed.
+        Also handles parameter name mapping for compatibility.
         """
         def vace_fixed_generate_video(*args, **kwargs):
+            # Map parameter names for compatibility
+            if "denoise_strength" in kwargs:
+                kwargs["denoising_strength"] = kwargs.pop("denoise_strength")
+            
             # VACE modules are now properly loaded via load_models() - no patching needed
             return original_generate_video(*args, **kwargs)
         
