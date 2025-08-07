@@ -594,6 +594,34 @@ class HeadlessTaskQueue:
                     current_multipliers.append(1.0)
                 wgp_params["lora_multipliers"] = current_multipliers
         
+        # ADDITIONAL LORAS: Process additional LoRA names and multipliers from task parameters
+        additional_lora_names = task.parameters.get("additional_lora_names", [])
+        additional_lora_multipliers = task.parameters.get("additional_lora_multipliers", [])
+        
+        if additional_lora_names:
+            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Processing {len(additional_lora_names)} additional LoRAs")
+            
+            # Get current LoRA lists (may have been modified by CausVid/LightI2X logic above)
+            current_loras = wgp_params.get("lora_names", [])
+            current_multipliers = wgp_params.get("lora_multipliers", [])
+            
+            # Add additional LoRAs to the lists
+            for i, lora_name in enumerate(additional_lora_names):
+                if lora_name not in current_loras:
+                    current_loras.append(lora_name)
+                    multiplier = additional_lora_multipliers[i] if i < len(additional_lora_multipliers) else 1.0
+                    current_multipliers.append(multiplier)
+                    self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Added additional LoRA: {lora_name} (multiplier: {multiplier})")
+                else:
+                    self.logger.debug(f"[CausVidDebugTrace] Task {task.id}: Additional LoRA {lora_name} already in list")
+            
+            # Update the wgp_params with combined LoRA lists
+            wgp_params["lora_names"] = current_loras
+            wgp_params["lora_multipliers"] = current_multipliers
+            
+            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Final combined LoRA list: {current_loras}")
+            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Final combined multipliers: {current_multipliers}")
+        
         return wgp_params
     
     def _apply_sampler_cfg_preset(self, model_key: str, sample_solver: str, wgp_params: Dict[str, Any]):
