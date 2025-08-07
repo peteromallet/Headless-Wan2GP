@@ -100,14 +100,47 @@ class WanOrchestrator:
             profile_choice=4,  # Profile 4: LowRAM_LowVRAM (Default)
             vae_config_choice="default",
             metadata_choice="none",
-            quantization_choice="int8"
+            quantization_choice="int8",
+            preload_model_policy_choice=["S"]  # Smart preloading for model switching
         )
         self.current_model = None
         self.offloadobj = None  # Store WGP's offload object
+        
         orchestrator_logger.success(f"WanOrchestrator initialized with WGP at {wan_root}")
-
+        
+    def _load_missing_model_definition(self, model_key: str, json_path: str):
+        """
+        Dynamically load a missing model definition from JSON file.
+        Replicates WGP's model loading logic for individual models.
+        """
+        import json
+        import wgp
+        
+        with open(json_path, "r", encoding="utf-8") as f:
+            try:
+                json_def = json.load(f)
+            except Exception as e:
+                raise Exception(f"Error while parsing Model Definition File '{json_path}': {str(e)}")
+        
+        model_def = json_def["model"]
+        model_def["path"] = json_path
+        del json_def["model"]      
+        settings = json_def   
+        
+        existing_model_def = wgp.models_def.get(model_key, None) 
+        if existing_model_def is not None:
+            existing_settings = existing_model_def.get("settings", None)
+            if existing_settings is not None:
+                existing_settings.update(settings)
+            existing_model_def.update(model_def)
+        else:
+            wgp.models_def[model_key] = model_def # partial def
+            model_def = wgp.init_model_def(model_key, model_def)
+            wgp.models_def[model_key] = model_def # replace with full def
+            model_def["settings"] = settings
+        
     def load_model(self, model_key: str):
-        """Load and validate a model type using WGP's load_models function.
+        """Load and validate a model type using WGP's native functions.
         
         Args:
             model_key: Model identifier (e.g., "t2v", "vace_14B", "flux")
@@ -118,91 +151,94 @@ class WanOrchestrator:
         if self._get_base_model_type(model_key) is None:
             raise ValueError(f"Unknown model: {model_key}")
         
-        # Import WGP to call load_models
         import wgp
-        import os
-        import shutil
-        import gc
         
-        # CRITICAL: Properly offload previous model before loading new one
-        # This follows the exact pattern from wgp.py's generate_video function (lines 4249-4254)
-        if hasattr(wgp, 'wan_model') and wgp.wan_model is not None:
-            current_model_info = f"(current: {self.current_model})" if self.current_model else "(unknown model)"
-            model_logger.info(f"🔄 MODEL SWITCH: Offloading previous model {current_model_info} before loading {model_key}")
-            
-            # CRITICAL: Unload LoRAs from transformers before model cleanup
-            # This prevents LoRA conflicts when switching between models
-            try:
-                # Get transformer models if they exist
-                trans = wgp.get_transformer_model(wgp.wan_model)
-                trans2 = wgp.get_transformer_model(wgp.wan_model, 2)
-                
-                # Unload LoRAs following WGP cleanup pattern (lines 5147-5149)
-                if trans is not None:
-                    model_logger.debug(f"🧹 LORA CLEANUP: Unloading LoRAs from primary transformer")
-                    wgp.offload.unload_loras_from_model(trans)
-                    model_logger.debug(f"✅ LORA CLEANUP: Primary transformer LoRAs unloaded")
-                if trans2 is not None:
-                    model_logger.debug(f"🧹 LORA CLEANUP: Unloading LoRAs from secondary transformer")
-                    wgp.offload.unload_loras_from_model(trans2)
-                    model_logger.debug(f"✅ LORA CLEANUP: Secondary transformer LoRAs unloaded")
-                    
-            except Exception as e:
-                model_logger.warning(f"⚠️ LORA CLEANUP: LoRA cleanup failed (non-critical): {e}")
-            
-            # Clear model references
-            model_logger.debug(f"🧹 MODEL CLEANUP: Clearing wan_model reference")
-            wgp.wan_model = None
-            
-            # Release offload objects
-            if hasattr(wgp, 'offloadobj') and wgp.offloadobj is not None:
-                model_logger.debug(f"🧹 MODEL CLEANUP: Releasing global offloadobj")
-                wgp.offloadobj.release()
-                wgp.offloadobj = None
-                model_logger.debug(f"✅ MODEL CLEANUP: Global offloadobj released")
-                
-            # Also clear our local reference
-            if self.offloadobj is not None:
-                model_logger.debug(f"🧹 MODEL CLEANUP: Releasing local offloadobj")
-                self.offloadobj.release()
-                self.offloadobj = None
-                model_logger.debug(f"✅ MODEL CLEANUP: Local offloadobj released")
-                
-            # Force garbage collection
-            model_logger.debug(f"🧹 MODEL CLEANUP: Running garbage collection")
-            gc.collect()
-            model_logger.info(f"✅ MODEL SWITCH: Previous model {current_model_info} and LoRAs offloaded successfully")
-        
-        # Debug: Show model discovery for debugging
-        if self._test_vace_module(model_key):
-            model_logger.debug(f"VACE model '{model_key}' detected - config files are now properly tracked in Git")
-            
-        modules = wgp.get_model_recursive_prop(model_key, "modules", return_list=True)
+        # Debug: Check if model definition is missing and diagnose why
         model_def = wgp.get_model_def(model_key)
+        if model_def is None:
+            available_models = list(wgp.models_def.keys())
+            current_dir = os.getcwd()
+            model_logger.warning(f"Model definition for '{model_key}' not found!")
+            model_logger.debug(f"Current working directory: {current_dir}")
+            model_logger.debug(f"Available models: {available_models}")
+            model_logger.debug(f"Looking for model file: {self.wan_root}/defaults/{model_key}.json")
+            
+            # Check if the JSON file exists and try to load it dynamically
+            json_path = os.path.join(self.wan_root, "defaults", f"{model_key}.json")
+            if os.path.exists(json_path):
+                model_logger.warning(f"Model JSON file exists at {json_path} but wasn't loaded into models_def - attempting dynamic load")
+                try:
+                    self._load_missing_model_definition(model_key, json_path)
+                    model_def = wgp.get_model_def(model_key)  # Try again after loading
+                    if model_def:
+                        model_logger.success(f"Successfully loaded missing model definition for {model_key}")
+                    else:
+                        model_logger.error(f"Failed to load model definition for {model_key} even after dynamic loading")
+                except Exception as e:
+                    model_logger.error(f"Failed to dynamically load model definition: {e}")
+            else:
+                model_logger.error(f"Model JSON file missing at {json_path}")
+        
         architecture = model_def.get('architecture') if model_def else 'unknown'
+        modules = wgp.get_model_recursive_prop(model_key, "modules", return_list=True)
         model_logger.debug(f"Model Info: {model_key} | Architecture: {architecture} | Modules: {modules}")
         
-        # Actually load the model using WGP's proper loading flow
-        # This handles VACE modules, LoRA discovery, etc.
-        loras, loras_names, _, _, _, _, _ = wgp.setup_loras(model_key, None, wgp.get_lora_dir(model_key), '', None)
-        model_logger.debug(f"Discovered {len(loras)} LoRAs for {model_key}: {loras_names}")
-        wan_model, self.offloadobj = wgp.load_models(model_key)
+        # Create a state object that WGP functions expect
+        temp_state = {"model_type": model_key}
         
+        # Use WGP's actual preload_model_when_switching function
+        current_model_info = f"(current: {wgp.transformer_type})" if wgp.transformer_type else "(no model loaded)"
+        if wgp.transformer_type != model_key:
+            model_logger.info(f"🔄 MODEL SWITCH: Switching from {current_model_info} to {model_key} using WGP's preload_model_when_switching")
+            
+            # Call WGP's native function - it returns a generator for UI updates, we'll consume it
+            try:
+                for progress_message in wgp.preload_model_when_switching(temp_state):
+                    if progress_message and hasattr(progress_message, 'value'):
+                        model_logger.debug(f"WGP Loading: {progress_message.value}")
+                    elif isinstance(progress_message, str):
+                        model_logger.debug(f"WGP Loading: {progress_message}")
+                        
+                model_logger.info(f"✅ MODEL: WGP preload_model_when_switching completed")
+            except Exception as e:
+                model_logger.error(f"WGP preload_model_when_switching failed: {e}")
+                raise
+        else:
+            model_logger.debug(f"📋 MODEL: Model {model_key} already loaded according to WGP transformer_type")
+        
+        # Update our tracking to match WGP's state
         self.current_model = model_key
         self.state["model_type"] = model_key
-        
-        # Store the loaded model globally for WGP to use
-        wgp.wan_model = wan_model
-        wgp.offloadobj = self.offloadobj
-        
-        # CRITICAL: Update WGP's global transformer_type tracking
-        # This prevents WGP from thinking it needs to reload the model on every generation
-        wgp.transformer_type = model_key
-        wgp.reload_needed = False  # Mark that reload is no longer needed
-        model_logger.debug(f"Updated WGP transformer_type tracking to: {model_key}, reload_needed=False")
+        self.offloadobj = wgp.offloadobj  # Keep reference to WGP's offload object
         
         family = self._get_model_family(model_key, for_ui=True)
-        model_logger.success(f"Loaded model: {model_key} ({family})")
+        model_logger.success(f"✅ MODEL Loaded model: {model_key} ({family}) using WGP's native functions")
+    
+    def unload_model(self):
+        """Unload the current model using WGP's native unload function."""
+        import wgp
+        
+        if self.current_model and wgp.wan_model is not None:
+            model_logger.info(f"🔄 MODEL UNLOAD: Unloading {self.current_model} using WGP's unload_model_if_needed")
+            
+            # Create a state object that WGP functions expect
+            temp_state = {"model_type": self.current_model}
+            
+            # Use WGP's native unload function
+            try:
+                wgp.unload_model_if_needed(temp_state)
+                model_logger.info(f"✅ MODEL: WGP unload_model_if_needed completed")
+                
+                # Clear our tracking
+                self.current_model = None
+                self.offloadobj = None
+                self.state["model_type"] = None
+                
+            except Exception as e:
+                model_logger.error(f"WGP unload_model_if_needed failed: {e}")
+                raise
+        else:
+            model_logger.debug(f"📋 MODEL: No model to unload")
     
     def _setup_loras_for_model(self, model_type: str):
         """Initialize LoRA discovery for a model type.
