@@ -182,25 +182,43 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
             try:
                 dprint(f"Single image task {task_id}: Calling generate_single_video with new flexible API")
                 
+                # Get preset defaults from model definition FIRST
+                try:
+                    preset_defaults = wgp_mod.get_default_settings(actual_model_type)
+                    dprint(f"Single image task {task_id}: Loaded preset defaults for '{actual_model_type}': steps={preset_defaults.get('num_inference_steps')}, guidance={preset_defaults.get('guidance_scale')}, flow={preset_defaults.get('flow_shift')}")
+                except Exception as e:
+                    dprint(f"Single image task {task_id}: Warning - could not load preset defaults for '{actual_model_type}': {e}")
+                    preset_defaults = {"num_inference_steps": 30, "guidance_scale": 5.0, "flow_shift": 3.0}
+                
                 # Use the new flexible keyword-style API
                 use_causvid = task_params_from_db.get("use_causvid_lora", False)
                 use_lighti2x = task_params_from_db.get("use_lighti2x_lora", False)
 
+                # Priority: task params > LoRA optimizations > preset defaults
+                if use_causvid:
+                    # CausVid optimization overrides preset
+                    preset_steps = 8
+                    preset_guidance = 1.0
+                    preset_flow = 1.0
+                elif use_lighti2x:
+                    # LightI2X optimization overrides preset  
+                    preset_steps = 6
+                    preset_guidance = 1.0
+                    preset_flow = 5.0
+                else:
+                    # Use preset defaults
+                    preset_steps = preset_defaults.get("num_inference_steps", 30)
+                    preset_guidance = preset_defaults.get("guidance_scale", 5.0) 
+                    preset_flow = preset_defaults.get("flow_shift", 3.0)
+
+                # Allow task params to override preset/LoRA defaults
                 num_inference_steps = (
                     task_params_from_db.get("steps")
                     or task_params_from_db.get("num_inference_steps")
-                    or (8 if use_causvid else (6 if use_lighti2x else 30))
+                    or preset_steps
                 )
-
-                if use_causvid:
-                    default_guidance = 1.0
-                    default_flow_shift = 1.0
-                elif use_lighti2x:
-                    default_guidance = 1.0
-                    default_flow_shift = 5.0
-                else:
-                    default_guidance = task_params_from_db.get("guidance_scale", 5.0)
-                    default_flow_shift = task_params_from_db.get("flow_shift", 3.0)
+                default_guidance = task_params_from_db.get("guidance_scale", preset_guidance)
+                default_flow_shift = task_params_from_db.get("flow_shift", preset_flow)
                 
                 generation_success, video_path_generated = generate_single_video(
                     wgp_mod=wgp_mod,
