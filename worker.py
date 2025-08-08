@@ -1223,7 +1223,7 @@ def main():
         pass
 
     # Ensure Wan2GP sees a clean argv list and Gradio functions are stubbed
-    sys.argv = ["Wan2GP/wgp.py"]  # Prevent wgp.py from parsing headless.py CLI args
+    sys.argv = ["Wan2GP/wgp.py"]  # Prevent wgp.py from parsing worker.py CLI args
     patch_gradio()
 
     # Change to WGP directory so it can find its defaults/*.json files

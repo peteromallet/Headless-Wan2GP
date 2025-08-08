@@ -1846,7 +1846,7 @@ def _apply_special_lora_settings(task_id: str, lora_type: str, lora_basename: st
         multipliers_list.insert(0, "1.0")
     ui_defaults["loras_multipliers"] = " ".join(multipliers_list)
 
-# --- SM_RESTRUCTURE: Function moved from headless.py ---
+# --- SM_RESTRUCTURE: Function moved from worker.py ---
 def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False, model_type_override: str = None):
     state = {
         "model_filename": model_filename,

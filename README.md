@@ -25,7 +25,7 @@ pip install -r Wan2GP/requirements.txt
 pip install -r requirements.txt
 
 # 5) Start the worker – polls the local SQLite DB every 10 s
-python headless.py --main-output-dir ./outputs
+python worker.py --main-output-dir ./outputs
 ```
 
 ---
@@ -48,7 +48,7 @@ Use Supabase when you need multiple workers or public download URLs for finished
 4.  Install dependencies as in the local setup, then run:
 
     ```bash
-    python headless.py --main-output-dir ./outputs
+    python worker.py --main-output-dir ./outputs
     ```
 
 ### Auth: service-role key vs. personal token
@@ -66,4 +66,4 @@ The worker will automatically upload finished videos to the bucket and store the
 
 ---
 
-For optional flags and advanced usage, run `python headless.py --help`. Thank you for trying Headless-Wan2GP!
+For optional flags and advanced usage, run `python worker.py --help`. Thank you for trying Headless-Wan2GP!

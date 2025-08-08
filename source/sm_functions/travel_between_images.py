@@ -155,7 +155,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         quantized_segment_frames = []
         dprint(f"Orchestrator: Quantizing frame counts. Original segment_frames_expanded: {expanded_segment_frames}")
         for i, frames in enumerate(expanded_segment_frames):
-            # Quantize to 4*N+1 format to match model constraints, applied later in headless.py
+            # Quantize to 4*N+1 format to match model constraints, applied later in worker.py
             new_frames = (frames // 4) * 4 + 1
             print(f"[FRAME_DEBUG] Segment {i}: {frames} -> {new_frames} (4*N+1 quantization)")
             if new_frames != frames:

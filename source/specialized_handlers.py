@@ -1,4 +1,4 @@
-"""Specialized task handlers for headless.py."""
+"""Specialized task handlers for worker.py."""
 
 import traceback
 import tempfile
