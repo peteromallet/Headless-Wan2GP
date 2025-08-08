@@ -137,7 +137,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         expanded_negative_prompts = orchestrator_payload["negative_prompts_expanded"]
         expanded_segment_frames = orchestrator_payload["segment_frames_expanded"]
         expanded_frame_overlap = orchestrator_payload["frame_overlap_expanded"]
-        vace_refs_instructions_all = orchestrator_payload.get("vace_image_refs_to_prepare_by_headless", [])
+        vace_refs_instructions_all = orchestrator_payload.get("vace_image_refs_to_prepare_by_worker", [])
 
         # Preserve a copy of the original overlap list in case we need it later
         _orig_frame_overlap = list(expanded_frame_overlap)  # shallow copy
@@ -264,7 +264,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "frame_overlap_from_previous": current_frame_overlap_from_previous,
                 "frame_overlap_with_next": expanded_frame_overlap[idx] if len(expanded_frame_overlap) > idx else 0,
                 
-                "vace_image_refs_to_prepare_by_headless": vace_refs_for_this_segment, # Already filtered for this segment
+                "vace_image_refs_to_prepare_by_worker": vace_refs_for_this_segment, # Already filtered for this segment
 
                 "parsed_resolution_wh": orchestrator_payload["parsed_resolution_wh"],
                 "model_name": orchestrator_payload["model_name"],
@@ -305,7 +305,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         final_stitched_video_name = f"travel_final_stitched_{run_id}.mp4"
         # Stitcher saves its final primary output directly under main_output_dir (e.g., ./steerable_motion_output/)
         # NOT under current_run_output_dir (which is .../travel_run_XYZ/)
-        # The main_output_dir_base is the one passed to headless.py (e.g. server's ./outputs or steerable_motion's ./steerable_motion_output)
+        # The main_output_dir_base is the one passed to worker.py (e.g. server's ./outputs or steerable_motion's ./steerable_motion_output)
         # The orchestrator_payload["main_output_dir_for_run"] is this main_output_dir_base.
         final_stitched_output_path = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))) / final_stitched_video_name
 
@@ -468,7 +468,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             dprint(f"Seg {segment_idx} CM Refs: Start='{start_ref_path_for_cm}', End='{end_ref_path_for_cm}'")
         # --- End Color Match Reference Image Determination ---
 
-        # --- Prepare VACE Refs for this Segment (moved to headless) ---
+        # --- Prepare VACE Refs for this Segment (moved to worker) ---
         actual_vace_image_ref_paths_for_wgp = []
         # Get the list of VACE ref instructions from the full orchestrator payload
         vace_ref_instructions_from_orchestrator = full_orchestrator_payload.get("", [])
@@ -503,7 +503,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 dprint(f"[WARNING] Segment {segment_idx}: parsed_resolution_wh not found in full_orchestrator_payload. VACE refs might not be resized correctly.")
 
             for ref_instr in relevant_vace_instructions:
-                # Pass segment_image_download_dir to _prepare_vace_ref_for_segment_headless
+                # Pass segment_image_download_dir to _prepare_vace_ref_for_segment_worker
                 dprint(f"Segment {segment_idx}: Preparing VACE ref from instruction: {ref_instr}")
                 processed_ref_path = sm_prepare_vace_ref_for_segment(
                     ref_instruction=ref_instr,
@@ -1552,7 +1552,7 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
 def _cleanup_intermediate_video(orchestrator_payload, video_path: Path, segment_idx: int, stage: str, dprint):
     """Helper to cleanup intermediate video files during chaining."""
     # Delete intermediates **only** when every cleanup-bypass flag is false.
-    # That now includes the headless-server global debug flag (db_ops.debug_mode)
+    # That now includes the worker-server global debug flag (db_ops.debug_mode)
     # so that running the server with --debug automatically preserves files.
     if (
         not orchestrator_payload.get("skip_cleanup_enabled", False)
@@ -1696,7 +1696,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 dprint(f"[WARNING] Stitch: Segment {seg_idx} has empty video_path in DB; skipping.")
                 continue
 
-            # Case A: Relative path that starts with files/ (works for both sqlite and supabase when headless has local access)
+            # Case A: Relative path that starts with files/ (works for both sqlite and supabase when worker has local access)
             if video_path_str_from_db.startswith("files/") or video_path_str_from_db.startswith("public/files/"):
                 print(f"[STITCH_DEBUG] Case A: Relative path detected for segment {seg_idx}")
                 sqlite_db_parent = None

@@ -71,7 +71,7 @@
 ├── add_task.py
 ├── generate_test_tasks.py
 ├── worker.py
-├── test_supabase_headless.py    # NEW: Test script for Supabase functionality
+├── test_supabase_worker.py    # NEW: Test script for Supabase functionality
 ├── SUPABASE_SETUP.md            # NEW: Setup guide for Supabase mode
 ├── source/
 │   ├── __init__.py

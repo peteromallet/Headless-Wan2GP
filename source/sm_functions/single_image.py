@@ -110,7 +110,7 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
         )
         dprint(f"Single image task {task_id}: model_filename_for_task='{model_filename_for_task}'")
         
-        # Handle special LoRA downloads (CausVid, LightI2X) - same logic as in headless.py
+        # Handle special LoRA downloads (CausVid, LightI2X) - same logic as in worker.py
         from ..common_utils import get_lora_dir_from_filename, download_file
         base_lora_dir_for_model = Path(get_lora_dir_from_filename(wgp_mod, model_filename_for_task))
         
