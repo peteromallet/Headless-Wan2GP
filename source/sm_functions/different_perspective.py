@@ -147,7 +147,7 @@ def _handle_dp_final_gen_task(
     *,
     wgp_mod,
     main_output_dir_base: Path,
-    process_single_task,  # recursive call helper supplied by headless.py
+    process_single_task,  # recursive call helper supplied by worker.py
     task_params_from_db: dict,
     dprint,
 ):

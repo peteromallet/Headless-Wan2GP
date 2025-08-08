@@ -1,4 +1,4 @@
-"""Wan2GP Headless Server.
+"""Wan2GP Worker Server.
 
 This long-running process polls the `tasks` table (SQLite by default, or
 Supabase-backed Postgres when configured), claims queued tasks, and executes
@@ -259,7 +259,7 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
 # -----------------------------------------------------------------------------
 
 def parse_args():
-    parser = argparse.ArgumentParser("WanGP Headless Server")
+    parser = argparse.ArgumentParser("WanGP Worker Server")
 
     pgroup_server = parser.add_argument_group("Server Settings")
     pgroup_server.add_argument("--db-file", type=str, default="tasks.db",
@@ -272,8 +272,8 @@ def parse_args():
                                help="Enable verbose debug logging (prints additional diagnostics)")
     pgroup_server.add_argument("--worker", type=str, default=None,
                                help="Worker name/ID - creates a log file named {worker}.log in the logs folder")
-    pgroup_server.add_argument("--save-logging", type=str, nargs='?', const='logs/headless.log', default=None,
-                               help="Save all logging output to a file (in addition to console output). Optionally specify path, defaults to 'logs/headless.log'")
+    pgroup_server.add_argument("--save-logging", type=str, nargs='?', const='logs/worker.log', default=None,
+                               help="Save all logging output to a file (in addition to console output). Optionally specify path, defaults to 'logs/worker.log'")
     pgroup_server.add_argument("--delete-db", action="store_true",
                                help="Delete existing database files before starting (fresh start)")
     pgroup_server.add_argument("--migrate-only", action="store_true",
