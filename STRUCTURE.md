@@ -70,7 +70,7 @@
 <repo-root>
 ├── add_task.py
 ├── generate_test_tasks.py
-├── headless.py
+├── worker.py
 ├── test_supabase_headless.py    # NEW: Test script for Supabase functionality
 ├── SUPABASE_SETUP.md            # NEW: Setup guide for Supabase mode
 ├── source/
@@ -105,7 +105,7 @@
 
 ## Top-level scripts
 
-* **headless.py** – Headless service that polls the `tasks` database, claims work, and drives the Wan2GP generator (`wgp.py`). Includes extra handlers for OpenPose and RIFE interpolation tasks and can upload outputs to Supabase storage. **NEW**: Now supports both SQLite and Supabase backends via `--db-type` flag.
+* **worker.py** – Headless service that polls the `tasks` database, claims work, and drives the Wan2GP generator (`wgp.py`). Includes extra handlers for OpenPose and RIFE interpolation tasks and can upload outputs to Supabase storage. **NEW**: Now supports both SQLite and Supabase backends via `--db-type` flag.
 * **add_task.py** – Lightweight CLI helper to queue a single new task into SQLite/Supabase. Accepts a JSON payload (or file) and inserts it into the `tasks` table.
 * **generate_test_tasks.py** – Developer utility that back-fills the database with synthetic images/prompts for integration testing and local benchmarking.
 * **tests/test_travel_workflow_db_edge_functions.py** – **NEW**: Comprehensive test script to verify Supabase Edge Functions, authentication, and database operations for the headless worker.
@@ -145,7 +145,7 @@ This is the main application package.
 
 ### source/sm_functions/ sub-package
 
-Task-specific wrappers around the bulky upstream logic. These are imported by `headless.py` (and potentially by notebooks/unit tests) without dragging in the interactive Gradio UI shipped with Wan2GP. **UPDATED**: All task handlers now use generalized Supabase upload functions for consistent output handling.
+Task-specific wrappers around the bulky upstream logic. These are imported by `worker.py` (and potentially by notebooks/unit tests) without dragging in the interactive Gradio UI shipped with Wan2GP. **UPDATED**: All task handlers now use generalized Supabase upload functions for consistent output handling.
 
 * **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images. Builds guide videos, queues generation tasks, stitches outputs. **UPDATED**: Final stitched videos are uploaded to Supabase when configured. **NEW**: Extensive debugging system with `debug_video_analysis()` function that tracks frame counts, file sizes, and processing steps throughout the entire orchestrator → segments → stitching pipeline.
 * **different_perspective.py** – Generates a new perspective for a single image using an OpenPose or depth-driven guide video plus optional RIFE interpolation for smoothness. **UPDATED**: Final posed images are uploaded to Supabase when configured.
@@ -155,7 +155,7 @@ Task-specific wrappers around the bulky upstream logic. These are imported by `h
 
 ## Additional runtime artefacts & folders
 
-* **logs/** – Rolling log files captured by `headless.py` and unit tests. The directory is git-ignored.
+* **logs/** – Rolling log files captured by `worker.py` and unit tests. The directory is git-ignored.
 * **outputs/** – Default location for final video/image results when not explicitly overridden by a task payload.
 * **samples/** – A handful of small images shipped inside the repo that are referenced in the README and tests.
 * **tests/** – Pytest-based regression and smoke tests covering both low-level helpers and full task workflows.
@@ -222,7 +222,7 @@ The submodule is currently pinned to commit `6706709` ("optimization for i2v wit
 ## End-to-End task lifecycle (1-minute read)
 
 1. **Task injection** – A CLI, API, or test script calls `add_task.py`, which inserts a new row into the `tasks` table (SQLite or Supabase).  Payload JSON is stored in `params`, `status` is set to `Queued`.
-2. **Worker pickup** – `headless.py` runs in a loop, atomically updates a `Queued` row to `In Progress`, and inspects `task_type` to choose the correct handler.
+2. **Worker pickup** – `worker.py` runs in a loop, atomically updates a `Queued` row to `In Progress`, and inspects `task_type` to choose the correct handler.
 3. **Handler execution**
    * Standard tasks live in `source/sm_functions/…` (see table below).
    * Special one-offs (OpenPose, RIFE, etc.) live in `specialized_handlers.py`.

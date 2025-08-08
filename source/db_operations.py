@@ -18,7 +18,7 @@ except ImportError:
     SupabaseClient = None
 
 # -----------------------------------------------------------------------------
-# Global DB Configuration (will be set by headless.py)
+# Global DB Configuration (will be set by worker.py)
 # -----------------------------------------------------------------------------
 DB_TYPE = "sqlite"
 PG_TABLE_NAME = "tasks"
@@ -28,9 +28,9 @@ SUPABASE_SERVICE_KEY = None
 SUPABASE_VIDEO_BUCKET = "image_uploads"
 SUPABASE_CLIENT: SupabaseClient | None = None
 SUPABASE_EDGE_COMPLETE_TASK_URL: str | None = None  # Optional override for edge function
-SUPABASE_ACCESS_TOKEN: str | None = None # Will be set by headless.py
-SUPABASE_EDGE_CREATE_TASK_URL: str | None = None # Will be set by headless.py
-SUPABASE_EDGE_CLAIM_TASK_URL: str | None = None # Will be set by headless.py
+SUPABASE_ACCESS_TOKEN: str | None = None # Will be set by worker.py
+SUPABASE_EDGE_CREATE_TASK_URL: str | None = None # Will be set by worker.py
+SUPABASE_EDGE_CLAIM_TASK_URL: str | None = None # Will be set by worker.py
 
 sqlite_lock = threading.Lock()
 
@@ -273,7 +273,7 @@ def _migrate_sqlite_schema(db_path_str: str):
                         # This part is highly dependent on previous conventions.
                         # As a simple default, if not found, it will remain NULL unless a default is set.
                         # For 'travel_between_images' and 'different_perspective', these are typically set by steerable_motion.py
-                        # and wouldn't exist as 'task_type' inside params for headless.py's default processing.
+                        # and wouldn't exist as 'task_type' inside params for worker.py's default processing.
                         # Headless tasks like 'generate_openpose' *did* use task_type in params.
                         dprint(f"SQLite Migration: No 'task_type' key in params for task_id {task_id}. It will remain NULL or needs manual/specific migration logic if it was inferred differently.")
                 except json.JSONDecodeError:
