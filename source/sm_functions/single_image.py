@@ -211,6 +211,7 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
                     video_length=1,  # Single frame
                     seed=seed,
                     model_filename=model_filename_for_task,
+                    model_name=actual_model_type,  # Pass original model name for preset detection
                     use_causvid_lora=use_causvid,
                     use_lighti2x_lora=use_lighti2x,
                     apply_reward_lora=apply_reward_lora,
