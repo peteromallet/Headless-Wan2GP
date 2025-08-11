@@ -210,6 +210,13 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
                 default_guidance = task_params_from_db.get("guidance_scale", preset_guidance)
                 default_flow_shift = task_params_from_db.get("flow_shift", preset_flow)
                 
+                dprint(f"Single image task {task_id}: Final parameter resolution:")
+                dprint(f"  num_inference_steps: {num_inference_steps} (preset: {preset_steps})")
+                dprint(f"  guidance_scale: {default_guidance} (preset: {preset_guidance})")
+                dprint(f"  flow_shift: {default_flow_shift} (preset: {preset_flow})")
+                dprint(f"  task_params_from_db keys: {list(task_params_from_db.keys())}")
+                dprint(f"  task_params_from_db.flow_shift: {task_params_from_db.get('flow_shift', 'NOT FOUND')}")
+                
                 generation_success, video_path_generated = generate_single_video(
                     wgp_mod=wgp_mod,
                     task_id=f"{task_id}_wgp_internal",
