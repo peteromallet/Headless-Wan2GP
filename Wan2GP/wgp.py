@@ -2051,7 +2051,8 @@ def get_default_settings(model_type):
             return "A large orange octopus is seen resting on the bottom of the ocean floor, blending in with the sandy and rocky terrain. Its tentacles are spread out around its body, and its eyes are closed. The octopus is unaware of a king crab that is crawling towards it from behind a rock, its claws raised and ready to attack. The crab is brown and spiny, with long legs and antennae. The scene is captured from a wide angle, showing the vastness and depth of the ocean. The water is clear and blue, with rays of sunlight filtering through. The shot is sharp and crisp, with a high dynamic range. The octopus and the crab are in focus, while the background is slightly blurred, creating a depth of field effect."
     i2v = test_class_i2v(model_type)
     defaults_filename = get_settings_file_name(model_type)
-    if not Path(defaults_filename).is_file():
+    # DISABLE CACHING: Always regenerate from JSON to ensure updated settings are used
+    if not Path(defaults_filename).is_file() or model_type == "optimised-t2i":
         model_def = get_model_def(model_type)
         base_model_type = get_base_model_type(model_type)
         ui_defaults = {
