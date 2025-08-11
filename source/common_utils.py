@@ -1879,19 +1879,10 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
             model_type_key = "t2v"  # Fallback to known good model type
         print(f"[DEBUG] build_task_state: model_filename='{model_filename}' → model_type='{model_type_key}'")
     ui_defaults = wgp_mod.get_default_settings(model_type_key).copy()
-    
-    print(f"[DEBUG] build_task_state: After get_default_settings('{model_type_key}'):")
-    print(f"[DEBUG]   ui_defaults.flow_shift = {ui_defaults.get('flow_shift', 'NOT FOUND')}")
-    print(f"[DEBUG]   ui_defaults.guidance_scale = {ui_defaults.get('guidance_scale', 'NOT FOUND')}")
-    print(f"[DEBUG]   ui_defaults.num_inference_steps = {ui_defaults.get('num_inference_steps', 'NOT FOUND')}")
 
     # Override with task_params from JSON - all task parameters take priority over model defaults
-    print(f"[DEBUG] build_task_state: task_params_dict keys: {list(task_params_dict.keys())}")
-    print(f"[DEBUG] build_task_state: task_params_dict.flow_shift = {task_params_dict.get('flow_shift', 'NOT FOUND')}")
-    
     for key, value in task_params_dict.items():
         if key not in ["output_sub_dir", "model", "task_id"]:
-            print(f"[DEBUG] build_task_state: Overriding ui_defaults[{key}] = {value}")
             ui_defaults[key] = value
     
     ui_defaults["prompt"] = task_params_dict.get("prompt", "Default prompt")

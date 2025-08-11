@@ -190,21 +190,7 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
                     dprint(f"Single image task {task_id}: Warning - could not load preset defaults for '{actual_model_type}': {e}")
                     preset_defaults = {"num_inference_steps": 30, "guidance_scale": 5.0, "flow_shift": 3.0}
                 
-                # CRITICAL FIX: Load model JSON configuration and merge into task parameters
-                try:
-                    model_def = wgp_mod.get_model_def(actual_model_type)
-                    if model_def:
-                        # Model JSON parameters (outside the "model" object) override preset defaults
-                        for key, value in model_def.items():
-                            if key not in ["model"] and key not in task_params_from_db:
-                                task_params_from_db[key] = value
-                                dprint(f"Single image task {task_id}: Loaded {key}={value} from model JSON")
-                        dprint(f"Single image task {task_id}: After JSON merge, flow_shift = {task_params_from_db.get('flow_shift', 'NOT FOUND')}")
-                    else:
-                        dprint(f"Single image task {task_id}: Warning - could not load model definition for '{actual_model_type}'")
-                except Exception as e:
-                    dprint(f"Single image task {task_id}: Warning - failed to load model JSON configuration: {e}")
-                
+
                 # Use the new flexible keyword-style API
                 use_causvid = task_params_from_db.get("use_causvid_lora", False)
                 use_lighti2x = task_params_from_db.get("use_lighti2x_lora", False)
