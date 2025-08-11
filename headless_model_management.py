@@ -500,11 +500,22 @@ class HeadlessTaskQueue:
             else:
                 wgp_params["lora_multipliers"] = task.parameters["loras_multipliers"]
         
-        # Set defaults for parameters if not already specified
-        if "flow_shift" not in wgp_params:
-            wgp_params["flow_shift"] = 3.0  # WGP default
-        if "sample_solver" not in wgp_params:
-            wgp_params["sample_solver"] = "euler"  # WGP default
+        # Load model-specific defaults from JSON first
+        try:
+            import wgp
+            model_defaults = wgp.get_default_settings(task.model)
+            # Apply model defaults for parameters not already specified
+            for param, value in model_defaults.items():
+                if param not in wgp_params:
+                    wgp_params[param] = value
+            self.logger.info(f"Applied model defaults for '{task.model}': flow_shift={model_defaults.get('flow_shift')}, guidance_scale={model_defaults.get('guidance_scale')}")
+        except Exception as e:
+            self.logger.warning(f"Could not load model defaults for '{task.model}': {e}")
+            # Fallback to hardcoded defaults if model loading fails
+            if "flow_shift" not in wgp_params:
+                wgp_params["flow_shift"] = 3.0  # WGP default
+            if "sample_solver" not in wgp_params:
+                wgp_params["sample_solver"] = "euler"  # WGP default
         
         # Apply sampler-specific CFG settings if available
         sample_solver = task.parameters.get("sample_solver", wgp_params.get("sample_solver", ""))
