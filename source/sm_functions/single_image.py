@@ -194,40 +194,21 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
                 use_causvid = task_params_from_db.get("use_causvid_lora", False)
                 use_lighti2x = task_params_from_db.get("use_lighti2x_lora", False)
 
-                # Priority: task params > preset defaults > LoRA optimizations (only if no explicit values)
-                # Get explicit task parameter values first
-                explicit_steps = (
-                    task_params_from_db.get("steps")
-                    or task_params_from_db.get("num_inference_steps")
-                )
-                explicit_guidance = task_params_from_db.get("guidance_scale")
-                explicit_flow_shift = task_params_from_db.get("flow_shift")
-                
-                # Use preset defaults, then apply LoRA optimizations only for unspecified parameters
+                # Priority: task params > preset defaults (no automatic LoRA optimizations)
                 preset_steps = preset_defaults.get("num_inference_steps", 30)
                 preset_guidance = preset_defaults.get("guidance_scale", 5.0) 
                 preset_flow = preset_defaults.get("flow_shift", 3.0)
                 
-                # Apply LoRA optimizations only if no explicit task parameters are provided
-                if use_causvid and not any([explicit_steps, explicit_guidance, explicit_flow_shift]):
-                    # CausVid optimization only if no explicit overrides
-                    preset_steps = 8
-                    preset_guidance = 1.0
-                    preset_flow = 1.0
-                    dprint(f"Single image task {task_id}: CausVid optimization applied (no explicit overrides)")
-                elif use_lighti2x and not any([explicit_steps, explicit_guidance, explicit_flow_shift]):
-                    # LightI2X optimization only if no explicit overrides
-                    preset_steps = 6
-                    preset_guidance = 1.0
-                    preset_flow = 5.0
-                    dprint(f"Single image task {task_id}: LightI2X optimization applied (no explicit overrides)")
-                else:
-                    dprint(f"Single image task {task_id}: Using preset/explicit values (skipping LoRA optimizations)")
+                dprint(f"Single image task {task_id}: Using preset/task values without automatic LoRA optimizations")
 
-                # Final parameter resolution: explicit task params take absolute priority
-                num_inference_steps = explicit_steps or preset_steps
-                default_guidance = explicit_guidance or preset_guidance
-                default_flow_shift = explicit_flow_shift or preset_flow
+                # Parameter resolution: task params take priority over preset defaults
+                num_inference_steps = (
+                    task_params_from_db.get("steps")
+                    or task_params_from_db.get("num_inference_steps")
+                    or preset_steps
+                )
+                default_guidance = task_params_from_db.get("guidance_scale", preset_guidance)
+                default_flow_shift = task_params_from_db.get("flow_shift", preset_flow)
                 
                 generation_success, video_path_generated = generate_single_video(
                     wgp_mod=wgp_mod,
