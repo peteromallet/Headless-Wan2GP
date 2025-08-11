@@ -22,7 +22,7 @@
             0.5
         ],
         "group": "wan2_2",
-        "auto_quantize": true
+        "auto_quantize": false
     },
     "num_inference_steps": 10,
     "guidance_scale": 1,
