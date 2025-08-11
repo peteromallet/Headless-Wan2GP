@@ -2102,93 +2102,93 @@ def get_default_settings(model_type):
             "slg_start_perc": 10,
             "slg_end_perc": 90
         }
-        if base_model_type in ["fantasy"]:
-            ui_defaults["audio_guidance_scale"] = 5.0
-        elif base_model_type in ["multitalk"]:
-            ui_defaults.update({
-                "guidance_scale": 5.0,
-                "flow_shift": 7, # 11 for 720p
-                "audio_guidance_scale": 4,
-                "sliding_window_discard_last_frames" : 4,
-                "sample_solver" : "euler",
-                "adaptive_switch" : 1,
-            })
+    if base_model_type in ["fantasy"]:
+        ui_defaults["audio_guidance_scale"] = 5.0
+    elif base_model_type in ["multitalk"]:
+        ui_defaults.update({
+            "guidance_scale": 5.0,
+            "flow_shift": 7, # 11 for 720p
+            "audio_guidance_scale": 4,
+            "sliding_window_discard_last_frames" : 4,
+            "sample_solver" : "euler",
+            "adaptive_switch" : 1,
+        })
 
-        elif base_model_type in ["hunyuan","hunyuan_i2v"]:
-            ui_defaults.update({
-                "guidance_scale": 7.0,
-            })
+    elif base_model_type in ["hunyuan","hunyuan_i2v"]:
+        ui_defaults.update({
+            "guidance_scale": 7.0,
+        })
 
-        elif base_model_type in ["flux"]:
+    elif base_model_type in ["flux"]:
+        ui_defaults.update({
+            "embedded_guidance":  2.5,
+        })            
+        if model_def.get("reference_image", False):
             ui_defaults.update({
-                "embedded_guidance":  2.5,
-            })            
-            if model_def.get("reference_image", False):
-                ui_defaults.update({
-                    "video_prompt_type": "KI",
-                })
-        elif base_model_type in ["sky_df_1.3B", "sky_df_14B"]:
-            ui_defaults.update({
-                "guidance_scale": 6.0,
-                "flow_shift": 8,
-                "sliding_window_discard_last_frames" : 0,
-                "resolution": "1280x720" if "720" in base_model_type else "960x544",
-                "sliding_window_size" : 121 if "720" in base_model_type else 97,
-                "RIFLEx_setting": 2,
-                "guidance_scale": 6,
-                "flow_shift": 8,
+                "video_prompt_type": "KI",
             })
+    elif base_model_type in ["sky_df_1.3B", "sky_df_14B"]:
+        ui_defaults.update({
+            "guidance_scale": 6.0,
+            "flow_shift": 8,
+            "sliding_window_discard_last_frames" : 0,
+            "resolution": "1280x720" if "720" in base_model_type else "960x544",
+            "sliding_window_size" : 121 if "720" in base_model_type else 97,
+            "RIFLEx_setting": 2,
+            "guidance_scale": 6,
+            "flow_shift": 8,
+        })
 
 
-        elif base_model_type in ["phantom_1.3B", "phantom_14B"]:
-            ui_defaults.update({
-                "guidance_scale": 7.5,
-                "flow_shift": 5,
-                "remove_background_images_ref": 1,
-                "video_prompt_type": "I",
-                # "resolution": "1280x720" 
-            })
+    elif base_model_type in ["phantom_1.3B", "phantom_14B"]:
+        ui_defaults.update({
+            "guidance_scale": 7.5,
+            "flow_shift": 5,
+            "remove_background_images_ref": 1,
+            "video_prompt_type": "I",
+            # "resolution": "1280x720" 
+        })
 
-        elif base_model_type in ["hunyuan_custom"]:
-            ui_defaults.update({
-                "guidance_scale": 7.5,
-                "flow_shift": 13,
-                "resolution": "1280x720",
-                "video_prompt_type": "I",
-            })
-        elif base_model_type in ["hunyuan_custom_audio"]:
-            ui_defaults.update({
-                "guidance_scale": 7.5,
-                "flow_shift": 13,
-                "video_prompt_type": "I",
-            })
-        elif base_model_type in ["hunyuan_custom_edit"]:
-            ui_defaults.update({
-                "guidance_scale": 7.5,
-                "flow_shift": 13,
-                "video_prompt_type": "MVAI",
-                "sliding_window_size": 129,
-            })
-        elif base_model_type in ["hunyuan_avatar"]:
-            ui_defaults.update({
-                "guidance_scale": 7.5,
-                "flow_shift": 5,
-                "remove_background_images_ref": 0,
-                "skip_steps_start_step_perc": 25, 
-                "video_length": 129,
-                "video_prompt_type": "I",
-            })
-        elif base_model_type in ["vace_14B", "vace_multitalk_14B"]:
-            ui_defaults.update({
-                "sliding_window_discard_last_frames": 0,
-            })
-            
+    elif base_model_type in ["hunyuan_custom"]:
+        ui_defaults.update({
+            "guidance_scale": 7.5,
+            "flow_shift": 13,
+            "resolution": "1280x720",
+            "video_prompt_type": "I",
+        })
+    elif base_model_type in ["hunyuan_custom_audio"]:
+        ui_defaults.update({
+            "guidance_scale": 7.5,
+            "flow_shift": 13,
+            "video_prompt_type": "I",
+        })
+    elif base_model_type in ["hunyuan_custom_edit"]:
+        ui_defaults.update({
+            "guidance_scale": 7.5,
+            "flow_shift": 13,
+            "video_prompt_type": "MVAI",
+            "sliding_window_size": 129,
+        })
+    elif base_model_type in ["hunyuan_avatar"]:
+        ui_defaults.update({
+            "guidance_scale": 7.5,
+            "flow_shift": 5,
+            "remove_background_images_ref": 0,
+            "skip_steps_start_step_perc": 25, 
+            "video_length": 129,
+            "video_prompt_type": "I",
+        })
+    elif base_model_type in ["vace_14B", "vace_multitalk_14B"]:
+        ui_defaults.update({
+            "sliding_window_discard_last_frames": 0,
+        })
+        
 
-        ui_defaults_update = model_def.get("settings", None) 
-        if ui_defaults_update is not None: ui_defaults.update(ui_defaults_update)
+    ui_defaults_update = model_def.get("settings", None) 
+    if ui_defaults_update is not None: ui_defaults.update(ui_defaults_update)
 
-        if len(ui_defaults.get("prompt","")) == 0:
-            ui_defaults["prompt"]= get_default_prompt(i2v)
+    if len(ui_defaults.get("prompt","")) == 0:
+        ui_defaults["prompt"]= get_default_prompt(i2v)
 
     # Apply command line overrides
     default_seed = args.seed
