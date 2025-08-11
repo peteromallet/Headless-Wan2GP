@@ -1892,15 +1892,23 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
     
     ui_defaults["prompt"] = task_params_dict.get("prompt", "Default prompt")
     ui_defaults["resolution"] = task_params_dict.get("resolution", "832x480")
-    # Allow task to specify frames/video_length, steps, guidance_scale, flow_shift unless overridden by CausVid
-    if not (causvid_active or lighti2x_active):
-        ui_defaults["video_length"] = task_params_dict.get("frames", task_params_dict.get("video_length", 81))
-        ui_defaults["num_inference_steps"] = task_params_dict.get("steps", task_params_dict.get("num_inference_steps", 30))
-        ui_defaults["guidance_scale"] = task_params_dict.get("guidance_scale", ui_defaults.get("guidance_scale", 5.0))
-        ui_defaults["flow_shift"] = task_params_dict.get("flow_shift", ui_defaults.get("flow_shift", 3.0))
-    else: # CausVid or LightI2X specific defaults if not touched by their logic yet
-        ui_defaults["video_length"] = task_params_dict.get("frames", task_params_dict.get("video_length", 81))
-        # steps, guidance_scale, flow_shift will be set below by specialised logic
+    # Allow task to specify frames/video_length, steps, guidance_scale, flow_shift - task params take absolute priority
+    ui_defaults["video_length"] = task_params_dict.get("frames", task_params_dict.get("video_length", 81))
+    
+    # Task parameters override any model defaults - no automatic LoRA optimizations in build_task_state
+    if "steps" in task_params_dict:
+        ui_defaults["num_inference_steps"] = task_params_dict["steps"]
+    elif "num_inference_steps" in task_params_dict:
+        ui_defaults["num_inference_steps"] = task_params_dict["num_inference_steps"]
+    # If no explicit task param, keep existing ui_defaults value from model definition
+    
+    if "guidance_scale" in task_params_dict:
+        ui_defaults["guidance_scale"] = task_params_dict["guidance_scale"]
+    # If no explicit task param, keep existing ui_defaults value from model definition
+    
+    if "flow_shift" in task_params_dict:
+        ui_defaults["flow_shift"] = task_params_dict["flow_shift"]
+    # If no explicit task param, keep existing ui_defaults value from model definition
 
     ui_defaults["seed"] = task_params_dict.get("seed", -1)
     ui_defaults["lset_name"] = "" 
