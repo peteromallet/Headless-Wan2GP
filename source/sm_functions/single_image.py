@@ -38,6 +38,7 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
     Returns:
         Tuple[bool, str]: (success, output_location_or_error_message)
     """
+    print(f"[FLOW_SHIFT_DEBUG] _handle_single_image_task: Starting for {task_id} - THIS PATH IS BEING USED")
     dprint(f"_handle_single_image_task: Starting for {task_id}")
     dprint(f"Single image task params: {json.dumps(task_params_from_db, default=str, indent=2)}")
     
@@ -92,6 +93,7 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
         
         # Use model_name directly - it should match JSON files in defaults/ directory
         actual_model_type = model_name
+        print(f"[FLOW_SHIFT_DEBUG] Single image task {task_id}: model_name='{model_name}' → actual_model_type='{actual_model_type}'")
         dprint(f"Single image task {task_id}: using model_type='{actual_model_type}'")
         dprint(f"Single image task {task_id}: transformer_quantization='{wgp_mod.transformer_quantization}'")
         # Fix empty transformer_dtype_policy which causes get_model_filename to fail
@@ -185,8 +187,10 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
                 # Get preset defaults from model definition FIRST
                 try:
                     preset_defaults = wgp_mod.get_default_settings(actual_model_type)
+                    print(f"[FLOW_SHIFT_DEBUG] Single image task {task_id}: Loaded preset defaults for '{actual_model_type}': steps={preset_defaults.get('num_inference_steps')}, guidance={preset_defaults.get('guidance_scale')}, flow={preset_defaults.get('flow_shift')}")
                     dprint(f"Single image task {task_id}: Loaded preset defaults for '{actual_model_type}': steps={preset_defaults.get('num_inference_steps')}, guidance={preset_defaults.get('guidance_scale')}, flow={preset_defaults.get('flow_shift')}")
                 except Exception as e:
+                    print(f"[FLOW_SHIFT_DEBUG] Single image task {task_id}: Warning - could not load preset defaults for '{actual_model_type}': {e}")
                     dprint(f"Single image task {task_id}: Warning - could not load preset defaults for '{actual_model_type}': {e}")
                     preset_defaults = {"num_inference_steps": 30, "guidance_scale": 5.0, "flow_shift": 3.0}
                 
