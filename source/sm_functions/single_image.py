@@ -186,8 +186,16 @@ def _handle_single_image_task(wgp_mod, task_params_from_db: dict, main_output_di
                 
                 # Get preset defaults from model definition FIRST
                 try:
+                    # Debug: Check what the model definition contains
+                    model_def = wgp_mod.get_model_def(actual_model_type)
+                    print(f"[FLOW_SHIFT_DEBUG] Single image task {task_id}: model_def for '{actual_model_type}': {model_def}")
+                    if model_def:
+                        settings = model_def.get("settings", None)
+                        print(f"[FLOW_SHIFT_DEBUG] Single image task {task_id}: model_def['settings']: {settings}")
+                    
                     preset_defaults = wgp_mod.get_default_settings(actual_model_type)
                     print(f"[FLOW_SHIFT_DEBUG] Single image task {task_id}: Loaded preset defaults for '{actual_model_type}': steps={preset_defaults.get('num_inference_steps')}, guidance={preset_defaults.get('guidance_scale')}, flow={preset_defaults.get('flow_shift')}")
+                    print(f"[FLOW_SHIFT_DEBUG] Single image task {task_id}: Full preset_defaults dict: {preset_defaults}")
                     dprint(f"Single image task {task_id}: Loaded preset defaults for '{actual_model_type}': steps={preset_defaults.get('num_inference_steps')}, guidance={preset_defaults.get('guidance_scale')}, flow={preset_defaults.get('flow_shift')}")
                 except Exception as e:
                     print(f"[FLOW_SHIFT_DEBUG] Single image task {task_id}: Warning - could not load preset defaults for '{actual_model_type}': {e}")
