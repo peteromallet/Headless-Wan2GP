@@ -2044,6 +2044,7 @@ def fix_settings(model_type, ui_defaults):
         ui_defaults["skip_steps_start_step_perc"] = tea_cache_start_step_perc
 
 def get_default_settings(model_type):
+    print(f"[DEBUG] *** get_default_settings() called with model_type='{model_type}'")
     def get_default_prompt(i2v):
         if i2v:
             return "Several giant wooly mammoths approach treading through a snowy meadow, their long wooly fur lightly blows in the wind as they walk, snow covered trees and dramatic snow capped mountains in the distance, mid afternoon light with wispy clouds and a sun high in the distance creates a warm glow, the low camera view is stunning capturing the large furry mammal with beautiful photography, depth of field."
