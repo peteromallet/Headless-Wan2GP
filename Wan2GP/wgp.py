@@ -1967,8 +1967,7 @@ def get_transformer_dtype(model_family, transformer_dtype_policy):
     else:
         return torch.bfloat16
 
-def get_settings_file_name(model_type):
-    return  os.path.join(args.settings, model_type + "_settings.json")
+# REMOVED: get_settings_file_name - no longer needed since caching is disabled
 
 def fix_settings(model_type, ui_defaults):
     if model_type == None: return
@@ -2049,32 +2048,39 @@ def get_default_settings(model_type):
             return "Several giant wooly mammoths approach treading through a snowy meadow, their long wooly fur lightly blows in the wind as they walk, snow covered trees and dramatic snow capped mountains in the distance, mid afternoon light with wispy clouds and a sun high in the distance creates a warm glow, the low camera view is stunning capturing the large furry mammal with beautiful photography, depth of field."
         else:
             return "A large orange octopus is seen resting on the bottom of the ocean floor, blending in with the sandy and rocky terrain. Its tentacles are spread out around its body, and its eyes are closed. The octopus is unaware of a king crab that is crawling towards it from behind a rock, its claws raised and ready to attack. The crab is brown and spiny, with long legs and antennae. The scene is captured from a wide angle, showing the vastness and depth of the ocean. The water is clear and blue, with rays of sunlight filtering through. The shot is sharp and crisp, with a high dynamic range. The octopus and the crab are in focus, while the background is slightly blurred, creating a depth of field effect."
-    i2v = test_class_i2v(model_type)
-    defaults_filename = get_settings_file_name(model_type)
-    # For optimised-t2i: Load settings directly from JSON without defaults generation
-    if model_type == "optimised-t2i":
-        model_def = get_model_def(model_type)
-        ui_defaults_update = model_def.get("settings", None)
-        if ui_defaults_update is not None:
-            # Start with minimal required defaults
-            ui_defaults = {
-                "prompt": get_default_prompt(test_class_i2v(model_type)),
-                "resolution": "832x480",
-                "video_length": 81,
-                "seed": -1,
-                "negative_prompt": "",
-                "activated_loras": [],
-                "loras_multipliers": "",
-            }
-            # Apply all JSON settings directly
-            ui_defaults.update(ui_defaults_update)
-            return ui_defaults
     
-    # DISABLE CACHING: Always regenerate from JSON to ensure updated settings are used  
-    if not Path(defaults_filename).is_file():
-        model_def = get_model_def(model_type)
-        base_model_type = get_base_model_type(model_type)
+    i2v = test_class_i2v(model_type)
+    model_def = get_model_def(model_type)
+    
+    # Check if model has JSON settings first
+    ui_defaults_update = model_def.get("settings", None)
+    if ui_defaults_update is not None:
+        # Start with minimal required defaults
         ui_defaults = {
+            "prompt": get_default_prompt(i2v),
+            "resolution": "832x480",
+            "video_length": 81,
+            "seed": -1,
+            "negative_prompt": "",
+            "activated_loras": [],
+            "loras_multipliers": "",
+        }
+        # Apply all JSON settings directly - no caching, always fresh
+        ui_defaults.update(ui_defaults_update)
+        
+        # Apply command line overrides
+        if args.seed > -1:
+            ui_defaults["seed"] = args.seed
+        if args.frames > 0:
+            ui_defaults["video_length"] = args.frames
+        if args.steps > 0:
+            ui_defaults["num_inference_steps"] = args.steps
+            
+        return ui_defaults
+    
+    # Fallback: Generate defaults for models without JSON settings (legacy behavior)
+    base_model_type = get_base_model_type(model_type)
+    ui_defaults = {
             "prompt": get_default_prompt(i2v),
             "resolution": "1280x720" if "720" in base_model_type else "832x480",
             "video_length": 81,
@@ -2184,13 +2190,7 @@ def get_default_settings(model_type):
         if len(ui_defaults.get("prompt","")) == 0:
             ui_defaults["prompt"]= get_default_prompt(i2v)
 
-        with open(defaults_filename, "w", encoding="utf-8") as f:
-            json.dump(ui_defaults, f, indent=4)
-    else:
-        with open(defaults_filename, "r", encoding="utf-8") as f:
-            ui_defaults = json.load(f)
-        fix_settings(model_type, ui_defaults)            
-    
+    # Apply command line overrides
     default_seed = args.seed
     if default_seed > -1:
         ui_defaults["seed"] = default_seed
