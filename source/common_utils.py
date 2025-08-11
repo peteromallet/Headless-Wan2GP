@@ -1880,14 +1880,9 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         print(f"[DEBUG] build_task_state: model_filename='{model_filename}' → model_type='{model_type_key}'")
     ui_defaults = wgp_mod.get_default_settings(model_type_key).copy()
 
-    # Override with task_params from JSON, but preserve some crucial ones if CausVid is used
-    causvid_active = task_params_dict.get("use_causvid_lora", False)
-    lighti2x_active = task_params_dict.get("use_lighti2x_lora", False)
-
+    # Override with task_params from JSON - all task parameters take priority over model defaults
     for key, value in task_params_dict.items():
-        if key not in ["output_sub_dir", "model", "task_id", "use_causvid_lora", "use_lighti2x_lora"]:
-            if (causvid_active or lighti2x_active) and key in ["steps", "guidance_scale", "flow_shift", "activated_loras", "loras_multipliers"]:
-                continue # These will be set by causvid/lighti2x logic if flag is true
+        if key not in ["output_sub_dir", "model", "task_id"]:
             ui_defaults[key] = value
     
     ui_defaults["prompt"] = task_params_dict.get("prompt", "Default prompt")
