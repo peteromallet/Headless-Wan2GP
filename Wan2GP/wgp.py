@@ -2044,7 +2044,6 @@ def fix_settings(model_type, ui_defaults):
         ui_defaults["skip_steps_start_step_perc"] = tea_cache_start_step_perc
 
 def get_default_settings(model_type):
-    print(f"[DEBUG] *** get_default_settings() called with model_type='{model_type}'")
     def get_default_prompt(i2v):
         if i2v:
             return "Several giant wooly mammoths approach treading through a snowy meadow, their long wooly fur lightly blows in the wind as they walk, snow covered trees and dramatic snow capped mountains in the distance, mid afternoon light with wispy clouds and a sun high in the distance creates a warm glow, the low camera view is stunning capturing the large furry mammal with beautiful photography, depth of field."
@@ -2160,11 +2159,7 @@ def get_default_settings(model_type):
             
 
         ui_defaults_update = model_def.get("settings", None) 
-        print(f"[DEBUG] get_default_settings({model_type}): model_def.settings = {ui_defaults_update}")
-        if ui_defaults_update is not None: 
-            print(f"[DEBUG] Applying settings update: {ui_defaults_update}")
-            ui_defaults.update(ui_defaults_update)
-            print(f"[DEBUG] After settings update, flow_shift = {ui_defaults.get('flow_shift')}")
+        if ui_defaults_update is not None: ui_defaults.update(ui_defaults_update)
 
         if len(ui_defaults.get("prompt","")) == 0:
             ui_defaults["prompt"]= get_default_prompt(i2v)
@@ -2217,7 +2212,6 @@ models_def_paths =  glob.glob( os.path.join("defaults", "*.json") ) + glob.glob(
 models_def_paths.sort()
 for file_path in models_def_paths:
     model_type = os.path.basename(file_path)[:-5]
-    print(f"[DEBUG] Loading JSON model definition: {file_path} → model_type='{model_type}'")
     with open(file_path, "r", encoding="utf-8") as f:
         try:
             json_def = json.load(f)
@@ -2227,20 +2221,17 @@ for file_path in models_def_paths:
     model_def["path"] = file_path
     del json_def["model"]      
     settings = json_def   
-    print(f"[DEBUG] Extracted settings from {model_type}: {settings}")
     existing_model_def = models_def.get(model_type, None) 
     if existing_model_def is not None:
         existing_settings = models_def.get("settings", None)
         if existing_settings != None:
             existing_settings.update(settings)
         existing_model_def.update(model_def)
-        print(f"[DEBUG] Updated existing model_def for {model_type}")
     else:
         models_def[model_type] = model_def # partial def
         model_def= init_model_def(model_type, model_def)
         models_def[model_type] = model_def # replace with full def
         model_def["settings"] = settings
-        print(f"[DEBUG] Created new model_def for {model_type} with settings: {settings}")
 
 model_types = models_def.keys()
 displayed_model_types= []
