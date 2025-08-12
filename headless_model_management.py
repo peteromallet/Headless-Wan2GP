@@ -488,7 +488,7 @@ class HeadlessTaskQueue:
         }
         
         # [DEBUG] Log incoming task parameters  
-        self.logger.info(f"[UPSTREAM_DEBUG] Task {task.task_id} incoming parameters:")
+        self.logger.info(f"[UPSTREAM_DEBUG] Task {task.id} incoming parameters:")
         for key, value in task.parameters.items():
             self.logger.info(f"[UPSTREAM_DEBUG]   {key}: {value}")
         self.logger.info(f"[UPSTREAM_DEBUG] Notable: sample_solver in task.parameters? {'sample_solver' in task.parameters}")
