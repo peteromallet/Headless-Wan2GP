@@ -7,12 +7,5 @@
         ],
         "description": "The Vace ControlNet model is a powerful model that allows you to control the content of the generated video based of additional custom data : pose or depth video, images or objects you want to see in the video.",
         "URLs": "t2v"
-    },
-    "num_inference_steps": 10,
-    "guidance_scale": 5.0,
-    "guidance2_scale": 5.0,
-    "flow_shift": 3.0,
-    "sample_solver": "unipc",
-    "control_net_weight": 1.0,
-    "control_net_weight2": 1.0
+    }
 }
