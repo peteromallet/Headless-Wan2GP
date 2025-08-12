@@ -101,8 +101,11 @@ class HeadlessTaskQueue:
         self.running = False
         self.start_time = time.time()
         
-        # Import wgp after path setup
+        # Import wgp after path setup (protect sys.argv to prevent argument conflicts)
+        _saved_argv = sys.argv[:]
+        sys.argv = ["headless_wgp.py"]
         import wgp
+        sys.argv = _saved_argv
         self.wgp = wgp
         
         # Import our orchestrator
