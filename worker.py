@@ -349,7 +349,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
         return tbi._handle_travel_orchestrator_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, orchestrator_task_id_str=task_id, orchestrator_project_id=project_id_for_task, dprint=dprint)
     elif task_type == "travel_segment":
         headless_logger.debug("Delegating to travel segment handler", task_id=task_id)
-        return tbi._handle_travel_segment_task(wgp_mod, task_params_dict, main_output_dir_base, task_id, apply_reward_lora, colour_match_videos, mask_active_frames, process_single_task=process_single_task, dprint=dprint, task_queue=task_queue)
+        return tbi._handle_travel_segment_task(task_params_dict, main_output_dir_base, task_id, apply_reward_lora, colour_match_videos, mask_active_frames, process_single_task=process_single_task, dprint=dprint, task_queue=task_queue)
     elif task_type == "travel_stitch":
         headless_logger.debug("Delegating to travel stitch handler", task_id=task_id)
         return tbi._handle_travel_stitch_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, stitch_task_id_str=task_id, dprint=dprint)
