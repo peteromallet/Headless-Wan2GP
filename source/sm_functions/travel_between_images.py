@@ -48,7 +48,7 @@ from ..video_utils import (
     extract_last_frame_as_image as sm_extract_last_frame_as_image,
     overlay_start_end_images_above_video as sm_overlay_start_end_images_above_video,
 )
-from ..wgp_utils import generate_single_video
+# Legacy wgp_utils import removed - now using task_queue system exclusively
 
 # Add debugging helper function
 def debug_video_analysis(video_path: str | Path, label: str, task_id: str = "unknown") -> dict:
