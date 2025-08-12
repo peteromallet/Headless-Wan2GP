@@ -354,7 +354,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
     
     return generation_success, output_message_for_orchestrator_db
 
-def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True, *, process_single_task, dprint, task_queue=None):
+def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True, *, process_single_task, dprint, task_queue=None):
     dprint(f"_handle_travel_segment_task: Starting for {segment_task_id_str}")
     dprint(f"Segment task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
     # task_params_from_db contains what was enqueued for this specific segment,
@@ -911,7 +911,14 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
 
         # Compute video_prompt_type for wgp: Check if we're using a VACE model for proper ControlNet activation
         model_name = full_orchestrator_payload["model_name"]
-        is_vace_model = wgp_mod.test_vace_module(model_name)
+        
+        # Use task_queue system for VACE detection if available, otherwise use simple name-based detection
+        if task_queue is not None:
+            is_vace_model = task_queue.orchestrator._is_vace() if hasattr(task_queue, 'orchestrator') else "vace" in model_name.lower()
+        else:
+            # Fallback: simple name-based detection when no task_queue available
+            is_vace_model = "vace" in model_name.lower()
+        
         dprint(f"[VACEDetection] Seg {segment_idx}: Model '{model_name}' -> VACE detected: {is_vace_model}")
 
         if is_vace_model:
@@ -1021,18 +1028,15 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         processed_additional_loras = {}
         if additional_loras:
             dprint(f"Seg {segment_idx}: Processing additional LoRAs using shared function")
-            model_filename_for_task = wgp_mod.get_model_filename(
-                full_orchestrator_payload["model_name"],
-                wgp_mod.transformer_quantization,
-                wgp_mod.transformer_dtype_policy,
-            )
-            processed_additional_loras = process_additional_loras_shared(
-                additional_loras, 
-                wgp_mod, 
-                model_filename_for_task, 
-                segment_task_id_str, 
-                dprint
-            )
+            # Since legacy system is removed, use task_queue system for LoRA processing
+            if task_queue is not None:
+                # The new queue system handles LoRAs internally, so just pass them as-is
+                processed_additional_loras = additional_loras
+                dprint(f"Seg {segment_idx}: Using task_queue system for LoRA processing: {len(processed_additional_loras)} LoRAs")
+            else:
+                # Fallback: pass LoRAs as-is if no task_queue
+                processed_additional_loras = additional_loras
+                dprint(f"Seg {segment_idx}: Fallback LoRA processing: {len(processed_additional_loras)} LoRAs")
 
         # ------------------------------------------------------------------
         # Ensure sensible defaults for critical generation params
@@ -1183,48 +1187,9 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                     # Removed verbose progress log to reduce noise
                     time.sleep(1.0)
         else:
-            dprint(f"[WGP_DEBUG] Using legacy wgp_utils for generation")
-            # Use the centralized WGP wrapper instead of process_single_task
-            generation_success, wgp_output_path_or_msg = generate_single_video(
-                 wgp_mod=wgp_mod,
-                 task_id=wgp_inline_task_id,
-                 prompt=prompt_for_wgp,
-                 negative_prompt=negative_prompt_for_wgp,
-                 resolution=f"{parsed_res_wh[0]}x{parsed_res_wh[1]}",
-                 video_length=final_frames_for_wgp_generation,
-                 seed=segment_params["seed_to_use"],
-                 num_inference_steps=num_inference_steps,
-                 guidance_scale=guidance_scale_default,
-                 flow_shift=flow_shift_default,
-                 # [VACE_FIX] Pass both model_name (for proper model type detection) and model_filename (for file loading)
-                 # The orchestrator payload contains the model alias (e.g. "vace_14B") which determines the model type,
-                 # while model_filename resolves to the actual .safetensors file for loading
-                 model_name=full_orchestrator_payload["model_name"],  # ← Preserve original model type 
-                 model_filename=wgp_mod.get_model_filename(
-                     full_orchestrator_payload["model_name"],
-                     wgp_mod.transformer_quantization,
-                     wgp_mod.transformer_dtype_policy,
-                 ),
-                 video_guide=str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
-                 video_mask=str(mask_video_path_for_wgp.resolve()) if mask_video_path_for_wgp else None,
-                 image_refs=safe_vace_image_ref_paths_for_wgp,
-                 use_causvid_lora=full_orchestrator_payload.get("apply_causvid", False) or full_orchestrator_payload.get("use_causvid_lora", False),
-                 use_lighti2x_lora=full_orchestrator_payload.get("use_lighti2x_lora", False) or segment_params.get("use_lighti2x_lora", False),
-                 apply_reward_lora=effective_apply_reward_lora,
-                 additional_loras=processed_additional_loras,
-                 video_prompt_type=video_prompt_type_str,
-                 control_net_weight=full_orchestrator_payload.get("control_net_weight", 1.0),
-                 control_net_weight2=full_orchestrator_payload.get("control_net_weight2", 1.0),
-                 dprint=dprint,
-                 **({k: v for k, v in wgp_payload.items() if k not in [
-                     'task_id', 'prompt', 'negative_prompt', 'resolution', 'frames', 'seed',
-                     'model', 'model_filename', 'video_guide', 'video_mask', 'image_refs',
-                     'use_causvid_lora', 'apply_reward_lora', 'additional_loras', 'video_prompt_type',
-                     'use_lighti2x_lora', 'control_net_weight', 'control_net_weight2',
-                     'num_inference_steps', 'guidance_scale', 'flow_shift',
-                     'activated_loras', 'loras_multipliers', 'additional_lora_names', 'additional_lora_multipliers'
-                 ]})
-             )
+            dprint(f"[WGP_DEBUG] Legacy wgp_utils system no longer available, this should not happen")
+            generation_success = False
+            wgp_output_path_or_msg = "Error: Legacy WGP system has been removed. Only task queue system is supported."
 
         print(f"[WGP_DEBUG] Segment {segment_idx}: GENERATION RESULT")
         print(f"[WGP_DEBUG]   generation_success: {generation_success}")
@@ -1243,7 +1208,6 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             chain_success, chain_message, final_chained_path = _handle_travel_chaining_after_wgp(
                 wgp_task_params=wgp_payload,
                 actual_wgp_output_video_path=wgp_output_path_or_msg,
-                wgp_mod=wgp_mod,
                 image_download_dir=segment_image_download_dir,
                 dprint=dprint
             )
@@ -1315,7 +1279,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         return False, f"Segment {segment_idx if 'segment_idx' in locals() else 'unknown'} failed: {str(e)[:200]}"
 
 # --- SM_RESTRUCTURE: New function to handle chaining after WGP/Comfy sub-task ---
-def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_video_path: str | None, wgp_mod, image_download_dir: Path | str | None = None, *, dprint) -> tuple[bool, str, str | None]:
+def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_video_path: str | None, image_download_dir: Path | str | None = None, *, dprint) -> tuple[bool, str, str | None]:
     """
     Handles the chaining logic after a WGP  sub-task for a travel segment completes.
     This includes post-generation saturation and enqueuing the next segment or stitch task.
