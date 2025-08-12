@@ -44,7 +44,7 @@ Headless-Wan2GP is a queue-based video generation system built around the Wan2GP
 │   ├── db_operations.py
 │   ├── specialized_handlers.py
 │   ├── video_utils.py
-│   ├── wgp_utils.py
+
 │   └── sm_functions/
 │       ├── __init__.py
 │       ├── travel_between_images.py
@@ -98,6 +98,23 @@ All task types support automatic upload to Supabase Storage when configured:
 * **Supabase mode**: `output_location` contains public URLs (e.g., `https://xyz.supabase.co/storage/v1/object/public/image_uploads/task_123/video.mp4`)
 * **Object naming**: Files stored as `{task_id}/{filename}` for collision-free organization
 
+## Queue-Based Architecture
+
+The system now uses a modern queue-based architecture for video generation:
+
+* **headless_model_management.py** – Core queue system providing the `HeadlessTaskQueue` class with efficient model loading, memory management, and task processing. Handles model switching, quantization, and resource optimization.
+
+* **headless_wgp.py** – Integration layer between the queue system and Wan2GP. Contains the `WanOrchestrator` class that handles parameter mapping, LoRA processing, and VACE-specific optimizations. Provides clean parameter handling to prevent conflicts.
+
+* **worker.py** – Main worker process that polls the database, claims tasks, and routes them to appropriate handlers. All task handlers now use the queue system exclusively for video generation.
+
+### Key Benefits
+- **Model Persistence**: Models stay loaded in memory between tasks for faster processing
+- **Memory Optimization**: Intelligent model loading and quantization support  
+- **Parameter Safety**: Clean parameter mapping prevents conflicts and errors
+- **Queue Efficiency**: Tasks are processed through an optimized queue system
+- **Modern Architecture**: Replaces legacy direct WGP calls with robust queue-based processing
+
 ## source/ package
 
 This is the main application package.
@@ -106,7 +123,7 @@ This is the main application package.
 * **db_operations.py** – Handles all database interactions for both SQLite and Supabase. Includes Supabase client initialization, Edge Function integration, and automatic backend selection based on `DB_TYPE`.
 * **specialized_handlers.py** – Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation. Uses Supabase-compatible upload functions for all outputs.
 * **video_utils.py** – Provides utilities for video manipulation like cross-fading, frame extraction, and color matching.
-* **wgp_utils.py** – Thin wrapper around `Wan2GP.wgp` that standardises parameter names, handles LoRA quirks (e.g. CausVid, LightI2X), and exposes the single `generate_single_video` helper used by every task handler. Includes comprehensive debugging throughout the generation pipeline with detailed frame count validation.
+
 
 ### source/sm_functions/ sub-package
 
@@ -184,7 +201,7 @@ The submodule is updated periodically using standard git submodule commands. Onl
    * Standard tasks live in `source/sm_functions/…` (see table below).
    * Special one-offs (OpenPose, RIFE, etc.) live in `specialized_handlers.py`.
    * Handlers may queue **sub-tasks** (e.g. travel → N segments + 1 stitch) by inserting new rows with `dependant_on` set, forming a DAG.
-4. **Video generation** – Every handler eventually calls `wgp_utils.generate_single_video` which wraps **Wan2GP/wgp.py** and returns a path to the rendered MP4.
+4. **Video generation** – Every handler now uses the **HeadlessTaskQueue** system which provides efficient model management, memory optimization, and queue-based processing through **headless_model_management.py** and **headless_wgp.py**.
 5. **Post-processing** – Optional saturation / brightness / colour-match (`video_utils.py`) or upscaling tasks.
 6. **DB update** – Handler stores `output_location` (relative in SQLite, absolute or URL in Supabase) and marks the row `Complete` (or `Failed`).  Dependants are now eligible to start.
 7. **Cleanup** – Intermediate folders are deleted unless `debug_mode_enabled` or `skip_cleanup_enabled` flags are set in the payload.
@@ -202,7 +219,7 @@ The submodule is updated periodically using standard git submodule commands. Onl
 | OpenPose mask video  | `handle_openpose_task`             | `specialized_handlers.py` |
 | RIFE interpolation   | `handle_rife_task`                 | `specialized_handlers.py` |
 
-All of the above eventually call `wgp_utils.generate_single_video`, which is the single **shared** bridge into Wan2GP.
+All of the above now use the **HeadlessTaskQueue** system, which provides a modern, efficient bridge into Wan2GP with proper model management and queue-based processing.
 
 ## Database cheat-sheet
 

@@ -33,7 +33,7 @@ from ..common_utils import (
     snap_resolution_to_model_grid,
     ensure_valid_prompt,
     ensure_valid_negative_prompt,
-    process_additional_loras_shared,
+    # process_additional_loras_shared,  # DEPRECATED - no longer used in queue-only system
     wait_for_file_stable as sm_wait_for_file_stable,
 )
 from ..video_utils import (
