@@ -923,24 +923,40 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             dprint(f"[VACE_DEBUG] Seg {segment_idx}: hasattr(task_queue, 'orchestrator') = {has_orchestrator}")
             
             if has_orchestrator:
-                dprint(f"[VACE_DEBUG] Seg {segment_idx}: orchestrator found, checking _is_vace method")
-                has_is_vace_method = hasattr(task_queue.orchestrator, '_is_vace')
-                dprint(f"[VACE_DEBUG] Seg {segment_idx}: hasattr(orchestrator, '_is_vace') = {has_is_vace_method}")
+                dprint(f"[VACE_DEBUG] Seg {segment_idx}: orchestrator found, checking is_model_vace method")
+                has_model_agnostic_method = hasattr(task_queue.orchestrator, 'is_model_vace')
+                dprint(f"[VACE_DEBUG] Seg {segment_idx}: hasattr(orchestrator, 'is_model_vace') = {has_model_agnostic_method}")
                 
-                if has_is_vace_method:
+                if has_model_agnostic_method:
                     try:
-                        vace_result = task_queue.orchestrator._is_vace()
-                        dprint(f"[VACE_DEBUG] Seg {segment_idx}: task_queue.orchestrator._is_vace() returned: {vace_result} (type: {type(vace_result)})")
+                        # Use the new model-agnostic method that doesn't require loaded model
+                        vace_result = task_queue.orchestrator.is_model_vace(model_name)
+                        dprint(f"[VACE_DEBUG] Seg {segment_idx}: task_queue.orchestrator.is_model_vace('{model_name}') returned: {vace_result} (type: {type(vace_result)})")
                         is_vace_model = vace_result
                     except Exception as e_vace_check:
-                        dprint(f"[VACE_DEBUG] Seg {segment_idx}: Exception calling _is_vace(): {e_vace_check}")
+                        dprint(f"[VACE_DEBUG] Seg {segment_idx}: Exception calling is_model_vace(): {e_vace_check}")
                         name_based_result = "vace" in model_name.lower()
                         dprint(f"[VACE_DEBUG] Seg {segment_idx}: Falling back to name-based detection: {name_based_result}")
                         is_vace_model = name_based_result
                 else:
-                    name_based_result = "vace" in model_name.lower()
-                    dprint(f"[VACE_DEBUG] Seg {segment_idx}: No _is_vace method, using name-based: {name_based_result}")
-                    is_vace_model = name_based_result
+                    # Fallback: try the old _is_vace method (for backward compatibility)
+                    has_is_vace_method = hasattr(task_queue.orchestrator, '_is_vace')
+                    dprint(f"[VACE_DEBUG] Seg {segment_idx}: No is_model_vace method, checking _is_vace: {has_is_vace_method}")
+                    
+                    if has_is_vace_method:
+                        try:
+                            vace_result = task_queue.orchestrator._is_vace()
+                            dprint(f"[VACE_DEBUG] Seg {segment_idx}: task_queue.orchestrator._is_vace() returned: {vace_result} (type: {type(vace_result)})")
+                            is_vace_model = vace_result
+                        except Exception as e_vace_check:
+                            dprint(f"[VACE_DEBUG] Seg {segment_idx}: Exception calling _is_vace(): {e_vace_check}")
+                            name_based_result = "vace" in model_name.lower()
+                            dprint(f"[VACE_DEBUG] Seg {segment_idx}: Falling back to name-based detection: {name_based_result}")
+                            is_vace_model = name_based_result
+                    else:
+                        name_based_result = "vace" in model_name.lower()
+                        dprint(f"[VACE_DEBUG] Seg {segment_idx}: No VACE detection methods, using name-based: {name_based_result}")
+                        is_vace_model = name_based_result
             else:
                 name_based_result = "vace" in model_name.lower()
                 dprint(f"[VACE_DEBUG] Seg {segment_idx}: No orchestrator, using name-based: {name_based_result}")

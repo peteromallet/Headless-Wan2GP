@@ -303,6 +303,21 @@ class WanOrchestrator:
     def _is_vace(self) -> bool:
         """Check if current model is a VACE model."""
         return self._test_vace_module(self.current_model)
+    
+    def is_model_vace(self, model_name: str) -> bool:
+        """Check if a given model name is a VACE model (model-agnostic).
+        
+        This method doesn't require the model to be loaded, making it suitable
+        for VACE detection during task processing when the orchestrator may not
+        have the model loaded yet.
+        
+        Args:
+            model_name: The model identifier to check (e.g., "vace_14B", "t2v")
+            
+        Returns:
+            True if the model is a VACE model, False otherwise
+        """
+        return self._test_vace_module(model_name)
 
     def _is_flux(self) -> bool:
         """Check if current model is a Flux model."""
