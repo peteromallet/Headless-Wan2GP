@@ -2,25 +2,23 @@
 
 ## Recent Updates (January 2025)
 
-### 🚀 **Major Architecture Improvements**
-- **✅ Complete Edge Function Migration**: Eliminated all RPC dependencies, now using pure Supabase Edge Functions
-- **✅ Dual Authentication System**: Perfect Service Key (worker) vs PAT (individual user) authentication
-- **✅ Worker Management**: Auto-creation system for worker IDs with proper constraint handling
-- **✅ Storage Integration**: Full Supabase storage upload/download functionality
-- **✅ Test Coverage**: Comprehensive test suite with 95.5% success rate (21/22 tests passing)
-- **✅ VACE ControlNet Integration**: Proper VACE ControlNet activation with preprocessing support
-- **✅ VACE Processing Optimization**: Enhanced travel_between_images.py with intelligent frame masking and component-based video_prompt_type construction
-- **✅ Wan 2.2 VACE Integration**: Full support for dual-phase Wan 2.2 models with optimized VACE strength (1.3) and sampler-specific CFG presets
-- **✅ LightI2X LoRA Enhancement**: Integrated advanced step distillation LoRA at 3.0 strength for faster inference
-- **✅ Structured Logging System**: Comprehensive logging overhaul with specialized loggers for different components (orchestrator, model, generation, travel)
-- **✅ Model Memory Management**: Fixed critical model offloading issue in headless_wgp.py - now properly releases previous model memory AND unloads LoRAs before loading new models, preventing memory fragmentation and LoRA conflicts causing "stuck" generation
+### 🏗️ **Current Architecture**
+- **Queue-Based Processing**: All tasks processed via HeadlessTaskQueue system with persistent model state and memory management
+- **Edge Function Integration**: Pure Supabase Edge Functions for database operations (no RPC dependencies)
+- **Dual Authentication System**: Service Key (worker) vs PAT (individual user) authentication modes
+- **Storage Integration**: Automatic Supabase storage upload/download functionality  
+- **VACE ControlNet Integration**: Full ControlNet activation with preprocessing support
+- **VACE Processing**: Intelligent frame masking and component-based video_prompt_type construction
+- **Wan 2.2 Support**: Dual-phase Wan 2.2 models with optimized VACE strength (1.3) and sampler-specific CFG presets
+- **Advanced LoRAs**: LightI2X LoRA with 3.0 strength for faster inference, CausVid acceleration support
+- **Structured Logging**: Specialized loggers for different components (orchestrator, model, generation, travel)
+- **Model Memory Management**: Proper model memory release and LoRA unloading to prevent memory fragmentation
 
-### 🧹 **Repository Cleanup & Organization**
-- **Organized tests:** Moved comprehensive test suite to `tests/` directory
-- **Removed debug files:** Eliminated temporary videos, obsolete test scripts, and debug utilities
-- **Cleaned documentation:** Removed unnecessary .md files, kept essential STRUCTURE.md
-- **Removed SQL migrations:** Eliminated one-time migration files after successful deployment
-- **Streamlined codebase:** Production-ready components only
+### 📁 **Repository Organization**
+- **Organized tests:** Comprehensive test suite in `tests/` directory
+- **Clean codebase:** Production-ready components only, no debug artifacts
+- **Essential documentation:** Focused on STRUCTURE.md and technical docs
+- **Streamlined deployment:** Production-ready components without migration dependencies
 
 ## Core Architecture
 
@@ -105,14 +103,14 @@
 
 ## Top-level scripts
 
-* **worker.py** – Headless service that polls the `tasks` database, claims work, and drives the Wan2GP generator (`wgp.py`). Includes extra handlers for OpenPose and RIFE interpolation tasks and can upload outputs to Supabase storage. **NEW**: Now supports both SQLite and Supabase backends via `--db-type` flag.
+* **worker.py** – Headless service that polls the `tasks` database, claims work, and executes tasks via the HeadlessTaskQueue system. Includes specialized handlers for OpenPose and RIFE interpolation tasks with automatic Supabase storage upload. Supports both SQLite and Supabase backends via `--db-type` flag with queue-based processing architecture.
 * **add_task.py** – Lightweight CLI helper to queue a single new task into SQLite/Supabase. Accepts a JSON payload (or file) and inserts it into the `tasks` table.
 * **generate_test_tasks.py** – Developer utility that back-fills the database with synthetic images/prompts for integration testing and local benchmarking.
-* **tests/test_travel_workflow_db_edge_functions.py** – **NEW**: Comprehensive test script to verify Supabase Edge Functions, authentication, and database operations for the headless worker.
+* **tests/test_travel_workflow_db_edge_functions.py** – Comprehensive test script to verify Supabase Edge Functions, authentication, and database operations for the headless worker.
 
 ## Supabase Upload System
 
-**NEW**: All task types now support automatic upload to Supabase Storage when configured:
+All task types support automatic upload to Supabase Storage when configured:
 
 ### How it works
 * **Local-first**: Files are always saved locally first for reliability
@@ -137,20 +135,20 @@
 
 This is the main application package.
 
-* **common_utils.py** – Reusable helpers (file downloads, ffmpeg helpers, MediaPipe keypoint interpolation, debug utilities, etc.). **UPDATED**: Now includes generalized Supabase upload functions (`prepare_output_path_with_upload`, `upload_and_get_final_output_location`) used by all task types.
-* **db_operations.py** – Handles all database interactions for both SQLite and Supabase. **UPDATED**: Now includes Supabase client initialization, Edge Function integration, and automatic backend selection based on `DB_TYPE`.
-* **specialized_handlers.py** – Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation. **UPDATED**: Uses Supabase-compatible upload functions for all outputs.
+* **common_utils.py** – Reusable helpers (file downloads, ffmpeg helpers, MediaPipe keypoint interpolation, debug utilities, etc.). Includes generalized Supabase upload functions (`prepare_output_path_with_upload`, `upload_and_get_final_output_location`) used by all task types.
+* **db_operations.py** – Handles all database interactions for both SQLite and Supabase. Includes Supabase client initialization, Edge Function integration, and automatic backend selection based on `DB_TYPE`.
+* **specialized_handlers.py** – Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation. Uses Supabase-compatible upload functions for all outputs.
 * **video_utils.py** – Provides utilities for video manipulation like cross-fading, frame extraction, and color matching.
-* **wgp_utils.py** – Thin wrapper around `Wan2GP.wgp` that standardises parameter names, handles LoRA quirks (e.g. CausVid, LightI2X), and exposes the single `generate_single_video` helper used by every task handler. **UPDATED**: Now includes comprehensive debugging throughout the generation pipeline with detailed frame count validation.
+* **wgp_utils.py** – Thin wrapper around `Wan2GP.wgp` that standardises parameter names, handles LoRA quirks (e.g. CausVid, LightI2X), and exposes the single `generate_single_video` helper used by every task handler. Includes comprehensive debugging throughout the generation pipeline with detailed frame count validation.
 
 ### source/sm_functions/ sub-package
 
-Task-specific wrappers around the bulky upstream logic. These are imported by `worker.py` (and potentially by notebooks/unit tests) without dragging in the interactive Gradio UI shipped with Wan2GP. **UPDATED**: All task handlers now use generalized Supabase upload functions for consistent output handling.
+Task-specific wrappers around the bulky upstream logic. These are imported by `worker.py` (and potentially by notebooks/unit tests) without dragging in the interactive Gradio UI shipped with Wan2GP. All task handlers use generalized Supabase upload functions for consistent output handling.
 
-* **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images. Builds guide videos, queues generation tasks, stitches outputs. **UPDATED**: Final stitched videos are uploaded to Supabase when configured. **NEW**: Extensive debugging system with `debug_video_analysis()` function that tracks frame counts, file sizes, and processing steps throughout the entire orchestrator → segments → stitching pipeline.
-* **different_perspective.py** – Generates a new perspective for a single image using an OpenPose or depth-driven guide video plus optional RIFE interpolation for smoothness. **UPDATED**: Final posed images are uploaded to Supabase when configured.
-* **single_image.py** – Minimal handler for one-off image-to-video generation without travel or pose manipulation. **UPDATED**: Generated images are uploaded to Supabase when configured.
-* **magic_edit.py** – **NEW**: Processes images through Replicate's black-forest-labs/flux-kontext-dev-lora model for scene transformations. Supports conditional InScene LoRA usage via `in_scene` parameter (true for scene consistency, false for creative freedom). Integrates with Supabase storage for output handling.
+* **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images. Builds guide videos, queues generation tasks, stitches outputs. Final stitched videos are uploaded to Supabase when configured. Includes extensive debugging system with `debug_video_analysis()` function that tracks frame counts, file sizes, and processing steps throughout the entire orchestrator → segments → stitching pipeline.
+* **different_perspective.py** – Generates a new perspective for a single image using an OpenPose or depth-driven guide video plus optional RIFE interpolation for smoothness. Final posed images are uploaded to Supabase when configured.
+* **single_image.py** – Minimal handler for one-off image-to-video generation without travel or pose manipulation. Generated images are uploaded to Supabase when configured.
+* **magic_edit.py** – Processes images through Replicate's black-forest-labs/flux-kontext-dev-lora model for scene transformations. Supports conditional InScene LoRA usage via `in_scene` parameter (true for scene consistency, false for creative freedom). Integrates with Supabase storage for output handling.
 * **__init__.py** – Re-exports public APIs (`run_travel_between_images_task`, `run_single_image_task`, `run_different_perspective_task`) and common utilities for convenient importing.
 
 ## Additional runtime artefacts & folders
@@ -164,7 +162,7 @@ Task-specific wrappers around the bulky upstream logic. These are imported by `w
 
 ## Database Backends
 
-**NEW**: The system now supports two database backends:
+The system supports two database backends:
 
 ### SQLite (Default)
 * Local file-based database (`tasks.db`)
