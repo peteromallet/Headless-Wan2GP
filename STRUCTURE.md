@@ -287,10 +287,18 @@ This debugging system provides comprehensive visibility into the video generatio
 
 ## LoRA Support
 
-### Special LoRA Flags
+### Special LoRA Flags and Auto-Detection
 
 * **`use_causvid_lora`** – Enables CausVid LoRA with 9 steps, guidance 1.0, flow-shift 1.0. Auto-downloads from HuggingFace if missing.
 * **`use_lighti2x_lora`** – Enables LightI2X LoRA with 6 steps, guidance 1.0, flow-shift 5.0, Tea Cache disabled. Auto-downloads from HuggingFace if missing.
+
+### Smart LoRA Detection (NEW)
+
+The system now auto-detects CausVid/LightI2X LoRAs included in model JSON configs:
+
+* **Built-in LoRAs**: When LoRAs are listed in model config's `loras` array, uses the JSON's parameter settings instead of forcing optimization values
+* **Explicit flags**: When `use_causvid_lora=True` is explicitly set (but model doesn't have it built-in), applies standard optimization parameters
+* **Best of both**: Allows fine-tuned parameter control in JSON configs while maintaining backward compatibility with explicit LoRA requests
 
 Both flags automatically configure optimal generation parameters and handle LoRA downloads/activation.
 
