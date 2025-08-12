@@ -430,7 +430,7 @@ class WanOrchestrator:
                 'sample_solver': 'sample_solver',  # Critical for generation  
                 'tea_cache_setting': 'tea_cache_setting',
                 'tea_cache_start_step_perc': 'tea_cache_start_step_perc',
-                'sliding_window_color_correction_strength': 'sliding_window_color_correction_strength',
+                # NOTE: sliding_window_color_correction_strength is explicitly set to 0.0, so excluded
             }
             
             for input_key, wgp_key in safe_direct_mapping.items():
