@@ -396,6 +396,9 @@ class WanOrchestrator:
         
         generation_logger.debug(f"Model detection - VACE: {is_vace}, Flux: {is_flux}, T2V: {is_t2v}")
         generation_logger.debug(f"Generation parameters - prompt: '{prompt[:50]}...', resolution: {resolution}, length: {video_length}")
+        generation_logger.debug(f"Kwargs received: {list(kwargs.keys())}")
+        if 'switch_threshold' in kwargs:
+            generation_logger.debug(f"Switch threshold from kwargs: {kwargs['switch_threshold']}")
         
         if is_vace:
             generation_logger.debug(f"VACE parameters - guide: {video_guide}, type: {video_prompt_type}, weights: {control_net_weight}/{control_net_weight2}")
@@ -575,7 +578,11 @@ class WanOrchestrator:
         # Override any parameters provided in kwargs
         # This allows ANY parameter to be customized
         for key, value in kwargs.items():
-            if key not in wgp_params:
+            if key in wgp_params:
+                # Override existing parameter
+                generation_logger.debug(f"Overriding parameter: {key}={wgp_params[key]} → {value}")
+                wgp_params[key] = value
+            else:
                 # Add any additional parameters from kwargs that aren't in defaults
                 wgp_params[key] = value
                 generation_logger.debug(f"Adding extra parameter from kwargs: {key}={value}")
