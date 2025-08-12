@@ -760,7 +760,8 @@ class WanAny2V:
         for i, t in enumerate(tqdm(timesteps)):
             # Debug: Log the comparison for first few steps
             if i < 5:
-                print(f"[SWITCH_THRESHOLD_DEBUG] Step {i}: timestep {t:.3f} <= {switch_threshold}? {t <= switch_threshold}")
+                t_val = float(t.item()) if hasattr(t, 'item') else float(t)
+                print(f"[SWITCH_THRESHOLD_DEBUG] Step {i}: timestep {t_val:.3f} <= {switch_threshold}? {t_val <= switch_threshold}")
             
             if not guidance_switch_done and t <= switch_threshold:
                 print(f"[SWITCH_THRESHOLD_LOG] SWITCHING at step {i}/{len(timesteps)}, timestep {t:.1f} <= {switch_threshold}")
