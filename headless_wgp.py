@@ -352,6 +352,7 @@ class WanOrchestrator:
                 # Other parameters
                 negative_prompt: str = "",
                 batch_size: int = 1,
+                switch_threshold: Optional[float] = None,  # Add as explicit parameter
                 **kwargs) -> str:
         """Generate content using the loaded model.
         
@@ -394,8 +395,24 @@ class WanOrchestrator:
         is_flux = self._is_flux()
         is_t2v = self._is_t2v()
         
+        # Handle switch_threshold parameter with scale conversion
+        # The JSON config uses 0-1000 range (e.g., 500), but WGP expects 0-1 range
+        if switch_threshold is not None:
+            # If value > 1, assume it's in 0-1000 range and convert to 0-1
+            if switch_threshold > 1:
+                actual_switch_threshold = switch_threshold / 1000.0
+                generation_logger.debug(f"Converted switch_threshold from {switch_threshold} to {actual_switch_threshold} (0-1 range)")
+            else:
+                actual_switch_threshold = switch_threshold
+                generation_logger.debug(f"Using switch_threshold: {actual_switch_threshold} (already in 0-1 range)")
+        else:
+            # Default to 0.5 if not specified
+            actual_switch_threshold = 0.5
+            generation_logger.debug(f"Using default switch_threshold: {actual_switch_threshold}")
+        
         generation_logger.debug(f"Model detection - VACE: {is_vace}, Flux: {is_flux}, T2V: {is_t2v}")
         generation_logger.debug(f"Generation parameters - prompt: '{prompt[:50]}...', resolution: {resolution}, length: {video_length}")
+        generation_logger.debug(f"Switch threshold: {actual_switch_threshold}")
         
         if is_vace:
             generation_logger.debug(f"VACE parameters - guide: {video_guide}, type: {video_prompt_type}, weights: {control_net_weight}/{control_net_weight2}")
@@ -430,31 +447,7 @@ class WanOrchestrator:
             control_net_weight = 0.0
             control_net_weight2 = 0.0
 
-        # Clean parameter mapping approach - extract and process known parameters
-        # This prevents parameter conflicts by being explicit about what goes to WGP
-        def extract_clean_wgp_params(**input_kwargs):
-            """Extract and clean parameters for WGP, avoiding conflicts"""
-            clean_params = {}
-            
-            # CONSERVATIVE APPROACH: Only include parameters that are NOT explicitly handled above
-            # After reviewing the _generate_video call, almost all parameters are explicitly set,
-            # so we'll only include truly safe parameters that have no explicit defaults
-            safe_direct_mapping = {
-                # Include parameters that are needed for generation but not explicitly set
-                'flow_shift': 'flow_shift',  # Critical for generation
-                'sample_solver': 'sample_solver',  # Critical for generation  
-                'tea_cache_setting': 'tea_cache_setting',
-                'tea_cache_start_step_perc': 'tea_cache_start_step_perc',
-                # NOTE: sliding_window_color_correction_strength is explicitly set to 0.0, so excluded
-            }
-            
-            for input_key, wgp_key in safe_direct_mapping.items():
-                if input_key in input_kwargs:
-                    clean_params[wgp_key] = input_kwargs[input_key]
-            
-            return clean_params
-
-        # Prepare LoRA parameters  
+        # Prepare LoRA parameters first (needed for wgp_params)
         activated_loras = lora_names if lora_names else []
         # WGP expects loras_multipliers as string, not list
         if lora_multipliers:
@@ -462,26 +455,8 @@ class WanOrchestrator:
             loras_multipliers_str = " ".join(str(m) for m in lora_multipliers)
         else:
             loras_multipliers_str = ""
-        
-        # Extract clean additional parameters
-        clean_additional_params = extract_clean_wgp_params(**kwargs)
 
-        # Extract key parameters from clean_additional_params or use defaults
-        flow_shift = clean_additional_params.get('flow_shift', 7.0)
-        sample_solver = clean_additional_params.get('sample_solver', "euler")
-        
-        # Ensure critical parameters are always included even if not in original kwargs
-        clean_additional_params['flow_shift'] = flow_shift
-        clean_additional_params['sample_solver'] = sample_solver
-        image_prompt_type = "disabled"
-        image_start = None
-        image_end = None
-        model_mode = "generate"
-        video_source = ""
-        image_refs = []
-        denoising_strength = 1.0
-
-        # Create minimal task and callback objects
+        # Create minimal task and callback objects (needed for wgp_params)
         task = {"id": 1, "params": {}, "repeats": 1}
         
         def send_cmd(cmd: str, data=None):
@@ -503,6 +478,124 @@ class WanOrchestrator:
                 print(f"ℹ️  Info: {data}")
             elif cmd == "preview":
                 print("🖼️  Preview updated")
+
+        # Build parameter dictionary with defaults that can be overridden
+        # This allows ANY parameter to be overridden via kwargs
+        wgp_params = {
+            # Core parameters with defaults
+            'task': task,
+            'send_cmd': send_cmd,
+            'state': self.state,
+            'model_type': self.current_model,
+            'prompt': prompt,
+            'negative_prompt': negative_prompt,
+            'resolution': resolution,
+            'video_length': actual_video_length,
+            'batch_size': actual_batch_size,
+            'seed': seed,
+            'force_fps': "auto",
+            'num_inference_steps': num_inference_steps,
+            'guidance_scale': actual_guidance,
+            'guidance2_scale': actual_guidance,
+            'switch_threshold': actual_switch_threshold,
+            'embedded_guidance_scale': embedded_guidance_scale if is_flux else 0.0,
+            'image_mode': image_mode,
+            
+            # VACE control parameters
+            'video_guide': video_guide,
+            'video_mask': video_mask,
+            'video_guide2': video_guide2,
+            'video_mask2': video_mask2,
+            'video_prompt_type': video_prompt_type,
+            'control_net_weight': control_net_weight,
+            'control_net_weight2': control_net_weight2,
+            'denoising_strength': 1.0,
+            
+            # LoRA parameters
+            'activated_loras': activated_loras,
+            'loras_multipliers': loras_multipliers_str,
+            
+            # Standard defaults for other parameters
+            'audio_guidance_scale': 1.0,
+            'repeat_generation': 1,
+            'multi_prompts_gen_type': 0,
+            'multi_images_gen_type': 0,
+            'skip_steps_cache_type': "",
+            'skip_steps_multiplier': 1.0,
+            'skip_steps_start_step_perc': 0.0,
+            
+            # Image parameters
+            'image_prompt_type': "disabled",
+            'image_start': None,
+            'image_end': None,
+            'image_refs': [],
+            'frames_positions': "",
+            'image_guide': None,
+            'image_mask': None,
+            
+            # Video parameters
+            'model_mode': "generate",
+            'video_source': None,
+            'keep_frames_video_source': "",
+            'keep_frames_video_guide': "",
+            'video_guide_outpainting': "0 0 0 0",
+            'mask_expand': 0,
+            
+            # Audio parameters
+            'audio_guide': None,
+            'audio_guide2': None,
+            'audio_source': None,
+            'audio_prompt_type': "",
+            'speakers_locations': "",
+            
+            # Sliding window
+            'sliding_window_size': 129,
+            'sliding_window_overlap': 0,
+            'sliding_window_color_correction_strength': 0.0,
+            'sliding_window_overlap_noise': 0.1,
+            'sliding_window_discard_last_frames': 0,
+            
+            # Post-processing
+            'remove_background_images_ref': 0,
+            'temporal_upsampling': "",
+            'spatial_upsampling': "",
+            'film_grain_intensity': 0.0,
+            'film_grain_saturation': 0.0,
+            'MMAudio_setting': 0,
+            'MMAudio_prompt': "",
+            'MMAudio_neg_prompt': "",
+            
+            # Advanced parameters
+            'RIFLEx_setting': 0,
+            'NAG_scale': 0.0,
+            'NAG_tau': 1.0,
+            'NAG_alpha': 0.0,
+            'slg_switch': 0,
+            'slg_layers': "",
+            'slg_start_perc': 0.0,
+            'slg_end_perc': 100.0,
+            'apg_switch': 0,
+            'cfg_star_switch': 0,
+            'cfg_zero_step': 0,
+            'prompt_enhancer': 0,
+            'min_frames_if_references': 9,
+            
+            # Mode and filename
+            'mode': "generate",
+            'model_filename': "",
+            
+            # Critical parameters from kwargs with defaults
+            'flow_shift': kwargs.get('flow_shift', 7.0),
+            'sample_solver': kwargs.get('sample_solver', "euler"),
+        }
+        
+        # Override any parameters provided in kwargs
+        # This allows ANY parameter to be customized
+        for key, value in kwargs.items():
+            if key not in wgp_params:
+                # Add any additional parameters from kwargs that aren't in defaults
+                wgp_params[key] = value
+                generation_logger.debug(f"Adding extra parameter from kwargs: {key}={value}")
 
         # Generate content type description
         content_type = "images" if is_flux else "video"
@@ -546,114 +639,9 @@ class WanOrchestrator:
                 generation_logger.debug(f"[CausVidDebugTrace] WanOrchestrator: state['loras'] = {self.state['loras']}")
             
             try:
-                # Call the VACE-fixed generate_video (patching is handled in wrapper)
-                result = self._generate_video(
-                            task=task,
-                            send_cmd=send_cmd,
-                            state=self.state,
-                            
-                            # Core parameters
-                            model_type=self.current_model,
-                            prompt=prompt,
-                            negative_prompt=negative_prompt,
-                            resolution=resolution,
-                            video_length=actual_video_length,
-                            batch_size=actual_batch_size,
-                            seed=seed,
-                            force_fps="auto",  # Use model default (16 fps for VACE)
-                            num_inference_steps=num_inference_steps,
-                            guidance_scale=actual_guidance,
-                            guidance2_scale=actual_guidance,
-                            switch_threshold=0.5,
-                            embedded_guidance_scale=embedded_guidance_scale if is_flux else 0.0,
-                            image_mode=image_mode,
-                            
-                            # VACE control parameters
-                            video_guide=video_guide,
-                            video_mask=video_mask,
-                            video_guide2=video_guide2,  # NEW: Secondary guide
-                            video_mask2=video_mask2,    # NEW: Secondary mask
-                            video_prompt_type=video_prompt_type,
-                            control_net_weight=control_net_weight,
-                            control_net_weight2=control_net_weight2,
-                            denoising_strength=1.0,
-                            
-                            # LoRA parameters
-                            activated_loras=activated_loras,
-                            loras_multipliers=loras_multipliers_str,
-                            
-                            # Standard defaults for other parameters
-                            audio_guidance_scale=1.0,
-                            repeat_generation=1,
-                            multi_prompts_gen_type=0,  # 0: new video, 1: sliding window
-                            multi_images_gen_type=0,  # 0: every combination, 1: match prompts
-                        skip_steps_cache_type="",  # Empty string disables caching
-                        skip_steps_multiplier=1.0,
-                        skip_steps_start_step_perc=0.0,
-                        
-                        # Image parameters
-                        image_prompt_type="disabled",
-                        image_start=None,
-                        image_end=None,
-                        image_refs=[],
-                        frames_positions="",  # Must be string, not list
-                        image_guide=None,
-                        image_mask=None,
-                        
-                        # Video parameters
-                        model_mode="generate",
-                        video_source=None,
-                        keep_frames_video_source="",
-                        keep_frames_video_guide="",
-                        video_guide_outpainting="0 0 0 0",  # Must be space-separated, not comma-separated
-                        mask_expand=0,
-                        
-                        # Audio parameters (disabled)
-                        audio_guide=None,
-                        audio_guide2=None,
-                        audio_source=None,
-                        audio_prompt_type="",  # Empty string disables audio prompts
-                        speakers_locations="",
-                        
-                        # Sliding window (disabled for short videos)  
-                        sliding_window_size=129,  # Default to 129 frames (matches WGP UI default)
-                        sliding_window_overlap=0,
-                        sliding_window_color_correction_strength=0.0,
-                        sliding_window_overlap_noise=0.1,
-                        sliding_window_discard_last_frames=0,
-                        
-                        # Post-processing (disabled)
-                        remove_background_images_ref=0,
-                        temporal_upsampling="",  # Must be string, not float
-                        spatial_upsampling="",   # Must be string, not float
-                        film_grain_intensity=0.0,
-                        film_grain_saturation=0.0,
-                        MMAudio_setting=0,       # Must be int, not string
-                        MMAudio_prompt="",
-                        MMAudio_neg_prompt="",
-                        
-                        # Advanced parameters (defaults)
-                        RIFLEx_setting=0,
-                        NAG_scale=0.0,
-                        NAG_tau=1.0,
-                        NAG_alpha=0.0,
-                        slg_switch=0,
-                        slg_layers="",
-                        slg_start_perc=0.0,
-                        slg_end_perc=100.0,
-                        apg_switch=0,
-                        cfg_star_switch=0,
-                        cfg_zero_step=0,
-                        prompt_enhancer=0,
-                        min_frames_if_references=9,
-                        
-                        # Mode and filename
-                        mode="generate",
-                        model_filename="",
-                        
-                        # Clean additional parameters (only known-safe parameters)
-                        **clean_additional_params
-                    )
+                # Call the VACE-fixed generate_video with the unified parameter dictionary
+                # This allows ANY parameter to be overridden via kwargs
+                result = self._generate_video(**wgp_params)
             
             finally:
                 # ARCHITECTURAL FIX: Restore original UI state after generation
@@ -697,6 +685,7 @@ class WanOrchestrator:
                      video_prompt_type: str = "VP",
                      control_net_weight: float = 1.0,
                      control_net_weight2: float = 1.0,
+                     switch_threshold: Optional[float] = None,  # Add explicit parameter
                      **kwargs) -> str:
         """Generate VACE controlled video content.
         
@@ -733,6 +722,7 @@ class WanOrchestrator:
             video_prompt_type=video_prompt_type,
             control_net_weight=control_net_weight,
             control_net_weight2=control_net_weight2,
+            switch_threshold=switch_threshold,  # Pass through the switch_threshold
             **kwargs
         )
 
