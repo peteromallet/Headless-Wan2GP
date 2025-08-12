@@ -487,10 +487,18 @@ class HeadlessTaskQueue:
             "lora_multipliers": "lora_multipliers",
         }
         
+        # [DEBUG] Log incoming task parameters  
+        self.logger.info(f"[UPSTREAM_DEBUG] Task {task.task_id} incoming parameters:")
+        for key, value in task.parameters.items():
+            self.logger.info(f"[UPSTREAM_DEBUG]   {key}: {value}")
+        self.logger.info(f"[UPSTREAM_DEBUG] Notable: sample_solver in task.parameters? {'sample_solver' in task.parameters}")
+        self.logger.info(f"[UPSTREAM_DEBUG] Notable: flow_shift in task.parameters? {'flow_shift' in task.parameters}")
+        
         # Map parameters with proper defaults
         for our_param, wgp_param in param_mapping.items():
             if our_param in task.parameters:
                 wgp_params[wgp_param] = task.parameters[our_param]
+                self.logger.info(f"[UPSTREAM_DEBUG] Mapped {our_param} -> {wgp_param} = {task.parameters[our_param]}")
         
         # Handle LoRA parameter format conversion
         if "activated_loras" in task.parameters:
