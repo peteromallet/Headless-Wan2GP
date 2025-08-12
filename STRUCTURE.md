@@ -6,11 +6,37 @@ Headless-Wan2GP is a queue-based video generation system built around the Wan2GP
 
 ## Architecture
 
-### **Queue-Based Processing System**
-- **HeadlessTaskQueue**: Central task management with persistent model state
-- **Model Memory Management**: Efficient model loading/unloading with LoRA handling
-- **Priority Scheduling**: Task prioritization with dependency resolution
-- **Worker Management**: Multi-worker support with automatic scaling
+### Runtime data flow with wgp.py (high-level)
+
+**DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py → Files**
+
+1. **worker.py** polls the tasks table (SQLite/Supabase), claims a row, converts DB params to `GenerationTask`
+2. **HeadlessTaskQueue** receives the task, switches models if needed, delegates to WanOrchestrator  
+3. **WanOrchestrator** maps parameters safely, calls `wgp.generate_video()` with exact model loading semantics
+4. **wgp.py** performs generation, writes files to outputs/, updates `state["gen"]["file_list"]`
+5. **Result flows back**: WanOrchestrator → HeadlessTaskQueue → worker.py → DB status update → optional Supabase upload
+
+### Component responsibilities at a glance
+
+- **worker.py**: Polls DB, claims work, converts DB rows → `GenerationTask`, submits to queue, awaits completion, performs chaining, updates DB, and handles uploads.
+- **HeadlessTaskQueue** (`headless_model_management.py`): In-memory priority queue, model switching/persistence, delegates generation to orchestrator, tracks per-task status and timing.
+- **WanOrchestrator** (`headless_wgp.py`): Thin adapter around `wgp.generate_video` with exact model-load/unload semantics, safe parameter mapping, and LoRA/VACE handling.
+- **wgp.py** (in `Wan2GP/`): Upstream engine that actually performs generation and records output paths in `state["gen"]["file_list"]`.
+
+### Key integration details with wgp.py
+
+- **Exact loading pattern**: `WanOrchestrator.load_model()` mirrors `wgp.generate_video`’s load/unload sequence to avoid stale state and ensure VRAM correctness.
+- **UI state compatibility**: For LoRAs, orchestrator temporarily pre-populates `state["loras"]` so `wgp` behaves as if driven by its UI, then restores the original state after generation.
+- **Model-type routing**: Queue delegates to `generate_vace`, `generate_flux`, or `generate_t2v` based on `wgp`-reported base model type, mapping parameters appropriately (e.g., Flux uses `video_length` as image count).
+- **Conservative param pass-through**: Orchestrator forwards only known-safe params; queue applies model defaults and sampler CFG presets when available, while letting explicit task params override.
+- **Result handoff**: `wgp` writes files and updates `state.gen.file_list`; orchestrator returns the latest path to the queue, which bubbles back up to `worker.py` for DB updates and optional uploads.
+
+### Supabase and specialized handlers
+
+- **Supabase Edge Functions**: Task lifecycle ops (claim, complete, fetch predecessors) happen via Edge Functions when in Supabase mode, keeping RLS intact.
+- **Uploads**: `worker.py` and specialized task handlers use `prepare_output_path_with_upload` and `upload_and_get_final_output_location` to save locally first, then upload to Supabase Storage with stable paths `{task_id}/{filename}`.
+- **Chaining**: Orchestrators like `travel_between_images` queue sub-tasks (segments/stitch) via DB rows; after each primitive generation, `worker.py` runs chaining logic to advance the DAG.
+
 
 ### **Database Backends**
 - **SQLite**: Local file-based database for single-machine deployments
@@ -18,11 +44,7 @@ Headless-Wan2GP is a queue-based video generation system built around the Wan2GP
 - **Dual Authentication**: Service role keys (workers) vs PATs (individual users)
 - **Edge Function Operations**: Atomic task claiming, completion, and dependency management
 
-### **Video Generation Pipeline**
-- **VACE ControlNet**: Automatic detection and activation with preprocessing support
-- **Wan 2.2 Integration**: Optimized dual-phase models with advanced CFG presets
-- **Advanced LoRAs**: CausVid acceleration, LightI2X distillation, custom LoRA support
-- **Frame Management**: Intelligent masking and cross-fade processing
+
 
 ### **Storage and Upload**
 - **Local-First**: Files saved locally for reliability, then uploaded to cloud storage

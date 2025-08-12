@@ -454,6 +454,10 @@ class WanOrchestrator:
         # Extract key parameters from clean_additional_params or use defaults
         flow_shift = clean_additional_params.get('flow_shift', 7.0)
         sample_solver = clean_additional_params.get('sample_solver', "euler")
+        
+        # Ensure critical parameters are always included even if not in original kwargs
+        clean_additional_params['flow_shift'] = flow_shift
+        clean_additional_params['sample_solver'] = sample_solver
         image_prompt_type = "disabled"
         image_start = None
         image_end = None
