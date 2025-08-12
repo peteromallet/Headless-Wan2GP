@@ -1156,7 +1156,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                         'model', 'model_filename', 'video_guide', 'video_mask', 'image_refs',
                         'use_causvid_lora', 'apply_reward_lora', 'additional_loras', 'video_prompt_type',
                         'use_lighti2x_lora', 'control_net_weight', 'control_net_weight2',
-                        'num_inference_steps', 'guidance_scale', 'flow_shift'
+                        'num_inference_steps', 'guidance_scale', 'flow_shift',
+                        'activated_loras', 'loras_multipliers', 'additional_lora_names', 'additional_lora_multipliers'
                     ]}
                 }
             )
@@ -1220,7 +1221,8 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                      'model', 'model_filename', 'video_guide', 'video_mask', 'image_refs',
                      'use_causvid_lora', 'apply_reward_lora', 'additional_loras', 'video_prompt_type',
                      'use_lighti2x_lora', 'control_net_weight', 'control_net_weight2',
-                     'num_inference_steps', 'guidance_scale', 'flow_shift'
+                     'num_inference_steps', 'guidance_scale', 'flow_shift',
+                     'activated_loras', 'loras_multipliers', 'additional_lora_names', 'additional_lora_multipliers'
                  ]})
              )
 
@@ -1971,7 +1973,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             else: 
                 dprint(f"Stitch: Using simple FFmpeg concatenation. Output to: {path_for_raw_stitched_video}")
                 try:
-                    from .common_utils import stitch_videos_ffmpeg as sm_stitch_videos_ffmpeg
+                    from ..common_utils import stitch_videos_ffmpeg as sm_stitch_videos_ffmpeg
                 except ImportError:
                     print(f"[CRITICAL ERROR Task ID: {stitch_task_id_str}] Failed to import 'stitch_videos_ffmpeg'. Cannot proceed with stitching.")
                     raise
@@ -2127,14 +2129,19 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             print(f"[STITCH_FINAL_ANALYSIS]   Overlap settings: {expanded_frame_overlaps}")
             # Calculate expected final length for analysis
             try:
-                # Try to calculate expected final length from stitch data
-                total_input_frames = sum(orchestrator_segment_frame_counts)
-                total_overlaps = sum(expanded_frame_overlaps)
-                expected_final_length = total_input_frames - total_overlaps
-                print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: {expected_final_length}")
-                print(f"[STITCH_FINAL_ANALYSIS]   Actual final frames: {final_frame_count}")
-                if final_frame_count != expected_final_length:
-                    print(f"[STITCH_FINAL_ANALYSIS]   ⚠️  FINAL LENGTH MISMATCH! Expected {expected_final_length}, got {final_frame_count}")
+                # Try to calculate expected final length from orchestrator data
+                expected_segment_frames = full_orchestrator_payload.get("segment_frames_expanded", [])
+                if expected_segment_frames:
+                    total_input_frames = sum(expected_segment_frames)
+                    total_overlaps = sum(expanded_frame_overlaps)
+                    expected_final_length = total_input_frames - total_overlaps
+                    print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: {expected_final_length}")
+                    print(f"[STITCH_FINAL_ANALYSIS]   Actual final frames: {final_frame_count}")
+                    if final_frame_count != expected_final_length:
+                        print(f"[STITCH_FINAL_ANALYSIS]   ⚠️  FINAL LENGTH MISMATCH! Expected {expected_final_length}, got {final_frame_count}")
+                else:
+                    print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: Not available (no segment_frames_expanded)")
+                    print(f"[STITCH_FINAL_ANALYSIS]   Actual final frames: {final_frame_count}")
             except Exception as e:
                 print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: Not calculated ({e})")
                 print(f"[STITCH_FINAL_ANALYSIS]   Actual final frames: {final_frame_count}")
