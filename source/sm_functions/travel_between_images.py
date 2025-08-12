@@ -1166,17 +1166,6 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                 }
             )
             
-            # [DEBUG] Log what parameters are being sent to task queue
-            dprint(f"[UPSTREAM_DEBUG] GenerationTask parameters created in travel_between_images:")
-            for key, value in generation_task.parameters.items():
-                dprint(f"[UPSTREAM_DEBUG]   {key}: {value}")
-            dprint(f"[UPSTREAM_DEBUG] Notable: sample_solver in params? {'sample_solver' in generation_task.parameters}")
-            dprint(f"[UPSTREAM_DEBUG] Notable: flow_shift in params? {'flow_shift' in generation_task.parameters}")
-            dprint(f"[UPSTREAM_DEBUG] Original wgp_payload keys: {list(wgp_payload.keys())}")
-            dprint(f"[UPSTREAM_DEBUG] sample_solver in wgp_payload? {'sample_solver' in wgp_payload}")
-            dprint(f"[UPSTREAM_DEBUG] full_orchestrator_payload keys: {list(full_orchestrator_payload.keys())}")  
-            dprint(f"[UPSTREAM_DEBUG] sample_solver in orchestrator_payload? {'sample_solver' in full_orchestrator_payload}")
-            
             # Submit task and wait for completion
             task_queue.submit_task(generation_task)
             

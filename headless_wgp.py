@@ -451,22 +451,13 @@ class WanOrchestrator:
         # Extract clean additional parameters
         clean_additional_params = extract_clean_wgp_params(**kwargs)
 
-        # [DEBUG] Log parameter extraction process
-        generation_logger.info(f"[PARAM_DEBUG] extract_clean_wgp_params result: {clean_additional_params}")
-        generation_logger.info(f"[PARAM_DEBUG] Original kwargs keys: {list(kwargs.keys())}")
-        
         # Extract key parameters from clean_additional_params or use defaults
         flow_shift = clean_additional_params.get('flow_shift', 7.0)
         sample_solver = clean_additional_params.get('sample_solver', "euler")
         
-        generation_logger.info(f"[PARAM_DEBUG] Extracted flow_shift: {flow_shift} (from clean_params or default)")
-        generation_logger.info(f"[PARAM_DEBUG] Extracted sample_solver: {sample_solver} (from clean_params or default)")
-        
         # Ensure critical parameters are always included even if not in original kwargs
         clean_additional_params['flow_shift'] = flow_shift
         clean_additional_params['sample_solver'] = sample_solver
-        
-        generation_logger.info(f"[PARAM_DEBUG] Final clean_additional_params: {clean_additional_params}")
         image_prompt_type = "disabled"
         image_start = None
         image_end = None
