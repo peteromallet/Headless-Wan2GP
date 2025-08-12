@@ -145,11 +145,11 @@ def _handle_different_perspective_orchestrator_task(task_params_from_db: dict, m
 
 def _handle_dp_final_gen_task(
     *,
-    wgp_mod,
     main_output_dir_base: Path,
     process_single_task,  # recursive call helper supplied by worker.py
     task_params_from_db: dict,
     dprint,
+    task_queue=None,
 ):
     """
     Handles the final step of the 'different_perspective' process. It gathers all
@@ -269,7 +269,6 @@ def _handle_dp_final_gen_task(
         print("\nDP Final Gen: Launching inline WGP generation for final video…")
 
         generation_success, final_video_output_db = process_single_task(
-            wgp_mod,
             final_video_payload,
             main_output_dir_base,
             "wgp",
@@ -278,6 +277,7 @@ def _handle_dp_final_gen_task(
             apply_reward_lora=False,
             colour_match_videos=False,
             mask_active_frames=True,
+            task_queue=task_queue
         )
 
         if not generation_success:
