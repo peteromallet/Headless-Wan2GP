@@ -47,6 +47,21 @@ def _handle_single_image_task(task_params_from_db: dict, main_output_dir_base: P
             dprint(error_msg)
             return False, error_msg
         
+        # Load model defaults from JSON config
+        model_defaults = {}
+        try:
+            import sys
+            from pathlib import Path
+            wan_dir = Path(__file__).parent.parent.parent / "Wan2GP"
+            if str(wan_dir) not in sys.path:
+                sys.path.insert(0, str(wan_dir))
+            
+            import wgp
+            model_defaults = wgp.get_default_settings(model_name)
+            dprint(f"[SINGLE_IMAGE_DEBUG] Task {task_id}: Loaded model defaults for '{model_name}': {model_defaults}")
+        except Exception as e:
+            dprint(f"[SINGLE_IMAGE_DEBUG] Task {task_id}: Warning - could not load model defaults for '{model_name}': {e}")
+
         # Build parameters for the task queue system
         generation_params = {
             "task_id": task_id,
@@ -56,9 +71,9 @@ def _handle_single_image_task(task_params_from_db: dict, main_output_dir_base: P
             "resolution": task_params_from_db.get("resolution", "512x512"),
             "video_length": 1,  # Single frame for images
             "seed": task_params_from_db.get("seed", -1),
-            "num_inference_steps": task_params_from_db.get("num_inference_steps", 30),
-            "guidance_scale": task_params_from_db.get("guidance_scale", 5.0),
-            "flow_shift": task_params_from_db.get("flow_shift", 3.0),
+            "num_inference_steps": task_params_from_db.get("num_inference_steps", model_defaults.get("num_inference_steps", 30)),
+            "guidance_scale": task_params_from_db.get("guidance_scale", model_defaults.get("guidance_scale", 5.0)),
+            "flow_shift": task_params_from_db.get("flow_shift", model_defaults.get("flow_shift", 3.0)),
         }
         
         # Add reference images if provided

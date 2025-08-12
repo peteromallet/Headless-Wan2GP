@@ -213,6 +213,7 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
     # Apply Wan 2.2 optimizations automatically (can be overridden by explicit task parameters)
     if "2_2" in model or "cocktail_2_2" in model:
         dprint(f"Task {task_id}: Applying Wan 2.2 optimizations for model '{model}'")
+        dprint(f"[WAN22_DEBUG] Task {task_id}: db_task_params keys: {list(db_task_params.keys())}")
         
         # Wan 2.2 optimized defaults (only set if not explicitly provided)
         wan22_optimizations = {
@@ -226,6 +227,8 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             if param not in db_task_params:  # Only apply if not explicitly set in task
                 generation_params[param] = optimized_value
                 dprint(f"Task {task_id}: Applied Wan 2.2 optimization {param}={optimized_value}")
+            else:
+                dprint(f"[WAN22_DEBUG] Task {task_id}: Skipping {param} optimization - already in db_task_params with value: {db_task_params[param]}")
         
         # Auto-enable built-in acceleration LoRAs if no LoRAs explicitly specified
         if "lora_names" not in generation_params and "activated_loras" not in db_task_params:
