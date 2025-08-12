@@ -605,8 +605,11 @@ class WanOrchestrator:
                         mode="generate",
                         model_filename="",
                         
-                        # Additional kwargs
-                        **kwargs
+                        # Additional kwargs (excluding parameters that are explicitly set above)
+                        **{k: v for k, v in kwargs.items() if k not in [
+                            'activated_loras', 'loras_multipliers', 'lora_names', 'lora_multipliers',
+                            'additional_lora_names', 'additional_lora_multipliers'
+                        ]}
                     )
             
             finally:
