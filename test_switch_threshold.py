@@ -6,13 +6,14 @@ This script creates 7 tasks using vace_14B_fake_cocktail_2_2 model with differen
 switch_threshold values (100, 200, 300, 400, 500, 600, 700) to test the dual-model switching behavior.
 
 Usage:
-    python test_switch_threshold.py video.mp4 mask.mp4 ["your prompt here"]
+    # Use all defaults (video.mp4, mask.mp4, "camera rotates around him")
+    python test_switch_threshold.py
     
-    # Use default prompt "camera rotates around him"
-    python test_switch_threshold.py video.mp4 mask.mp4
+    # Use custom files with default prompt
+    python test_switch_threshold.py my_video.mp4 my_mask.mp4
     
-    # Use custom prompt  
-    python test_switch_threshold.py video.mp4 mask.mp4 "custom prompt here"
+    # Use custom files and prompt
+    python test_switch_threshold.py my_video.mp4 my_mask.mp4 "custom prompt here"
 """
 
 import json
@@ -214,8 +215,8 @@ def generate_comparison_analysis():
 
 def main():
     parser = argparse.ArgumentParser(description="Generate switch_threshold test tasks for vace_14B_fake_cocktail_2_2")
-    parser.add_argument("video", help="Path to guide video (video.mp4)")
-    parser.add_argument("mask", help="Path to mask video (mask.mp4)")
+    parser.add_argument("video", nargs='?', default="video.mp4", help="Path to guide video (default: video.mp4)")
+    parser.add_argument("mask", nargs='?', default="mask.mp4", help="Path to mask video (default: mask.mp4)")
     parser.add_argument("prompt", nargs='?', default="camera rotates around him", help="Generation prompt (default: 'camera rotates around him')")
     parser.add_argument("--project-id", help="Project ID for organization")
     parser.add_argument("--output-dir", default="outputs/switch_threshold_test", 
