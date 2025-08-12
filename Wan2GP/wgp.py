@@ -2867,8 +2867,17 @@ def load_models(model_type):
         print(f"Unable to create a finetune quantized model as some modules are declared in the finetune definition. If your finetune includes already the module weights you can remove the 'modules' entry and try again. If not you will need also to change temporarly the model 'architecture' to an architecture that wont require the modules part ({modules}) to quantize and then add back the original 'modules' and 'architecture' entries.")
         save_quantized = False
     quantizeTransformer = not save_quantized and model_def !=None and transformer_quantization in ("int8", "fp8") and model_def.get("auto_quantize", False) and not "quanto" in model_filename
+    
+    # [AUTO_QUANTIZE_LOG] Detailed logging for auto_quantize decision
+    print(f"[AUTO_QUANTIZE_LOG] Model: {model_type}")
+    print(f"[AUTO_QUANTIZE_LOG] auto_quantize in model_def: {model_def.get('auto_quantize', False) if model_def else 'No model_def'}")
+    print(f"[AUTO_QUANTIZE_LOG] transformer_quantization: {transformer_quantization}")
+    print(f"[AUTO_QUANTIZE_LOG] save_quantized: {save_quantized}")
+    print(f"[AUTO_QUANTIZE_LOG] model_filename: {model_filename}")
+    print(f"[AUTO_QUANTIZE_LOG] quantizeTransformer decision: {quantizeTransformer}")
+    
     if quantizeTransformer and len(modules) > 0:
-        print(f"Autoquantize is not yet supported if some modules are declared")
+        print(f"[AUTO_QUANTIZE_LOG] Autoquantize disabled: modules declared ({modules})")
         quantizeTransformer = False
     model_family = get_model_family(model_type)
     transformer_dtype = get_transformer_dtype(model_family, transformer_dtype_policy)

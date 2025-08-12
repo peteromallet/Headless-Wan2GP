@@ -71,6 +71,9 @@ class WanAny2V:
         VAE_dtype = torch.float32,
         mixed_precision_transformer = False
     ):
+        print(f"[AUTO_QUANTIZE_LOG] WanAny2V init: quantizeTransformer={quantizeTransformer}, model_type={model_type}")
+        print(f"[AUTO_QUANTIZE_LOG] model_filename: {model_filename}")
+        print(f"[AUTO_QUANTIZE_LOG] dtype: {dtype}, save_quantized: {save_quantized}")
         self.device = torch.device(f"cuda")
         self.config = config
         self.VAE_dtype = VAE_dtype
@@ -738,12 +741,25 @@ class WanAny2V:
 
         guidance_switch_done = False
 
+        # [SWITCH_THRESHOLD_LOG] Log switch threshold configuration
+        print(f"[SWITCH_THRESHOLD_LOG] switch_threshold: {switch_threshold}")
+        print(f"[SWITCH_THRESHOLD_LOG] guidance_scale (stage 1): {guide_scale}")
+        print(f"[SWITCH_THRESHOLD_LOG] guidance2_scale (stage 2): {guide2_scale}")
+        print(f"[SWITCH_THRESHOLD_LOG] Has model2: {self.model2 is not None}")
+        print(f"[SWITCH_THRESHOLD_LOG] Total timesteps: {len(timesteps)}")
+
         # denoising
         trans = self.model
         for i, t in enumerate(tqdm(timesteps)):
             if not guidance_switch_done and t <= switch_threshold:
+                print(f"[SWITCH_THRESHOLD_LOG] SWITCHING at step {i}/{len(timesteps)}, timestep {t:.1f} <= {switch_threshold}")
+                print(f"[SWITCH_THRESHOLD_LOG] Guidance scale: {guide_scale} -> {guide2_scale}")
+                if self.model2 is not None:
+                    print(f"[SWITCH_THRESHOLD_LOG] Model: model1 -> model2")
+                    trans = self.model2
+                else:
+                    print(f"[SWITCH_THRESHOLD_LOG] No model2 available, keeping model1")
                 guide_scale = guide2_scale
-                if self.model2 is not None: trans = self.model2
                 guidance_switch_done = True
  
             offload.set_step_no_for_lora(trans, i)
