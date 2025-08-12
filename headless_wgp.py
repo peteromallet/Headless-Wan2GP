@@ -415,6 +415,32 @@ class WanOrchestrator:
             control_net_weight = 0.0
             control_net_weight2 = 0.0
 
+        # Clean parameter mapping approach - extract and process known parameters
+        # This prevents parameter conflicts by being explicit about what goes to WGP
+        def extract_clean_wgp_params(**input_kwargs):
+            """Extract and clean parameters for WGP, avoiding conflicts"""
+            clean_params = {}
+            
+            # Core parameters with direct mapping
+            direct_mapping = {
+                'video_guide': 'video_guide',
+                'video_mask': 'video_mask', 
+                'video_guide2': 'video_guide2',
+                'video_mask2': 'video_mask2',
+                'video_prompt_type': 'video_prompt_type',
+                'control_net_weight': 'control_net_weight',
+                'control_net_weight2': 'control_net_weight2',
+                'flow_shift': 'flow_shift',
+                'cfg_star_switch': 'cfg_star_switch',
+                'cfg_zero_step': 'cfg_zero_step',
+            }
+            
+            for input_key, wgp_key in direct_mapping.items():
+                if input_key in input_kwargs:
+                    clean_params[wgp_key] = input_kwargs[input_key]
+            
+            return clean_params
+
         # Prepare LoRA parameters  
         activated_loras = lora_names if lora_names else []
         # WGP expects loras_multipliers as string, not list
@@ -423,6 +449,9 @@ class WanOrchestrator:
             loras_multipliers_str = " ".join(str(m) for m in lora_multipliers)
         else:
             loras_multipliers_str = ""
+        
+        # Extract clean additional parameters
+        clean_additional_params = extract_clean_wgp_params(**kwargs)
 
         # Define missing variables with defaults
         flow_shift = 7.0
@@ -605,11 +634,8 @@ class WanOrchestrator:
                         mode="generate",
                         model_filename="",
                         
-                        # Additional kwargs (excluding parameters that are explicitly set above)
-                        **{k: v for k, v in kwargs.items() if k not in [
-                            'activated_loras', 'loras_multipliers', 'lora_names', 'lora_multipliers',
-                            'additional_lora_names', 'additional_lora_multipliers'
-                        ]}
+                        # Clean additional parameters (only known-safe parameters)
+                        **clean_additional_params
                     )
             
             finally:
