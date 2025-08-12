@@ -94,7 +94,7 @@ def run_switch_threshold_tests(video_path: str, mask_path: str, prompt: str,
         output_filename = f"switch_threshold_{switch_threshold}.mp4"
         
         print(f"🎯 Task ID: {task_id}")
-        print(f"📊 Switch Threshold: {switch_threshold}")
+        print(f"📊 Switch Threshold: {switch_threshold} → {switch_threshold/1000.0:.3f} (converted to 0-1)")
         print(f"💾 Output: {output_dir}/{output_filename}")
         print(f"⏳ Starting generation...")
         
@@ -116,7 +116,7 @@ def run_switch_threshold_tests(video_path: str, mask_path: str, prompt: str,
                 negative_prompt="blurry, low quality, distorted",
                 control_net_weight=1.0,
                 control_net_weight2=1.0,
-                switch_threshold=switch_threshold,  # 🎯 KEY TEST PARAMETER
+                switch_threshold=switch_threshold / 1000.0,  # 🎯 KEY TEST PARAMETER - Convert 0-1000 to 0-1 range
                 guidance2_scale=1  # From model defaults
             )
             
