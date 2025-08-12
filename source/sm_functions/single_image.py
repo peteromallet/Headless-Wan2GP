@@ -63,6 +63,7 @@ def _handle_single_image_task(task_params_from_db: dict, main_output_dir_base: P
             dprint(f"[SINGLE_IMAGE_DEBUG] Task {task_id}: Warning - could not load model defaults for '{model_name}': {e}")
 
         # Build parameters for the task queue system
+        # Note: HeadlessTaskQueue will handle model defaults and task parameter overrides properly
         generation_params = {
             "task_id": task_id,
             "prompt": prompt,
@@ -71,10 +72,14 @@ def _handle_single_image_task(task_params_from_db: dict, main_output_dir_base: P
             "resolution": task_params_from_db.get("resolution", "512x512"),
             "video_length": 1,  # Single frame for images
             "seed": task_params_from_db.get("seed", -1),
-            "num_inference_steps": task_params_from_db.get("num_inference_steps", model_defaults.get("num_inference_steps", 30)),
-            "guidance_scale": task_params_from_db.get("guidance_scale", model_defaults.get("guidance_scale", 5.0)),
-            "flow_shift": task_params_from_db.get("flow_shift", model_defaults.get("flow_shift", 3.0)),
         }
+        
+        # Add any task-specific parameter overrides
+        overridable_params = ["num_inference_steps", "guidance_scale", "flow_shift", "switch_threshold"]
+        for param in overridable_params:
+            if param in task_params_from_db:
+                generation_params[param] = task_params_from_db[param]
+                dprint(f"[SINGLE_IMAGE_DEBUG] Task {task_id}: Task override {param}={task_params_from_db[param]}")
         
         # Add reference images if provided
         if task_params_from_db.get("image_refs_paths"):

@@ -1083,8 +1083,9 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         }
         
         # Add model config defaults to wgp_payload so they're available in parameter precedence chain
+        # Note: HeadlessTaskQueue will properly handle task parameter overrides
         if model_defaults_from_config:
-            for param in ["guidance_scale", "flow_shift", "num_inference_steps"]:
+            for param in ["guidance_scale", "flow_shift", "num_inference_steps", "switch_threshold"]:
                 if param in model_defaults_from_config:
                     wgp_payload[param] = model_defaults_from_config[param]
                     dprint(f"[MODEL_CONFIG_DEBUG] Segment {segment_idx}: Added {param}={model_defaults_from_config[param]} to wgp_payload from model config")

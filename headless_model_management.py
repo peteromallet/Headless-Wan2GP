@@ -505,22 +505,37 @@ class HeadlessTaskQueue:
             else:
                 wgp_params["lora_multipliers"] = task.parameters["loras_multipliers"]
         
-        # Load model-specific defaults from JSON first
+        # Load model-specific defaults from JSON first, but respect task parameter overrides
         try:
             import wgp
             model_defaults = wgp.get_default_settings(task.model)
-            # Apply model defaults for parameters not already specified
+            
+            # Apply model defaults ONLY for parameters not already specified in task
+            applied_defaults = {}
             for param, value in model_defaults.items():
-                if param not in wgp_params:
+                if param not in wgp_params:  # Task parameters take priority
                     wgp_params[param] = value
-            self.logger.info(f"Applied model defaults for '{task.model}': flow_shift={model_defaults.get('flow_shift')}, guidance_scale={model_defaults.get('guidance_scale')}")
+                    applied_defaults[param] = value
+                else:
+                    self.logger.debug(f"Task parameter override: {param}={wgp_params[param]} (model default: {value})")
+            
+            if applied_defaults:
+                self.logger.info(f"Applied model defaults for '{task.model}': {applied_defaults}")
+            else:
+                self.logger.info(f"No model defaults applied for '{task.model}' - all parameters overridden by task")
+                
         except Exception as e:
             self.logger.warning(f"Could not load model defaults for '{task.model}': {e}")
             # Fallback to hardcoded defaults if model loading fails
-            if "flow_shift" not in wgp_params:
-                wgp_params["flow_shift"] = 3.0  # WGP default
-            if "sample_solver" not in wgp_params:
-                wgp_params["sample_solver"] = "euler"  # WGP default
+            fallback_defaults = {
+                "flow_shift": 3.0,
+                "sample_solver": "euler",
+                "guidance_scale": 5.0,
+                "num_inference_steps": 30
+            }
+            for param, value in fallback_defaults.items():
+                if param not in wgp_params:
+                    wgp_params[param] = value
         
         # Apply sampler-specific CFG settings if available
         sample_solver = task.parameters.get("sample_solver", wgp_params.get("sample_solver", ""))
