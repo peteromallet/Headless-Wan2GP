@@ -414,6 +414,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             current_run_base_output_dir_str = full_orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
             current_run_base_output_dir_str = str(Path(current_run_base_output_dir_str) / f"travel_run_{orchestrator_run_id}")
 
+        from pathlib import Path  # Ensure Path is available in local scope
         current_run_base_output_dir = Path(current_run_base_output_dir_str)
         # Use the base directory directly without creating segment-specific subdirectories
         segment_processing_dir = current_run_base_output_dir
