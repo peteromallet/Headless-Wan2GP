@@ -1042,6 +1042,21 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         dprint(f"[VPT_FINAL] Seg {segment_idx}: Video mask path: {mask_video_path_for_wgp}")
         dprint(f"[VPT_FINAL] Seg {segment_idx}: =========================================")
         
+        # Load model defaults from JSON config BEFORE building wgp_payload
+        model_defaults_from_config = {}
+        try:
+            import sys
+            import os
+            wan_dir = Path(__file__).parent.parent.parent / "Wan2GP"
+            if str(wan_dir) not in sys.path:
+                sys.path.insert(0, str(wan_dir))
+            
+            import wgp
+            model_defaults_from_config = wgp.get_default_settings(model_name)
+            dprint(f"[MODEL_CONFIG_DEBUG] Segment {segment_idx}: Loaded model defaults for '{model_name}': {model_defaults_from_config}")
+        except Exception as e:
+            dprint(f"[MODEL_CONFIG_DEBUG] Segment {segment_idx}: Warning - could not load model defaults for '{model_name}': {e}")
+
         wgp_payload = {
             "task_id": wgp_inline_task_id, # ID for this specific WGP generation operation
             "model": full_orchestrator_payload["model_name"],
@@ -1065,6 +1080,13 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             # Attach mask video if available
             **({"video_mask": str(mask_video_path_for_wgp.resolve())} if mask_video_path_for_wgp else {}),
         }
+        
+        # Add model config defaults to wgp_payload so they're available in parameter precedence chain
+        if model_defaults_from_config:
+            for param in ["guidance_scale", "flow_shift", "num_inference_steps"]:
+                if param in model_defaults_from_config:
+                    wgp_payload[param] = model_defaults_from_config[param]
+                    dprint(f"[MODEL_CONFIG_DEBUG] Segment {segment_idx}: Added {param}={model_defaults_from_config[param]} to wgp_payload from model config")
         if additional_loras:
             wgp_payload["additional_loras"] = additional_loras
 
@@ -1132,7 +1154,6 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                 # Import WGP to access model definitions
                 import sys
                 import os
-                from pathlib import Path
                 wan_dir = Path(__file__).parent.parent.parent / "Wan2GP"
                 if str(wan_dir) not in sys.path:
                     sys.path.insert(0, str(wan_dir))
@@ -1226,6 +1247,10 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                 or wgp_payload.get("guidance_scale")  # Use JSON config value if available
                 or 5.0  # Default fallback
             )
+            dprint(f"[PARAM_DEBUG] Segment {segment_idx}: Guidance scale resolution:")
+            dprint(f"[PARAM_DEBUG]   full_orchestrator_payload.get('guidance_scale'): {full_orchestrator_payload.get('guidance_scale')}")
+            dprint(f"[PARAM_DEBUG]   wgp_payload.get('guidance_scale'): {wgp_payload.get('guidance_scale')}")
+            dprint(f"[PARAM_DEBUG]   Final guidance_scale_default: {guidance_scale_default}")
             flow_shift_default = (
                 full_orchestrator_payload.get("flow_shift")
                 or wgp_payload.get("flow_shift")  # Use JSON config value if available  
