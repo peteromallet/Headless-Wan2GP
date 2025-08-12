@@ -764,7 +764,8 @@ class WanAny2V:
                 print(f"[SWITCH_THRESHOLD_DEBUG] Step {i}: timestep {t_val:.3f} <= {switch_threshold}? {t_val <= switch_threshold}")
             
             if not guidance_switch_done and t <= switch_threshold:
-                print(f"[SWITCH_THRESHOLD_LOG] SWITCHING at step {i}/{len(timesteps)}, timestep {t:.1f} <= {switch_threshold}")
+                t_val = float(t.item()) if hasattr(t, 'item') else float(t)
+                print(f"[SWITCH_THRESHOLD_LOG] SWITCHING at step {i}/{len(timesteps)}, timestep {t_val:.1f} <= {switch_threshold}")
                 print(f"[SWITCH_THRESHOLD_LOG] Guidance scale: {guide_scale} -> {guide2_scale}")
                 if self.model2 is not None:
                     print(f"[SWITCH_THRESHOLD_LOG] Model: model1 -> model2")
