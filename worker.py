@@ -60,7 +60,11 @@ from source.sm_functions import different_perspective as dp
 from source.sm_functions import single_image as si
 from source.sm_functions import magic_edit as me
 # --- New Queue-based Architecture Imports ---
+# Protect sys.argv before importing queue management which imports wgp.py
+_original_argv = sys.argv[:]
+sys.argv = ["worker.py"]  # Prevent wgp.py from parsing our CLI args
 from headless_model_management import HeadlessTaskQueue, GenerationTask
+sys.argv = _original_argv  # Restore original arguments
 # --- Structured Logging ---
 from source.logging_utils import headless_logger, enable_debug_mode, disable_debug_mode
 # --- End SM_RESTRUCTURE imports ---
