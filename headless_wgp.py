@@ -352,7 +352,6 @@ class WanOrchestrator:
                 # Other parameters
                 negative_prompt: str = "",
                 batch_size: int = 1,
-                switch_threshold: Optional[float] = None,  # Add as explicit parameter
                 **kwargs) -> str:
         """Generate content using the loaded model.
         
@@ -395,24 +394,8 @@ class WanOrchestrator:
         is_flux = self._is_flux()
         is_t2v = self._is_t2v()
         
-        # Handle switch_threshold parameter with scale conversion
-        # The JSON config uses 0-1000 range (e.g., 500), but WGP expects 0-1 range
-        if switch_threshold is not None:
-            # If value > 1, assume it's in 0-1000 range and convert to 0-1
-            if switch_threshold > 1:
-                actual_switch_threshold = switch_threshold / 1000.0
-                generation_logger.debug(f"Converted switch_threshold from {switch_threshold} to {actual_switch_threshold} (0-1 range)")
-            else:
-                actual_switch_threshold = switch_threshold
-                generation_logger.debug(f"Using switch_threshold: {actual_switch_threshold} (already in 0-1 range)")
-        else:
-            # Default to 0.5 if not specified
-            actual_switch_threshold = 0.5
-            generation_logger.debug(f"Using default switch_threshold: {actual_switch_threshold}")
-        
         generation_logger.debug(f"Model detection - VACE: {is_vace}, Flux: {is_flux}, T2V: {is_t2v}")
         generation_logger.debug(f"Generation parameters - prompt: '{prompt[:50]}...', resolution: {resolution}, length: {video_length}")
-        generation_logger.debug(f"Switch threshold: {actual_switch_threshold}")
         
         if is_vace:
             generation_logger.debug(f"VACE parameters - guide: {video_guide}, type: {video_prompt_type}, weights: {control_net_weight}/{control_net_weight2}")
@@ -497,7 +480,7 @@ class WanOrchestrator:
             'num_inference_steps': num_inference_steps,
             'guidance_scale': actual_guidance,
             'guidance2_scale': actual_guidance,
-            'switch_threshold': actual_switch_threshold,
+            'switch_threshold': kwargs.get('switch_threshold', 0.5),  # Get from kwargs with default
             'embedded_guidance_scale': embedded_guidance_scale if is_flux else 0.0,
             'image_mode': image_mode,
             
@@ -685,7 +668,6 @@ class WanOrchestrator:
                      video_prompt_type: str = "VP",
                      control_net_weight: float = 1.0,
                      control_net_weight2: float = 1.0,
-                     switch_threshold: Optional[float] = None,  # Add explicit parameter
                      **kwargs) -> str:
         """Generate VACE controlled video content.
         
@@ -722,8 +704,7 @@ class WanOrchestrator:
             video_prompt_type=video_prompt_type,
             control_net_weight=control_net_weight,
             control_net_weight2=control_net_weight2,
-            switch_threshold=switch_threshold,  # Pass through the switch_threshold
-            **kwargs
+            **kwargs  # Any additional parameters including switch_threshold
         )
 
     def generate_flux(self, prompt: str, images: int = 4, **kwargs) -> str:
