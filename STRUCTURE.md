@@ -1,66 +1,33 @@
 # Headless-Wan2GP Project Structure
 
-## Recent Updates (January 2025)
+## Overview
 
-### 🏗️ **Current Architecture**
-- **Queue-Based Processing**: All tasks processed via HeadlessTaskQueue system with persistent model state and memory management
-- **Edge Function Integration**: Pure Supabase Edge Functions for database operations (no RPC dependencies)
-- **Dual Authentication System**: Service Key (worker) vs PAT (individual user) authentication modes
-- **Storage Integration**: Automatic Supabase storage upload/download functionality  
-- **VACE ControlNet Integration**: Full ControlNet activation with preprocessing support
-- **VACE Processing**: Intelligent frame masking and component-based video_prompt_type construction
-- **Wan 2.2 Support**: Dual-phase Wan 2.2 models with optimized VACE strength (1.3) and sampler-specific CFG presets
-- **Advanced LoRAs**: LightI2X LoRA with 3.0 strength for faster inference, CausVid acceleration support
-- **Structured Logging**: Specialized loggers for different components (orchestrator, model, generation, travel)
-- **Model Memory Management**: Proper model memory release and LoRA unloading to prevent memory fragmentation
+Headless-Wan2GP is a queue-based video generation system built around the Wan2GP engine. It provides a scalable, headless interface for automated video generation tasks with support for both local SQLite and cloud Supabase backends.
 
-### 📁 **Repository Organization**
-- **Organized tests:** Comprehensive test suite in `tests/` directory
-- **Clean codebase:** Production-ready components only, no debug artifacts
-- **Essential documentation:** Focused on STRUCTURE.md and technical docs
-- **Streamlined deployment:** Production-ready components without migration dependencies
+## Architecture
 
-## Core Architecture
+### **Queue-Based Processing System**
+- **HeadlessTaskQueue**: Central task management with persistent model state
+- **Model Memory Management**: Efficient model loading/unloading with LoRA handling
+- **Priority Scheduling**: Task prioritization with dependency resolution
+- **Worker Management**: Multi-worker support with automatic scaling
 
-### **Database Operations (`source/db_operations.py`)**
-- **Pure Edge Function Integration**: All database operations via Supabase Edge Functions
-- **Dual Authentication**: Service role keys for workers, PATs for individual users
-- **Storage Management**: Upload/download to `image_uploads` bucket
-- **Worker ID Handling**: Automatic creation and constraint management
+### **Database Backends**
+- **SQLite**: Local file-based database for single-machine deployments
+- **Supabase**: Cloud PostgreSQL with Edge Functions, RLS, and storage integration
+- **Dual Authentication**: Service role keys (workers) vs PATs (individual users)
+- **Edge Function Operations**: Atomic task claiming, completion, and dependency management
 
-### **Edge Functions (`supabase/functions/`)**
-1. **`create-task/`** - Task creation with RLS enforcement
-2. **`claim-next-task/`** - Atomic task claiming with dependency checking
-3. **`complete-task/`** - Task completion with file upload
-4. **`update-task-status/`** - Status updates (In Progress, Failed)
-5. **`get-predecessor-output/`** - Dependency chain resolution
-6. **`get-completed-segments/`** - Segment collection for stitching
+### **Video Generation Pipeline**
+- **VACE ControlNet**: Automatic detection and activation with preprocessing support
+- **Wan 2.2 Integration**: Optimized dual-phase models with advanced CFG presets
+- **Advanced LoRAs**: CausVid acceleration, LightI2X distillation, custom LoRA support
+- **Frame Management**: Intelligent masking and cross-fade processing
 
-### **Authentication Architecture**
-- **Service Role Path**: Uses `worker_id` for machine/process tracking
-- **User/PAT Path**: Clean task claiming without worker complexity  
-- **RLS Enforcement**: Row-Level Security via Edge Functions
-- **Token Resolution**: PAT lookup via `user_api_tokens` table
-
-### **Worker Management (`fix_worker_issue.sql`)**
-- Auto-creation trigger for new worker IDs
-- Backfill existing workers from tasks
-- Specific worker ID support: `gpu-20250723_221138-afa8403b`
-- Constraint validation and foreign key management
-
-### **VACE ControlNet Integration**
-- **Automatic Detection**: Travel system now detects VACE models and activates ControlNet processing
-- **Component-Based Construction**: Dynamic video_prompt_type building (V + preprocessing + M + I components)
-- **Intelligent Frame Masking**: VM (Video + Mask) for selective frame generation in travel segments
-- **Enhanced Error Handling**: Graceful fallback when mask creation fails
-- **Comprehensive Logging**: Detailed debug output for VACE component tracking
-
-### **Documentation**
-- **`VACE_Documentation.md`**: Complete technical documentation for VACE (Video Auto-Completion Enhancement) system
-  - Processing pipeline explanation (video input → preprocessing → tensor conversion → generation)
-  - All preprocessing types: Pose (P), Depth (D), Flow (L), Scribble (S), Gray (C), Inpaint (M), Identity (U)
-  - Travel-specific optimization patterns and frame masking strategies
-  - Usage examples and performance considerations
+### **Storage and Upload**
+- **Local-First**: Files saved locally for reliability, then uploaded to cloud storage
+- **Supabase Storage**: Automatic upload to `image_uploads` bucket with public URLs
+- **Collision-Free Naming**: Files organized as `{task_id}/{filename}`
 
 # Project Structure
 
@@ -69,8 +36,8 @@
 ├── add_task.py
 ├── generate_test_tasks.py
 ├── worker.py
-├── test_supabase_worker.py    # NEW: Test script for Supabase functionality
-├── SUPABASE_SETUP.md            # NEW: Setup guide for Supabase mode
+├── test_supabase_worker.py    # Test script for Supabase functionality
+├── SUPABASE_SETUP.md            # Setup guide for Supabase mode
 ├── source/
 │   ├── __init__.py
 │   ├── common_utils.py
@@ -84,14 +51,14 @@
 │       ├── different_perspective.py
 │       └── single_image.py
 ├── tasks/                      # Task specifications
-│   └── HEADLESS_SUPABASE_TASK.md  # NEW: Supabase implementation spec
+│   └── HEADLESS_SUPABASE_TASK.md  # Supabase implementation spec
 ├── supabase/
 │   └── functions/
 │       ├── complete_task/         # Edge Function: uploads file & marks task complete
-│       ├── create_task/           # NEW Edge Function: queues task from client
-│       ├── claim_next_task/       # NEW Edge Function: claims next task (service-role → any, user → own only)
-│       ├── get_predecessor_output/ # NEW Edge Function: gets task dependency and its output in single call
-│       └── get-completed-segments/ # NEW Edge Function: fetches completed travel_segment outputs for a run_id, bypassing RLS
+│       ├── create_task/           # Edge Function: queues task from client
+│       ├── claim_next_task/       # Edge Function: claims next task (service-role → any, user → own only)
+│       ├── get_predecessor_output/ # Edge Function: gets task dependency and its output in single call
+│       └── get-completed-segments/ # Edge Function: fetches completed travel_segment outputs for a run_id, bypassing RLS
 ├── logs/               # runtime logs (git-ignored)
 ├── outputs/            # generated videos/images (git-ignored)
 ├── samples/            # example inputs for docs & tests
@@ -160,30 +127,22 @@ Task-specific wrappers around the bulky upstream logic. These are imported by `w
 * **test_outputs/** – Artefacts produced by the test-suite; kept out of version control via `.gitignore`.
 * **tasks.db** – SQLite database created on-demand by the orchestrator to track queued, running, and completed tasks (SQLite mode only).
 
-## Database Backends
-
-The system supports two database backends:
+## Database Configuration
 
 ### SQLite (Default)
 * Local file-based database (`tasks.db`)
 * No authentication required
-* Good for single-machine deployments
-* Files stored in `public/files/`
+* Single-machine deployments
+* Files stored locally in `public/files/`
 
 ### Supabase
-* Cloud-hosted PostgreSQL via Supabase
-* Supports Row-Level Security (RLS)
+* Cloud PostgreSQL with Row-Level Security (RLS)
 * Enable with: `--db-type supabase --supabase-url <url> --supabase-access-token <token>`
-* Two token types:
-  * **User JWT**: Only processes tasks owned by that user
+* Authentication modes:
+  * **User JWT**: Processes only user-owned tasks
   * **Service-role key**: Processes all tasks (bypasses RLS)
-* Files can be uploaded to Supabase Storage (in development)
-* Uses Edge Functions for database operations to handle RLS properly:
-  * `claim_next_task/` - Claims tasks with dependency checking
-  * `get_predecessor_output/` - Gets task dependencies and outputs
-  * `complete_task/` - Uploads files and marks tasks complete
-  * `create_task/` - Creates new tasks
-* Python code uses Edge Functions for Supabase, direct queries for SQLite
+* Automatic file upload to Supabase Storage
+* Edge Function operations for RLS compliance
 
 ## Wan2GP/
 
@@ -209,7 +168,7 @@ The system supports two database backends:
 *   Temporal Upsampling (RIFE): Increases video fluidity (frame rate).
 *   Spatial Upsampling (Lanczos): Increases video resolution.
 
-The submodule is currently pinned to commit `6706709` ("optimization for i2v with CausVid") and can be updated periodically using standard git submodule commands. Only the entry module `wgp.py` is imported directly; everything else stays encapsulated within the submodule.
+The submodule is updated periodically using standard git submodule commands. Only the entry module `wgp.py` is imported directly; everything else stays encapsulated within the submodule.
 
 ## Runtime artefacts
 
@@ -262,7 +221,7 @@ SQLite keeps the DB at `tasks.db`; Supabase uses the same columns with RLS polic
 
 ## Debugging System
 
-**NEW**: Comprehensive debugging system for video generation pipeline with detailed frame count tracking and validation:
+Comprehensive debugging system for video generation pipeline with detailed frame count tracking and validation:
 
 ### Debug Functions
 * **`debug_video_analysis()`** – Analyzes any video file and reports frame count, FPS, duration, file size with clear labeling
