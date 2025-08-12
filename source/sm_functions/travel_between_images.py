@@ -912,54 +912,119 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         # Compute video_prompt_type for wgp: Check if we're using a VACE model for proper ControlNet activation
         model_name = full_orchestrator_payload["model_name"]
         
-        # Use task_queue system for VACE detection if available, otherwise use simple name-based detection
+        # [VACE_DEBUG] Add comprehensive debugging for VACE model detection
+        dprint(f"[VACE_DEBUG] Seg {segment_idx}: Starting VACE model detection")
+        dprint(f"[VACE_DEBUG] Seg {segment_idx}: model_name = '{model_name}'")
+        dprint(f"[VACE_DEBUG] Seg {segment_idx}: task_queue is not None = {task_queue is not None}")
+        
         if task_queue is not None:
-            is_vace_model = task_queue.orchestrator._is_vace() if hasattr(task_queue, 'orchestrator') else "vace" in model_name.lower()
+            dprint(f"[VACE_DEBUG] Seg {segment_idx}: task_queue available, checking orchestrator")
+            has_orchestrator = hasattr(task_queue, 'orchestrator')
+            dprint(f"[VACE_DEBUG] Seg {segment_idx}: hasattr(task_queue, 'orchestrator') = {has_orchestrator}")
+            
+            if has_orchestrator:
+                dprint(f"[VACE_DEBUG] Seg {segment_idx}: orchestrator found, checking _is_vace method")
+                has_is_vace_method = hasattr(task_queue.orchestrator, '_is_vace')
+                dprint(f"[VACE_DEBUG] Seg {segment_idx}: hasattr(orchestrator, '_is_vace') = {has_is_vace_method}")
+                
+                if has_is_vace_method:
+                    try:
+                        vace_result = task_queue.orchestrator._is_vace()
+                        dprint(f"[VACE_DEBUG] Seg {segment_idx}: task_queue.orchestrator._is_vace() returned: {vace_result} (type: {type(vace_result)})")
+                        is_vace_model = vace_result
+                    except Exception as e_vace_check:
+                        dprint(f"[VACE_DEBUG] Seg {segment_idx}: Exception calling _is_vace(): {e_vace_check}")
+                        name_based_result = "vace" in model_name.lower()
+                        dprint(f"[VACE_DEBUG] Seg {segment_idx}: Falling back to name-based detection: {name_based_result}")
+                        is_vace_model = name_based_result
+                else:
+                    name_based_result = "vace" in model_name.lower()
+                    dprint(f"[VACE_DEBUG] Seg {segment_idx}: No _is_vace method, using name-based: {name_based_result}")
+                    is_vace_model = name_based_result
+            else:
+                name_based_result = "vace" in model_name.lower()
+                dprint(f"[VACE_DEBUG] Seg {segment_idx}: No orchestrator, using name-based: {name_based_result}")
+                is_vace_model = name_based_result
         else:
             # Fallback: simple name-based detection when no task_queue available
-            is_vace_model = "vace" in model_name.lower()
+            name_based_result = "vace" in model_name.lower()
+            dprint(f"[VACE_DEBUG] Seg {segment_idx}: No task_queue, using name-based detection: {name_based_result}")
+            is_vace_model = name_based_result
         
+        dprint(f"[VACE_DEBUG] Seg {segment_idx}: FINAL is_vace_model = {is_vace_model} (type: {type(is_vace_model)})")
         dprint(f"[VACEDetection] Seg {segment_idx}: Model '{model_name}' -> VACE detected: {is_vace_model}")
 
+        # [VIDEO_PROMPT_TYPE_DEBUG] Add detailed logging for video_prompt_type construction
+        dprint(f"[VPT_DEBUG] Seg {segment_idx}: Starting video_prompt_type construction")
+        dprint(f"[VPT_DEBUG] Seg {segment_idx}: is_vace_model = {is_vace_model}")
+        dprint(f"[VPT_DEBUG] Seg {segment_idx}: mask_video_path_for_wgp exists = {mask_video_path_for_wgp is not None}")
+        dprint(f"[VPT_DEBUG] Seg {segment_idx}: safe_vace_image_ref_paths_for_wgp exists = {safe_vace_image_ref_paths_for_wgp is not None}")
+        
         if is_vace_model:
+            dprint(f"[VPT_DEBUG] Seg {segment_idx}: ENTERING VACE MODEL PATH")
             # For travel between images, default to frame masking rather than preprocessing
             # This lets VACE focus on the key frames while masking unused intermediate frames
             preprocessing_code = full_orchestrator_payload.get("vace_preprocessing", "M")  # Default to Mask-only
+            dprint(f"[VPT_DEBUG] Seg {segment_idx}: vace_preprocessing from payload = '{preprocessing_code}'")
             
             # Build video_prompt_type based on available inputs and requested preprocessing
             vpt_components = ["V"]  # Always start with V for VACE
+            dprint(f"[VPT_DEBUG] Seg {segment_idx}: Starting with vpt_components = {vpt_components}")
             
             if preprocessing_code != "M":
                 # Explicit preprocessing requested (P=Pose, D=Depth, L=Flow, etc.)
                 vpt_components.append(preprocessing_code)
+                dprint(f"[VPT_DEBUG] Seg {segment_idx}: Added preprocessing '{preprocessing_code}', vpt_components = {vpt_components}")
                 dprint(f"[VACEActivated] Seg {segment_idx}: Using VACE ControlNet with preprocessing '{preprocessing_code}'")
             else:
+                dprint(f"[VPT_DEBUG] Seg {segment_idx}: No preprocessing (default 'M'), vpt_components = {vpt_components}")
                 dprint(f"[VACEActivated] Seg {segment_idx}: Using VACE with raw video guide (no preprocessing)")
             
             # Add mask component if mask video exists
             if mask_video_path_for_wgp:
                 vpt_components.append("M")
+                dprint(f"[VPT_DEBUG] Seg {segment_idx}: Added mask 'M', vpt_components = {vpt_components}")
                 dprint(f"[VACEActivated] Seg {segment_idx}: Adding mask control - mask video: {mask_video_path_for_wgp}")
+            else:
+                dprint(f"[VPT_DEBUG] Seg {segment_idx}: No mask video, vpt_components = {vpt_components}")
             
             # Add image refs component if present
             if safe_vace_image_ref_paths_for_wgp:
                 vpt_components.append("I")
+                dprint(f"[VPT_DEBUG] Seg {segment_idx}: Added image refs 'I', vpt_components = {vpt_components}")
                 dprint(f"[VACEActivated] Seg {segment_idx}: Adding image references: {len(safe_vace_image_ref_paths_for_wgp)} images")
+            else:
+                dprint(f"[VPT_DEBUG] Seg {segment_idx}: No image refs, vpt_components = {vpt_components}")
             
             video_prompt_type_str = "".join(vpt_components)
+            dprint(f"[VPT_DEBUG] Seg {segment_idx}: VACE PATH RESULT: video_prompt_type = '{video_prompt_type_str}'")
             dprint(f"[VACEActivated] Seg {segment_idx}: Final video_prompt_type: '{video_prompt_type_str}'")
         else:
+            dprint(f"[VPT_DEBUG] Seg {segment_idx}: ENTERING NON-VACE MODEL PATH")
             # Fallback for non-VACE models: use 'U' for unprocessed RGB to provide direct pixel-level control.
             # Add 'M' if a mask video is attached, and 'I' when reference images are supplied so that VACE models
             # properly process the `image_refs` list.  Passing image refs without the 'I'
             # flag causes Wan2GP to attempt to pre-process the paths as PIL images and
             # raises AttributeError ('str' object has no attribute size').
-            video_prompt_type_str = (
-                "U" +
-                ("M" if mask_video_path_for_wgp else "") +
-                ("I" if safe_vace_image_ref_paths_for_wgp else "")
-            )
+            
+            u_component = "U"
+            m_component = "M" if mask_video_path_for_wgp else ""
+            i_component = "I" if safe_vace_image_ref_paths_for_wgp else ""
+            
+            dprint(f"[VPT_DEBUG] Seg {segment_idx}: Non-VACE components: U='{u_component}', M='{m_component}', I='{i_component}'")
+            
+            video_prompt_type_str = u_component + m_component + i_component
+            dprint(f"[VPT_DEBUG] Seg {segment_idx}: NON-VACE PATH RESULT: video_prompt_type = '{video_prompt_type_str}'")
             dprint(f"[VACESkipped] Seg {segment_idx}: Using non-VACE model -> video_prompt_type: '{video_prompt_type_str}'")
+        
+        # [FINAL_VPT_DEBUG] Log the final video_prompt_type before passing to WGP
+        dprint(f"[VPT_FINAL] Seg {segment_idx}: ===== FINAL VIDEO_PROMPT_TYPE SUMMARY =====")
+        dprint(f"[VPT_FINAL] Seg {segment_idx}: Model: '{model_name}'")
+        dprint(f"[VPT_FINAL] Seg {segment_idx}: Is VACE: {is_vace_model}")
+        dprint(f"[VPT_FINAL] Seg {segment_idx}: Final video_prompt_type: '{video_prompt_type_str}'")
+        dprint(f"[VPT_FINAL] Seg {segment_idx}: Video guide path: {actual_guide_video_path_for_wgp}")
+        dprint(f"[VPT_FINAL] Seg {segment_idx}: Video mask path: {mask_video_path_for_wgp}")
+        dprint(f"[VPT_FINAL] Seg {segment_idx}: =========================================")
         
         wgp_payload = {
             "task_id": wgp_inline_task_id, # ID for this specific WGP generation operation
