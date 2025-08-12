@@ -25,8 +25,8 @@
         "auto_quantize": true
     },
     "num_inference_steps": 10,
-    "guidance_scale": 1,
+    "guidance_scale": 3,
     "guidance2_scale": 1,
     "flow_shift": 2,
-    "switch_threshold": 875
+    "switch_threshold": 500
 }
