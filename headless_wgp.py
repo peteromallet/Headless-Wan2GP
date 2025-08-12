@@ -421,21 +421,81 @@ class WanOrchestrator:
             """Extract and clean parameters for WGP, avoiding conflicts"""
             clean_params = {}
             
-            # Core parameters with direct mapping
-            direct_mapping = {
-                'video_guide': 'video_guide',
-                'video_mask': 'video_mask', 
-                'video_guide2': 'video_guide2',
-                'video_mask2': 'video_mask2',
-                'video_prompt_type': 'video_prompt_type',
-                'control_net_weight': 'control_net_weight',
-                'control_net_weight2': 'control_net_weight2',
+            # Direct mapping of safe parameters that won't conflict with explicit ones
+            safe_direct_mapping = {
+                # Advanced generation parameters
                 'flow_shift': 'flow_shift',
-                'cfg_star_switch': 'cfg_star_switch',
+                'cfg_star_switch': 'cfg_star_switch', 
                 'cfg_zero_step': 'cfg_zero_step',
+                'switch_threshold': 'switch_threshold',
+                
+                # VACE secondary parameters (video_guide, video_mask, etc. are handled explicitly)
+                'keep_frames_video_guide': 'keep_frames_video_guide',
+                'video_guide_outpainting': 'video_guide_outpainting', 
+                'mask_expand': 'mask_expand',
+                
+                # Image parameters
+                'image_prompt_type': 'image_prompt_type',
+                'image_start': 'image_start',
+                'image_end': 'image_end', 
+                'image_refs': 'image_refs',
+                'frames_positions': 'frames_positions',
+                'image_guide': 'image_guide',
+                'image_mask': 'image_mask',
+                
+                # Video source parameters
+                'model_mode': 'model_mode', 
+                'video_source': 'video_source',
+                'keep_frames_video_source': 'keep_frames_video_source',
+                
+                # Audio parameters
+                'audio_guide': 'audio_guide',
+                'audio_guide2': 'audio_guide2', 
+                'audio_source': 'audio_source',
+                'audio_prompt_type': 'audio_prompt_type',
+                'speakers_locations': 'speakers_locations',
+                
+                # Advanced algorithms
+                'tea_cache_setting': 'tea_cache_setting',
+                'tea_cache_start_step_perc': 'tea_cache_start_step_perc',
+                'RIFLEx_setting': 'RIFLEx_setting',
+                'slg_switch': 'slg_switch',
+                'slg_layers': 'slg_layers', 
+                'slg_start_perc': 'slg_start_perc',
+                'slg_end_perc': 'slg_end_perc',
+                'prompt_enhancer': 'prompt_enhancer',
+                
+                # Sliding window
+                'sliding_window_size': 'sliding_window_size',
+                'sliding_window_overlap': 'sliding_window_overlap',
+                'sliding_window_overlap_noise': 'sliding_window_overlap_noise',
+                'sliding_window_discard_last_frames': 'sliding_window_discard_last_frames',
+                
+                # Post-processing
+                'remove_background_images_ref': 'remove_background_images_ref',
+                'temporal_upsampling': 'temporal_upsampling',
+                'spatial_upsampling': 'spatial_upsampling', 
+                'film_grain_intensity': 'film_grain_intensity',
+                'film_grain_saturation': 'film_grain_saturation',
+                
+                # MMAudio
+                'MMAudio_setting': 'MMAudio_setting',
+                'MMAudio_prompt': 'MMAudio_prompt',
+                'MMAudio_neg_prompt': 'MMAudio_neg_prompt',
+                
+                # NAG parameters
+                'NAG_scale': 'NAG_scale',
+                'NAG_tau': 'NAG_tau',  
+                'NAG_alpha': 'NAG_alpha',
+                
+                # APG
+                'apg_switch': 'apg_switch',
+                
+                # Output control
+                'min_frames_if_references': 'min_frames_if_references',
             }
             
-            for input_key, wgp_key in direct_mapping.items():
+            for input_key, wgp_key in safe_direct_mapping.items():
                 if input_key in input_kwargs:
                     clean_params[wgp_key] = input_kwargs[input_key]
             
