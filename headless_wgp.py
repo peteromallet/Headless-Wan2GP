@@ -425,8 +425,9 @@ class WanOrchestrator:
             # After reviewing the _generate_video call, almost all parameters are explicitly set,
             # so we'll only include truly safe parameters that have no explicit defaults
             safe_direct_mapping = {
-                # Only parameters that are NOT explicitly passed to _generate_video()
-                # and are safe to override from task queue
+                # Include parameters that are needed for generation but not explicitly set
+                'flow_shift': 'flow_shift',  # Critical for generation
+                'sample_solver': 'sample_solver',  # Critical for generation  
                 'tea_cache_setting': 'tea_cache_setting',
                 'tea_cache_start_step_perc': 'tea_cache_start_step_perc',
                 'sliding_window_color_correction_strength': 'sliding_window_color_correction_strength',
@@ -450,9 +451,9 @@ class WanOrchestrator:
         # Extract clean additional parameters
         clean_additional_params = extract_clean_wgp_params(**kwargs)
 
-        # Define missing variables with defaults
-        flow_shift = 7.0
-        sample_solver = "euler"
+        # Extract key parameters from clean_additional_params or use defaults
+        flow_shift = clean_additional_params.get('flow_shift', 7.0)
+        sample_solver = clean_additional_params.get('sample_solver', "euler")
         image_prompt_type = "disabled"
         image_start = None
         image_end = None
