@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Switch Threshold Testing Script
+Switch Threshold Testing Script with Direct Execution
 
-This script creates 7 tasks using vace_14B_fake_cocktail_2_2 model with different 
+This script creates and RUNS 7 tasks using vace_14B_fake_cocktail_2_2 model with different 
 switch_threshold values (100, 200, 300, 400, 500, 600, 700) to test the dual-model switching behavior.
 
 Usage:
@@ -19,6 +19,8 @@ Usage:
 import json
 import sys
 import argparse
+import time
+import os
 from pathlib import Path
 from datetime import datetime
 
@@ -26,13 +28,14 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent))
 
 from source.common_utils import generate_unique_task_id
+from headless_wgp import WanOrchestrator
 
 
-def create_switch_threshold_test_tasks(video_path: str, mask_path: str, prompt: str, 
-                                     base_output_dir: str = "outputs/switch_threshold_test",
-                                     project_id: str = None):
+def run_switch_threshold_tests(video_path: str, mask_path: str, prompt: str, 
+                              base_output_dir: str = "outputs/switch_threshold_test",
+                              project_id: str = None):
     """
-    Create 10 tasks testing different switch_threshold values.
+    Create and RUN tasks testing different switch_threshold values.
     
     Args:
         video_path: Path to the guide video
@@ -49,179 +52,225 @@ def create_switch_threshold_test_tasks(video_path: str, mask_path: str, prompt: 
     if project_id is None:
         project_id = f"switch-threshold-test-{timestamp}"
     
-    tasks = []
+    # Define specific threshold values to test
+    threshold_values = [100, 200, 300, 400, 500, 600, 700]
     
-    print(f"🧪 Creating Switch Threshold Test Suite")
+    print(f"🧪 Starting Switch Threshold Test Suite")
     print(f"📁 Test Run ID: {test_run_id}")
     print(f"🎬 Video: {video_path}")
     print(f"🎭 Mask: {mask_path}")
     print(f"💭 Prompt: {prompt}")
-    # Define specific threshold values to test
-    threshold_values = [100, 200, 300, 400, 500, 600, 700]
     print(f"📊 Testing switch_threshold values: {threshold_values}")
-    print()
-    
-    for i, switch_threshold in enumerate(threshold_values):
-        
-        task_params = {
-            "task_type": "travel_orchestrator",
-            "model_name": "vace_14B_fake_cocktail_2_2",
-            "prompt": prompt,
-            "negative_prompt": "blurry, low quality, distorted",
-            "resolution": "768x576",
-            "segment_frames": [65],  # Single segment
-            "frame_overlap": [0],    # No overlap needed for single segment
-            "seed_base": 12345,
-            "fps_helpers": 16,
-            "project_id": project_id,
-            "debug_mode_enabled": True,
-            "orchestrator_class": "travel_between_images",
-            
-            # 🎯 KEY TEST PARAMETER
-            "switch_threshold": switch_threshold,
-            
-            # Custom output naming for easy comparison
-            "custom_output_dir": f"{base_output_dir}/{test_run_id}",
-            "output_filename_prefix": f"switch_threshold_{switch_threshold}_",
-            
-            # Video guide and mask
-            "image_refs": [
-                {
-                    "download_url": video_path,
-                    "local_path": video_path,
-                    "segment_idx_for_naming": 0,
-                    "is_video_guide": True
-                }
-            ],
-            "mask_refs": [
-                {
-                    "download_url": mask_path,
-                    "local_path": mask_path,
-                    "segment_idx_for_naming": 0
-                }
-            ]
-        }
-        
-        task_id = generate_unique_task_id(f"switch_test_{switch_threshold}_")
-        task_params["task_id"] = task_id
-        
-        tasks.append({
-            "task_id": task_id,
-            "switch_threshold": switch_threshold,
-            "params": task_params
-        })
-        
-        print(f"📋 Task {i+1:2d}/7: threshold={switch_threshold:3d} → {task_id}")
-    
-    return tasks, test_run_id
-
-
-def save_tasks_batch(tasks: list, output_file: str = None):
-    """Save all tasks to a JSON file for batch processing."""
-    
-    if output_file is None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = f"switch_threshold_test_batch_{timestamp}.json"
-    
-    batch_data = {
-        "test_suite": "switch_threshold_comparison",
-        "model": "vace_14B_fake_cocktail_2_2",
-        "parameter_tested": "switch_threshold",
-        "values_tested": [task["switch_threshold"] for task in tasks],
-        "total_tasks": len(tasks),
-        "tasks": [task["params"] for task in tasks]
-    }
-    
-    with open(output_file, 'w') as f:
-        json.dump(batch_data, f, indent=2)
-    
-    print(f"💾 Saved {len(tasks)} tasks to: {output_file}")
-    return output_file
-
-
-def generate_add_task_commands(tasks: list):
-    """Generate individual add_task.py commands for each task."""
-    
-    commands = []
-    
-    print("\n🔧 Individual add_task.py commands:")
+    print(f"🚀 Running tasks directly via headless_wgp.py")
     print("=" * 60)
     
-    for i, task in enumerate(tasks):
-        task_json = json.dumps(task["params"])
-        # Escape quotes for shell
-        task_json_escaped = task_json.replace('"', '\\"')
-        
-        command = f'python add_task.py --json-payload "{task_json_escaped}"'
-        commands.append(command)
-        
-        print(f"# Task {i+1}: switch_threshold={task['switch_threshold']}")
-        print(command)
-        print()
+    # Initialize WanOrchestrator
+    print("\n⚙️  Initializing WanOrchestrator...")
+    wan_root = Path(__file__).parent / "Wan2GP"
+    orchestrator = WanOrchestrator(str(wan_root))
     
-    return commands
-
-
-def generate_comparison_analysis():
-    """Generate a comparison analysis template."""
+    # Load the model once for all tests
+    model_name = "vace_14B_fake_cocktail_2_2"
+    print(f"📦 Loading model: {model_name}")
+    print("This may take a few minutes on first load...")
+    orchestrator.load_model(model_name)
+    print(f"✅ Model loaded successfully!\n")
     
-    analysis_template = """
-# Switch Threshold Analysis Template
+    # Create output directory
+    output_dir = Path(base_output_dir) / test_run_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    results = []
+    total_tasks = len(threshold_values)
+    
+    for i, switch_threshold in enumerate(threshold_values, 1):
+        print(f"\n{'='*60}")
+        print(f"📋 Task {i}/{total_tasks}: switch_threshold = {switch_threshold}")
+        print(f"{'='*60}")
+        
+        task_id = generate_unique_task_id(f"switch_test_{switch_threshold}_")
+        
+        # Prepare output path with custom naming
+        output_filename = f"switch_threshold_{switch_threshold}.mp4"
+        
+        print(f"🎯 Task ID: {task_id}")
+        print(f"📊 Switch Threshold: {switch_threshold}")
+        print(f"💾 Output: {output_dir}/{output_filename}")
+        print(f"⏳ Starting generation...")
+        
+        start_time = time.time()
+        
+        try:
+            # Run the generation with the specific switch_threshold
+            output_path = orchestrator.generate_vace(
+                prompt=prompt,
+                video_guide=video_path,
+                video_mask=mask_path,
+                video_prompt_type="VM",  # Video + Mask
+                resolution="768x576",
+                video_length=65,
+                num_inference_steps=10,  # From model defaults
+                guidance_scale=3,  # From model defaults  
+                flow_shift=2,  # From model defaults
+                seed=12345,  # Consistent seed for comparison
+                negative_prompt="blurry, low quality, distorted",
+                control_net_weight=1.0,
+                control_net_weight2=1.0,
+                switch_threshold=switch_threshold,  # 🎯 KEY TEST PARAMETER
+                guidance2_scale=1  # From model defaults
+            )
+            
+            generation_time = time.time() - start_time
+            
+            # Move/rename the output to our custom location
+            if output_path and Path(output_path).exists():
+                final_path = output_dir / output_filename
+                Path(output_path).rename(final_path)
+                
+                print(f"✅ Generation completed in {generation_time:.1f} seconds")
+                print(f"📁 Saved to: {final_path}")
+                
+                # Get file size for analysis
+                file_size_mb = final_path.stat().st_size / (1024 * 1024)
+                
+                results.append({
+                    "task_id": task_id,
+                    "switch_threshold": switch_threshold,
+                    "output_path": str(final_path),
+                    "generation_time": generation_time,
+                    "file_size_mb": file_size_mb,
+                    "status": "success"
+                })
+            else:
+                print(f"⚠️  Generation completed but output path not found")
+                results.append({
+                    "task_id": task_id,
+                    "switch_threshold": switch_threshold,
+                    "status": "no_output"
+                })
+                
+        except Exception as e:
+            print(f"❌ Generation failed: {e}")
+            results.append({
+                "task_id": task_id,
+                "switch_threshold": switch_threshold,
+                "status": "failed",
+                "error": str(e)
+            })
+        
+        # Brief pause between generations
+        if i < total_tasks:
+            print(f"\n⏸️  Pausing 5 seconds before next generation...")
+            time.sleep(5)
+    
+    # Unload model to free memory
+    print(f"\n🧹 Unloading model...")
+    orchestrator.unload_model()
+    
+    return results, test_run_id, output_dir
 
-## Expected Results:
 
-### switch_threshold = 100-200 (Early Switch)  
-- Quick switch to Low model (refinement focused)
-- Should have excellent detail but potentially less structure
+def save_results(results: list, test_run_id: str, output_dir: Path):
+    """Save test results to JSON and generate analysis report."""
+    
+    # Save raw results
+    results_file = output_dir / "test_results.json"
+    with open(results_file, 'w') as f:
+        json.dump({
+            "test_run_id": test_run_id,
+            "timestamp": datetime.now().isoformat(),
+            "total_tests": len(results),
+            "results": results
+        }, f, indent=2)
+    
+    print(f"\n💾 Results saved to: {results_file}")
+    
+    # Generate analysis report
+    report_file = output_dir / "analysis_report.md"
+    
+    successful = [r for r in results if r.get("status") == "success"]
+    failed = [r for r in results if r.get("status") != "success"]
+    
+    report = f"""# Switch Threshold Test Results
+    
+## Test Run: {test_run_id}
+Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
-### switch_threshold = 300-400 (Early-Mid Switch)
-- Balanced toward detail refinement
-- Should provide good detail with decent structure
+## Summary
+- Total Tests: {len(results)}
+- Successful: {len(successful)}
+- Failed: {len(failed)}
 
-### switch_threshold = 500 (Current Default)
-- Balanced between structure and detail
-- Should provide good overall quality
+## Results by Threshold
 
-### switch_threshold = 600-700 (Late Switch)
-- High model dominates, Low model for final touches
-- Should have excellent structure with good detail
-
-## Analysis Questions:
-
-1. **Quality Sweet Spot**: Which switch_threshold provides the best overall quality?
-2. **Detail vs Structure**: How does early vs late switching affect the balance?
-3. **Model Efficiency**: Do earlier thresholds generate faster due to more Low model usage?
-4. **Prompt Adherence**: Which threshold best follows the prompt instructions?
-5. **Consistency**: Which threshold produces the most consistent results?
-
-## Comparison Metrics:
-
-- [ ] Visual quality assessment (1-10 scale)
-- [ ] Prompt adherence (1-10 scale)  
-- [ ] Detail preservation (1-10 scale)
-- [ ] Structural coherence (1-10 scale)
-- [ ] Generation time
-- [ ] Final video file size
-
+| Threshold | Status | Time (s) | Size (MB) | Output File |
+|-----------|--------|----------|-----------|-------------|
 """
     
-    analysis_file = f"switch_threshold_analysis_template.md"
-    with open(analysis_file, 'w') as f:
-        f.write(analysis_template)
+    for r in results:
+        status_icon = "✅" if r["status"] == "success" else "❌"
+        time_str = f"{r.get('generation_time', 0):.1f}" if "generation_time" in r else "N/A"
+        size_str = f"{r.get('file_size_mb', 0):.2f}" if "file_size_mb" in r else "N/A"
+        output = Path(r["output_path"]).name if "output_path" in r else "N/A"
+        
+        report += f"| {r['switch_threshold']} | {status_icon} | {time_str} | {size_str} | {output} |\n"
     
-    print(f"📊 Analysis template saved to: {analysis_file}")
-    return analysis_file
+    if successful:
+        # Calculate averages
+        avg_time = sum(r["generation_time"] for r in successful) / len(successful)
+        avg_size = sum(r["file_size_mb"] for r in successful) / len(successful)
+        
+        report += f"""
+## Performance Analysis
+
+### Average Metrics
+- Average Generation Time: {avg_time:.1f} seconds
+- Average File Size: {avg_size:.2f} MB
+
+### Timing Analysis by Threshold
+"""
+        for r in successful:
+            pct_diff = ((r["generation_time"] - avg_time) / avg_time) * 100
+            report += f"- **{r['switch_threshold']}**: {r['generation_time']:.1f}s ({pct_diff:+.1f}% from avg)\n"
+    
+    report += """
+## Visual Quality Assessment
+
+Review the generated videos and rate each on:
+
+| Threshold | Quality (1-10) | Prompt Adherence | Detail | Structure | Notes |
+|-----------|----------------|------------------|--------|-----------|-------|
+| 100 | _ | _ | _ | _ | |
+| 200 | _ | _ | _ | _ | |
+| 300 | _ | _ | _ | _ | |
+| 400 | _ | _ | _ | _ | |
+| 500 | _ | _ | _ | _ | |
+| 600 | _ | _ | _ | _ | |
+| 700 | _ | _ | _ | _ | |
+
+## Recommendations
+
+Based on the results:
+- **Optimal Quality**: ___ (fill in after review)
+- **Best Speed/Quality Balance**: ___ (fill in after review)
+- **Recommended Default**: ___ (fill in after review)
+"""
+    
+    with open(report_file, 'w') as f:
+        f.write(report)
+    
+    print(f"📊 Analysis report saved to: {report_file}")
+    
+    return results_file, report_file
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate switch_threshold test tasks for vace_14B_fake_cocktail_2_2")
+    parser = argparse.ArgumentParser(description="Run switch_threshold tests for vace_14B_fake_cocktail_2_2")
     parser.add_argument("video", nargs='?', default="video.mp4", help="Path to guide video (default: video.mp4)")
     parser.add_argument("mask", nargs='?', default="mask.mp4", help="Path to mask video (default: mask.mp4)")
     parser.add_argument("prompt", nargs='?', default="camera rotates around him", help="Generation prompt (default: 'camera rotates around him')")
-    parser.add_argument("--project-id", help="Project ID for organization")
     parser.add_argument("--output-dir", default="outputs/switch_threshold_test", 
                        help="Base output directory")
-    parser.add_argument("--batch-file", help="Custom batch file name")
     
     args = parser.parse_args()
     
@@ -234,36 +283,49 @@ def main():
         print(f"❌ Error: Mask file not found: {args.mask}")
         sys.exit(1)
     
-    # Create test tasks
-    tasks, test_run_id = create_switch_threshold_test_tasks(
-        video_path=args.video,
-        mask_path=args.mask, 
-        prompt=args.prompt,
-        base_output_dir=args.output_dir,
-        project_id=args.project_id
-    )
-    
-    # Save batch file
-    batch_file = save_tasks_batch(tasks, args.batch_file)
-    
-    # Generate individual commands
-    commands = generate_add_task_commands(tasks)
-    
-    # Generate analysis template
-    analysis_file = generate_comparison_analysis()
-    
-    print("\n🎯 Test Suite Ready!")
-    print("=" * 60)
-    print(f"📁 Test Run ID: {test_run_id}")
-    print(f"📋 Tasks Created: {len(tasks)}")
-    print(f"💾 Batch File: {batch_file}")
-    print(f"📊 Analysis Template: {analysis_file}")
-    print(f"🎬 Expected Outputs: {args.output_dir}/{test_run_id}/")
-    print()
-    print("🚀 To run all tasks:")
-    print(f"   for i in {{0..6}}; do python add_task.py --json-payload \"$(jq -r '.tasks[$i]' {batch_file})\"; done")
-    print()
-    print("🔍 Monitor progress and compare results to find optimal switch_threshold!")
+    # Run the tests
+    try:
+        results, test_run_id, output_dir = run_switch_threshold_tests(
+            video_path=args.video,
+            mask_path=args.mask, 
+            prompt=args.prompt,
+            base_output_dir=args.output_dir
+        )
+        
+        # Save results and generate report
+        results_file, report_file = save_results(results, test_run_id, output_dir)
+        
+        # Final summary
+        print("\n" + "="*60)
+        print("🎯 TEST SUITE COMPLETE!")
+        print("="*60)
+        
+        successful = [r for r in results if r.get("status") == "success"]
+        print(f"✅ Successful: {len(successful)}/{len(results)}")
+        
+        if successful:
+            print(f"\n📁 All outputs saved to: {output_dir}")
+            print(f"📊 Results: {results_file}")
+            print(f"📝 Report: {report_file}")
+            
+            print("\n🎬 Generated videos:")
+            for r in successful:
+                print(f"  - switch_threshold_{r['switch_threshold']}.mp4")
+            
+            print("\n🔍 Next steps:")
+            print("1. Review all generated videos side-by-side")
+            print("2. Fill out the quality assessment in the report")
+            print("3. Identify the optimal switch_threshold value")
+            print("4. Update model defaults if needed")
+        
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Test suite interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Test suite failed: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
