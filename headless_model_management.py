@@ -487,18 +487,12 @@ class HeadlessTaskQueue:
             "lora_multipliers": "lora_multipliers",
         }
         
-        # [DEBUG] Log incoming task parameters  
-        self.logger.info(f"[UPSTREAM_DEBUG] Task {task.id} incoming parameters:")
-        for key, value in task.parameters.items():
-            self.logger.info(f"[UPSTREAM_DEBUG]   {key}: {value}")
-        self.logger.info(f"[UPSTREAM_DEBUG] Notable: sample_solver in task.parameters? {'sample_solver' in task.parameters}")
-        self.logger.info(f"[UPSTREAM_DEBUG] Notable: flow_shift in task.parameters? {'flow_shift' in task.parameters}")
+
         
         # Map parameters with proper defaults
         for our_param, wgp_param in param_mapping.items():
             if our_param in task.parameters:
                 wgp_params[wgp_param] = task.parameters[our_param]
-                self.logger.info(f"[UPSTREAM_DEBUG] Mapped {our_param} -> {wgp_param} = {task.parameters[our_param]}")
         
         # Handle LoRA parameter format conversion
         if "activated_loras" in task.parameters:
@@ -515,24 +509,18 @@ class HeadlessTaskQueue:
         try:
             import wgp
             model_defaults = wgp.get_default_settings(task.model)
-            self.logger.info(f"[PARAM_DEBUG] Model defaults for '{task.model}': {model_defaults}")
             # Apply model defaults for parameters not already specified
             for param, value in model_defaults.items():
                 if param not in wgp_params:
                     wgp_params[param] = value
-                    self.logger.info(f"[PARAM_DEBUG] Applied model default {param}={value}")
             self.logger.info(f"Applied model defaults for '{task.model}': flow_shift={model_defaults.get('flow_shift')}, guidance_scale={model_defaults.get('guidance_scale')}")
         except Exception as e:
             self.logger.warning(f"Could not load model defaults for '{task.model}': {e}")
             # Fallback to hardcoded defaults if model loading fails
             if "flow_shift" not in wgp_params:
                 wgp_params["flow_shift"] = 3.0  # WGP default
-                self.logger.info(f"[PARAM_DEBUG] Applied fallback flow_shift=3.0")
             if "sample_solver" not in wgp_params:
                 wgp_params["sample_solver"] = "euler"  # WGP default
-                self.logger.info(f"[PARAM_DEBUG] Applied fallback sample_solver=euler")
-        
-        self.logger.info(f"[PARAM_DEBUG] Final wgp_params after model defaults: {wgp_params}")
         
         # Apply sampler-specific CFG settings if available
         sample_solver = task.parameters.get("sample_solver", wgp_params.get("sample_solver", ""))
