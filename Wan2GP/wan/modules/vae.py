@@ -5,6 +5,7 @@ import torch
 import torch.cuda.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
+from pathlib import Path
 from einops import rearrange
 
 __all__ = [
@@ -768,10 +769,18 @@ def _video_vae(pretrained_path=None, z_dim=None, device='cpu', **kwargs):
     from mmgp import offload
     # load checkpoint
     logging.info(f'loading {pretrained_path}')
+    safetensors_path = pretrained_path.replace(".pth", ".safetensors")
+    print(f"[VAE_LOAD_DEBUG] About to load VAE from: {safetensors_path}")
+    print(f"[VAE_LOAD_DEBUG] File exists: {Path(safetensors_path).exists()}")
+    if Path(safetensors_path).exists():
+        print(f"[VAE_LOAD_DEBUG] File size: {Path(safetensors_path).stat().st_size / (1024*1024):.1f} MB")
+    print(f"[VAE_LOAD_DEBUG] Starting offload.load_model_data...")
+    
     # model.load_state_dict(
     #     torch.load(pretrained_path, map_location=device), assign=True)
     # offload.load_model_data(model, pretrained_path.replace(".pth", "_bf16.safetensors"), writable_tensors= False)    
-    offload.load_model_data(model, pretrained_path.replace(".pth", ".safetensors"), writable_tensors= False)    
+    offload.load_model_data(model, safetensors_path, writable_tensors= False)
+    print(f"[VAE_LOAD_DEBUG] VAE loading completed successfully!")    
     return model
 
 
