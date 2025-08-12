@@ -46,6 +46,7 @@ def dprint(msg: str):
 # --- Helper Functions ---
 
 def get_lora_dir_from_filename(wgp_mod, model_filename: str) -> str:
+    # DEPRECATED: This function is no longer used in the queue-only system
     """
     Centralized helper to get LoRA directory from model filename.
     Properly converts model_filename to model_type before calling get_lora_dir.
@@ -125,6 +126,7 @@ def process_additional_loras_shared(
     task_id: str, 
     dprint: callable
 ) -> dict[str, str]:
+    # DEPRECATED: This function is no longer used in the queue-only system
     """
     Shared function to process additional LoRAs for any task handler.
     
@@ -1848,6 +1850,7 @@ def _apply_special_lora_settings(task_id: str, lora_type: str, lora_basename: st
 
 # --- SM_RESTRUCTURE: Function moved from worker.py ---
 def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False, model_type_override: str = None):
+    # DEPRECATED: This function is no longer used in the queue-only system
     state = {
         "model_filename": model_filename,
         "validate_success": 1,
