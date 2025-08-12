@@ -76,8 +76,8 @@ def run_switch_threshold_tests(video_path: str, mask_path: str, prompt: str,
     orchestrator.load_model(model_name)
     print(f"✅ Model loaded successfully!\n")
     
-    # Create output directory
-    output_dir = Path(base_output_dir) / test_run_id
+    # Create output directory with absolute path
+    output_dir = (Path(base_output_dir).absolute() / test_run_id)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     results = []
@@ -274,20 +274,28 @@ def main():
     
     args = parser.parse_args()
     
+    # Convert to absolute paths to handle working directory changes
+    video_path = Path(args.video).absolute()
+    mask_path = Path(args.mask).absolute()
+    
     # Validate input files
-    if not Path(args.video).exists():
-        print(f"❌ Error: Video file not found: {args.video}")
+    if not video_path.exists():
+        print(f"❌ Error: Video file not found: {video_path}")
         sys.exit(1)
         
-    if not Path(args.mask).exists():
-        print(f"❌ Error: Mask file not found: {args.mask}")
+    if not mask_path.exists():
+        print(f"❌ Error: Mask file not found: {mask_path}")
         sys.exit(1)
+    
+    print(f"📁 Using absolute paths:")
+    print(f"   Video: {video_path}")
+    print(f"   Mask: {mask_path}")
     
     # Run the tests
     try:
         results, test_run_id, output_dir = run_switch_threshold_tests(
-            video_path=args.video,
-            mask_path=args.mask, 
+            video_path=str(video_path),  # Pass as string
+            mask_path=str(mask_path),    # Pass as string
             prompt=args.prompt,
             base_output_dir=args.output_dir
         )
