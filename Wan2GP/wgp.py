@@ -4934,6 +4934,10 @@ def generate_video(
                 if has_causvid and flow_shift != 1.0:
                     print(f"[CausVidDebugTrace] ⚠️ WARNING: CausVid LoRA loaded but using flow_shift {flow_shift} instead of optimized 1.0!")
                 
+                # Debug: Log switch_threshold parameter before calling wan_model.generate
+                print(f"[SWITCH_THRESHOLD_DEBUG] wgp.py calling wan_model.generate with switch_threshold: {switch_threshold}")
+                print(f"[SWITCH_THRESHOLD_DEBUG] Type: {type(switch_threshold)}, Value: {repr(switch_threshold)}")
+                
                 samples = wan_model.generate(
                     input_prompt = prompt,
                     image_start = image_start_tensor,  
