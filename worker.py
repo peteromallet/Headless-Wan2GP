@@ -325,7 +325,7 @@ def parse_args():
 # Process a single task using queue-based architecture
 # -----------------------------------------------------------------------------
 
-def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True, task_queue: HeadlessTaskQueue = None):
+def process_single_task(task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True, task_queue: HeadlessTaskQueue = None):
     task_id = task_params_dict.get("task_id", "unknown_task_" + str(time.time()))
     
     headless_logger.debug(f"Entering process_single_task", task_id=task_id)
@@ -364,22 +364,22 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
     elif task_type == "dp_final_gen":
         headless_logger.debug("Delegating to different perspective final generation handler", task_id=task_id)
         return dp._handle_dp_final_gen_task(
-            wgp_mod=wgp_mod,
             main_output_dir_base=main_output_dir_base,
             process_single_task=process_single_task,
             task_params_from_db=task_params_dict,
-            dprint=dprint
+            dprint=dprint,
+            task_queue=task_queue
         )
     elif task_type == "single_image":
         headless_logger.debug("Delegating to single image handler", task_id=task_id)
         return si._handle_single_image_task(
-            wgp_mod=wgp_mod,
             task_params_from_db=task_params_dict,
             main_output_dir_base=main_output_dir_base,
             task_id=task_id,
             image_download_dir=image_download_dir,
             apply_reward_lora=apply_reward_lora,
-            dprint=dprint
+            dprint=dprint,
+            task_queue=task_queue
         )
     elif task_type == "magic_edit":
         headless_logger.debug("Delegating to magic edit handler", task_id=task_id)
@@ -404,7 +404,7 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
 
     elif task_type == "rife_interpolate_images":
         headless_logger.debug("Processing RIFE interpolation task", task_id=task_id)
-        generation_success, output_location_to_db = handle_rife_interpolate_task(wgp_mod, task_params_dict, main_output_dir_base, task_id, dprint)
+        generation_success, output_location_to_db = handle_rife_interpolate_task(task_params_dict, main_output_dir_base, task_id, dprint, task_queue=task_queue)
 
     # Default handling for standard wgp tasks
     else:
@@ -482,7 +482,6 @@ def process_single_task(wgp_mod, task_params_dict, main_output_dir_base: Path, t
             chain_success, chain_message, final_path_from_chaining = tbi._handle_travel_chaining_after_wgp(
                 wgp_task_params=task_params_dict, 
                 actual_wgp_output_video_path=output_location_to_db,
-                wgp_mod=wgp_mod,
                 image_download_dir=image_download_dir,
                 dprint=dprint
             )
@@ -864,7 +863,7 @@ def main():
                     current_task_params["orchestrator_details"]["orchestrator_task_id"] = current_task_id_for_status_update
 
             task_succeeded, output_location = process_single_task(
-                None, current_task_params, main_output_dir, current_task_type, current_project_id,
+                current_task_params, main_output_dir, current_task_type, current_project_id,
                 image_download_dir=segment_image_download_dir,
                 apply_reward_lora=cli_args.apply_reward_lora,
                 colour_match_videos=cli_args.colour_match_videos,
