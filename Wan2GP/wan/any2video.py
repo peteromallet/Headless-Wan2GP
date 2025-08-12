@@ -750,7 +750,18 @@ class WanAny2V:
 
         # denoising
         trans = self.model
+        # Debug: Log timestep schedule and switch_threshold at start
+        print(f"[SWITCH_THRESHOLD_DEBUG] any2video.py starting generation loop:")
+        print(f"[SWITCH_THRESHOLD_DEBUG]   switch_threshold: {switch_threshold} (type: {type(switch_threshold)})")
+        print(f"[SWITCH_THRESHOLD_DEBUG]   timesteps: {timesteps[:5]}...{timesteps[-5:]} (len: {len(timesteps)})")
+        print(f"[SWITCH_THRESHOLD_DEBUG]   guidance_switch_done: {guidance_switch_done}")
+        print(f"[SWITCH_THRESHOLD_DEBUG]   guide_scale: {guide_scale}, guide2_scale: {guide2_scale}")
+        
         for i, t in enumerate(tqdm(timesteps)):
+            # Debug: Log the comparison for first few steps
+            if i < 5:
+                print(f"[SWITCH_THRESHOLD_DEBUG] Step {i}: timestep {t:.3f} <= {switch_threshold}? {t <= switch_threshold}")
+            
             if not guidance_switch_done and t <= switch_threshold:
                 print(f"[SWITCH_THRESHOLD_LOG] SWITCHING at step {i}/{len(timesteps)}, timestep {t:.1f} <= {switch_threshold}")
                 print(f"[SWITCH_THRESHOLD_LOG] Guidance scale: {guide_scale} -> {guide2_scale}")
