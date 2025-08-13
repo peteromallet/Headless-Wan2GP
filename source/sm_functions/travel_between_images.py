@@ -813,6 +813,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             "output_path": str(wgp_final_output_path_for_this_segment.resolve()), 
             "video_guide_path": str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
             "use_causvid_lora": full_orchestrator_payload.get("apply_causvid", False),
+            "use_lighti2x_lora": full_orchestrator_payload.get("use_lighti2x_lora", False),
             "apply_reward_lora": full_orchestrator_payload.get("apply_reward_lora", False),
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
