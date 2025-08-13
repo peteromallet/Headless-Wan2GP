@@ -27,4 +27,5 @@ def _handle_single_image_task(task_params_from_db: dict, main_output_dir_base: P
         f"handled by the direct_queue_task_types logic, not this legacy handler."
     )
     dprint(error_msg)
-    return False, error_msg
+                    return False, error_msg
+                
