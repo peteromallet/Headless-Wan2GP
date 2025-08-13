@@ -734,6 +734,13 @@ class HeadlessTaskQueue:
             sys.path.insert(0, str(source_dir))
         from lora_utils import detect_lora_optimization_flags, apply_lora_parameter_optimization, ensure_lora_in_list
         
+        # [DEBUG] Log task parameters for LoRA detection debugging
+        self.logger.info(f"[LORA_DEBUG] Task {task.id}: task.parameters keys: {list(task.parameters.keys())}")
+        self.logger.info(f"[LORA_DEBUG] Task {task.id}: use_causvid_lora in params: {'use_causvid_lora' in task.parameters}")
+        self.logger.info(f"[LORA_DEBUG] Task {task.id}: use_lighti2x_lora in params: {'use_lighti2x_lora' in task.parameters}")
+        if 'use_lighti2x_lora' in task.parameters:
+            self.logger.info(f"[LORA_DEBUG] Task {task.id}: use_lighti2x_lora value: {task.parameters['use_lighti2x_lora']}")
+        
         # Detect LoRA optimization flags using shared logic
         use_causvid, use_lighti2x = detect_lora_optimization_flags(
             task_params=task.parameters,
