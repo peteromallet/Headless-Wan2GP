@@ -616,17 +616,47 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 mask_video_path_for_wgp = None
         
         # Create generation task parameters optimized for queue processing
+        # Let WanOrchestrator handle parameter resolution with proper model preset precedence
         generation_params = {
             "negative_prompt": negative_prompt_for_wgp,
             "resolution": f"{parsed_res_wh[0]}x{parsed_res_wh[1]}",
             "video_length": total_frames_for_segment,
             "seed": segment_params.get("seed_to_use", 12345),
-            "num_inference_steps": full_orchestrator_payload.get("num_inference_steps", 30),
-            "guidance_scale": full_orchestrator_payload.get("guidance_scale", 5.0),
-            "flow_shift": full_orchestrator_payload.get("flow_shift", 3.0),
             "use_causvid_lora": full_orchestrator_payload.get("apply_causvid", False),
             "apply_reward_lora": apply_reward_lora,
         }
+        
+        # Only add explicit parameters if they're provided (let model preset handle defaults)
+        # Check both 'steps' and 'num_inference_steps' from orchestrator payload
+        explicit_steps = (
+            full_orchestrator_payload.get("num_inference_steps") or 
+            full_orchestrator_payload.get("steps") or
+            segment_params.get("num_inference_steps") or
+            segment_params.get("steps")
+        )
+        if explicit_steps:
+            generation_params["num_inference_steps"] = explicit_steps
+            dprint(f"[QUEUE_PARAMS] Using explicit steps: {explicit_steps}")
+        else:
+            dprint(f"[QUEUE_PARAMS] No explicit steps provided - model preset will handle defaults")
+        
+        # Only add guidance_scale if explicitly provided
+        explicit_guidance = (
+            full_orchestrator_payload.get("guidance_scale") or
+            segment_params.get("guidance_scale")
+        )
+        if explicit_guidance:
+            generation_params["guidance_scale"] = explicit_guidance
+            dprint(f"[QUEUE_PARAMS] Using explicit guidance_scale: {explicit_guidance}")
+        
+        # Only add flow_shift if explicitly provided
+        explicit_flow_shift = (
+            full_orchestrator_payload.get("flow_shift") or
+            segment_params.get("flow_shift")
+        )
+        if explicit_flow_shift:
+            generation_params["flow_shift"] = explicit_flow_shift
+            dprint(f"[QUEUE_PARAMS] Using explicit flow_shift: {explicit_flow_shift}")
         
         # Add video guide if available (ESSENTIAL for VACE models)
         if guide_video_path:
