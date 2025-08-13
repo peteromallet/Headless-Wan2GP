@@ -181,15 +181,23 @@ def apply_lora_parameter_optimization(
     # Priority: task_params > orchestrator_payload > current params > optimization defaults
     
     # Number of inference steps (check both 'num_inference_steps' and 'steps')
-    final_steps = (
+    # Check if steps are explicitly set anywhere in the precedence chain
+    explicit_steps = (
         (task_params.get("num_inference_steps") if task_params else None) or
         (task_params.get("steps") if task_params else None) or
         (orchestrator_payload.get("num_inference_steps") if orchestrator_payload else None) or
         (orchestrator_payload.get("steps") if orchestrator_payload else None) or
         params.get("num_inference_steps") or
-        params.get("steps") or
-        num_inference_steps_default
+        params.get("steps")
     )
+    
+    # Only use LoRA step optimization if no explicit steps are set
+    if explicit_steps is not None:
+        final_steps = explicit_steps
+        step_source = "explicit"
+    else:
+        final_steps = num_inference_steps_default
+        step_source = "lora_optimization"
     
     # Guidance scale
     final_guidance = (
@@ -214,20 +222,25 @@ def apply_lora_parameter_optimization(
     
     if dprint:
         dprint(f"[LORA_OPT] Task {task_id}: Applied {optimization_type} optimization:")
-        dprint(f"[LORA_OPT]   num_inference_steps: {final_steps}")
+        dprint(f"[LORA_OPT]   num_inference_steps: {final_steps} (source: {step_source})")
         dprint(f"[LORA_OPT]   guidance_scale: {final_guidance}")
         dprint(f"[LORA_OPT]   flow_shift: {final_flow_shift}")
         
-        # Validation warnings
-        if causvid_enabled and final_steps == 9:
-            dprint(f"[LORA_OPT] ✅ CausVid optimization SUCCESS: Using optimized 9 steps!")
-        elif causvid_enabled and final_steps != 9:
-            dprint(f"[LORA_OPT] ⚠️  WARNING: CausVid enabled but using {final_steps} steps instead of optimized 9 steps!")
-            
-        if lighti2x_enabled and final_steps == 6:
-            dprint(f"[LORA_OPT] ✅ LightI2X optimization SUCCESS: Using optimized 6 steps!")
-        elif lighti2x_enabled and final_steps != 6:
-            dprint(f"[LORA_OPT] ⚠️  WARNING: LightI2X enabled but using {final_steps} steps instead of optimized 6 steps!")
+        # Validation feedback - only warn about step optimization when it's actually being applied
+        if step_source == "lora_optimization":
+            if causvid_enabled and final_steps == 9:
+                dprint(f"[LORA_OPT] ✅ CausVid optimization SUCCESS: Using optimized 9 steps!")
+            elif causvid_enabled and final_steps != 9:
+                dprint(f"[LORA_OPT] ⚠️  WARNING: CausVid enabled but using {final_steps} steps instead of optimized 9 steps!")
+                
+            if lighti2x_enabled and final_steps == 6:
+                dprint(f"[LORA_OPT] ✅ LightI2X optimization SUCCESS: Using optimized 6 steps!")
+            elif lighti2x_enabled and final_steps != 6:
+                dprint(f"[LORA_OPT] ⚠️  WARNING: LightI2X enabled but using {final_steps} steps instead of optimized 6 steps!")
+        else:
+            # Steps were explicitly set, so just note that LoRA optimization is respecting explicit values
+            if causvid_enabled or lighti2x_enabled:
+                dprint(f"[LORA_OPT] ℹ️  Using explicit step count ({final_steps}), LoRA step optimization bypassed")
     
     return params
 
