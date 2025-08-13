@@ -303,6 +303,17 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             dprint(f"[DEEP_DEBUG]   segment_payload['use_causvid_lora']: {segment_payload.get('use_causvid_lora')}")
             dprint(f"[DEEP_DEBUG]   segment_payload['use_lighti2x_lora']: {segment_payload.get('use_lighti2x_lora')}")
             dprint(f"[DEEP_DEBUG]   segment_payload['apply_reward_lora']: {segment_payload.get('apply_reward_lora')}")
+            dprint(f"[DEEP_DEBUG]   FULL segment_payload keys: {list(segment_payload.keys())}")
+            
+            # [DEEP_DEBUG] Also log what we're about to send to the Edge Function
+            edge_function_payload = {
+                "task_id": current_segment_task_id,
+                "params": segment_payload,
+                "task_type": "travel_segment",
+                "project_id": orchestrator_project_id,
+                "dependant_on": previous_segment_task_id
+            }
+            dprint(f"[DEEP_DEBUG] EDGE FUNCTION PAYLOAD keys: {list(edge_function_payload['params'].keys())}")
 
             dprint(f"Orchestrator: Enqueuing travel_segment {idx} (ID: {current_segment_task_id}) depends_on={previous_segment_task_id}")
             db_ops.add_task_to_db(
