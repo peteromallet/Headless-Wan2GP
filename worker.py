@@ -509,7 +509,6 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 guide_video_path = None
         
         # 7. CRITICAL: VACE models MUST have a guide video - fail if creation failed
-        from pathlib import Path  # Ensure Path is available for validation
         if is_vace_model and (guide_video_path is None or not Path(guide_video_path).exists()):
             error_msg = f"VACE model '{model_name}' requires a guide video but creation failed for segment {segment_idx}. VACE models cannot perform pure text-to-video generation."
             dprint(f"[VACE_ERROR] {error_msg}")
