@@ -1144,48 +1144,19 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                 dprint(f"Seg {segment_idx}: Fallback LoRA processing: {len(processed_additional_loras)} LoRAs")
 
         # ------------------------------------------------------------------
-        # Ensure sensible defaults for critical generation params
+        # Ensure sensible defaults for critical generation params using shared utilities
         # ------------------------------------------------------------------
-        lighti2x_enabled = bool(segment_params.get("use_lighti2x_lora", False) or full_orchestrator_payload.get("use_lighti2x_lora", False))
-        causvid_enabled = bool(full_orchestrator_payload.get("apply_causvid", False) or full_orchestrator_payload.get("use_causvid_lora", False))
-
-        # AUTO-DETECT: Check if model config includes CausVid/LightI2X LoRAs and auto-enable optimization
+        from ...lora_utils import detect_lora_optimization_flags, apply_lora_parameter_optimization
+        
         model_name = full_orchestrator_payload["model_name"]
-        if not causvid_enabled or not lighti2x_enabled:  # Only check if not already explicitly enabled
-            try:
-                # Import WGP to access model definitions
-                import sys
-                import os
-                wan_dir = Path(__file__).parent.parent.parent / "Wan2GP"
-                if str(wan_dir) not in sys.path:
-                    sys.path.insert(0, str(wan_dir))
-                
-                import wgp
-                model_def = wgp.get_model_def(model_name)
-                if model_def and "model" in model_def and "loras" in model_def["model"]:
-                    model_loras = model_def["model"]["loras"]
-                    dprint(f"[AUTO_DETECT] Model {model_name} has LoRAs: {[os.path.basename(lora) for lora in model_loras if isinstance(lora, str)]}")
-                    
-                    # Check for CausVid LoRA in model config
-                    if not causvid_enabled:
-                        for lora in model_loras:
-                            if isinstance(lora, str) and "CausVid" in lora:
-                                causvid_enabled = True
-                                dprint(f"[AUTO_DETECT] CausVid LoRA detected in model config: {os.path.basename(lora)} - enabling optimization")
-                                break
-                    
-                    # Check for LightI2X LoRA in model config  
-                    if not lighti2x_enabled:
-                        for lora in model_loras:
-                            if isinstance(lora, str) and ("lightx2v" in lora.lower() or "lighti2x" in lora.lower()):
-                                lighti2x_enabled = True
-                                dprint(f"[AUTO_DETECT] LightI2X LoRA detected in model config: {os.path.basename(lora)} - enabling optimization")
-                                break
-                else:
-                    dprint(f"[AUTO_DETECT] No LoRAs found in model config for {model_name}")
-            except Exception as e:
-                dprint(f"[AUTO_DETECT] Failed to check model config LoRAs: {e}")
-                # Continue with original flags if detection fails
+        
+        # Detect LoRA optimization flags using shared logic
+        causvid_enabled, lighti2x_enabled = detect_lora_optimization_flags(
+            task_params=segment_params,
+            orchestrator_payload=full_orchestrator_payload,
+            model_name=model_name,
+            dprint=dprint
+        )
 
         # [CausVidDebugTrace] Add detailed parameter precedence logging
         dprint(f"[CausVidDebugTrace] Segment {segment_idx}: Parameter precedence analysis:")
@@ -1197,83 +1168,30 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         dprint(f"[CausVidDebugTrace]   full_orchestrator_payload.get('steps'): {full_orchestrator_payload.get('steps')}")
         dprint(f"[CausVidDebugTrace]   wgp_payload.get('num_inference_steps'): {wgp_payload.get('num_inference_steps')}")
         dprint(f"[CausVidDebugTrace]   wgp_payload.get('steps'): {wgp_payload.get('steps')}")
-        dprint(f"[CausVidDebugTrace]   default would be: {5 if lighti2x_enabled else 30}")
+        dprint(f"[CausVidDebugTrace]   default would be: {6 if lighti2x_enabled else (9 if causvid_enabled else 30)}")
 
-        # Check if special LoRAs are detected from model config (not explicit flags)
-        model_has_causvid = False
-        model_has_lighti2x = False
-        try:
-            import wgp
-            model_def = wgp.get_model_def(full_orchestrator_payload["model_name"])
-            if model_def and "model" in model_def and "loras" in model_def["model"]:
-                model_loras = model_def["model"]["loras"]
-                model_has_causvid = any(isinstance(lora, str) and "CausVid" in lora for lora in model_loras)
-                model_has_lighti2x = any(isinstance(lora, str) and ("lightx2v" in lora.lower() or "lighti2x" in lora.lower()) for lora in model_loras)
-        except:
-            pass
-
-        # Parameter precedence: respect JSON config when LoRAs are built into model
-        if causvid_enabled and not model_has_causvid:
-            # Explicit CausVid request (not from model config) - use optimization
-            num_inference_steps = (
-                segment_params.get("num_inference_steps")
-                or segment_params.get("steps")  # Allow explicit segment override
-                or 9  # CausVid optimized steps
-            )
-            guidance_scale_default = 1.0  # CausVid optimized guidance
-            flow_shift_default = 1.0      # CausVid optimized flow_shift
-            dprint(f"[CausVidFix] Explicit CausVid optimization applied: steps={num_inference_steps}, guidance={guidance_scale_default}, flow_shift={flow_shift_default}")
-        elif lighti2x_enabled and not model_has_lighti2x:
-            # Explicit LightI2X request (not from model config) - use optimization
-            num_inference_steps = (
-                segment_params.get("num_inference_steps")
-                or segment_params.get("steps")  # Allow explicit segment override
-                or 6  # LightI2X optimized steps
-            )
-            guidance_scale_default = 1.0  # LightI2X optimized guidance
-            flow_shift_default = 5.0      # LightI2X optimized flow_shift
-            dprint(f"[CausVidFix] Explicit LightI2X optimization applied: steps={num_inference_steps}, guidance={guidance_scale_default}, flow_shift={flow_shift_default}")
-        else:
-            # Normal parameter precedence chain - includes models with built-in LoRAs using JSON settings
-            num_inference_steps = (
-                segment_params.get("num_inference_steps")
-                or segment_params.get("steps")  # Check for "steps" as alternative
-                or full_orchestrator_payload.get("num_inference_steps")
-                or full_orchestrator_payload.get("steps")  # Check for "steps" as alternative
-                or wgp_payload.get("num_inference_steps")  # Check wgp_payload after JSON override
-                or wgp_payload.get("steps")  # Check for "steps" in wgp_payload
-                or 30  # Default steps
-            )
-            guidance_scale_default = (
-                full_orchestrator_payload.get("guidance_scale") 
-                or wgp_payload.get("guidance_scale")  # Use JSON config value if available
-                or 5.0  # Default fallback
-            )
-            dprint(f"[PARAM_DEBUG] Segment {segment_idx}: Guidance scale resolution:")
-            dprint(f"[PARAM_DEBUG]   full_orchestrator_payload.get('guidance_scale'): {full_orchestrator_payload.get('guidance_scale')}")
-            dprint(f"[PARAM_DEBUG]   wgp_payload.get('guidance_scale'): {wgp_payload.get('guidance_scale')}")
-            dprint(f"[PARAM_DEBUG]   Final guidance_scale_default: {guidance_scale_default}")
-            flow_shift_default = (
-                full_orchestrator_payload.get("flow_shift")
-                or wgp_payload.get("flow_shift")  # Use JSON config value if available  
-                or 3.0  # Default fallback
-            )
-            
-            if model_has_causvid or model_has_lighti2x:
-                dprint(f"[JSON_CONFIG] Using model's JSON config settings: steps={num_inference_steps}, guidance={guidance_scale_default}, flow_shift={flow_shift_default}")
-            else:
-                dprint(f"[NORMAL_PARAMS] Using standard parameter chain: steps={num_inference_steps}, guidance={guidance_scale_default}, flow_shift={flow_shift_default}")
+        # Apply LoRA parameter optimization using shared logic
+        optimized_params = apply_lora_parameter_optimization(
+            params=wgp_payload.copy(),  # Work on a copy to avoid modifying original
+            causvid_enabled=causvid_enabled,
+            lighti2x_enabled=lighti2x_enabled,
+            model_name=model_name,
+            task_params=segment_params,
+            orchestrator_payload=full_orchestrator_payload,
+            task_id=segment_task_id_str,
+            dprint=dprint
+        )
+        
+        # Extract the optimized values
+        num_inference_steps = optimized_params["num_inference_steps"]
+        guidance_scale_default = optimized_params["guidance_scale"]
+        flow_shift_default = optimized_params["flow_shift"]
         
         dprint(f"[CausVidDebugTrace] Segment {segment_idx}: FINAL SELECTED num_inference_steps = {num_inference_steps}")
         dprint(f"[CausVidDebugTrace] Segment {segment_idx}: FINAL SELECTED guidance_scale = {guidance_scale_default}")
         dprint(f"[CausVidDebugTrace] Segment {segment_idx}: FINAL SELECTED flow_shift = {flow_shift_default}")
-        
-        if causvid_enabled and num_inference_steps == 9:
-            dprint(f"[CausVidFix] ✅ CausVid optimization SUCCESS: Using optimized 9 steps!")
-        elif causvid_enabled and num_inference_steps != 9:
-            dprint(f"[CausVidDebugTrace] ⚠️  WARNING: CausVid enabled but using {num_inference_steps} steps instead of optimized 9 steps!")
 
-        # Parameter defaults now handled in the CausVid/LightI2X optimization logic above
+        # Parameter defaults now handled in the shared optimization logic above
 
         # DEPRECATED: Legacy task queue system code - travel segments now processed via direct queue integration
         # Travel segments are now routed through worker.py's _handle_travel_segment_via_queue function

@@ -751,105 +751,66 @@ class HeadlessTaskQueue:
         if sample_solver:
             self._apply_sampler_cfg_preset(task.model, sample_solver, wgp_params)
         
-        # Apply special LoRA settings (CausVid, LightI2X) - auto-detect from model or use explicit flags
-        use_causvid = task.parameters.get("use_causvid_lora", False)
-        use_lighti2x = task.parameters.get("use_lighti2x_lora", False)
+        # Apply special LoRA settings (CausVid, LightI2X) using shared utilities
+        from ..lora_utils import detect_lora_optimization_flags, apply_lora_parameter_optimization, ensure_lora_in_list
         
-        # Auto-detect CausVid LoRA from model defaults if not explicitly set
-        if not use_causvid:
-            current_loras = wgp_params.get("lora_names", [])
-            causvid_lora_filename = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
-            if any(causvid_lora_filename in str(lora_path) for lora_path in current_loras):
-                use_causvid = True
-                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Auto-detected CausVid LoRA from model defaults")
-        
-        # Auto-detect LightI2X LoRA from model defaults if not explicitly set
-        if not use_lighti2x:
-            current_loras = wgp_params.get("lora_names", [])
-            lighti2x_lora_filename = "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors"
-            if any(lighti2x_lora_filename in str(lora_path) for lora_path in current_loras):
-                use_lighti2x = True
-                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Auto-detected LightI2X LoRA from model defaults")
+        # Detect LoRA optimization flags using shared logic
+        use_causvid, use_lighti2x = detect_lora_optimization_flags(
+            task_params=task.parameters,
+            model_name=task.model,
+            dprint=lambda msg: self.logger.info(msg)
+        )
         
         # [CausVidDebugTrace] Enhanced parameter inspection
         self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Pre-processing parameter analysis:")
         self.logger.info(f"[CausVidDebugTrace]   use_causvid: {use_causvid}")
         self.logger.info(f"[CausVidDebugTrace]   use_lighti2x: {use_lighti2x}")
-        self.logger.info(f"[CausVidDebugTrace]   wgp_params keys before CausVid logic: {list(wgp_params.keys())}")
+        self.logger.info(f"[CausVidDebugTrace]   wgp_params keys before LoRA optimization: {list(wgp_params.keys())}")
         self.logger.info(f"[CausVidDebugTrace]   'num_inference_steps' in wgp_params: {'num_inference_steps' in wgp_params}")
         if "num_inference_steps" in wgp_params:
             self.logger.info(f"[CausVidDebugTrace]   existing num_inference_steps value: {wgp_params['num_inference_steps']}")
         
+        # Apply LoRA parameter optimization using shared logic
+        if use_causvid or use_lighti2x:
+            wgp_params = apply_lora_parameter_optimization(
+                params=wgp_params,
+                causvid_enabled=use_causvid,
+                lighti2x_enabled=use_lighti2x,
+                model_name=task.model,
+                task_params=task.parameters,
+                task_id=task.id,
+                dprint=lambda msg: self.logger.info(msg)
+            )
+        
+        # Ensure required LoRAs are in the activated list
         if use_causvid:
-            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: CausVid LoRA detected - applying optimizations")
-            self.logger.info(f"[Task {task.id}] Applying CausVid LoRA settings: steps=9, guidance=1.0, flow_shift=1.0")
+            wgp_params = ensure_lora_in_list(
+                params=wgp_params,
+                lora_filename="Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
+                lora_type="CausVid",
+                task_id=task.id,
+                dprint=lambda msg: self.logger.info(msg)
+            )
             
-            # Apply CausVid-specific parameters, but allow task to override if explicitly specified
-            if "num_inference_steps" not in wgp_params:
-                wgp_params["num_inference_steps"] = 9
-                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Set num_inference_steps = 9 (CausVid optimization)")
-            else:
-                self.logger.warning(f"[CausVidDebugTrace] Task {task.id}: ⚠️ CausVid num_inference_steps SKIPPED - already set to {wgp_params['num_inference_steps']}")
-                
-            if "guidance_scale" not in wgp_params:
-                wgp_params["guidance_scale"] = 1.0
-                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Set guidance_scale = 1.0 (CausVid optimization)")
-            else:
-                self.logger.warning(f"[CausVidDebugTrace] Task {task.id}: ⚠️ CausVid guidance_scale SKIPPED - already set to {wgp_params['guidance_scale']}")
-                
-            if "flow_shift" not in wgp_params:
-                wgp_params["flow_shift"] = 1.0
-                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Set flow_shift = 1.0 (CausVid optimization)")
-            else:
-                self.logger.warning(f"[CausVidDebugTrace] Task {task.id}: ⚠️ CausVid flow_shift SKIPPED - already set to {wgp_params['flow_shift']}")
-            
-            # Ensure CausVid LoRA is in activated list
-            current_loras = wgp_params.get("lora_names", [])
-            causvid_lora = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
-            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Current LoRAs before CausVid: {current_loras}")
-            
-            if causvid_lora not in current_loras:
-                current_loras.append(causvid_lora)
-                wgp_params["lora_names"] = current_loras
-                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Added CausVid LoRA to list: {current_loras}")
-                
-                # Add multiplier for CausVid LoRA
-                current_multipliers = wgp_params.get("lora_multipliers", [])
-                while len(current_multipliers) < len(current_loras):
-                    current_multipliers.append(1.0)
-                wgp_params["lora_multipliers"] = current_multipliers
-                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Updated LoRA multipliers: {current_multipliers}")
-            else:
-                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: CausVid LoRA already in list at index {current_loras.index(causvid_lora)}")
-        else:
-            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: CausVid NOT enabled, skipping optimizations")
+            self.logger.info(f"[Task {task.id}] Applied CausVid LoRA settings via shared utilities")
         
         if use_lighti2x:
-            self.logger.info(f"[Task {task.id}] Applying LightI2X LoRA settings: steps=6, guidance=1.0, flow_shift=5.0")
-            # Apply LightI2X-specific parameters
-            if "num_inference_steps" not in wgp_params:
-                wgp_params["num_inference_steps"] = 6
-            if "guidance_scale" not in wgp_params:
-                wgp_params["guidance_scale"] = 1.0
-            if "flow_shift" not in wgp_params:
-                wgp_params["flow_shift"] = 5.0
+            wgp_params = ensure_lora_in_list(
+                params=wgp_params,
+                lora_filename="Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
+                lora_type="LightI2X",
+                task_id=task.id,
+                dprint=lambda msg: self.logger.info(msg)
+            )
             
-            # LightI2X-specific settings
+            # LightI2X-specific additional settings
             wgp_params["sample_solver"] = "unipc"
             wgp_params["denoise_strength"] = 1.0
             
-            # Ensure LightI2X LoRA is in activated list
-            current_loras = wgp_params.get("lora_names", [])
-            lighti2x_lora = "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors"
-            if lighti2x_lora not in current_loras:
-                current_loras.append(lighti2x_lora)
-                wgp_params["lora_names"] = current_loras
-                
-                # Add multiplier for LightI2X LoRA
-                current_multipliers = wgp_params.get("lora_multipliers", [])
-                while len(current_multipliers) < len(current_loras):
-                    current_multipliers.append(1.0)
-                wgp_params["lora_multipliers"] = current_multipliers
+            self.logger.info(f"[Task {task.id}] Applied LightI2X LoRA settings via shared utilities")
+        
+        if not use_causvid and not use_lighti2x:
+            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: No LoRA optimizations enabled")
         
         # ADDITIONAL LORAS: Process additional LoRA names and multipliers from task parameters
         additional_lora_names = task.parameters.get("additional_lora_names", [])
