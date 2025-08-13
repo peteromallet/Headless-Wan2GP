@@ -256,6 +256,49 @@ class HeadlessTaskQueue:
         """Get status of a specific task."""
         return self.task_history.get(task_id)
     
+    def wait_for_completion(self, task_id: str, timeout: float = 300.0) -> Dict[str, Any]:
+        """
+        Wait for a task to complete and return the result.
+        
+        Args:
+            task_id: ID of the task to wait for
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            Dictionary with 'success', 'output_path', and optional 'error' keys
+        """
+        import time
+        start_time = time.time()
+        
+        while (time.time() - start_time) < timeout:
+            task_status = self.get_task_status(task_id)
+            
+            if task_status is None:
+                return {
+                    "success": False,
+                    "error": f"Task {task_id} not found in queue"
+                }
+            
+            if task_status.status == "completed":
+                return {
+                    "success": True,
+                    "output_path": task_status.result_path
+                }
+            elif task_status.status == "failed":
+                return {
+                    "success": False,
+                    "error": task_status.error_message or "Task failed with unknown error"
+                }
+            
+            # Task is still pending or processing, wait a bit
+            time.sleep(1.0)
+        
+        # Timeout reached
+        return {
+            "success": False,
+            "error": f"Task {task_id} did not complete within {timeout} seconds"
+        }
+    
     def get_queue_status(self) -> QueueStatus:
         """Get current queue status."""
         with self.queue_lock:
