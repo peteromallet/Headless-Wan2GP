@@ -441,11 +441,13 @@ class HeadlessTaskQueue:
             if model_supports_vace:
                 self.logger.info(f"[GENERATION_DEBUG] Task {task.id}: Using VACE generation path")
                 
-                # For VACE models, video_guide is optional but recommended
+                # CRITICAL: VACE models require a video_guide parameter
                 if "video_guide" in generation_params and generation_params["video_guide"]:
                     self.logger.info(f"[GENERATION_DEBUG] Task {task.id}: Video guide provided: {generation_params['video_guide']}")
                 else:
-                    self.logger.info(f"[GENERATION_DEBUG] Task {task.id}: No video guide - using text-to-video mode")
+                    error_msg = f"VACE model '{task.model}' requires a video_guide parameter but none was provided. VACE models cannot perform pure text-to-video generation."
+                    self.logger.error(f"[GENERATION_DEBUG] Task {task.id}: {error_msg}")
+                    raise ValueError(error_msg)
                 
                 result = self.orchestrator.generate_vace(
                     prompt=task.prompt,
