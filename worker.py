@@ -180,6 +180,14 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             generation_params[param] = db_task_params[param]
     
     # [DEEP_DEBUG] Log LoRA parameter transfer for debugging
+    print(f"[WORKER_DEBUG] Worker {task_id}: CONVERTING DB TASK TO GENERATION TASK")
+    print(f"[WORKER_DEBUG]   task_type: {task_type}")
+    print(f"[WORKER_DEBUG]   db_task_params keys: {list(db_task_params.keys())}")
+    print(f"[WORKER_DEBUG]   'use_lighti2x_lora' in db_task_params: {'use_lighti2x_lora' in db_task_params}")
+    if 'use_lighti2x_lora' in db_task_params:
+        print(f"[WORKER_DEBUG]   db_task_params['use_lighti2x_lora']: {db_task_params['use_lighti2x_lora']}")
+    print(f"[WORKER_DEBUG]   generation_params keys after copy: {list(generation_params.keys())}")
+    
     if task_type == "travel_segment":
         dprint(f"[DEEP_DEBUG] Worker {task_id}: DB TASK TO GENERATION TASK CONVERSION")
         dprint(f"[DEEP_DEBUG]   db_task_params.get('use_causvid_lora'): {db_task_params.get('use_causvid_lora')}")
