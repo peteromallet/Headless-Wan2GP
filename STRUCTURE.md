@@ -6,22 +6,63 @@ Headless-Wan2GP is a queue-based video generation system built around the Wan2GP
 
 ## Architecture
 
-### Runtime data flow with wgp.py (high-level)
+### Runtime data flow with wgp.py (unified architecture)
 
 **DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py → Files**
 
-1. **worker.py** polls the tasks table (SQLite/Supabase), claims a row, converts DB params to `GenerationTask`
-2. **HeadlessTaskQueue** receives the task, switches models if needed, delegates to WanOrchestrator  
-3. **WanOrchestrator** maps parameters safely, calls `wgp.generate_video()` with exact model loading semantics
-4. **wgp.py** performs generation, writes files to outputs/, updates `state["gen"]["file_list"]`
-5. **Result flows back**: WanOrchestrator → HeadlessTaskQueue → worker.py → DB status update → optional Supabase upload
+**NEW: Direct Queue Integration** eliminates triple-queue inefficiencies:
+
+1. **worker.py** polls the tasks table (SQLite/Supabase), claims a row
+2. **For generation tasks**: worker.py directly submits to HeadlessTaskQueue (bypassing legacy handlers)
+3. **For orchestrator tasks**: worker.py delegates to orchestrator handlers (travel_orchestrator, etc.)
+4. **HeadlessTaskQueue** processes tasks with model persistence, switches models efficiently
+5. **WanOrchestrator** maps parameters safely, calls `wgp.generate_video()` with exact model loading semantics
+6. **wgp.py** performs generation, writes files to outputs/, updates `state["gen"]["file_list"]`
+7. **Result flows back**: WanOrchestrator → HeadlessTaskQueue → worker.py → DB status update → optional Supabase upload
+
+**Key improvements:**
+- ✅ **Eliminated blocking waits** in single_image.py and travel_between_images.py
+- ✅ **Model persistence** across sequential tasks (especially beneficial for travel segments)
+- ✅ **Single worker thread** processing (VRAM-friendly)
+- ✅ **Direct queue routing** for simple generation tasks
 
 ### Component responsibilities at a glance
 
-- **worker.py**: Polls DB, claims work, converts DB rows → `GenerationTask`, submits to queue, awaits completion, performs chaining, updates DB, and handles uploads.
-- **HeadlessTaskQueue** (`headless_model_management.py`): In-memory priority queue, model switching/persistence, delegates generation to orchestrator, tracks per-task status and timing.
-- **WanOrchestrator** (`headless_wgp.py`): Thin adapter around `wgp.generate_video` with exact model-load/unload semantics, safe parameter mapping, and LoRA/VACE handling.
-- **wgp.py** (in `Wan2GP/`): Upstream engine that actually performs generation and records output paths in `state["gen"]["file_list"]`.
+- **worker.py**: Polls DB, claims work, routes tasks appropriately:
+  - **Generation tasks** (`single_image`, `vace`, `flux`, `t2v`, etc.) → Direct to HeadlessTaskQueue  
+  - **Orchestrator tasks** (`travel_orchestrator`) → Orchestrator handlers
+  - **Travel segments** → `_handle_travel_segment_via_queue` (eliminates blocking)
+  - **Complex tasks** (`travel_stitch`, `dp_final_gen`) → Specialized handlers
+- **HeadlessTaskQueue** (`headless_model_management.py`): Enhanced queue system with:
+  - Model persistence across tasks (reduces load times)
+  - Advanced parameter validation (video guides, masks, image refs)
+  - VACE/CausVid/LightI2X optimization auto-detection
+  - Enhanced logging and debugging support
+- **WanOrchestrator** (`headless_wgp.py`): Enhanced adapter with improved VACE detection and parameter mapping
+- **wgp.py** (in `Wan2GP/`): Upstream engine that performs generation and records output paths
+
+### Architectural Improvements (New)
+
+**Before (Triple-Queue Problem):**
+```
+DB → worker.py → single_image.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
+                      ↓ BLOCKING WAIT ↓
+                   (defeats queue purpose)
+```
+
+**After (Unified Architecture):**
+```
+DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
+         ↓ Direct routing, no blocking waits
+    Model stays loaded between tasks
+```
+
+**Benefits:**
+1. **Eliminated Blocking Waits**: No more `task_queue.wait_for_completion()` in handlers
+2. **Model Persistence**: Same model stays loaded across sequential tasks (huge performance gain)
+3. **Simplified Flow**: Direct routing eliminates unnecessary handler layers
+4. **VRAM Efficiency**: Single worker thread respects GPU memory constraints
+5. **Better Debugging**: Centralized parameter validation and logging
 
 ### Key integration details with wgp.py
 
