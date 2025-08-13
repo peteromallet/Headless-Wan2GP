@@ -328,8 +328,64 @@ class WanOrchestrator:
         base_type = self._get_base_model_type(self.current_model)
         return base_type in ["t2v", "t2v_1.3B", "hunyuan", "ltxv_13B"]
 
+    def _resolve_parameters(self, model_type: str, task_params: dict) -> dict:
+        """
+        Resolve generation parameters with explicit precedence:
+        1. Task explicit parameters (highest priority)
+        2. Model JSON configuration (medium priority)
+        3. System defaults (lowest priority)
+        
+        Args:
+            model_type: Model identifier (e.g., "optimised-t2i")
+            task_params: Parameters explicitly provided by the task/user
+            
+        Returns:
+            Resolved parameter dictionary with proper precedence
+        """
+        # 1. Start with system defaults (lowest priority)
+        resolved_params = {
+            "resolution": "1280x720",
+            "video_length": 49,
+            "num_inference_steps": 25,
+            "guidance_scale": 7.5,
+            "guidance2_scale": 7.5,
+            "flow_shift": 7.0,
+            "sample_solver": "euler",
+            "switch_threshold": 500,
+            "seed": 42,
+            "negative_prompt": "",
+            "activated_loras": [],
+            "loras_multipliers": "",
+        }
+        
+        # 2. Apply model JSON configuration (medium priority)
+        try:
+            import wgp
+            model_defaults = wgp.get_default_settings(model_type)
+            if model_defaults:
+                for param, value in model_defaults.items():
+                    # Skip UI-specific parameters that shouldn't affect generation
+                    if param not in ["prompt", "activated_loras", "loras_multipliers"]:
+                        resolved_params[param] = value
+                        
+                generation_logger.debug(f"Applied model config for '{model_type}': {len(model_defaults)} parameters")
+            else:
+                generation_logger.warning(f"No model configuration found for '{model_type}'")
+                
+        except Exception as e:
+            generation_logger.warning(f"Could not load model configuration for '{model_type}': {e}")
+        
+        # 3. Apply task explicit parameters (highest priority)
+        for param, value in task_params.items():
+            if value is not None:  # Don't override with None values
+                resolved_params[param] = value
+                
+        generation_logger.debug(f"Parameter resolution for '{model_type}': {len(task_params)} task overrides applied")
+        return resolved_params
+
     def generate(self, 
                 prompt: str,
+                model_type: str = None,
                 # Common parameters
                 resolution: str = "1280x720",
                 video_length: int = 49,
@@ -386,6 +442,42 @@ class WanOrchestrator:
         if not self.current_model:
             raise RuntimeError("No model loaded. Call load_model() first.")
 
+        # Use provided model_type or current loaded model
+        effective_model_type = model_type or self.current_model
+        
+        # Resolve parameters with proper precedence: task > model_config > system_defaults
+        task_explicit_params = {
+            "prompt": prompt,
+            "resolution": resolution,
+            "video_length": video_length, 
+            "num_inference_steps": num_inference_steps,
+            "guidance_scale": guidance_scale,
+            "seed": seed,
+            "video_guide": video_guide,
+            "video_mask": video_mask,
+            "video_guide2": video_guide2,
+            "video_mask2": video_mask2,
+            "video_prompt_type": video_prompt_type,
+            "control_net_weight": control_net_weight,
+            "control_net_weight2": control_net_weight2,
+            "embedded_guidance_scale": embedded_guidance_scale,
+            "lora_names": lora_names,
+            "lora_multipliers": lora_multipliers,
+            "negative_prompt": negative_prompt,
+            "batch_size": batch_size,
+        }
+        
+        # Remove None values to avoid overriding defaults unnecessarily
+        task_explicit_params = {k: v for k, v in task_explicit_params.items() if v is not None}
+        
+        # Add any additional kwargs
+        task_explicit_params.update(kwargs)
+        
+        # Resolve final parameters with proper precedence
+        resolved_params = self._resolve_parameters(effective_model_type, task_explicit_params)
+        
+        generation_logger.info(f"[PARAM_RESOLUTION] Final parameters for '{effective_model_type}': num_inference_steps={resolved_params.get('num_inference_steps')}, guidance_scale={resolved_params.get('guidance_scale')}")
+
         # Determine model types for generation
         base_model_type = self._get_base_model_type(self.current_model)
         vace_test_result = self._test_vace_module(self.current_model)
@@ -406,19 +498,25 @@ class WanOrchestrator:
         if is_vace and not video_guide:
             raise ValueError("VACE models require video_guide parameter")
 
+        # Extract resolved parameters
+        final_video_length = resolved_params.get("video_length", 49)
+        final_batch_size = resolved_params.get("batch_size", 1)
+        final_guidance_scale = resolved_params.get("guidance_scale", 7.5)
+        final_embedded_guidance = resolved_params.get("embedded_guidance_scale", 3.0)
+        
         # Configure model-specific parameters
         if is_flux:
             image_mode = 1
             # For Flux, video_length means number of images
             actual_video_length = 1
-            actual_batch_size = video_length
+            actual_batch_size = final_video_length
             # Use embedded guidance for Flux
-            actual_guidance = embedded_guidance_scale
+            actual_guidance = final_embedded_guidance
         else:
             image_mode = 0
-            actual_video_length = video_length
-            actual_batch_size = batch_size
-            actual_guidance = guidance_scale
+            actual_video_length = final_video_length
+            actual_batch_size = final_batch_size
+            actual_guidance = final_guidance_scale
 
         # Set up VACE parameters
         if not is_vace:
@@ -462,19 +560,19 @@ class WanOrchestrator:
             elif cmd == "preview":
                 print("🖼️  Preview updated")
 
-        # Build parameter dictionary with defaults
+        # Build parameter dictionary from resolved parameters
         wgp_params = {
             # Core parameters (fixed, not overridable)
             'task': task,
             'send_cmd': send_cmd,
             'state': self.state,
             'model_type': self.current_model,
-            'prompt': prompt,
-            'negative_prompt': negative_prompt,
-            'resolution': resolution,
+            'prompt': resolved_params.get("prompt", prompt),
+            'negative_prompt': resolved_params.get("negative_prompt", ""),
+            'resolution': resolved_params.get("resolution", "1280x720"),
             'video_length': actual_video_length,
             'batch_size': actual_batch_size,
-            'seed': seed,
+            'seed': resolved_params.get("seed", 42),
             'force_fps': "auto",
             'image_mode': image_mode,
             
@@ -492,14 +590,14 @@ class WanOrchestrator:
             'activated_loras': activated_loras,
             'loras_multipliers': loras_multipliers_str,
             
-            # Overridable parameters with defaults
-            'num_inference_steps': num_inference_steps,
+            # Overridable parameters from resolved configuration
+            'num_inference_steps': resolved_params.get("num_inference_steps", 25),
             'guidance_scale': actual_guidance,
-            'guidance2_scale': actual_guidance,
-            'switch_threshold': 500,  # Default value (0-1000 scale)
-            'embedded_guidance_scale': embedded_guidance_scale if is_flux else 0.0,
-            'flow_shift': 7.0,
-            'sample_solver': "euler",
+            'guidance2_scale': resolved_params.get("guidance2_scale", actual_guidance),
+            'switch_threshold': resolved_params.get("switch_threshold", 500),
+            'embedded_guidance_scale': final_embedded_guidance if is_flux else 0.0,
+            'flow_shift': resolved_params.get("flow_shift", 7.0),
+            'sample_solver': resolved_params.get("sample_solver", "euler"),
             
             # Standard defaults for other parameters
             'audio_guidance_scale': 1.0,
@@ -654,15 +752,16 @@ class WanOrchestrator:
 
     # Convenience methods for specific generation types
     
-    def generate_t2v(self, prompt: str, **kwargs) -> str:
+    def generate_t2v(self, prompt: str, model_type: str = None, **kwargs) -> str:
         """Generate text-to-video content."""
         if not self._is_t2v():
             generation_logger.warning(f"Current model {self.current_model} may not be optimized for T2V")
-        return self.generate(prompt=prompt, **kwargs)
+        return self.generate(prompt=prompt, model_type=model_type, **kwargs)
     
     def generate_vace(self, 
                      prompt: str, 
                      video_guide: str,
+                     model_type: str = None,
                      video_mask: Optional[str] = None,
                      video_guide2: Optional[str] = None,  # NEW: Secondary guide
                      video_mask2: Optional[str] = None,   # NEW: Secondary mask
@@ -698,6 +797,7 @@ class WanOrchestrator:
         
         return self.generate(
             prompt=prompt,
+            model_type=model_type,
             video_guide=video_guide,
             video_mask=video_mask,
             video_guide2=video_guide2,  # Now properly supported in WGP
@@ -708,7 +808,7 @@ class WanOrchestrator:
             **kwargs  # Any additional parameters including switch_threshold
         )
 
-    def generate_flux(self, prompt: str, images: int = 4, **kwargs) -> str:
+    def generate_flux(self, prompt: str, images: int = 4, model_type: str = None, **kwargs) -> str:
         """Generate Flux images.
         
         Args:
@@ -724,6 +824,7 @@ class WanOrchestrator:
         
         return self.generate(
             prompt=prompt,
+            model_type=model_type,
             video_length=images,  # For Flux, video_length = number of images
             **kwargs
         )
