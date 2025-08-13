@@ -103,9 +103,10 @@ def _handle_single_image_task(task_params_from_db: dict, main_output_dir_base: P
         from headless_model_management import GenerationTask
         
         generation_task = GenerationTask(
-            task_id=task_id,
-            model_name=model_name,
-            **generation_params
+            id=task_id,
+            model=model_name,
+            prompt=generation_params.get("prompt", ""),
+            parameters={k: v for k, v in generation_params.items() if k != "prompt"}
         )
         
         # Execute the task using the queue system
