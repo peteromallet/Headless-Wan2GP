@@ -732,10 +732,14 @@ class HeadlessTaskQueue:
             for param, value in model_defaults.items():
                 # Only skip if this parameter was explicitly set by the user in task.parameters
                 if param not in task_explicit_params:
-                    # Model JSON config overrides worker defaults
+                    # Model JSON config ALWAYS overrides worker defaults (this is the correct precedence)
+                    old_value = wgp_params.get(param, "NOT_SET")
                     wgp_params[param] = value
                     applied_defaults[param] = value
-                    self.logger.debug(f"Applied model default: {param}={value} (overriding any worker default)")
+                    if old_value != "NOT_SET" and old_value != value:
+                        self.logger.debug(f"Applied model default: {param}={value} (overrode worker default: {old_value})")
+                    else:
+                        self.logger.debug(f"Applied model default: {param}={value}")
                 else:
                     self.logger.debug(f"Task explicit parameter override: {param}={wgp_params[param]} (model default: {value})")
             
