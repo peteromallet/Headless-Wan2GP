@@ -714,52 +714,8 @@ class HeadlessTaskQueue:
             else:
                 wgp_params["lora_multipliers"] = task.parameters["loras_multipliers"]
         
-        # Load model-specific defaults from JSON first, but respect task parameter overrides
-        try:
-            import wgp
-            
-            # Debug: Check what the model definition contains
-            model_def = wgp.get_model_def(task.model)
-            self.logger.info(f"[MODEL_DEF_DEBUG] get_model_def('{task.model}') returned: {model_def}")
-            
-            model_defaults = wgp.get_default_settings(task.model)
-            self.logger.info(f"[WGP_DEBUG] get_default_settings('{task.model}') returned: {model_defaults}")
-            
-            # Apply model defaults with proper precedence: task explicit params > model JSON config > worker defaults
-            applied_defaults = {}
-            task_explicit_params = set(task.parameters.keys())  # These are user-specified parameters
-            
-            for param, value in model_defaults.items():
-                # Only skip if this parameter was explicitly set by the user in task.parameters
-                if param not in task_explicit_params:
-                    # Model JSON config ALWAYS overrides worker defaults (this is the correct precedence)
-                    old_value = wgp_params.get(param, "NOT_SET")
-                    wgp_params[param] = value
-                    applied_defaults[param] = value
-                    if old_value != "NOT_SET" and old_value != value:
-                        self.logger.debug(f"Applied model default: {param}={value} (overrode worker default: {old_value})")
-                    else:
-                        self.logger.debug(f"Applied model default: {param}={value}")
-                else:
-                    self.logger.debug(f"Task explicit parameter override: {param}={wgp_params[param]} (model default: {value})")
-            
-            if applied_defaults:
-                self.logger.info(f"Applied model defaults for '{task.model}': {applied_defaults}")
-            else:
-                self.logger.info(f"No model defaults applied for '{task.model}' - all parameters overridden by task")
-                
-        except Exception as e:
-            self.logger.warning(f"Could not load model defaults for '{task.model}': {e}")
-            # Fallback to hardcoded defaults if model loading fails
-            fallback_defaults = {
-                "flow_shift": 3.0,
-                "sample_solver": "euler",
-                "guidance_scale": 5.0,
-                "num_inference_steps": 30
-            }
-            for param, value in fallback_defaults.items():
-                if param not in wgp_params:
-                    wgp_params[param] = value
+        # Apply parameter precedence: task_params > model_json_config > worker_defaults
+        wgp_params = self._resolve_parameters_with_precedence(task, wgp_params)
         
         # Apply sampler-specific CFG settings if available
         sample_solver = task.parameters.get("sample_solver", wgp_params.get("sample_solver", ""))
@@ -861,6 +817,72 @@ class HeadlessTaskQueue:
             self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Final combined multipliers: {current_multipliers}")
         
         return wgp_params
+    
+    def _resolve_parameters_with_precedence(self, task: GenerationTask, worker_defaults: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Resolve parameters with clear precedence: task_params > model_json_config > worker_defaults
+        
+        This single function handles all parameter resolution in one place with explicit precedence.
+        """
+        try:
+            import wgp
+            
+            # Debug: Check what the model definition contains
+            model_def = wgp.get_model_def(task.model)
+            self.logger.info(f"[MODEL_DEF_DEBUG] get_model_def('{task.model}') returned: {model_def}")
+            
+            model_json_config = wgp.get_default_settings(task.model)
+            self.logger.info(f"[WGP_DEBUG] get_default_settings('{task.model}') returned: {model_json_config}")
+            
+        except Exception as e:
+            self.logger.warning(f"Could not load model config for '{task.model}': {e}")
+            # Fallback model config if loading fails
+            model_json_config = {
+                "flow_shift": 3.0,
+                "sample_solver": "euler", 
+                "guidance_scale": 5.0,
+                "num_inference_steps": 30
+            }
+        
+        # CLEAR PRECEDENCE: Apply in order from lowest to highest priority
+        final_params = {}
+        
+        # 1. Worker defaults (lowest priority)
+        final_params.update(worker_defaults)
+        self.logger.debug(f"[PRECEDENCE] Step 1 - Worker defaults: {len(worker_defaults)} params")
+        
+        # 2. Model JSON config (medium priority) - only non-sensitive params
+        model_overrides = {}
+        for param, value in model_json_config.items():
+            # Skip certain params that should come from worker defaults (like prompt templates)
+            if param not in ['prompt', 'resolution', 'video_length', 'seed', 'negative_prompt', 'activated_loras', 'loras_multipliers']:
+                if param in final_params and final_params[param] != value:
+                    model_overrides[param] = f"{final_params[param]} → {value}"
+                final_params[param] = value
+        
+        if model_overrides:
+            self.logger.info(f"[PRECEDENCE] Step 2 - Model JSON overrides: {model_overrides}")
+        else:
+            self.logger.debug(f"[PRECEDENCE] Step 2 - Model JSON: no overrides needed")
+        
+        # 3. Task parameters (highest priority) 
+        task_overrides = {}
+        for param, value in task.parameters.items():
+            if param in final_params and final_params[param] != value:
+                task_overrides[param] = f"{final_params[param]} → {value}"
+            final_params[param] = value
+        
+        if task_overrides:
+            self.logger.info(f"[PRECEDENCE] Step 3 - Task overrides: {task_overrides}")
+        else:
+            self.logger.debug(f"[PRECEDENCE] Step 3 - Task params: no overrides needed")
+        
+        # Summary of final critical parameters
+        critical_params = {k: v for k, v in final_params.items() 
+                         if k in ['num_inference_steps', 'guidance_scale', 'guidance2_scale', 'flow_shift', 'video_length']}
+        self.logger.info(f"[PRECEDENCE] Final critical parameters: {critical_params}")
+        
+        return final_params
     
     def _apply_sampler_cfg_preset(self, model_key: str, sample_solver: str, wgp_params: Dict[str, Any]):
         """Apply sampler-specific CFG and flow_shift settings from model configuration."""
