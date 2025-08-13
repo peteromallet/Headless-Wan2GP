@@ -174,10 +174,16 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         "apply_reward_lora"
     }
     
-    # Copy whitelisted parameters
+    # Copy whitelisted parameters with field name mapping
     for param in param_whitelist:
         if param in db_task_params:
             generation_params[param] = db_task_params[param]
+    
+    # Handle field name variations (orchestrator uses different names than WGP)
+    # Map 'steps' to 'num_inference_steps' for compatibility
+    if "steps" in db_task_params and "num_inference_steps" not in generation_params:
+        generation_params["num_inference_steps"] = db_task_params["steps"]
+        dprint(f"Task {task_id}: Mapped 'steps' ({db_task_params['steps']}) to 'num_inference_steps'")
     
     # Handle LoRA parameter format conversion
     if "activated_loras" in generation_params:
@@ -210,31 +216,22 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
     # NOTE: resolution, video_length, num_inference_steps, guidance_scale are now handled 
     # by WanOrchestrator._resolve_parameters() with proper model config precedence
     
-    # Apply Wan 2.2 optimizations automatically (can be overridden by explicit task parameters)
-    if "2_2" in model or "cocktail_2_2" in model:
-        dprint(f"Task {task_id}: Applying Wan 2.2 optimizations for model '{model}'")
-        dprint(f"[WAN22_DEBUG] Task {task_id}: db_task_params keys: {list(db_task_params.keys())}")
-        
-        # Wan 2.2 optimized defaults (only set if not explicitly provided)
-        wan22_optimizations = {
-            "num_inference_steps": 10,    # 2.5x faster than Wan 2.1's 25 steps
-            "guidance_scale": 1.0,        # Optimized for Wan 2.2 architecture
-            "flow_shift": 2.0,            # Better quality with Wan 2.2
-            "switch_threshold": 875,      # Dual-phase switching point
-        }
-        
-        for param, optimized_value in wan22_optimizations.items():
-            if param not in db_task_params:  # Only apply if not explicitly set in task
-                generation_params[param] = optimized_value
-                dprint(f"Task {task_id}: Applied Wan 2.2 optimization {param}={optimized_value}")
-            else:
-                dprint(f"[WAN22_DEBUG] Task {task_id}: Skipping {param} optimization - already in db_task_params with value: {db_task_params[param]}")
-        
-        # Auto-enable built-in acceleration LoRAs if no LoRAs explicitly specified
-        if "lora_names" not in generation_params and "activated_loras" not in db_task_params:
-            generation_params["lora_names"] = ["CausVid", "DetailEnhancerV1"]
-            generation_params["lora_multipliers"] = [1.0, 0.2]  # DetailEnhancer at reduced strength
-            dprint(f"Task {task_id}: Auto-enabled Wan 2.2 acceleration LoRAs")
+    # REMOVED: Wan 2.2 optimizations that interfere with model preset precedence
+    # 
+    # PROPER PRECEDENCE CHAIN:
+    # 1. User explicit parameters (highest priority) - handled by WanOrchestrator._resolve_parameters()
+    # 2. Model preset JSON config (medium priority) - handled by WanOrchestrator._resolve_parameters()  
+    # 3. System defaults (lowest priority) - handled by WanOrchestrator._resolve_parameters()
+    #
+    # All parameter resolution is now centralized in WanOrchestrator._resolve_parameters()
+    # to ensure consistent precedence without conflicts
+    
+    # Auto-enable built-in acceleration LoRAs only if no LoRAs explicitly specified
+    # This doesn't interfere with parameter precedence
+    if ("2_2" in model or "cocktail_2_2" in model) and "lora_names" not in generation_params and "activated_loras" not in db_task_params:
+        generation_params["lora_names"] = ["CausVid", "DetailEnhancerV1"]
+        generation_params["lora_multipliers"] = [1.0, 0.2]  # DetailEnhancer at reduced strength
+        dprint(f"Task {task_id}: Auto-enabled Wan 2.2 acceleration LoRAs (no parameter overrides)")
     
     # Determine task priority (orchestrator tasks get higher priority)
     priority = db_task_params.get("priority", 0)
@@ -628,15 +625,16 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         
         # Only add explicit parameters if they're provided (let model preset handle defaults)
         # Check both 'steps' and 'num_inference_steps' from orchestrator payload
+        # Priority: segment_params > orchestrator_payload (user explicit > orchestrator defaults)
         explicit_steps = (
-            full_orchestrator_payload.get("num_inference_steps") or 
-            full_orchestrator_payload.get("steps") or
             segment_params.get("num_inference_steps") or
-            segment_params.get("steps")
+            segment_params.get("steps") or
+            full_orchestrator_payload.get("num_inference_steps") or 
+            full_orchestrator_payload.get("steps")
         )
         if explicit_steps:
             generation_params["num_inference_steps"] = explicit_steps
-            dprint(f"[QUEUE_PARAMS] Using explicit steps: {explicit_steps}")
+            dprint(f"[QUEUE_PARAMS] Using explicit steps: {explicit_steps} (user override)")
         else:
             dprint(f"[QUEUE_PARAMS] No explicit steps provided - model preset will handle defaults")
         
