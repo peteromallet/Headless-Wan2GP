@@ -347,9 +347,11 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             snap_resolution_to_model_grid,
             ensure_valid_prompt,
             ensure_valid_negative_prompt,
-            prepare_vace_ref_for_segment as sm_prepare_vace_ref_for_segment,
             create_guide_video_for_travel_segment as sm_create_guide_video_for_travel_segment,
             create_mask_video_from_inactive_indices
+        )
+        from source.video_utils import (
+            prepare_vace_ref_for_segment as sm_prepare_vace_ref_for_segment
         )
         from source import db_operations as db_ops
         
