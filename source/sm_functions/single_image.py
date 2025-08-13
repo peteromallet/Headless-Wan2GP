@@ -119,9 +119,9 @@ def _handle_single_image_task(task_params_from_db: dict, main_output_dir_base: P
                 if output_path and Path(output_path).exists():
                     # Handle upload if configured
                     final_output_location = upload_and_get_final_output_location(
-                        local_path=output_path,
-                        task_type="single_image",
-                        task_id=task_id,
+                        Path(output_path),
+                        f"single_image_{task_id}",
+                        str(output_path),
                         dprint=dprint
                     )
                     

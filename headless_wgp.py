@@ -462,10 +462,9 @@ class WanOrchestrator:
             elif cmd == "preview":
                 print("🖼️  Preview updated")
 
-        # Build parameter dictionary with defaults that can be overridden
-        # This allows ANY parameter to be overridden via kwargs
+        # Build parameter dictionary with defaults
         wgp_params = {
-            # Core parameters with defaults
+            # Core parameters (fixed, not overridable)
             'task': task,
             'send_cmd': send_cmd,
             'state': self.state,
@@ -477,11 +476,6 @@ class WanOrchestrator:
             'batch_size': actual_batch_size,
             'seed': seed,
             'force_fps': "auto",
-            'num_inference_steps': num_inference_steps,
-            'guidance_scale': actual_guidance,
-            'guidance2_scale': actual_guidance,
-            'switch_threshold': kwargs.get('switch_threshold', 500),  # Get from kwargs with default (0-1000 scale)
-            'embedded_guidance_scale': embedded_guidance_scale if is_flux else 0.0,
             'image_mode': image_mode,
             
             # VACE control parameters
@@ -497,6 +491,15 @@ class WanOrchestrator:
             # LoRA parameters
             'activated_loras': activated_loras,
             'loras_multipliers': loras_multipliers_str,
+            
+            # Overridable parameters with defaults
+            'num_inference_steps': num_inference_steps,
+            'guidance_scale': actual_guidance,
+            'guidance2_scale': actual_guidance,
+            'switch_threshold': 500,  # Default value (0-1000 scale)
+            'embedded_guidance_scale': embedded_guidance_scale if is_flux else 0.0,
+            'flow_shift': 7.0,
+            'sample_solver': "euler",
             
             # Standard defaults for other parameters
             'audio_guidance_scale': 1.0,
@@ -566,19 +569,17 @@ class WanOrchestrator:
             # Mode and filename
             'mode': "generate",
             'model_filename': "",
-            
-            # Critical parameters from kwargs with defaults
-            'flow_shift': kwargs.get('flow_shift', 7.0),
-            'sample_solver': kwargs.get('sample_solver', "euler"),
         }
         
-        # Override any parameters provided in kwargs
-        # This allows ANY parameter to be customized
+        # Override ANY parameter provided in kwargs
+        # This allows complete customization of generation parameters
         for key, value in kwargs.items():
-            if key not in wgp_params:
-                # Add any additional parameters from kwargs that aren't in defaults
+            if key in wgp_params:
+                generation_logger.debug(f"Overriding parameter from kwargs: {key}={wgp_params[key]} -> {value}")
                 wgp_params[key] = value
-                generation_logger.debug(f"Adding extra parameter from kwargs: {key}={value}")
+            else:
+                generation_logger.debug(f"Adding new parameter from kwargs: {key}={value}")
+                wgp_params[key] = value
 
         # Generate content type description
         content_type = "images" if is_flux else "video"
