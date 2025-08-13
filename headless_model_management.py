@@ -717,7 +717,13 @@ class HeadlessTaskQueue:
         # Load model-specific defaults from JSON first, but respect task parameter overrides
         try:
             import wgp
+            
+            # Debug: Check what the model definition contains
+            model_def = wgp.get_model_def(task.model)
+            self.logger.info(f"[MODEL_DEF_DEBUG] get_model_def('{task.model}') returned: {model_def}")
+            
             model_defaults = wgp.get_default_settings(task.model)
+            self.logger.info(f"[WGP_DEBUG] get_default_settings('{task.model}') returned: {model_defaults}")
             
             # Apply model defaults with proper precedence: task explicit params > model JSON config > worker defaults
             applied_defaults = {}
