@@ -414,7 +414,8 @@ class HeadlessTaskQueue:
         Execute the actual generation using headless_wgp.py.
         
         This delegates to the orchestrator while providing progress tracking
-        and integration with our queue system.
+        and integration with our queue system. Enhanced to support video guides,
+        masks, image references, and other advanced features.
         """
         self.logger.info(f"{worker_name} executing generation for task {task.id} (model: {task.model})")
         
@@ -424,17 +425,35 @@ class HeadlessTaskQueue:
         # Remove model and prompt from params since they're passed separately to avoid duplication
         generation_params = {k: v for k, v in wgp_params.items() if k not in ("model", "prompt")}
         
+        # Log generation parameters for debugging
+        self.logger.info(f"[GENERATION_DEBUG] Task {task.id}: Generation parameters:")
+        for key, value in generation_params.items():
+            if key in ["video_guide", "video_mask", "image_refs"]:
+                self.logger.info(f"[GENERATION_DEBUG]   {key}: {value}")
+            elif key in ["video_length", "resolution", "num_inference_steps"]:
+                self.logger.info(f"[GENERATION_DEBUG]   {key}: {value}")
+        
         # Determine generation type and delegate
         try:
-            if self.orchestrator._is_vace():
-                if "video_guide" not in generation_params:
-                    raise ValueError("VACE model requires video_guide parameter")
+            # Check if model supports VACE features
+            model_supports_vace = self._model_supports_vace(task.model)
+            
+            if model_supports_vace:
+                self.logger.info(f"[GENERATION_DEBUG] Task {task.id}: Using VACE generation path")
+                
+                # For VACE models, video_guide is optional but recommended
+                if "video_guide" in generation_params and generation_params["video_guide"]:
+                    self.logger.info(f"[GENERATION_DEBUG] Task {task.id}: Video guide provided: {generation_params['video_guide']}")
+                else:
+                    self.logger.info(f"[GENERATION_DEBUG] Task {task.id}: No video guide - using text-to-video mode")
                 
                 result = self.orchestrator.generate_vace(
                     prompt=task.prompt,
                     **generation_params
                 )
             elif self.orchestrator._is_flux():
+                self.logger.info(f"[GENERATION_DEBUG] Task {task.id}: Using Flux generation path")
+                
                 # For Flux, map video_length to num_images
                 if "video_length" in generation_params:
                     generation_params["num_images"] = generation_params.pop("video_length")
@@ -444,6 +463,8 @@ class HeadlessTaskQueue:
                     **generation_params
                 )
             else:
+                self.logger.info(f"[GENERATION_DEBUG] Task {task.id}: Using T2V generation path")
+                
                 # T2V or other models
                 result = self.orchestrator.generate_t2v(
                     prompt=task.prompt,
@@ -456,6 +477,28 @@ class HeadlessTaskQueue:
         except Exception as e:
             self.logger.error(f"{worker_name} generation failed for task {task.id}: {e}")
             raise
+    
+    def _model_supports_vace(self, model_key: str) -> bool:
+        """
+        Check if a model supports VACE features (video guides, masks, etc.).
+        """
+        try:
+            # Use orchestrator's VACE detection with model key
+            if hasattr(self.orchestrator, 'is_model_vace'):
+                return self.orchestrator.is_model_vace(model_key)
+            elif hasattr(self.orchestrator, '_is_vace'):
+                # Fallback: load model and check (less efficient)
+                current_model = self.current_model
+                if current_model != model_key:
+                    # Would need to load model to check - use name-based detection as fallback
+                    return "vace" in model_key.lower()
+                return self.orchestrator._is_vace()
+            else:
+                # Ultimate fallback: name-based detection
+                return "vace" in model_key.lower()
+        except Exception as e:
+            self.logger.warning(f"Could not determine VACE support for model '{model_key}': {e}")
+            return "vace" in model_key.lower()
     
     def _monitor_loop(self):
         """Background monitoring and maintenance loop."""
@@ -535,7 +578,57 @@ class HeadlessTaskQueue:
         # Map parameters with proper defaults
         for our_param, wgp_param in param_mapping.items():
             if our_param in task.parameters:
-                wgp_params[wgp_param] = task.parameters[our_param]
+                value = task.parameters[our_param]
+                
+                # Special handling for file path parameters
+                if our_param in ["video_guide", "video_mask", "video_guide2", "video_mask2"] and value:
+                    # Ensure path exists and convert to absolute path
+                    try:
+                        path_obj = Path(value)
+                        if path_obj.exists():
+                            wgp_params[wgp_param] = str(path_obj.resolve())
+                            self.logger.info(f"[PARAM_DEBUG] Task {task.id}: {our_param} path validated: {wgp_params[wgp_param]}")
+                        else:
+                            self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: {our_param} path does not exist: {value}")
+                            # Don't include invalid paths
+                            continue
+                    except Exception as e:
+                        self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Error processing {our_param} path '{value}': {e}")
+                        continue
+                
+                # Special handling for image references
+                elif our_param == "image_refs" and value:
+                    if isinstance(value, list):
+                        # Validate each image path
+                        valid_images = []
+                        for img_path in value:
+                            try:
+                                img_path_obj = Path(img_path)
+                                if img_path_obj.exists():
+                                    valid_images.append(str(img_path_obj.resolve()))
+                                else:
+                                    self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Image ref does not exist: {img_path}")
+                            except Exception as e:
+                                self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Error processing image ref '{img_path}': {e}")
+                        
+                        if valid_images:
+                            wgp_params["image_refs"] = valid_images
+                            self.logger.info(f"[PARAM_DEBUG] Task {task.id}: Validated {len(valid_images)} image references")
+                    else:
+                        # Single image reference
+                        try:
+                            img_path_obj = Path(value)
+                            if img_path_obj.exists():
+                                wgp_params["image_refs"] = [str(img_path_obj.resolve())]
+                                self.logger.info(f"[PARAM_DEBUG] Task {task.id}: Validated single image reference")
+                            else:
+                                self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Single image ref does not exist: {value}")
+                        except Exception as e:
+                            self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Error processing single image ref '{value}': {e}")
+                
+                else:
+                    # Normal parameter mapping
+                    wgp_params[wgp_param] = value
         
         # Handle LoRA parameter format conversion
         if "activated_loras" in task.parameters:

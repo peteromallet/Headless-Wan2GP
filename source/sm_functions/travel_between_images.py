@@ -1275,96 +1275,15 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
 
         # Parameter defaults now handled in the CausVid/LightI2X optimization logic above
 
-        # Use the new task queue system if available, otherwise fall back to legacy wgp_utils
-        if task_queue is not None:
-            dprint(f"[WGP_DEBUG] Using new task queue system for generation")
-            from headless_model_management import GenerationTask
-            
-            # [CausVidDebugTrace] Log task creation parameters - use the already-computed enabled flags
-            causvid_flag = causvid_enabled
-            lighti2x_flag = lighti2x_enabled
-            
-            # ADDITIONAL LORAS: Prepare LoRA names and multipliers for generation
-            additional_lora_names = []
-            additional_lora_multipliers = []
-            if processed_additional_loras:
-                dprint(f"[CausVidDebugTrace] Segment {segment_idx}: Including {len(processed_additional_loras)} additional LoRAs:")
-                for lora_name, multiplier in processed_additional_loras.items():
-                    additional_lora_names.append(lora_name)
-                    additional_lora_multipliers.append(multiplier)
-                    dprint(f"[CausVidDebugTrace]   Additional LoRA: {lora_name} (multiplier: {multiplier})")
-            
-            dprint(f"[CausVidDebugTrace] Segment {segment_idx}: Creating GenerationTask with:")
-            dprint(f"[CausVidDebugTrace]   num_inference_steps: {num_inference_steps}")
-            dprint(f"[CausVidDebugTrace]   guidance_scale: {guidance_scale_default}")
-            dprint(f"[CausVidDebugTrace]   flow_shift: {flow_shift_default}")
-            dprint(f"[CausVidDebugTrace]   use_causvid_lora flag: {causvid_flag}")
-            dprint(f"[CausVidDebugTrace]   use_lighti2x_lora flag: {lighti2x_flag}")
-            dprint(f"[CausVidDebugTrace]   apply_reward_lora flag: {effective_apply_reward_lora}")
-            dprint(f"[CausVidDebugTrace]   additional_lora_names: {additional_lora_names}")
-            dprint(f"[CausVidDebugTrace]   additional_lora_multipliers: {additional_lora_multipliers}")
-            
-            # Create a GenerationTask for the queue system
-            generation_task = GenerationTask(
-                id=wgp_inline_task_id,
-                model=full_orchestrator_payload["model_name"],
-                prompt=prompt_for_wgp,
-                parameters={
-                    "negative_prompt": negative_prompt_for_wgp,
-                    "resolution": f"{parsed_res_wh[0]}x{parsed_res_wh[1]}",
-                    "video_length": final_frames_for_wgp_generation,
-                    "seed": segment_params["seed_to_use"],
-                    "num_inference_steps": num_inference_steps,
-                    "guidance_scale": guidance_scale_default,
-                    "flow_shift": flow_shift_default,
-                    "video_guide": str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
-                    "video_mask": str(mask_video_path_for_wgp.resolve()) if mask_video_path_for_wgp else None,
-                    "video_prompt_type": video_prompt_type_str,
-                    "control_net_weight": full_orchestrator_payload.get("control_net_weight", 1.0),
-                    "control_net_weight2": full_orchestrator_payload.get("control_net_weight2", 1.0),
-                    # Include special LoRA flags that drive parameter optimization
-                    "use_causvid_lora": causvid_flag,
-                    "use_lighti2x_lora": lighti2x_flag,
-                    "apply_reward_lora": effective_apply_reward_lora,
-                    # ADDITIONAL LORAS: Include processed additional LoRAs
-                    "additional_lora_names": additional_lora_names,
-                    "additional_lora_multipliers": additional_lora_multipliers,
-                    # Add any additional parameters from wgp_payload
-                    **{k: v for k, v in wgp_payload.items() if k not in [
-                        'task_id', 'prompt', 'negative_prompt', 'resolution', 'frames', 'seed',
-                        'model', 'model_filename', 'video_guide', 'video_mask', 'image_refs',
-                        'use_causvid_lora', 'apply_reward_lora', 'additional_loras', 'video_prompt_type',
-                        'use_lighti2x_lora', 'control_net_weight', 'control_net_weight2',
-                        'num_inference_steps', 'guidance_scale', 'flow_shift',
-                        'activated_loras', 'loras_multipliers', 'additional_lora_names', 'additional_lora_multipliers'
-                    ]}
-                }
-            )
-            
-            # Submit task and wait for completion
-            task_queue.submit_task(generation_task)
-            
-            # Poll for completion (blocking)
-            import time
-            while True:
-                task_status = task_queue.get_task_status(wgp_inline_task_id)
-                if task_status.status == "completed":
-                    generation_success = True
-                    wgp_output_path_or_msg = task_status.result_path
-                    dprint(f"[WGP_DEBUG] Task queue generation completed: {wgp_output_path_or_msg}")
-                    break
-                elif task_status.status == "failed":
-                    generation_success = False
-                    wgp_output_path_or_msg = f"Generation failed: {task_status.error_message}"
-                    dprint(f"[WGP_DEBUG] Task queue generation failed: {task_status.error_message}")
-                    break
-                else:
-                    # Removed verbose progress log to reduce noise
-                    time.sleep(1.0)
-        else:
-            dprint(f"[WGP_DEBUG] Legacy wgp_utils system no longer available, this should not happen")
-            generation_success = False
-            wgp_output_path_or_msg = "Error: Legacy WGP system has been removed. Only task queue system is supported."
+        # DEPRECATED: Legacy task queue system code - travel segments now processed via direct queue integration
+        # Travel segments are now routed through worker.py's _handle_travel_segment_via_queue function
+        # which eliminates the blocking wait pattern and provides better model persistence.
+        generation_success = False
+        wgp_output_path_or_msg = (
+            f"DEPRECATED: Travel segment {segment_idx} should be processed via direct queue integration. "
+            f"This indicates that worker.py is incorrectly routing travel_segment tasks to the legacy handler "
+            f"instead of using _handle_travel_segment_via_queue. Check task routing configuration."
+        )
 
         print(f"[WGP_DEBUG] Segment {segment_idx}: GENERATION RESULT")
         print(f"[WGP_DEBUG]   generation_success: {generation_success}")
