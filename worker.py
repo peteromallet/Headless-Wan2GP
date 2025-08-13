@@ -462,6 +462,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             "video_length": total_frames_for_segment,
             "seed": segment_params.get("seed_to_use", 12345),
             "use_causvid_lora": full_orchestrator_payload.get("apply_causvid", False),
+            "use_lighti2x_lora": full_orchestrator_payload.get("use_lighti2x_lora", False),
             "apply_reward_lora": apply_reward_lora,
         }
         
