@@ -1,7 +1,7 @@
 {
     "model": {
         "name": "Wan2.2 Fake Vace Cocktail 14B",
-        "architecture": "t2v",
+        "architecture": "vace_14B",
         "description": "This finetune has been created by JohnDopamine. It is an attempt to create a working Vace for Wan 2.2. For fast generations it is combined wit the Loras of FusioniX (the weight of the Detail Enhancer Lora has been reduced to improve identity preservation).",
         "URLs": [
             "https://huggingface.co/CCP6/FakeVace2.2/resolve/main/Fake-Vace2.2-High.fp16.safetensors"

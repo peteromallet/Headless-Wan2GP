@@ -1943,9 +1943,8 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         )
         if loaded: ui_defaults["image_refs"] = loaded
     
-    for key in ["video_source_path", "video_guide_path", "video_mask_path", "audio_guide_path"]:
-        if task_params_dict.get(key):
-            ui_defaults[key.replace("_path","")] = task_params_dict[key]
+    # REMOVED: Legacy parameter mapping for deprecated build_task_state function
+    # The queue-based system handles parameter mapping directly in headless_wgp.py
 
     if task_params_dict.get("prompt_enhancer_mode"):
         ui_defaults["prompt_enhancer"] = task_params_dict["prompt_enhancer_mode"]
