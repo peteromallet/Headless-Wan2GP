@@ -519,6 +519,10 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
             # Create GenerationTask object from DB parameters
             generation_task = db_task_to_generation_task(task_params_dict, task_id, task_type)
             
+            # For single_image tasks, ensure video_length=1 for PNG conversion
+            if task_type == "single_image":
+                generation_task.parameters["video_length"] = 1
+            
             # Apply global flags to task parameters
             if apply_reward_lora:
                 generation_task.parameters["apply_reward_lora"] = True

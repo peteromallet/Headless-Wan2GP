@@ -472,6 +472,14 @@ class HeadlessTaskQueue:
                 )
             
             self.logger.info(f"{worker_name} generation completed for task {task.id}: {result}")
+            
+            # Post-process single frame videos to PNG for single_image tasks
+            if self._is_single_image_task(task):
+                png_result = self._convert_single_frame_video_to_png(task, result, worker_name)
+                if png_result:
+                    self.logger.info(f"{worker_name} converted single frame video to PNG: {png_result}")
+                    return png_result
+            
             return result
             
         except Exception as e:
@@ -499,6 +507,71 @@ class HeadlessTaskQueue:
         except Exception as e:
             self.logger.warning(f"Could not determine VACE support for model '{model_key}': {e}")
             return "vace" in model_key.lower()
+    
+    def _is_single_image_task(self, task: GenerationTask) -> bool:
+        """
+        Check if this is a single image task that should be converted from video to PNG.
+        """
+        # Check if video_length is 1 (single frame) and this looks like an image task
+        video_length = task.parameters.get("video_length", 0)
+        return video_length == 1
+    
+    def _convert_single_frame_video_to_png(self, task: GenerationTask, video_path: str, worker_name: str) -> str:
+        """
+        Convert a single-frame video to PNG format for single image tasks.
+        
+        This restores the functionality that was in the original single_image.py handler
+        where single-frame videos were converted to PNG files.
+        """
+        try:
+            import cv2
+            from pathlib import Path
+            
+            video_path_obj = Path(video_path)
+            if not video_path_obj.exists():
+                self.logger.error(f"Video file does not exist for PNG conversion: {video_path}")
+                return video_path  # Return original path if conversion fails
+            
+            # Create PNG output path (same directory, different extension)
+            png_path = video_path_obj.with_suffix('.png')
+            
+            self.logger.info(f"[PNG_CONVERSION] Task {task.id}: Converting {video_path_obj.name} to {png_path.name}")
+            
+            # Extract the first frame using OpenCV
+            cap = cv2.VideoCapture(str(video_path_obj))
+            try:
+                if cap.isOpened():
+                    ret, frame = cap.read()
+                    if ret:
+                        # Save the frame as PNG
+                        success = cv2.imwrite(str(png_path), frame)
+                        if success and png_path.exists():
+                            self.logger.info(f"[PNG_CONVERSION] Task {task.id}: Successfully saved PNG to {png_path}")
+                            
+                            # Clean up the original video file
+                            try:
+                                video_path_obj.unlink()
+                                self.logger.info(f"[PNG_CONVERSION] Task {task.id}: Removed original video file")
+                            except Exception as e_cleanup:
+                                self.logger.warning(f"[PNG_CONVERSION] Task {task.id}: Could not remove original video: {e_cleanup}")
+                            
+                            return str(png_path)
+                        else:
+                            self.logger.error(f"[PNG_CONVERSION] Task {task.id}: Failed to save PNG to {png_path}")
+                    else:
+                        self.logger.error(f"[PNG_CONVERSION] Task {task.id}: Failed to read frame from video")
+                else:
+                    self.logger.error(f"[PNG_CONVERSION] Task {task.id}: Failed to open video file")
+            finally:
+                cap.release()
+                
+        except ImportError:
+            self.logger.warning(f"[PNG_CONVERSION] Task {task.id}: OpenCV not available, keeping video format")
+        except Exception as e:
+            self.logger.error(f"[PNG_CONVERSION] Task {task.id}: Error during conversion: {e}")
+        
+        # Return original video path if conversion failed
+        return video_path
     
     def _monitor_loop(self):
         """Background monitoring and maintenance loop."""
