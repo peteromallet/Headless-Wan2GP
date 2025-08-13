@@ -1146,7 +1146,12 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         # ------------------------------------------------------------------
         # Ensure sensible defaults for critical generation params using shared utilities
         # ------------------------------------------------------------------
-        from ...lora_utils import detect_lora_optimization_flags, apply_lora_parameter_optimization
+        import sys
+        from pathlib import Path
+        source_dir = Path(__file__).parent.parent
+        if str(source_dir) not in sys.path:
+            sys.path.insert(0, str(source_dir))
+        from lora_utils import detect_lora_optimization_flags, apply_lora_parameter_optimization
         
         model_name = full_orchestrator_payload["model_name"]
         

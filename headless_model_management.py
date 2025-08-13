@@ -757,7 +757,12 @@ class HeadlessTaskQueue:
             self._apply_sampler_cfg_preset(task.model, sample_solver, wgp_params)
         
         # Apply special LoRA settings (CausVid, LightI2X) using shared utilities
-        from ..lora_utils import detect_lora_optimization_flags, apply_lora_parameter_optimization, ensure_lora_in_list
+        import sys
+        from pathlib import Path
+        source_dir = Path(__file__).parent / "source"
+        if str(source_dir) not in sys.path:
+            sys.path.insert(0, str(source_dir))
+        from lora_utils import detect_lora_optimization_flags, apply_lora_parameter_optimization, ensure_lora_in_list
         
         # Detect LoRA optimization flags using shared logic
         use_causvid, use_lighti2x = detect_lora_optimization_flags(
