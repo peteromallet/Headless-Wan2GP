@@ -177,6 +177,47 @@ The system now uses a modern queue-based architecture for video generation:
 - **Parameter Safety**: Clean parameter mapping prevents conflicts and errors
 - **Queue Efficiency**: Tasks are processed through an optimized queue system
 - **Modern Architecture**: Replaces legacy direct WGP calls with robust queue-based processing
+- **Code Deduplication**: Eliminated ~470 lines of duplicated travel segment logic through shared processor pattern
+
+## Code Deduplication Refactoring
+
+### Problem Addressed
+The travel segment system previously had nearly identical logic duplicated between two handlers:
+
+1. **Blocking Handler** (`travel_between_images.py`) - Synchronous processing with inline logic
+2. **Queue Handler** (`worker.py`) - Asynchronous processing with copied logic
+
+**Duplication Scope:**
+- Guide video creation logic (~280 lines)
+- Mask video creation logic (~140 lines) 
+- Video prompt type construction (~50 lines)
+- **Total: ~470 lines of duplicated code**
+
+### Maintenance Burden
+Every bug fix, feature addition, or parameter change had to be implemented twice:
+- Doubled development time
+- Error-prone manual synchronization  
+- Risk of behavioral divergence between handlers
+- Parameter precedence fixes needed in both places
+
+### Solution: Shared Processor Pattern
+Created `TravelSegmentProcessor` class that:
+- Consolidates all shared logic in a single location
+- Provides identical behavior for both execution paths
+- Maintains full compatibility with existing parameter handling
+- Supports both VACE and non-VACE model workflows
+
+**Files Modified:**
+- `source/travel_segment_processor.py` - **NEW**: Shared processor implementation
+- `source/sm_functions/travel_between_images.py` - Refactored to use shared processor
+- `worker.py` - Refactored to use shared processor  
+
+**Benefits:**
+- ✅ Single source of truth for travel segment logic
+- ✅ Consistent behavior across both execution paths
+- ✅ Easier maintenance and feature development
+- ✅ Reduced codebase size and complexity
+- ✅ Preserved existing functionality and parameter precedence
 
 ## source/ package
 
@@ -186,13 +227,14 @@ This is the main application package.
 * **db_operations.py** – Handles all database interactions for both SQLite and Supabase. Includes Supabase client initialization, Edge Function integration, and automatic backend selection based on `DB_TYPE`.
 * **specialized_handlers.py** – Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation. Uses Supabase-compatible upload functions for all outputs.
 * **video_utils.py** – Provides utilities for video manipulation like cross-fading, frame extraction, and color matching.
+* **travel_segment_processor.py** – **NEW**: Shared processor that eliminates code duplication between travel segment handlers. Contains the unified logic for guide video creation, mask video creation, and video_prompt_type construction that was previously duplicated between `travel_between_images.py` and `worker.py`.
 
 
 ### source/sm_functions/ sub-package
 
 Task-specific wrappers around the bulky upstream logic. These are imported by `worker.py` (and potentially by notebooks/unit tests) without dragging in the interactive Gradio UI shipped with Wan2GP. All task handlers use generalized Supabase upload functions for consistent output handling.
 
-* **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images. Builds guide videos, queues generation tasks, stitches outputs. Final stitched videos are uploaded to Supabase when configured. Includes extensive debugging system with `debug_video_analysis()` function that tracks frame counts, file sizes, and processing steps throughout the entire orchestrator → segments → stitching pipeline.
+* **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images. Builds guide videos, queues generation tasks, stitches outputs. Final stitched videos are uploaded to Supabase when configured. Includes extensive debugging system with `debug_video_analysis()` function that tracks frame counts, file sizes, and processing steps throughout the entire orchestrator → segments → stitching pipeline. **Now uses shared TravelSegmentProcessor to eliminate code duplication.**
 * **different_perspective.py** – Generates a new perspective for a single image using an OpenPose or depth-driven guide video plus optional RIFE interpolation for smoothness. Final posed images are uploaded to Supabase when configured.
 * **single_image.py** – Minimal handler for one-off image-to-video generation without travel or pose manipulation. Generated images are uploaded to Supabase when configured.
 * **magic_edit.py** – Processes images through Replicate's black-forest-labs/flux-kontext-dev-lora model for scene transformations. Supports conditional InScene LoRA usage via `in_scene` parameter (true for scene consistency, false for creative freedom). Integrates with Supabase storage for output handling.
