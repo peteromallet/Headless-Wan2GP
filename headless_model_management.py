@@ -449,6 +449,7 @@ class HeadlessTaskQueue:
                 
                 result = self.orchestrator.generate_vace(
                     prompt=task.prompt,
+                    model_type=task.model,  # Pass model type for parameter resolution
                     **generation_params
                 )
             elif self.orchestrator._is_flux():
@@ -460,14 +461,16 @@ class HeadlessTaskQueue:
                 
                 result = self.orchestrator.generate_flux(
                     prompt=task.prompt,
+                    model_type=task.model,  # Pass model type for parameter resolution
                     **generation_params
                 )
             else:
                 self.logger.info(f"[GENERATION_DEBUG] Task {task.id}: Using T2V generation path")
                 
-                # T2V or other models
+                # T2V or other models - pass model_type for proper parameter resolution
                 result = self.orchestrator.generate_t2v(
                     prompt=task.prompt,
+                    model_type=task.model,  # ← CRITICAL: Pass model type for parameter resolution
                     **generation_params
                 )
             
@@ -714,8 +717,9 @@ class HeadlessTaskQueue:
             else:
                 wgp_params["lora_multipliers"] = task.parameters["loras_multipliers"]
         
-        # Apply parameter precedence: task_params > model_json_config > worker_defaults
-        wgp_params = self._resolve_parameters_with_precedence(task, wgp_params)
+        # Parameter resolution is now handled by WanOrchestrator._resolve_parameters()
+        # This provides clean separation: HeadlessTaskQueue manages tasks, WanOrchestrator handles parameters
+        self.logger.info(f"[TASK_CONVERSION] Converting task {task.id} for model '{task.model}' - parameter resolution delegated to orchestrator")
         
         # Apply sampler-specific CFG settings if available
         sample_solver = task.parameters.get("sample_solver", wgp_params.get("sample_solver", ""))
@@ -817,72 +821,6 @@ class HeadlessTaskQueue:
             self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Final combined multipliers: {current_multipliers}")
         
         return wgp_params
-    
-    def _resolve_parameters_with_precedence(self, task: GenerationTask, worker_defaults: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Resolve parameters with clear precedence: task_params > model_json_config > worker_defaults
-        
-        This single function handles all parameter resolution in one place with explicit precedence.
-        """
-        try:
-            import wgp
-            
-            # Debug: Check what the model definition contains
-            model_def = wgp.get_model_def(task.model)
-            self.logger.info(f"[MODEL_DEF_DEBUG] get_model_def('{task.model}') returned: {model_def}")
-            
-            model_json_config = wgp.get_default_settings(task.model)
-            self.logger.info(f"[WGP_DEBUG] get_default_settings('{task.model}') returned: {model_json_config}")
-            
-        except Exception as e:
-            self.logger.warning(f"Could not load model config for '{task.model}': {e}")
-            # Fallback model config if loading fails
-            model_json_config = {
-                "flow_shift": 3.0,
-                "sample_solver": "euler", 
-                "guidance_scale": 5.0,
-                "num_inference_steps": 30
-            }
-        
-        # CLEAR PRECEDENCE: Apply in order from lowest to highest priority
-        final_params = {}
-        
-        # 1. Worker defaults (lowest priority)
-        final_params.update(worker_defaults)
-        self.logger.debug(f"[PRECEDENCE] Step 1 - Worker defaults: {len(worker_defaults)} params")
-        
-        # 2. Model JSON config (medium priority) - only non-sensitive params
-        model_overrides = {}
-        for param, value in model_json_config.items():
-            # Skip certain params that should come from worker defaults (like prompt templates)
-            if param not in ['prompt', 'resolution', 'video_length', 'seed', 'negative_prompt', 'activated_loras', 'loras_multipliers']:
-                if param in final_params and final_params[param] != value:
-                    model_overrides[param] = f"{final_params[param]} → {value}"
-                final_params[param] = value
-        
-        if model_overrides:
-            self.logger.info(f"[PRECEDENCE] Step 2 - Model JSON overrides: {model_overrides}")
-        else:
-            self.logger.debug(f"[PRECEDENCE] Step 2 - Model JSON: no overrides needed")
-        
-        # 3. Task parameters (highest priority) 
-        task_overrides = {}
-        for param, value in task.parameters.items():
-            if param in final_params and final_params[param] != value:
-                task_overrides[param] = f"{final_params[param]} → {value}"
-            final_params[param] = value
-        
-        if task_overrides:
-            self.logger.info(f"[PRECEDENCE] Step 3 - Task overrides: {task_overrides}")
-        else:
-            self.logger.debug(f"[PRECEDENCE] Step 3 - Task params: no overrides needed")
-        
-        # Summary of final critical parameters
-        critical_params = {k: v for k, v in final_params.items() 
-                         if k in ['num_inference_steps', 'guidance_scale', 'guidance2_scale', 'flow_shift', 'video_length']}
-        self.logger.info(f"[PRECEDENCE] Final critical parameters: {critical_params}")
-        
-        return final_params
     
     def _apply_sampler_cfg_preset(self, model_key: str, sample_solver: str, wgp_params: Dict[str, Any]):
         """Apply sampler-specific CFG and flow_shift settings from model configuration."""
