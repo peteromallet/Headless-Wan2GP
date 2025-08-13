@@ -822,45 +822,45 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                     dprint(f"Seg {segment_idx}: Error selecting banner images for show_input_images: {e_banner_sel}")
             # ------------------------------------------------------------------
 
-        # Always create guide video for VACE models (required for functionality)
-        # For non-VACE models, only create in debug mode
-        if not debug_enabled and not is_vace_model:
-            dprint(f"Task {segment_task_id_str}: Debug mode disabled and non-VACE model, skipping guide video creation")
-            actual_guide_video_path_for_wgp = None
-        else:
-            if is_vace_model and not debug_enabled:
-                dprint(f"Task {segment_task_id_str}: VACE model detected, creating guide video (required for VACE functionality)")
-            # Create the final guide video path with UUID-based naming
-            guide_video_final_path = guide_video_target_dir / guide_video_filename
-            
-            actual_guide_video_path_for_wgp = sm_create_guide_video_for_travel_segment(
-                segment_idx_for_logging=segment_idx,
-                end_anchor_image_index=end_anchor_img_path_str_idx,
-                is_first_segment_from_scratch=is_first_segment_from_scratch,
-                total_frames_for_segment=total_frames_for_segment,
-                parsed_res_wh=parsed_res_wh,
-                fps_helpers=fps_helpers,
-                input_images_resolved_for_guide=input_images_resolved_for_guide,
-                path_to_previous_segment_video_output_for_guide=path_to_previous_segment_video_output_for_guide,
-                output_target_dir=guide_video_target_dir,
-                guide_video_base_name=guide_video_base_name,
-                segment_image_download_dir=segment_image_download_dir,
-                task_id_for_logging=segment_task_id_str, # Corrected keyword argument
-                full_orchestrator_payload=full_orchestrator_payload,
-                segment_params=segment_params,
-                single_image_journey=is_single_image_journey,
-                predefined_output_path=guide_video_final_path,
-                dprint=dprint
-            )
-            
-            # CRITICAL FIX: VACE models require a video_guide parameter
-            # If guide video creation failed but we're using a VACE model, this is an error condition
-            if is_vace_model and (actual_guide_video_path_for_wgp is None or not Path(actual_guide_video_path_for_wgp).exists()):
-                dprint(f"[VACE_ERROR] Seg {segment_idx}: VACE model '{model_name}' requires guide video but creation failed!")
-                dprint(f"[VACE_ERROR] Guide video path: {actual_guide_video_path_for_wgp}")
-                dprint(f"[VACE_ERROR] Available inputs: {len(input_images_resolved_for_guide) if input_images_resolved_for_guide else 0} images")
-                dprint(f"[VACE_ERROR] Previous segment video: {path_to_previous_segment_video_output_for_guide}")
-                raise ValueError(f"VACE model '{model_name}' requires a guide video but guide video creation failed. Check input images and previous segment outputs.")
+            # Always create guide video for VACE models (required for functionality)
+            # For non-VACE models, only create in debug mode
+            if not debug_enabled and not is_vace_model:
+                dprint(f"Task {segment_task_id_str}: Debug mode disabled and non-VACE model, skipping guide video creation")
+                actual_guide_video_path_for_wgp = None
+            else:
+                if is_vace_model and not debug_enabled:
+                    dprint(f"Task {segment_task_id_str}: VACE model detected, creating guide video (required for VACE functionality)")
+                # Create the final guide video path with UUID-based naming
+                guide_video_final_path = guide_video_target_dir / guide_video_filename
+                
+                actual_guide_video_path_for_wgp = sm_create_guide_video_for_travel_segment(
+                    segment_idx_for_logging=segment_idx,
+                    end_anchor_image_index=end_anchor_img_path_str_idx,
+                    is_first_segment_from_scratch=is_first_segment_from_scratch,
+                    total_frames_for_segment=total_frames_for_segment,
+                    parsed_res_wh=parsed_res_wh,
+                    fps_helpers=fps_helpers,
+                    input_images_resolved_for_guide=input_images_resolved_for_guide,
+                    path_to_previous_segment_video_output_for_guide=path_to_previous_segment_video_output_for_guide,
+                    output_target_dir=guide_video_target_dir,
+                    guide_video_base_name=guide_video_base_name,
+                    segment_image_download_dir=segment_image_download_dir,
+                    task_id_for_logging=segment_task_id_str, # Corrected keyword argument
+                    full_orchestrator_payload=full_orchestrator_payload,
+                    segment_params=segment_params,
+                    single_image_journey=is_single_image_journey,
+                    predefined_output_path=guide_video_final_path,
+                    dprint=dprint
+                )
+                
+                # CRITICAL FIX: VACE models require a video_guide parameter
+                # If guide video creation failed but we're using a VACE model, this is an error condition
+                if is_vace_model and (actual_guide_video_path_for_wgp is None or not Path(actual_guide_video_path_for_wgp).exists()):
+                    dprint(f"[VACE_ERROR] Seg {segment_idx}: VACE model '{model_name}' requires guide video but creation failed!")
+                    dprint(f"[VACE_ERROR] Guide video path: {actual_guide_video_path_for_wgp}")
+                    dprint(f"[VACE_ERROR] Available inputs: {len(input_images_resolved_for_guide) if input_images_resolved_for_guide else 0} images")
+                    dprint(f"[VACE_ERROR] Previous segment video: {path_to_previous_segment_video_output_for_guide}")
+                    raise ValueError(f"VACE model '{model_name}' requires a guide video but guide video creation failed. Check input images and previous segment outputs.")
                 
         except Exception as e_guide:
             print(f"ERROR Task {segment_task_id_str} guide prep: {e_guide}")
