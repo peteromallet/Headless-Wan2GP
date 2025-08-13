@@ -127,7 +127,7 @@ class TravelSegmentProcessor:
                 path_to_previous_segment_video_output_for_guide=path_to_previous_segment_video_output_for_guide,
                 output_target_dir=ctx.segment_processing_dir,
                 guide_video_base_name=guide_video_base_name,
-                segment_image_download_dir=None,  # Will be handled by function
+                segment_image_download_dir=ctx.segment_processing_dir,  # Use processing dir for downloads
                 task_id_for_logging=ctx.task_id,
                 full_orchestrator_payload=ctx.full_orchestrator_payload,
                 segment_params=ctx.segment_params,
