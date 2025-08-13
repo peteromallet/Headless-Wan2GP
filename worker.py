@@ -196,19 +196,19 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             generation_params["lora_multipliers"] = [float(x.strip()) for x in multipliers.split(",") if x.strip()]
         # Keep as-is if already a list
     
-    # Set default values for common parameters if not specified
-    defaults = {
-        "resolution": "1280x720",
-        "video_length": 49,
-        "num_inference_steps": 25,
-        "guidance_scale": 7.5,
-        "seed": -1,  # Random seed
-        "negative_prompt": "",
+    # Set default values for essential parameters only (orchestrator handles generation defaults)
+    # Only set defaults for parameters that are required for basic task functionality
+    essential_defaults = {
+        "seed": -1,  # Random seed (essential for reproducibility)
+        "negative_prompt": "",  # Empty negative prompt (essential to prevent errors)
     }
     
-    for param, default_value in defaults.items():
+    for param, default_value in essential_defaults.items():
         if param not in generation_params:
             generation_params[param] = default_value
+    
+    # NOTE: resolution, video_length, num_inference_steps, guidance_scale are now handled 
+    # by WanOrchestrator._resolve_parameters() with proper model config precedence
     
     # Apply Wan 2.2 optimizations automatically (can be overridden by explicit task parameters)
     if "2_2" in model or "cocktail_2_2" in model:

@@ -342,7 +342,7 @@ class WanOrchestrator:
         Returns:
             Resolved parameter dictionary with proper precedence
         """
-        # 1. Start with system defaults (lowest priority)
+        # 1. Start with system defaults (lowest priority) - migrated from worker.py
         resolved_params = {
             "resolution": "1280x720",
             "video_length": 49,
@@ -352,7 +352,7 @@ class WanOrchestrator:
             "flow_shift": 7.0,
             "sample_solver": "euler",
             "switch_threshold": 500,
-            "seed": 42,
+            "seed": -1,  # Random seed (matches worker.py behavior)
             "negative_prompt": "",
             "activated_loras": [],
             "loras_multipliers": "",
