@@ -1,28 +1,33 @@
 {
     "model": {
         "name": "Optimised T2I 14B",
-        "architecture": "t2v",
+        "architecture": "vace_14B",
+        "modules": [
+            "vace_14B"
+        ],
         "description": "Optimized configuration for text-to-image generation using a carefully balanced combination of quality enhancement and acceleration LoRAs. Features MoviiGen, LightX2V fast generation, MPS rewards, and detail enhancement LoRAs for superior image quality.",
         "URLs": "t2v_2_2",
         "URLs2": "t2v_2_2",
         "loras": [
-            "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
-            "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/DetailEnhancerV1.safetensors",
-            "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_AccVid_T2V_14B_lora_rank32_fp16.safetensors",
-            "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_T2V_14B_MoviiGen_lora_rank32_fp16.safetensors"
+            "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_T2V_14B_MoviiGen_lora_rank32_fp16.safetensors",
+            "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
+            "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan2.1-Fun-14B-InP-MPS_reward_lora.safetensors",
+            "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/DetailEnhancerV1.safetensors"
         ],
-        "loras_multipliers": [
-            1,
-            0.2,
-            0.5,
-            0.5
-        ],
-        "group": "wan2_2",
-        "auto_quantize": true
+        "loras_multipliers": [0.5, 1.0, 0.5, 0.2],
+        "group": "wan2_2"
     },
     "num_inference_steps": 10,
-    "guidance_scale": 1,
+    "guidance_scale": 1.0,
     "guidance2_scale": 1,
-    "flow_shift": 2,
-    "switch_threshold": 50
+    "flow_shift": 5.0,
+    "sample_solver": "unipc",
+    "control_net_weight": 1.3,
+    "control_net_weight2": 1.0,
+    "sampler_cfg_presets": {
+        "euler": {"guidance_scale": 1.0, "flow_shift": 2.0},
+        "unipc": {"guidance_scale": 1.0, "flow_shift": 5.0, "num_inference_steps": 10},
+        "dpm++": {"guidance_scale": 1.0, "guidance2_scale": 1.0, "flow_shift": 5.0, "num_inference_steps": 10},
+        "causvid": {"guidance_scale": 1.0, "flow_shift": 1.0}
+    }
 }
