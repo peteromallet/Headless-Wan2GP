@@ -401,10 +401,122 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         segment_processing_dir = current_run_base_output_dir
         segment_processing_dir.mkdir(parents=True, exist_ok=True)
         
-        # Prepare guide video (simplified version for queue processing)
+        # CRITICAL: Restore essential guide video creation for VACE models
+        # This was incorrectly removed as "complex" but is REQUIRED for VACE functionality
+        
+        # 1. VACE model detection
+        is_vace_model = "vace" in model_name.lower()
+        debug_enabled = segment_params.get("debug_mode_enabled", full_orchestrator_payload.get("debug_mode_enabled", False))
+        
+        dprint(f"[VACE_QUEUE_DEBUG] Segment {segment_idx}: Model '{model_name}' -> VACE detected: {is_vace_model}")
+        
+        # 2. Essential parameters for guide video creation
+        fps_helpers = full_orchestrator_payload.get("fps_helpers", 16)
+        segment_image_download_dir = segment_processing_dir  # Use processing dir for downloads
+        
+        # 3. Determine if this is first segment from scratch
+        is_first_segment = segment_params.get("is_first_segment", segment_idx == 0)
+        is_first_segment_from_scratch = is_first_segment and not full_orchestrator_payload.get("continue_from_video_resolved_path")
+        
+        # 4. Get input images and calculate end anchor index
+        input_images_resolved_for_guide = full_orchestrator_payload.get("input_image_paths_resolved", [])
+        end_anchor_img_path_str_idx = segment_idx + 1
+        if full_orchestrator_payload.get("continue_from_video_resolved_path"):
+            end_anchor_img_path_str_idx = segment_idx
+        
+        # Safety: if this is the last segment, no end anchor available
+        if end_anchor_img_path_str_idx >= len(input_images_resolved_for_guide):
+            end_anchor_img_path_str_idx = -1  # No end anchor image available
+        
+        # 5. Get previous segment video output for guide creation
+        path_to_previous_segment_video_output_for_guide = None
+        if is_first_segment and full_orchestrator_payload.get("continue_from_video_resolved_path"):
+            # First segment continuing from video
+            path_to_previous_segment_video_output_for_guide = full_orchestrator_payload.get("continue_from_video_resolved_path")
+        elif not is_first_segment:
+            # Subsequent segment - get predecessor output
+            task_dependency_id, raw_path_from_db = db_ops.get_predecessor_output_via_edge_function(task_id)
+            if task_dependency_id and raw_path_from_db:
+                dprint(f"[QUEUE_GUIDE_DEBUG] Segment {segment_idx}: Found predecessor {task_dependency_id} with output: {raw_path_from_db}")
+                # Resolve path (handle SQLite relative paths vs absolute paths)
+                if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and raw_path_from_db.startswith("files/"):
+                    sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
+                    path_to_previous_segment_video_output_for_guide = str((sqlite_db_parent / "public" / raw_path_from_db).resolve())
+                else:
+                    path_to_previous_segment_video_output_for_guide = raw_path_from_db
+                
+                # Download if it's a remote URL
+                if path_to_previous_segment_video_output_for_guide and path_to_previous_segment_video_output_for_guide.startswith("http"):
+                    try:
+                        from source.common_utils import download_file as sm_download_file
+                        remote_url = path_to_previous_segment_video_output_for_guide
+                        local_filename = Path(remote_url).name
+                        local_download_path = segment_processing_dir / f"prev_{segment_idx:02d}_{local_filename}"
+                        if not local_download_path.exists():
+                            sm_download_file(remote_url, segment_processing_dir, local_download_path.name)
+                            dprint(f"[QUEUE_GUIDE_DEBUG] Downloaded previous segment video to {local_download_path}")
+                        path_to_previous_segment_video_output_for_guide = str(local_download_path.resolve())
+                    except Exception as e_dl_prev:
+                        dprint(f"[WARNING] Failed to download remote previous segment video: {e_dl_prev}")
+        
+        # 6. Create guide video for VACE models (or debug mode)
         guide_video_path = None
-        # For queue-based processing, we'll skip complex guide video creation for now
-        # and focus on the core generation parameters
+        if debug_enabled or is_vace_model:
+            if is_vace_model and not debug_enabled:
+                dprint(f"[QUEUE_GUIDE_DEBUG] VACE model detected, creating guide video (REQUIRED for VACE functionality)")
+            
+            # Import guide video creation function
+            from datetime import datetime
+            import uuid
+            
+            # Generate unique guide video filename
+            timestamp_short = datetime.now().strftime("%H%M%S")
+            unique_suffix = uuid.uuid4().hex[:6]
+            guide_video_filename = f"seg{segment_idx:02d}_vace_guide_{timestamp_short}_{unique_suffix}.mp4"
+            guide_video_base_name = f"seg{segment_idx:02d}_vace_guide_{timestamp_short}_{unique_suffix}"
+            guide_video_final_path = segment_processing_dir / guide_video_filename
+            
+            try:
+                # Call the SAME guide video creation function as the full handler
+                guide_video_path = sm_create_guide_video_for_travel_segment(
+                    segment_idx_for_logging=segment_idx,
+                    end_anchor_image_index=end_anchor_img_path_str_idx,
+                    is_first_segment_from_scratch=is_first_segment_from_scratch,
+                    total_frames_for_segment=total_frames_for_segment,
+                    parsed_res_wh=parsed_res_wh,
+                    fps_helpers=fps_helpers,
+                    input_images_resolved_for_guide=input_images_resolved_for_guide,
+                    path_to_previous_segment_video_output_for_guide=path_to_previous_segment_video_output_for_guide,
+                    output_target_dir=segment_processing_dir,
+                    guide_video_base_name=guide_video_base_name,
+                    segment_image_download_dir=segment_image_download_dir,
+                    task_id_for_logging=task_id,
+                    full_orchestrator_payload=full_orchestrator_payload,
+                    segment_params=segment_params,
+                    single_image_journey=False,  # Travel segments are not single image journeys
+                    predefined_output_path=guide_video_final_path,
+                    dprint=dprint
+                )
+                
+                if guide_video_path and Path(guide_video_path).exists():
+                    dprint(f"[QUEUE_GUIDE_DEBUG] Successfully created guide video: {guide_video_path}")
+                else:
+                    dprint(f"[QUEUE_GUIDE_ERROR] Guide video creation returned: {guide_video_path}")
+                    
+            except Exception as e_guide:
+                dprint(f"[QUEUE_GUIDE_ERROR] Guide video creation failed: {e_guide}")
+                import traceback
+                traceback.print_exc()
+                guide_video_path = None
+        
+        # 7. CRITICAL: VACE models MUST have a guide video - fail if creation failed
+        if is_vace_model and (guide_video_path is None or not Path(guide_video_path).exists()):
+            error_msg = f"VACE model '{model_name}' requires a guide video but creation failed for segment {segment_idx}. VACE models cannot perform pure text-to-video generation."
+            dprint(f"[VACE_ERROR] {error_msg}")
+            dprint(f"[VACE_ERROR] Guide video path: {guide_video_path}")
+            dprint(f"[VACE_ERROR] Available inputs: {len(input_images_resolved_for_guide) if input_images_resolved_for_guide else 0} images")
+            dprint(f"[VACE_ERROR] Previous segment video: {path_to_previous_segment_video_output_for_guide}")
+            return False, error_msg
         
         # Create generation task parameters optimized for queue processing
         generation_params = {
@@ -419,9 +531,12 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             "apply_reward_lora": apply_reward_lora,
         }
         
-        # Add video guide if available
+        # Add video guide if available (ESSENTIAL for VACE models)
         if guide_video_path:
             generation_params["video_guide"] = str(guide_video_path)
+            dprint(f"[QUEUE_GUIDE_DEBUG] Added video_guide to generation_params: {guide_video_path}")
+        else:
+            dprint(f"[QUEUE_GUIDE_DEBUG] No guide video available for generation_params")
         
         # Create and submit generation task
         from headless_model_management import GenerationTask
