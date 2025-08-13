@@ -247,6 +247,12 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 if ref_instr.get("segment_idx_for_naming") == idx
             ]
 
+            # [DEEP_DEBUG] Log orchestrator payload values BEFORE creating segment payload
+            dprint(f"[DEEP_DEBUG] Orchestrator {orchestrator_task_id_str}: CREATING SEGMENT {idx} PAYLOAD")
+            dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('apply_causvid'): {orchestrator_payload.get('apply_causvid')}")
+            dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('use_lighti2x_lora'): {orchestrator_payload.get('use_lighti2x_lora')}")
+            dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('apply_reward_lora'): {orchestrator_payload.get('apply_reward_lora')}")
+            
             segment_payload = {
                 "task_id": current_segment_task_id,
                 "orchestrator_task_id_ref": orchestrator_task_id_str,
@@ -291,6 +297,12 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "continue_from_video_resolved_path_for_guide": orchestrator_payload.get("continue_from_video_resolved_path") if idx == 0 else None,
                 "full_orchestrator_payload": orchestrator_payload, # Ensure full payload is passed to segment
             }
+
+            # [DEEP_DEBUG] Log segment payload values AFTER creation to verify they match
+            dprint(f"[DEEP_DEBUG] Orchestrator {orchestrator_task_id_str}: SEGMENT {idx} PAYLOAD CREATED")
+            dprint(f"[DEEP_DEBUG]   segment_payload['use_causvid_lora']: {segment_payload.get('use_causvid_lora')}")
+            dprint(f"[DEEP_DEBUG]   segment_payload['use_lighti2x_lora']: {segment_payload.get('use_lighti2x_lora')}")
+            dprint(f"[DEEP_DEBUG]   segment_payload['apply_reward_lora']: {segment_payload.get('apply_reward_lora')}")
 
             dprint(f"Orchestrator: Enqueuing travel_segment {idx} (ID: {current_segment_task_id}) depends_on={previous_segment_task_id}")
             db_ops.add_task_to_db(

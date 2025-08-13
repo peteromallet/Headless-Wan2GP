@@ -740,6 +740,11 @@ class HeadlessTaskQueue:
         self.logger.info(f"[LORA_DEBUG] Task {task.id}: use_lighti2x_lora in params: {'use_lighti2x_lora' in task.parameters}")
         if 'use_lighti2x_lora' in task.parameters:
             self.logger.info(f"[LORA_DEBUG] Task {task.id}: use_lighti2x_lora value: {task.parameters['use_lighti2x_lora']}")
+        if 'use_causvid_lora' in task.parameters:
+            self.logger.info(f"[LORA_DEBUG] Task {task.id}: use_causvid_lora value: {task.parameters['use_causvid_lora']}")
+        
+        # [DEEP_DEBUG] Log ALL parameters for this task to see everything
+        self.logger.info(f"[DEEP_DEBUG] Task {task.id}: FULL task.parameters: {task.parameters}")
         
         # Detect LoRA optimization flags using shared logic
         use_causvid, use_lighti2x = detect_lora_optimization_flags(

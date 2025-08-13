@@ -179,6 +179,14 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         if param in db_task_params:
             generation_params[param] = db_task_params[param]
     
+    # [DEEP_DEBUG] Log LoRA parameter transfer for debugging
+    if task_type == "travel_segment":
+        dprint(f"[DEEP_DEBUG] Worker {task_id}: DB TASK TO GENERATION TASK CONVERSION")
+        dprint(f"[DEEP_DEBUG]   db_task_params.get('use_causvid_lora'): {db_task_params.get('use_causvid_lora')}")
+        dprint(f"[DEEP_DEBUG]   db_task_params.get('use_lighti2x_lora'): {db_task_params.get('use_lighti2x_lora')}")
+        dprint(f"[DEEP_DEBUG]   generation_params.get('use_causvid_lora'): {generation_params.get('use_causvid_lora')}")
+        dprint(f"[DEEP_DEBUG]   generation_params.get('use_lighti2x_lora'): {generation_params.get('use_lighti2x_lora')}")
+    
     # Handle field name variations (orchestrator uses different names than WGP)
     # Map 'steps' to 'num_inference_steps' for compatibility
     if "steps" in db_task_params and "num_inference_steps" not in generation_params:
