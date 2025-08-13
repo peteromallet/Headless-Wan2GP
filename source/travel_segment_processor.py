@@ -179,14 +179,32 @@ class TravelSegmentProcessor:
             frame_overlap_from_previous = ctx.segment_params.get("frame_overlap_from_previous", 0)
             overlap_count = max(0, int(frame_overlap_from_previous))
             
-            # For travel segments, overlap frames from previous segment should be inactive (black)
-            # so VACE reuses the overlapping content rather than regenerating it
+            # 1) Frames reused from the previous segment (overlap)
             if overlap_count > 0:
                 overlap_indices = set(range(overlap_count))
                 inactive_indices.update(overlap_indices)
                 ctx.dprint(f"Seg {ctx.segment_idx}: Adding {len(overlap_indices)} overlap frames to inactive set: {sorted(overlap_indices)}")
             else:
                 ctx.dprint(f"Seg {ctx.segment_idx}: No overlap frames to mark as inactive")
+            
+            # 2) First frame when this is the very first segment from scratch
+            is_first_segment_val = ctx.segment_params.get("is_first_segment", False)
+            is_continue_scenario = ctx.full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
+            
+            if is_first_segment_val and not is_continue_scenario:
+                inactive_indices.add(0)
+                ctx.dprint(f"Seg {ctx.segment_idx}: First segment from scratch - marking frame 0 as inactive")
+            
+            # 3) Last frame for ALL segments - each segment travels TO a target image
+            # Every segment ends at its target image, which should be kept (inactive/black)
+            inactive_indices.add(ctx.total_frames_for_segment - 1)
+            ctx.dprint(f"Seg {ctx.segment_idx}: Marking last frame {ctx.total_frames_for_segment - 1} as inactive (target image)")
+            
+            # --- DEBUG LOGGING (restored from original) ---
+            print(f"[MASK_DEBUG] Segment {ctx.segment_idx}: frame_overlap_from_previous={frame_overlap_from_previous}")
+            print(f"[MASK_DEBUG] Segment {ctx.segment_idx}: inactive (masked) frame indices: {sorted(list(inactive_indices))}")
+            print(f"[MASK_DEBUG] Segment {ctx.segment_idx}: active (unmasked) frame indices: {[i for i in range(ctx.total_frames_for_segment) if i not in inactive_indices]}")
+            # --- END DEBUG LOGGING ---
             
             # Create mask video output path
             timestamp_short = datetime.now().strftime("%H%M%S")
