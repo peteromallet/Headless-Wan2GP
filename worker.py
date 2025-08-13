@@ -614,6 +614,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                         mask_video_path_for_wgp = None
             except Exception as e_mask_gen2:
                 dprint(f"[ERROR] Seg {segment_idx}: Mask video generation error: {e_mask_gen2}")
+                traceback.print_exc()
                 mask_video_path_for_wgp = None
         
         # Create generation task parameters optimized for queue processing
