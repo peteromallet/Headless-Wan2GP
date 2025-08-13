@@ -362,24 +362,40 @@ class WanOrchestrator:
         try:
             import wgp
             model_defaults = wgp.get_default_settings(model_type)
+            generation_logger.info(f"[PARAM_DEBUG] get_default_settings('{model_type}') returned: {model_defaults}")
+            generation_logger.info(f"[PARAM_DEBUG] Type: {type(model_defaults)}")
+            
             if model_defaults:
+                generation_logger.info(f"[PARAM_DEBUG] Before applying model config - resolved_params: {resolved_params}")
                 for param, value in model_defaults.items():
                     # Skip UI-specific parameters that shouldn't affect generation
                     if param not in ["prompt", "activated_loras", "loras_multipliers"]:
+                        old_value = resolved_params.get(param, "NOT_SET")
                         resolved_params[param] = value
+                        generation_logger.info(f"[PARAM_DEBUG] Applied {param}: {old_value} → {value}")
                         
+                generation_logger.info(f"[PARAM_DEBUG] After applying model config - resolved_params: {resolved_params}")
                 generation_logger.debug(f"Applied model config for '{model_type}': {len(model_defaults)} parameters")
             else:
                 generation_logger.warning(f"No model configuration found for '{model_type}'")
                 
         except Exception as e:
             generation_logger.warning(f"Could not load model configuration for '{model_type}': {e}")
+            generation_logger.error(f"[PARAM_DEBUG] Exception details: {str(e)}")
+            import traceback
+            generation_logger.error(f"[PARAM_DEBUG] Traceback: {traceback.format_exc()}")
         
         # 3. Apply task explicit parameters (highest priority)
+        generation_logger.info(f"[PARAM_DEBUG] Task explicit parameters: {task_params}")
+        generation_logger.info(f"[PARAM_DEBUG] Before applying task params - resolved_params: {resolved_params}")
+        
         for param, value in task_params.items():
             if value is not None:  # Don't override with None values
+                old_value = resolved_params.get(param, "NOT_SET")
                 resolved_params[param] = value
+                generation_logger.info(f"[PARAM_DEBUG] Task override {param}: {old_value} → {value}")
                 
+        generation_logger.info(f"[PARAM_DEBUG] FINAL resolved_params: {resolved_params}")
         generation_logger.debug(f"Parameter resolution for '{model_type}': {len(task_params)} task overrides applied")
         return resolved_params
 
