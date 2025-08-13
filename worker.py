@@ -398,219 +398,45 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         segment_processing_dir = current_run_base_output_dir
         segment_processing_dir.mkdir(parents=True, exist_ok=True)
         
-        # CRITICAL: Restore essential guide video creation for VACE models
-        # This was incorrectly removed as "complex" but is REQUIRED for VACE functionality
-        
-        # 1. VACE model detection
-        is_vace_model = "vace" in model_name.lower()
-        debug_enabled = segment_params.get("debug_mode_enabled", full_orchestrator_payload.get("debug_mode_enabled", False))
-        
-        dprint(f"[VACE_QUEUE_DEBUG] Segment {segment_idx}: Model '{model_name}' -> VACE detected: {is_vace_model}")
-        
-        # 2. Essential parameters for guide video creation
-        fps_helpers = full_orchestrator_payload.get("fps_helpers", 16)
-        segment_image_download_dir = segment_processing_dir  # Use processing dir for downloads
-        
-        # 3. Determine if this is first segment from scratch
-        is_first_segment = segment_params.get("is_first_segment", segment_idx == 0)
-        is_first_segment_from_scratch = is_first_segment and not full_orchestrator_payload.get("continue_from_video_resolved_path")
-        
-        # 4. Get input images and calculate end anchor index
-        input_images_resolved_for_guide = full_orchestrator_payload.get("input_image_paths_resolved", [])
-        end_anchor_img_path_str_idx = segment_idx + 1
-        if full_orchestrator_payload.get("continue_from_video_resolved_path"):
-            end_anchor_img_path_str_idx = segment_idx
-        
-        # Safety: if this is the last segment, no end anchor available
-        if end_anchor_img_path_str_idx >= len(input_images_resolved_for_guide):
-            end_anchor_img_path_str_idx = -1  # No end anchor image available
-        
-        # 5. Get previous segment video output for guide creation
-        path_to_previous_segment_video_output_for_guide = None
-        if is_first_segment and full_orchestrator_payload.get("continue_from_video_resolved_path"):
-            # First segment continuing from video
-            path_to_previous_segment_video_output_for_guide = full_orchestrator_payload.get("continue_from_video_resolved_path")
-        elif not is_first_segment:
-            # Subsequent segment - get predecessor output
-            task_dependency_id, raw_path_from_db = db_ops.get_predecessor_output_via_edge_function(task_id)
-            if task_dependency_id and raw_path_from_db:
-                dprint(f"[QUEUE_GUIDE_DEBUG] Segment {segment_idx}: Found predecessor {task_dependency_id} with output: {raw_path_from_db}")
-                # Resolve path (handle SQLite relative paths vs absolute paths)
-                if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and raw_path_from_db.startswith("files/"):
-                    sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
-                    path_to_previous_segment_video_output_for_guide = str((sqlite_db_parent / "public" / raw_path_from_db).resolve())
-                else:
-                    path_to_previous_segment_video_output_for_guide = raw_path_from_db
-                
-                # Download if it's a remote URL
-                if path_to_previous_segment_video_output_for_guide and path_to_previous_segment_video_output_for_guide.startswith("http"):
-                    try:
-                        from source.common_utils import download_file as sm_download_file
-                        remote_url = path_to_previous_segment_video_output_for_guide
-                        local_filename = Path(remote_url).name
-                        local_download_path = segment_processing_dir / f"prev_{segment_idx:02d}_{local_filename}"
-                        if not local_download_path.exists():
-                            sm_download_file(remote_url, segment_processing_dir, local_download_path.name)
-                            dprint(f"[QUEUE_GUIDE_DEBUG] Downloaded previous segment video to {local_download_path}")
-                        path_to_previous_segment_video_output_for_guide = str(local_download_path.resolve())
-                    except Exception as e_dl_prev:
-                        dprint(f"[WARNING] Failed to download remote previous segment video: {e_dl_prev}")
-        
-        # 6. Create guide video for VACE models (or debug mode)
-        guide_video_path = None
-        if debug_enabled or is_vace_model:
-            if is_vace_model and not debug_enabled:
-                dprint(f"[QUEUE_GUIDE_DEBUG] VACE model detected, creating guide video (REQUIRED for VACE functionality)")
+        # Use the shared TravelSegmentProcessor to eliminate code duplication
+        try:
+            from source.travel_segment_processor import TravelSegmentProcessor, TravelSegmentContext
             
-            # Import guide video creation function
-            from datetime import datetime
-            import uuid
+            # Get debug mode from either segment params or orchestrator payload
+            debug_enabled = segment_params.get("debug_mode_enabled", full_orchestrator_payload.get("debug_mode_enabled", False))
             
-            # Generate unique guide video filename
-            timestamp_short = datetime.now().strftime("%H%M%S")
-            unique_suffix = uuid.uuid4().hex[:6]
-            guide_video_filename = f"seg{segment_idx:02d}_vace_guide_{timestamp_short}_{unique_suffix}.mp4"
-            guide_video_base_name = f"seg{segment_idx:02d}_vace_guide_{timestamp_short}_{unique_suffix}"
-            guide_video_final_path = segment_processing_dir / guide_video_filename
+            # Create context for the shared processor
+            processor_context = TravelSegmentContext(
+                task_id=task_id,
+                segment_idx=segment_idx,
+                model_name=model_name,
+                total_frames_for_segment=total_frames_for_segment,
+                parsed_res_wh=parsed_res_wh,
+                segment_processing_dir=segment_processing_dir,
+                full_orchestrator_payload=full_orchestrator_payload,
+                segment_params=segment_params,
+                mask_active_frames=mask_active_frames,
+                debug_enabled=debug_enabled,
+                dprint=dprint
+            )
             
-            try:
-                # Call the SAME guide video creation function as the full handler
-                guide_video_path = sm_create_guide_video_for_travel_segment(
-                    segment_idx_for_logging=segment_idx,
-                    end_anchor_image_index=end_anchor_img_path_str_idx,
-                    is_first_segment_from_scratch=is_first_segment_from_scratch,
-                    total_frames_for_segment=total_frames_for_segment,
-                    parsed_res_wh=parsed_res_wh,
-                    fps_helpers=fps_helpers,
-                    input_images_resolved_for_guide=input_images_resolved_for_guide,
-                    path_to_previous_segment_video_output_for_guide=path_to_previous_segment_video_output_for_guide,
-                    output_target_dir=segment_processing_dir,
-                    guide_video_base_name=guide_video_base_name,
-                    segment_image_download_dir=segment_image_download_dir,
-                    task_id_for_logging=task_id,
-                    full_orchestrator_payload=full_orchestrator_payload,
-                    segment_params=segment_params,
-                    single_image_journey=False,  # Travel segments are not single image journeys
-                    predefined_output_path=guide_video_final_path,
-                    dprint=dprint
-                )
-                
-                if guide_video_path and Path(guide_video_path).exists():
-                    dprint(f"[QUEUE_GUIDE_DEBUG] Successfully created guide video: {guide_video_path}")
-                else:
-                    dprint(f"[QUEUE_GUIDE_ERROR] Guide video creation returned: {guide_video_path}")
-                    
-            except Exception as e_guide:
-                dprint(f"[QUEUE_GUIDE_ERROR] Guide video creation failed: {e_guide}")
-                traceback.print_exc()
-                guide_video_path = None
-        
-        # 7. CRITICAL: VACE models MUST have a guide video - fail if creation failed
-        if is_vace_model and (guide_video_path is None or not Path(guide_video_path).exists()):
-            error_msg = f"VACE model '{model_name}' requires a guide video but creation failed for segment {segment_idx}. VACE models cannot perform pure text-to-video generation."
-            dprint(f"[VACE_ERROR] {error_msg}")
-            dprint(f"[VACE_ERROR] Guide video path: {guide_video_path}")
-            dprint(f"[VACE_ERROR] Available inputs: {len(input_images_resolved_for_guide) if input_images_resolved_for_guide else 0} images")
-            dprint(f"[VACE_ERROR] Previous segment video: {path_to_previous_segment_video_output_for_guide}")
-            return False, error_msg
-        
-        # 8. Create mask video for VACE models (EXACT SAME LOGIC as travel_between_images.py)
-        mask_video_path_for_wgp = None  # Use same variable name as original
-        if mask_active_frames:
-            try:
-                # --- Determine which frame indices should be kept (inactive = black) ---
-                inactive_indices = set()
-
-                # Define overlap_count up front for consistent logging  
-                frame_overlap_from_previous = segment_params.get("frame_overlap_from_previous", 0)
-                overlap_count = max(0, int(frame_overlap_from_previous))
-
-                # Single image journey detection (SAME LOGIC as original)
-                is_single_image_journey = (
-                    len(input_images_resolved_for_guide) == 1
-                    and full_orchestrator_payload.get("continue_from_video_resolved_path") is None
-                    and segment_params.get("is_first_segment")
-                    and segment_params.get("is_last_segment")
-                )
-
-                if is_single_image_journey:
-                    # For a single image journey, only the first frame is kept from the guide.
-                    inactive_indices.add(0)
-                    dprint(f"Seg {segment_idx} Mask: Single image journey - keeping only frame 0 inactive.")
-                else:
-                    # 1) Frames reused from the previous segment (overlap)
-                    inactive_indices.update(range(overlap_count))
-
-                # 2) First frame when this is the very first segment from scratch
-                is_first_segment_val = segment_params.get("is_first_segment", False)
-                is_continue_scenario = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
-                if is_first_segment_val and not is_continue_scenario:
-                    inactive_indices.add(0)
-
-                # 3) Last frame for ALL segments - each segment travels TO a target image
-                # Every segment ends at its target image, which should be kept (inactive/black)
-                inactive_indices.add(total_frames_for_segment - 1)
-
-                # --- DEBUG LOGGING (SAME FORMAT as original) ---
-                print(f"[MASK_DEBUG] Segment {segment_idx}: frame_overlap_from_previous={frame_overlap_from_previous}")
-                print(f"[MASK_DEBUG] Segment {segment_idx}: inactive (masked) frame indices: {sorted(list(inactive_indices))}")
-                print(f"[MASK_DEBUG] Segment {segment_idx}: active (unmasked) frame indices: {[i for i in range(total_frames_for_segment) if i not in inactive_indices]}")
-                # --- END DEBUG LOGGING ---
-
-                # Debug: Show the conditions that determined inactive indices (SAME as original)
-                dprint(
-                    f"Seg {segment_idx}: Mask conditions - is_first_segment={segment_params.get('is_first_segment', False)}, "
-                    f"is_continue_scenario={full_orchestrator_payload.get('continue_from_video_resolved_path') is not None}, is_last_segment={segment_params.get('is_last_segment', False)}, "
-                    f"overlap_count={frame_overlap_from_previous}, is_single_image_journey={is_single_image_journey}"
-                )
-
-                # Improved mask naming: use descriptive name with timestamp and UUID (SAME as original)
-                timestamp_short = datetime.now().strftime("%H%M%S")
-                unique_suffix = uuid.uuid4().hex[:6]
-                mask_filename = f"seg{segment_idx:02d}_vace_mask_{timestamp_short}_{unique_suffix}.mp4"
-                # Create mask video in the same directory as guide video for consistency
-                mask_out_path_tmp = segment_processing_dir / mask_filename
-                
-                # Always create mask video for VACE models (required for functionality)
-                # For non-VACE models, only create in debug mode (SAME LOGIC as original)
-                if not debug_enabled and not is_vace_model:
-                    dprint(f"Task {task_id}: Debug mode disabled and non-VACE model, skipping mask video creation")
-                    mask_video_path_for_wgp = None
-                else:
-                    if is_vace_model and not debug_enabled:
-                        dprint(f"Task {task_id}: VACE model detected, creating mask video (required for VACE functionality)")
-                    # Use the generalized mask creation function (SAME as original)
-                    created_mask_vid = create_mask_video_from_inactive_indices(
-                        total_frames=total_frames_for_segment,
-                        resolution_wh=parsed_res_wh,
-                        inactive_frame_indices=inactive_indices,
-                        output_path=mask_out_path_tmp,
-                        fps=fps_helpers,
-                        task_id_for_logging=task_id,
-                        dprint=dprint
-                    )
-                    
-                    if created_mask_vid and created_mask_vid.exists():
-                        mask_video_path_for_wgp = created_mask_vid
-                        # Verify mask video properties match guide video (SAME as original)
-                        try:
-                            from source.common_utils import get_video_frame_count_and_fps
-                            mask_frames, mask_fps = get_video_frame_count_and_fps(str(mask_video_path_for_wgp))
-                            dprint(f"Seg {segment_idx}: Mask video generated - {mask_frames} frames @ {mask_fps}fps -> {mask_video_path_for_wgp}")
-                            
-                            # Warn if frame count mismatch
-                            if mask_frames != total_frames_for_segment:
-                                dprint(f"[WARNING] Seg {segment_idx}: Mask frame count ({mask_frames}) != target ({total_frames_for_segment})")
-                        except Exception as e_verify:
-                            dprint(f"[WARNING] Seg {segment_idx}: Could not verify mask video properties: {e_verify}")
-                    else:
-                        dprint(f"[ERROR] Seg {segment_idx}: Mask video generation failed or file does not exist.")
-                        # Continue without mask - VACE can still work with just video guide
-                        mask_video_path_for_wgp = None
-            except Exception as e_mask_gen2:
-                dprint(f"[ERROR] Seg {segment_idx}: Mask video generation error: {e_mask_gen2}")
-                traceback.print_exc()
-                mask_video_path_for_wgp = None
+            # Create and use the shared processor
+            processor = TravelSegmentProcessor(processor_context)
+            segment_outputs = processor.process_segment()
+            
+            # Extract outputs for queue handler variables
+            guide_video_path = segment_outputs.get("video_guide")
+            mask_video_path_for_wgp = Path(segment_outputs["video_mask"]) if segment_outputs.get("video_mask") else None
+            video_prompt_type_str = segment_outputs["video_prompt_type"]
+            
+            dprint(f"[SHARED_PROCESSOR_QUEUE] Seg {segment_idx}: Guide video: {guide_video_path}")
+            dprint(f"[SHARED_PROCESSOR_QUEUE] Seg {segment_idx}: Mask video: {mask_video_path_for_wgp}")
+            dprint(f"[SHARED_PROCESSOR_QUEUE] Seg {segment_idx}: Video prompt type: {video_prompt_type_str}")
+            
+        except Exception as e_shared_processor:
+            dprint(f"[ERROR] Seg {segment_idx}: Shared processor failed in queue handler: {e_shared_processor}")
+            traceback.print_exc()
+            return False, f"Shared processor failed: {e_shared_processor}"
         
         # Create generation task parameters optimized for queue processing
         # Let WanOrchestrator handle parameter resolution with proper model preset precedence
@@ -670,68 +496,8 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         else:
             dprint(f"[QUEUE_MASK_DEBUG] No mask video available for generation_params")
         
-        # 9. Set video_prompt_type (CRITICAL for VACE models - EXACT SAME LOGIC as original)
-        dprint(f"[VPT_DEBUG] Seg {segment_idx}: Starting video_prompt_type construction")
-        dprint(f"[VPT_DEBUG] Seg {segment_idx}: is_vace_model = {is_vace_model}")
-        dprint(f"[VPT_DEBUG] Seg {segment_idx}: mask_video_path_for_wgp exists = {mask_video_path_for_wgp is not None}")
-        
-        if is_vace_model:
-            dprint(f"[VPT_DEBUG] Seg {segment_idx}: ENTERING VACE MODEL PATH")
-            # For travel between images, default to frame masking rather than preprocessing
-            # This lets VACE focus on the key frames while masking unused intermediate frames
-            preprocessing_code = full_orchestrator_payload.get("vace_preprocessing", "M")  # Default to Mask-only
-            dprint(f"[VPT_DEBUG] Seg {segment_idx}: vace_preprocessing from payload = '{preprocessing_code}'")
-            
-            # Build video_prompt_type based on available inputs and requested preprocessing
-            vpt_components = ["V"]  # Always start with V for VACE
-            dprint(f"[VPT_DEBUG] Seg {segment_idx}: Starting with vpt_components = {vpt_components}")
-            
-            if preprocessing_code != "M":
-                # Explicit preprocessing requested (P=Pose, D=Depth, L=Flow, etc.)
-                vpt_components.append(preprocessing_code)
-                dprint(f"[VPT_DEBUG] Seg {segment_idx}: Added preprocessing '{preprocessing_code}', vpt_components = {vpt_components}")
-                dprint(f"[VACEActivated] Seg {segment_idx}: Using VACE ControlNet with preprocessing '{preprocessing_code}'")
-            else:
-                dprint(f"[VPT_DEBUG] Seg {segment_idx}: No preprocessing (default 'M'), vpt_components = {vpt_components}")
-                dprint(f"[VACEActivated] Seg {segment_idx}: Using VACE with raw video guide (no preprocessing)")
-            
-            # Add mask component if mask video exists
-            if mask_video_path_for_wgp:
-                vpt_components.append("M")
-                dprint(f"[VPT_DEBUG] Seg {segment_idx}: Added mask 'M', vpt_components = {vpt_components}")
-                dprint(f"[VACEActivated] Seg {segment_idx}: Adding mask control - mask video: {mask_video_path_for_wgp}")
-            else:
-                dprint(f"[VPT_DEBUG] Seg {segment_idx}: No mask video, vpt_components = {vpt_components}")
-            
-            # NOTE: Image refs component would be added here if implemented
-            # For now, queue handler focuses on guide+mask for travel segments
-            
-            video_prompt_type_str = "".join(vpt_components)
-            dprint(f"[VPT_DEBUG] Seg {segment_idx}: VACE PATH RESULT: video_prompt_type = '{video_prompt_type_str}'")
-            dprint(f"[VACEActivated] Seg {segment_idx}: Final video_prompt_type: '{video_prompt_type_str}'")
-        else:
-            dprint(f"[VPT_DEBUG] Seg {segment_idx}: ENTERING NON-VACE MODEL PATH")
-            # Fallback for non-VACE models: use 'U' for unprocessed RGB to provide direct pixel-level control.
-            u_component = "U"
-            m_component = "M" if mask_video_path_for_wgp else ""
-            
-            dprint(f"[VPT_DEBUG] Seg {segment_idx}: Non-VACE components: U='{u_component}', M='{m_component}'")
-            
-            video_prompt_type_str = u_component + m_component
-            dprint(f"[VPT_DEBUG] Seg {segment_idx}: NON-VACE PATH RESULT: video_prompt_type = '{video_prompt_type_str}'")
-            dprint(f"[VACESkipped] Seg {segment_idx}: Using non-VACE model -> video_prompt_type: '{video_prompt_type_str}'")
-        
         # Add video_prompt_type to generation params (ESSENTIAL for VACE)
         generation_params["video_prompt_type"] = video_prompt_type_str
-        
-        # [FINAL_VPT_DEBUG] Log the final video_prompt_type before passing to WGP (SAME as original)
-        dprint(f"[VPT_FINAL] Seg {segment_idx}: ===== FINAL VIDEO_PROMPT_TYPE SUMMARY =====")
-        dprint(f"[VPT_FINAL] Seg {segment_idx}: Model: '{model_name}'")
-        dprint(f"[VPT_FINAL] Seg {segment_idx}: Is VACE: {is_vace_model}")
-        dprint(f"[VPT_FINAL] Seg {segment_idx}: Final video_prompt_type: '{video_prompt_type_str}'")
-        dprint(f"[VPT_FINAL] Seg {segment_idx}: Video guide path: {guide_video_path}")
-        dprint(f"[VPT_FINAL] Seg {segment_idx}: Video mask path: {mask_video_path_for_wgp}")
-        dprint(f"[VPT_FINAL] Seg {segment_idx}: =========================================")
         
         # Create and submit generation task
         from headless_model_management import GenerationTask
