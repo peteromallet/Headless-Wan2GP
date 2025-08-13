@@ -461,33 +461,65 @@ class WanOrchestrator:
         # Use provided model_type or current loaded model
         effective_model_type = model_type or self.current_model
         
-        # Resolve parameters with proper precedence: task > model_config > system_defaults
-        task_explicit_params = {
-            "prompt": prompt,
-            "resolution": resolution,
-            "video_length": video_length, 
-            "num_inference_steps": num_inference_steps,
-            "guidance_scale": guidance_scale,
-            "seed": seed,
-            "video_guide": video_guide,
-            "video_mask": video_mask,
-            "video_guide2": video_guide2,
-            "video_mask2": video_mask2,
-            "video_prompt_type": video_prompt_type,
-            "control_net_weight": control_net_weight,
-            "control_net_weight2": control_net_weight2,
-            "embedded_guidance_scale": embedded_guidance_scale,
-            "lora_names": lora_names,
-            "lora_multipliers": lora_multipliers,
-            "negative_prompt": negative_prompt,
-            "batch_size": batch_size,
+        # Build task explicit parameters from only the kwargs (actual passed parameters)
+        # Do NOT include method signature defaults as "task explicit" parameters
+        task_explicit_params = kwargs.copy()
+        
+        # Only add signature parameters if they differ from defaults or are essential
+        signature_defaults = {
+            "resolution": "1280x720",
+            "video_length": 49,
+            "num_inference_steps": 25,
+            "guidance_scale": 7.5,
+            "seed": 42,
+            "video_prompt_type": "VP",
+            "control_net_weight": 1.0,
+            "control_net_weight2": 1.0,
+            "embedded_guidance_scale": 3.0,
+            "negative_prompt": "",
+            "batch_size": 1,
         }
         
-        # Remove None values to avoid overriding defaults unnecessarily
-        task_explicit_params = {k: v for k, v in task_explicit_params.items() if v is not None}
+        # Always include prompt as it's required
+        task_explicit_params["prompt"] = prompt
         
-        # Add any additional kwargs
-        task_explicit_params.update(kwargs)
+        # Only include other parameters if they were explicitly passed (differ from defaults)
+        if resolution != signature_defaults["resolution"]:
+            task_explicit_params["resolution"] = resolution
+        if video_length != signature_defaults["video_length"]:
+            task_explicit_params["video_length"] = video_length
+        if num_inference_steps != signature_defaults["num_inference_steps"]:
+            task_explicit_params["num_inference_steps"] = num_inference_steps
+        if guidance_scale != signature_defaults["guidance_scale"]:
+            task_explicit_params["guidance_scale"] = guidance_scale
+        if seed != signature_defaults["seed"]:
+            task_explicit_params["seed"] = seed
+        if video_prompt_type != signature_defaults["video_prompt_type"]:
+            task_explicit_params["video_prompt_type"] = video_prompt_type
+        if control_net_weight != signature_defaults["control_net_weight"]:
+            task_explicit_params["control_net_weight"] = control_net_weight
+        if control_net_weight2 != signature_defaults["control_net_weight2"]:
+            task_explicit_params["control_net_weight2"] = control_net_weight2
+        if embedded_guidance_scale != signature_defaults["embedded_guidance_scale"]:
+            task_explicit_params["embedded_guidance_scale"] = embedded_guidance_scale
+        if negative_prompt != signature_defaults["negative_prompt"]:
+            task_explicit_params["negative_prompt"] = negative_prompt
+        if batch_size != signature_defaults["batch_size"]:
+            task_explicit_params["batch_size"] = batch_size
+            
+        # Always include non-None optional parameters
+        if video_guide is not None:
+            task_explicit_params["video_guide"] = video_guide
+        if video_mask is not None:
+            task_explicit_params["video_mask"] = video_mask
+        if video_guide2 is not None:
+            task_explicit_params["video_guide2"] = video_guide2
+        if video_mask2 is not None:
+            task_explicit_params["video_mask2"] = video_mask2
+        if lora_names is not None:
+            task_explicit_params["lora_names"] = lora_names
+        if lora_multipliers is not None:
+            task_explicit_params["lora_multipliers"] = lora_multipliers
         
         # Resolve final parameters with proper precedence
         resolved_params = self._resolve_parameters(effective_model_type, task_explicit_params)
