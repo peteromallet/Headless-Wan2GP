@@ -751,9 +751,25 @@ class HeadlessTaskQueue:
         if sample_solver:
             self._apply_sampler_cfg_preset(task.model, sample_solver, wgp_params)
         
-        # Apply special LoRA settings (CausVid, LightI2X) if flags are present
+        # Apply special LoRA settings (CausVid, LightI2X) - auto-detect from model or use explicit flags
         use_causvid = task.parameters.get("use_causvid_lora", False)
         use_lighti2x = task.parameters.get("use_lighti2x_lora", False)
+        
+        # Auto-detect CausVid LoRA from model defaults if not explicitly set
+        if not use_causvid:
+            current_loras = wgp_params.get("lora_names", [])
+            causvid_lora_filename = "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
+            if any(causvid_lora_filename in str(lora_path) for lora_path in current_loras):
+                use_causvid = True
+                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Auto-detected CausVid LoRA from model defaults")
+        
+        # Auto-detect LightI2X LoRA from model defaults if not explicitly set
+        if not use_lighti2x:
+            current_loras = wgp_params.get("lora_names", [])
+            lighti2x_lora_filename = "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors"
+            if any(lighti2x_lora_filename in str(lora_path) for lora_path in current_loras):
+                use_lighti2x = True
+                self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Auto-detected LightI2X LoRA from model defaults")
         
         # [CausVidDebugTrace] Enhanced parameter inspection
         self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Pre-processing parameter analysis:")
