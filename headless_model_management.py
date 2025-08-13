@@ -530,7 +530,6 @@ class HeadlessTaskQueue:
         """
         try:
             import cv2
-            from pathlib import Path
             
             video_path_obj = Path(video_path)
             if not video_path_obj.exists():
@@ -730,7 +729,6 @@ class HeadlessTaskQueue:
         
         # Apply special LoRA settings (CausVid, LightI2X) using shared utilities
         import sys
-        from pathlib import Path
         source_dir = Path(__file__).parent / "source"
         if str(source_dir) not in sys.path:
             sys.path.insert(0, str(source_dir))
