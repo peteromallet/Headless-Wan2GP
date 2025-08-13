@@ -719,14 +719,19 @@ class HeadlessTaskQueue:
             import wgp
             model_defaults = wgp.get_default_settings(task.model)
             
-            # Apply model defaults ONLY for parameters not already specified in task
+            # Apply model defaults with proper precedence: task explicit params > model JSON config > worker defaults
             applied_defaults = {}
+            task_explicit_params = set(task.parameters.keys())  # These are user-specified parameters
+            
             for param, value in model_defaults.items():
-                if param not in wgp_params:  # Task parameters take priority
+                # Only skip if this parameter was explicitly set by the user in task.parameters
+                if param not in task_explicit_params:
+                    # Model JSON config overrides worker defaults
                     wgp_params[param] = value
                     applied_defaults[param] = value
+                    self.logger.debug(f"Applied model default: {param}={value} (overriding any worker default)")
                 else:
-                    self.logger.debug(f"Task parameter override: {param}={wgp_params[param]} (model default: {value})")
+                    self.logger.debug(f"Task explicit parameter override: {param}={wgp_params[param]} (model default: {value})")
             
             if applied_defaults:
                 self.logger.info(f"Applied model defaults for '{task.model}': {applied_defaults}")
