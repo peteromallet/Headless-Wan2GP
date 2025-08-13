@@ -505,7 +505,6 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                     
             except Exception as e_guide:
                 dprint(f"[QUEUE_GUIDE_ERROR] Guide video creation failed: {e_guide}")
-                import traceback
                 traceback.print_exc()
                 guide_video_path = None
         
