@@ -195,10 +195,14 @@ class TravelSegmentProcessor:
                 inactive_indices.add(0)
                 ctx.dprint(f"Seg {ctx.segment_idx}: First segment from scratch - marking frame 0 as inactive")
             
-            # 3) Last frame for ALL segments - each segment travels TO a target image
-            # Every segment ends at its target image, which should be kept (inactive/black)
-            inactive_indices.add(ctx.total_frames_for_segment - 1)
-            ctx.dprint(f"Seg {ctx.segment_idx}: Marking last frame {ctx.total_frames_for_segment - 1} as inactive (target image)")
+            # 3) Last frame for multi-image segments - each segment travels TO a target image
+            # For single image journeys, we don't anchor the end, let the model generate freely
+            is_single_image_journey = self._detect_single_image_journey()
+            if not is_single_image_journey:
+                inactive_indices.add(ctx.total_frames_for_segment - 1)
+                ctx.dprint(f"Seg {ctx.segment_idx}: Multi-image journey - marking last frame {ctx.total_frames_for_segment - 1} as inactive (target image)")
+            else:
+                ctx.dprint(f"Seg {ctx.segment_idx}: Single image journey - NOT marking last frame as inactive, letting model generate freely")
             
             # --- DEBUG LOGGING (restored from original) ---
             print(f"[MASK_DEBUG] Segment {ctx.segment_idx}: frame_overlap_from_previous={frame_overlap_from_previous}")

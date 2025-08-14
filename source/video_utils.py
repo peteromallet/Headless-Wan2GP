@@ -664,6 +664,9 @@ def create_guide_video_for_travel_segment(
             
             end_anchor_frame_np = sm_image_to_frame(end_anchor_img_path_str, parsed_res_wh, task_id_for_logging=task_id_for_logging, image_download_dir=segment_image_download_dir, debug_mode=debug_mode)
             if end_anchor_frame_np is None: raise ValueError(f"Failed to load end anchor image: {end_anchor_img_path_str}")
+        else:
+            # For single image journeys, we don't need an end anchor - only set the first frame
+            dprint(f"Task {task_id_for_logging}: Single image journey - skipping end anchor setup, will only set first frame")
         
         num_end_anchor_duplicates = 1
         start_anchor_frame_np = None
@@ -675,7 +678,7 @@ def create_guide_video_for_travel_segment(
             if frames_for_guide_list: frames_for_guide_list[0] = start_anchor_frame_np.copy()
 
             if single_image_journey:
-                dprint(f"Task {task_id_for_logging}: Guide video for single image journey. Only first frame is set.")
+                dprint(f"Task {task_id_for_logging}: Guide video for single image journey. Only first frame is set, all other frames remain gray/masked.")
             else:
                 # This is the original logic for fading between start and end.
                 pot_max_idx_start_fade = total_frames_for_segment - num_end_anchor_duplicates - 1
