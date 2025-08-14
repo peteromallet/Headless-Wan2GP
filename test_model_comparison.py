@@ -28,8 +28,8 @@ def run_model_comparison_tests(base_output_dir: str = "outputs/model_comparison_
             "model": "vace_14B",
             "name": "Vace ControlNet 14B",
             "test_type": "vace_video",
-            "video": "video_1.mp4",
-            "mask": "mask_1.mp4", 
+            "video": "video.mp4",
+            "mask": "mask.mp4", 
             "prompt": "camera rotates around him",
             "params": {
                 "video_prompt_type": "VM",
@@ -50,8 +50,8 @@ def run_model_comparison_tests(base_output_dir: str = "outputs/model_comparison_
             "model": "vace_14B_fake_cocktail_2_2", 
             "name": "Fake Vace Cocktail 14B",
             "test_type": "vace_video",
-            "video": "video_2.mp4",
-            "mask": "mask_2.mp4",
+            "video": "video.mp4",
+            "mask": "mask.mp4",
             "prompt": "he runs into the kitchen and starts cooking",
             "params": {
                 "video_prompt_type": "VM",
@@ -72,7 +72,7 @@ def run_model_comparison_tests(base_output_dir: str = "outputs/model_comparison_
             "model": "optimised-t2i",
             "name": "Optimised T2I 14B",
             "test_type": "single_image",
-            "image": "image_1.jpg",  # Single image input
+            "image": "image.jpg",  # Single image input
             "prompt": "a beautiful landscape with mountains and a lake at sunset",
             "params": {
                 "resolution": "768x576",
