@@ -24,5 +24,5 @@
     "guidance_scale": 1,
     "guidance2_scale": 1,
     "flow_shift": 2,
-    "switch_threshold": 50
+    "switch_threshold": 850
 }
