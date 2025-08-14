@@ -71,8 +71,7 @@ def run_model_comparison_tests(base_output_dir: str = "outputs/model_comparison_
         {
             "model": "optimised-t2i",
             "name": "Optimised T2I 14B",
-            "test_type": "single_image",
-            "image": "image.jpg",  # Single image input
+            "test_type": "text_to_video",
             "prompt": "a beautiful landscape with mountains and a lake at sunset",
             "params": {
                 "resolution": "768x576",
@@ -99,11 +98,7 @@ def run_model_comparison_tests(base_output_dir: str = "outputs/model_comparison_
             if not mask_path.exists():
                 print(f"Error: Mask file not found: {mask_path}")
                 return [], test_run_id, None
-        elif config["test_type"] == "single_image":
-            image_path = Path(config["image"]).absolute()
-            if not image_path.exists():
-                print(f"Error: Image file not found: {image_path}")
-                return [], test_run_id, None
+        # text_to_video doesn't need input file validation
     
     print(f"Testing {len(test_configs)} different model configurations:")
     for i, config in enumerate(test_configs, 1):
@@ -144,14 +139,11 @@ def run_model_comparison_tests(base_output_dir: str = "outputs/model_comparison_
                     **config['params']
                 )
                 
-            elif config["test_type"] == "single_image":
-                image_path = Path(config["image"]).absolute()
+            elif config["test_type"] == "text_to_video":
+                print(f"Text-to-Video generation (no input files needed)")
                 
-                print(f"Image: {config['image']}")
-                
-                output_path = orchestrator.generate_i2v(
+                output_path = orchestrator.generate_t2v(
                     prompt=config['prompt'],
-                    image=str(image_path),
                     resolution=config['params']['resolution'],
                     video_length=config['params']['video_length'],
                     num_inference_steps=config['params']['num_inference_steps'],
@@ -179,8 +171,7 @@ def run_model_comparison_tests(base_output_dir: str = "outputs/model_comparison_
                     "prompt": config["prompt"],
                     "input_files": {
                         "video": config.get("video"),
-                        "mask": config.get("mask"),
-                        "image": config.get("image")
+                        "mask": config.get("mask")
                     },
                     "output_path": str(final_path),
                     "generation_time": generation_time,
