@@ -53,3 +53,9 @@ tests/
 # Task database files
 tasks.db-shm
 tasks.db-wal
+
+# venv
+venv/*
+venv312/*
+venv/
+venv312/
