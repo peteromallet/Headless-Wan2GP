@@ -1651,12 +1651,19 @@ attention_modes_installed = get_attention_modes()
 attention_modes_supported = get_supported_attention_modes()
 args = _parse_args()
 
-major, minor = torch.cuda.get_device_capability(args.gpu if len(args.gpu) > 0 else None)
-if  major < 8:
-    print("Switching to FP16 models when possible as GPU architecture doesn't support optimed BF16 Kernels")
-    bfloat16_supported = False
+# Check if CUDA is available before getting device capability
+if torch.cuda.is_available():
+    major, minor = torch.cuda.get_device_capability(args.gpu if len(args.gpu) > 0 else None)
+    if major < 8:
+        print("Switching to FP16 models when possible as GPU architecture doesn't support optimed BF16 Kernels")
+        bfloat16_supported = False
+    else:
+        bfloat16_supported = True
 else:
-    bfloat16_supported = True
+    # Fallback for systems without CUDA (e.g., macOS)
+    print("CUDA not available, running in CPU mode with FP16 fallback")
+    major, minor = 0, 0
+    bfloat16_supported = False
 
 args.flow_reverse = True
 processing_device = args.gpu
