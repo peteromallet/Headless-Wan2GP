@@ -145,8 +145,9 @@ All task types support automatic upload to Supabase Storage when configured:
 ### How it works
 * **Local-first**: Files are always saved locally first for reliability
 * **Conditional upload**: If Supabase is configured, files are uploaded to the `image_uploads` bucket
+* **Filename sanitization**: All filenames are automatically sanitized to remove invalid storage characters (§, ®, ©, ™, control characters, etc.) before upload
 * **Consistent API**: All task handlers use the same two functions:
-  * `prepare_output_path_with_upload()` - Sets up local path and provisional DB location
+  * `prepare_output_path_with_upload()` - Sets up local path, sanitizes filename, and provisional DB location
   * `upload_and_get_final_output_location()` - Handles upload and returns final URL/path for DB
 
 ### Task type coverage

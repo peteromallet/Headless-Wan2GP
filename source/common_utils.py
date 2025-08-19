@@ -2139,6 +2139,42 @@ def prepare_output_path(
 
     return final_save_path, db_output_location
 
+def sanitize_filename_for_storage(filename: str) -> str:
+    """
+    Sanitizes a filename to be safe for storage systems like Supabase Storage.
+    
+    Removes characters that are invalid for S3/Supabase storage keys:
+    - Control characters (0x00-0x1F, 0x7F-0x9F)
+    - Special characters: § ® © ™ @ · º ½ ¾ ¿ ¡ ~ and others
+    - Path separators and other problematic characters
+    
+    Args:
+        filename: Original filename that may contain unsafe characters
+        
+    Returns:
+        Sanitized filename safe for storage systems
+    """
+    import re
+    
+    # Define characters to remove (includes the § character causing the issue)
+    # This is based on S3/Supabase storage key restrictions and common filesystem issues
+    unsafe_chars = r'[§®©™@·º½¾¿¡~\x00-\x1F\x7F-\x9F<>:"/\\|?*]'
+    
+    # Replace unsafe characters with empty string
+    sanitized = re.sub(unsafe_chars, '', filename)
+    
+    # Replace multiple consecutive spaces/dots with single ones
+    sanitized = re.sub(r'[ \.]{2,}', ' ', sanitized)
+    
+    # Remove leading/trailing whitespace and dots
+    sanitized = sanitized.strip(' .')
+    
+    # Ensure we have a non-empty filename
+    if not sanitized:
+        sanitized = "sanitized_file"
+    
+    return sanitized
+
 def prepare_output_path_with_upload(
     task_id: str, 
     filename: str, 
@@ -2161,9 +2197,16 @@ def prepare_output_path_with_upload(
     except Exception:  # pragma: no cover
         db_ops = None
 
-    # First, get the local path where we'll save the file
+    # Sanitize filename BEFORE any processing to prevent storage upload issues
+    original_filename = filename
+    sanitized_filename = sanitize_filename_for_storage(filename)
+    
+    if original_filename != sanitized_filename:
+        dprint(f"Task {task_id}: Sanitized filename '{original_filename}' -> '{sanitized_filename}'")
+
+    # First, get the local path where we'll save the file (using sanitized filename)
     local_save_path, initial_db_location = prepare_output_path(
-        task_id, filename, main_output_dir_base, 
+        task_id, sanitized_filename, main_output_dir_base, 
         dprint=dprint, custom_output_dir=custom_output_dir
     )
     
