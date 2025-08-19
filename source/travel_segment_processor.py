@@ -348,7 +348,48 @@ class TravelSegmentProcessor:
             task_dependency_id, raw_path_from_db = db_ops.get_predecessor_output_via_edge_function(ctx.task_id)
             if task_dependency_id and raw_path_from_db:
                 ctx.dprint(f"Seg {ctx.segment_idx}: Found predecessor output: {raw_path_from_db}")
-                return raw_path_from_db
+                
+                # Handle Supabase public URLs by downloading them locally for guide processing
+                if raw_path_from_db.startswith("http"):
+                    try:
+                        ctx.dprint(f"Seg {ctx.segment_idx}: Detected remote URL for previous segment: {raw_path_from_db}. Downloading...")
+                        
+                        # Import download utilities
+                        from . import common_utils
+                        from pathlib import Path
+                        
+                        remote_url = raw_path_from_db
+                        local_filename = Path(remote_url).name
+                        # Store under segment_processing_dir to keep things tidy
+                        local_download_path = ctx.segment_processing_dir / f"prev_{ctx.segment_idx:02d}_{local_filename}"
+                        
+                        # Ensure directory exists
+                        ctx.segment_processing_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        # Perform download if file not already present
+                        if not local_download_path.exists():
+                            common_utils.download_file(remote_url, ctx.segment_processing_dir, local_download_path.name)
+                            ctx.dprint(f"Seg {ctx.segment_idx}: Downloaded previous segment video to {local_download_path}")
+                        else:
+                            ctx.dprint(f"Seg {ctx.segment_idx}: Local copy of previous segment video already exists at {local_download_path}")
+                        
+                        return str(local_download_path.resolve())
+                        
+                    except Exception as e_dl_prev:
+                        ctx.dprint(f"[WARNING] Seg {ctx.segment_idx}: Failed to download remote previous segment video: {e_dl_prev}")
+                        # Return the original URL - this will likely cause an error downstream but preserves existing behavior
+                        return raw_path_from_db
+                else:
+                    # Local path or relative path - handle SQLite path resolution
+                    if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and raw_path_from_db.startswith("files/"):
+                        from pathlib import Path
+                        sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
+                        resolved_path = str((sqlite_db_parent / "public" / raw_path_from_db).resolve())
+                        ctx.dprint(f"Seg {ctx.segment_idx}: Resolved SQLite relative path from DB '{raw_path_from_db}' to absolute path '{resolved_path}'")
+                        return resolved_path
+                    else:
+                        # Path from DB is already absolute (Supabase) or an old absolute SQLite path
+                        return raw_path_from_db
             else:
                 ctx.dprint(f"[WARNING] Seg {ctx.segment_idx}: Could not retrieve predecessor output")
                 return None

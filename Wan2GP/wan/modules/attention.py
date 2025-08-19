@@ -4,8 +4,14 @@ from importlib.metadata import version
 from mmgp import offload
 import torch.nn.functional as F
 
-major, minor = torch.cuda.get_device_capability(None)
-bfloat16_supported =  major >= 8 
+# Check if CUDA is available before getting device capability
+if torch.cuda.is_available():
+    major, minor = torch.cuda.get_device_capability(None)
+    bfloat16_supported = major >= 8
+else:
+    # Fallback for systems without CUDA (e.g., macOS)
+    major, minor = 0, 0
+    bfloat16_supported = False 
 
 try:
     from xformers.ops import memory_efficient_attention
