@@ -469,6 +469,12 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             "apply_reward_lora": apply_reward_lora,
         }
         
+        # Add additional LoRAs from orchestrator payload if present
+        additional_loras = full_orchestrator_payload.get("additional_loras", {})
+        if additional_loras:
+            generation_params["additional_loras"] = additional_loras
+            dprint(f"[QUEUE_PARAMS] Added {len(additional_loras)} additional LoRAs from orchestrator payload")
+        
         # Only add explicit parameters if they're provided (let model preset handle defaults)
         # Check both 'steps' and 'num_inference_steps' from orchestrator payload
         # Priority: segment_params > orchestrator_payload (user explicit > orchestrator defaults)
