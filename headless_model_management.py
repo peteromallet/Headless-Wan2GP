@@ -811,24 +811,40 @@ class HeadlessTaskQueue:
         
         # Check for dict format and convert if needed
         additional_loras_dict = task.parameters.get("additional_loras", {})
+        self.logger.info(f"[PATH_TRACE] Task {task.id}: additional_loras_dict = {additional_loras_dict}")
+        self.logger.info(f"[PATH_TRACE] Task {task.id}: additional_loras_dict type = {type(additional_loras_dict)}")
+        self.logger.info(f"[PATH_TRACE] Task {task.id}: bool(additional_loras_dict) = {bool(additional_loras_dict)}")
+        self.logger.info(f"[PATH_TRACE] Task {task.id}: isinstance(additional_loras_dict, dict) = {isinstance(additional_loras_dict, dict)}")
+        
         if additional_loras_dict and isinstance(additional_loras_dict, dict):
+            self.logger.info(f"[PATH_TRACE] Task {task.id}: ENTERING dict conversion branch")
             # Convert dict format to lists format and handle URL downloading
             dict_names = list(additional_loras_dict.keys())
             dict_multipliers = list(additional_loras_dict.values())
             
+            self.logger.info(f"[PATH_TRACE] Task {task.id}: dict_names = {dict_names}")
+            
             # Process URLs - download if needed and convert to local filenames
             processed_names = []
-            for lora_name_or_url in dict_names:
+            for i, lora_name_or_url in enumerate(dict_names):
+                self.logger.info(f"[PATH_TRACE] Task {task.id}: Processing LoRA {i}: '{lora_name_or_url}'")
+                self.logger.info(f"[PATH_TRACE] Task {task.id}: lora_name_or_url.startswith('http') = {lora_name_or_url.startswith('http')}")
+                
                 if lora_name_or_url.startswith("http"):
+                    self.logger.info(f"[PATH_TRACE] Task {task.id}: URL detected, starting download process")
                     # It's a URL - download it
                     try:
                         # Extract filename from URL
                         local_filename = lora_name_or_url.split("/")[-1]
+                        self.logger.info(f"[PATH_TRACE] Task {task.id}: local_filename = '{local_filename}'")
                         
                         # Get LoRA directory for the current model
                         from Wan2GP.wgp import get_lora_dir
                         lora_dir = get_lora_dir(task.model)
                         local_path = os.path.join(lora_dir, local_filename)
+                        self.logger.info(f"[PATH_TRACE] Task {task.id}: lora_dir = '{lora_dir}'")
+                        self.logger.info(f"[PATH_TRACE] Task {task.id}: local_path = '{local_path}'")
+                        self.logger.info(f"[PATH_TRACE] Task {task.id}: os.path.isfile(local_path) = {os.path.isfile(local_path)}")
                         
                         # Check if file already exists
                         if not os.path.isfile(local_path):
@@ -871,15 +887,21 @@ class HeadlessTaskQueue:
                         processed_names.append(lora_name_or_url)
                 else:
                     # It's already a local filename
+                    self.logger.info(f"[PATH_TRACE] Task {task.id}: Local filename detected: '{lora_name_or_url}'")
                     processed_names.append(lora_name_or_url)
             
             # Merge with existing lists (dict format takes precedence)
             additional_lora_names.extend(processed_names)
             additional_lora_multipliers.extend(dict_multipliers)
             
+            self.logger.info(f"[PATH_TRACE] Task {task.id}: processed_names = {processed_names}")
+            self.logger.info(f"[PATH_TRACE] Task {task.id}: final additional_lora_names = {additional_lora_names}")
+            
             self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Converted additional_loras dict to lists: {len(processed_names)} LoRAs")
             for i, (name, mult) in enumerate(zip(processed_names, dict_multipliers)):
                 self.logger.info(f"[CausVidDebugTrace]   {i+1}. {name} (multiplier: {mult})")
+        else:
+            self.logger.info(f"[PATH_TRACE] Task {task.id}: NOT entering dict conversion branch - using existing lists")
         
         if additional_lora_names:
             self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Processing {len(additional_lora_names)} additional LoRAs")
@@ -904,6 +926,7 @@ class HeadlessTaskQueue:
             
             self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Final combined LoRA list: {current_loras}")
             self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Final combined multipliers: {current_multipliers}")
+            self.logger.info(f"[PATH_TRACE] Task {task.id}: About to pass these LoRAs to WGP: {current_loras}")
         
         return wgp_params
     
