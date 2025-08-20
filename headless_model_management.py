@@ -841,18 +841,21 @@ class HeadlessTaskQueue:
                         # Get LoRA directory for the current model without importing WGP
                         # Use the same logic as WGP's get_lora_dir but inline to avoid import issues
                         if task.model in ['i2v', 'i2v_1_3B', 'i2v_14B']:
-                            lora_dir = "loras_i2v"
+                            lora_subdir = "loras_i2v"
                         elif task.model in ['hunyuan_i2v']:
-                            lora_dir = "loras_hunyuan_i2v"
+                            lora_subdir = "loras_hunyuan_i2v"
                         elif task.model in ['hunyuan']:
-                            lora_dir = "loras_hunyuan"
+                            lora_subdir = "loras_hunyuan"
                         elif task.model in ['ltxv', 'ltxv_13b']:
-                            lora_dir = "loras_ltxv"
+                            lora_subdir = "loras_ltxv"
                         elif task.model in ['flux', 'flux_dev']:
-                            lora_dir = "loras_flux"
+                            lora_subdir = "loras_flux"
                         else:
                             # Default for WAN models (t2v, vace, etc.)
-                            lora_dir = "loras"
+                            lora_subdir = "loras"
+                        
+                        # Build full path to Wan2GP/loras directory
+                        lora_dir = os.path.join("Wan2GP", lora_subdir)
                         local_path = os.path.join(lora_dir, local_filename)
                         self.logger.info(f"[PATH_TRACE] Task {task.id}: lora_dir = '{lora_dir}'")
                         self.logger.info(f"[PATH_TRACE] Task {task.id}: local_path = '{local_path}'")
