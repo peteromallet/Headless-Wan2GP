@@ -218,25 +218,8 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             generation_params["lora_multipliers"] = [float(x.strip()) for x in multipliers.split(",") if x.strip()]
         # Keep as-is if already a list
     
-    # Handle additional_loras dict format conversion
-    if "additional_loras" in generation_params:
-        additional_loras = generation_params["additional_loras"]
-        if isinstance(additional_loras, dict) and additional_loras:
-            # Convert dict format to lists format
-            # Dict format: {"url1": multiplier1, "url2": multiplier2}
-            # List format: additional_lora_names=["url1", "url2"], additional_lora_multipliers=[multiplier1, multiplier2]
-            lora_names = list(additional_loras.keys())
-            lora_multipliers = list(additional_loras.values())
-            
-            generation_params["additional_lora_names"] = lora_names
-            generation_params["additional_lora_multipliers"] = lora_multipliers
-            
-            dprint(f"Task {task_id}: Converted additional_loras dict to lists: {len(lora_names)} LoRAs")
-            for i, (name, mult) in enumerate(zip(lora_names, lora_multipliers)):
-                dprint(f"  {i+1}. {name} (multiplier: {mult})")
-        
-        # Remove the old format to avoid confusion
-        del generation_params["additional_loras"]
+    # NOTE: additional_loras conversion is now handled centrally in HeadlessTaskQueue
+    # Both dict format ({"url": multiplier}) and list format are supported
     
     # Set default values for essential parameters only (orchestrator handles generation defaults)
     # Only set defaults for parameters that are required for basic task functionality
