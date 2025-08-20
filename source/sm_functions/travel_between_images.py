@@ -869,21 +869,9 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                     wgp_payload[param] = model_defaults_from_config[param]
                     dprint(f"[MODEL_CONFIG_DEBUG] Segment {segment_idx}: Added {param}={model_defaults_from_config[param]} to wgp_payload from model config")
         if additional_loras:
-            # Convert additional_loras dict format to lists format expected by task queue
-            # Dict format: {"url1": multiplier1, "url2": multiplier2}
-            # List format: additional_lora_names=["url1", "url2"], additional_lora_multipliers=[multiplier1, multiplier2]
-            lora_names = list(additional_loras.keys())
-            lora_multipliers = list(additional_loras.values())
-            
-            wgp_payload["additional_lora_names"] = lora_names
-            wgp_payload["additional_lora_multipliers"] = lora_multipliers
-            
-            dprint(f"Seg {segment_idx}: Converted additional_loras dict to lists: {len(lora_names)} LoRAs")
-            for i, (name, mult) in enumerate(zip(lora_names, lora_multipliers)):
-                dprint(f"  {i+1}. {name} (multiplier: {mult})")
-            
-            # Keep the old format for backward compatibility if needed
+            # Pass additional_loras in dict format - HeadlessTaskQueue handles conversion centrally
             wgp_payload["additional_loras"] = additional_loras
+            dprint(f"Seg {segment_idx}: Added {len(additional_loras)} additional LoRAs to payload")
 
         if full_orchestrator_payload.get("params_json_str_override"):
             try:

@@ -805,8 +805,24 @@ class HeadlessTaskQueue:
             self.logger.info(f"[CausVidDebugTrace] Task {task.id}: No LoRA optimizations enabled")
         
         # ADDITIONAL LORAS: Process additional LoRA names and multipliers from task parameters
+        # Support both dict format ({"url": multiplier}) and list format ([names], [multipliers])
         additional_lora_names = task.parameters.get("additional_lora_names", [])
         additional_lora_multipliers = task.parameters.get("additional_lora_multipliers", [])
+        
+        # Check for dict format and convert if needed
+        additional_loras_dict = task.parameters.get("additional_loras", {})
+        if additional_loras_dict and isinstance(additional_loras_dict, dict):
+            # Convert dict format to lists format
+            dict_names = list(additional_loras_dict.keys())
+            dict_multipliers = list(additional_loras_dict.values())
+            
+            # Merge with existing lists (dict format takes precedence)
+            additional_lora_names.extend(dict_names)
+            additional_lora_multipliers.extend(dict_multipliers)
+            
+            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Converted additional_loras dict to lists: {len(dict_names)} LoRAs")
+            for i, (name, mult) in enumerate(zip(dict_names, dict_multipliers)):
+                self.logger.info(f"[CausVidDebugTrace]   {i+1}. {name} (multiplier: {mult})")
         
         if additional_lora_names:
             self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Processing {len(additional_lora_names)} additional LoRAs")
