@@ -368,12 +368,26 @@ class TravelSegmentProcessor:
                         
                         # Perform download if file not already present
                         if not local_download_path.exists():
+                            ctx.dprint(f"Seg {ctx.segment_idx}: Downloading from {remote_url}")
                             common_utils.download_file(remote_url, ctx.segment_processing_dir, local_download_path.name)
                             ctx.dprint(f"Seg {ctx.segment_idx}: Downloaded previous segment video to {local_download_path}")
+                            
+                            # Verify download was successful and file has content
+                            if local_download_path.exists() and local_download_path.stat().st_size > 0:
+                                ctx.dprint(f"Seg {ctx.segment_idx}: Download verified - file size: {local_download_path.stat().st_size:,} bytes")
+                            else:
+                                raise Exception(f"Download failed or resulted in empty file: {local_download_path}")
                         else:
                             ctx.dprint(f"Seg {ctx.segment_idx}: Local copy of previous segment video already exists at {local_download_path}")
+                            # Verify cached file is still valid
+                            if local_download_path.stat().st_size == 0:
+                                ctx.dprint(f"Seg {ctx.segment_idx}: Cached file is empty, re-downloading...")
+                                local_download_path.unlink()  # Remove empty file
+                                common_utils.download_file(remote_url, ctx.segment_processing_dir, local_download_path.name)
                         
-                        return str(local_download_path.resolve())
+                        resolved_path = str(local_download_path.resolve())
+                        ctx.dprint(f"Seg {ctx.segment_idx}: Returning local path for guide creation: {resolved_path}")
+                        return resolved_path
                         
                     except Exception as e_dl_prev:
                         ctx.dprint(f"[WARNING] Seg {ctx.segment_idx}: Failed to download remote previous segment video: {e_dl_prev}")
