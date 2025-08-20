@@ -422,3 +422,34 @@ class TravelSegmentProcessor:
         ctx.dprint(f"[GUIDE_INPUT_DEBUG] Seg {ctx.segment_idx}: Using {len(input_images_resolved_for_guide)} input images for guide creation")
         
         return input_images_resolved_for_guide
+    
+    def _detect_single_image_journey(self) -> bool:
+        """
+        Detect if this is a single image journey.
+        
+        A single image journey is when:
+        - Only one input image is provided
+        - Not continuing from a video
+        - This segment is both first and last (entire journey in one segment)
+        
+        Returns:
+            True if this is a single image journey, False otherwise
+        """
+        ctx = self.ctx
+        
+        input_images_for_check = ctx.full_orchestrator_payload.get("input_image_paths_resolved", [])
+        is_single_image_journey = (
+            len(input_images_for_check) == 1
+            and ctx.full_orchestrator_payload.get("continue_from_video_resolved_path") is None
+            and ctx.segment_params.get("is_first_segment")
+            and ctx.segment_params.get("is_last_segment")
+        )
+        
+        ctx.dprint(f"[SINGLE_IMAGE_DEBUG] Seg {ctx.segment_idx}: Single image journey detection:")
+        ctx.dprint(f"[SINGLE_IMAGE_DEBUG]   Input images count: {len(input_images_for_check)}")
+        ctx.dprint(f"[SINGLE_IMAGE_DEBUG]   Continue from video: {ctx.full_orchestrator_payload.get('continue_from_video_resolved_path') is not None}")
+        ctx.dprint(f"[SINGLE_IMAGE_DEBUG]   Is first segment: {ctx.segment_params.get('is_first_segment')}")
+        ctx.dprint(f"[SINGLE_IMAGE_DEBUG]   Is last segment: {ctx.segment_params.get('is_last_segment')}")
+        ctx.dprint(f"[SINGLE_IMAGE_DEBUG]   Result: {is_single_image_journey}")
+        
+        return is_single_image_journey
