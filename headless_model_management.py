@@ -812,16 +812,73 @@ class HeadlessTaskQueue:
         # Check for dict format and convert if needed
         additional_loras_dict = task.parameters.get("additional_loras", {})
         if additional_loras_dict and isinstance(additional_loras_dict, dict):
-            # Convert dict format to lists format
+            # Convert dict format to lists format and handle URL downloading
             dict_names = list(additional_loras_dict.keys())
             dict_multipliers = list(additional_loras_dict.values())
             
+            # Process URLs - download if needed and convert to local filenames
+            processed_names = []
+            for lora_name_or_url in dict_names:
+                if lora_name_or_url.startswith("http"):
+                    # It's a URL - download it
+                    try:
+                        # Extract filename from URL
+                        local_filename = lora_name_or_url.split("/")[-1]
+                        
+                        # Get LoRA directory for the current model
+                        from Wan2GP.wgp import get_lora_dir
+                        lora_dir = get_lora_dir(task.model)
+                        local_path = os.path.join(lora_dir, local_filename)
+                        
+                        # Check if file already exists
+                        if not os.path.isfile(local_path):
+                            self.logger.info(f"[LORA_DOWNLOAD] Task {task.id}: Downloading LoRA from {lora_name_or_url}")
+                            
+                            # Use existing download logic pattern from WGP
+                            
+                            # Use WGP's download_file logic - need to import it properly
+                            if lora_name_or_url.startswith("https://huggingface.co/") and "/resolve/main/" in lora_name_or_url:
+                                from huggingface_hub import hf_hub_download
+                                import shutil
+                                
+                                # Parse HuggingFace URL
+                                url = lora_name_or_url[len("https://huggingface.co/"):]
+                                url_parts = url.split("/resolve/main/")
+                                repo_id = url_parts[0]
+                                filename = os.path.basename(url_parts[-1])
+                                
+                                # Ensure LoRA directory exists
+                                os.makedirs(lora_dir, exist_ok=True)
+                                
+                                # Download using HuggingFace hub
+                                hf_hub_download(repo_id=repo_id, filename=filename, local_dir=lora_dir)
+                                self.logger.info(f"[LORA_DOWNLOAD] Task {task.id}: Successfully downloaded {filename} to {lora_dir}")
+                            else:
+                                # Use urllib for other URLs
+                                from urllib.request import urlretrieve
+                                os.makedirs(lora_dir, exist_ok=True)
+                                urlretrieve(lora_name_or_url, local_path)
+                                self.logger.info(f"[LORA_DOWNLOAD] Task {task.id}: Successfully downloaded {local_filename} to {lora_dir}")
+                        else:
+                            self.logger.info(f"[LORA_DOWNLOAD] Task {task.id}: LoRA {local_filename} already exists locally")
+                        
+                        # Use local filename instead of URL
+                        processed_names.append(local_filename)
+                        
+                    except Exception as e:
+                        self.logger.error(f"[LORA_DOWNLOAD] Task {task.id}: Failed to download LoRA from {lora_name_or_url}: {e}")
+                        # Keep original URL in case there's a fallback mechanism
+                        processed_names.append(lora_name_or_url)
+                else:
+                    # It's already a local filename
+                    processed_names.append(lora_name_or_url)
+            
             # Merge with existing lists (dict format takes precedence)
-            additional_lora_names.extend(dict_names)
+            additional_lora_names.extend(processed_names)
             additional_lora_multipliers.extend(dict_multipliers)
             
-            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Converted additional_loras dict to lists: {len(dict_names)} LoRAs")
-            for i, (name, mult) in enumerate(zip(dict_names, dict_multipliers)):
+            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Converted additional_loras dict to lists: {len(processed_names)} LoRAs")
+            for i, (name, mult) in enumerate(zip(processed_names, dict_multipliers)):
                 self.logger.info(f"[CausVidDebugTrace]   {i+1}. {name} (multiplier: {mult})")
         
         if additional_lora_names:
