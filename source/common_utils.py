@@ -45,6 +45,36 @@ def dprint(msg: str):
 
 # --- Helper Functions ---
 
+def get_lora_dir_from_filename(wgp_mod, model_filename: str) -> str:
+    # DEPRECATED: This function is no longer used in the queue-only system
+    """
+    Centralized helper to get LoRA directory from model filename.
+    Properly converts model_filename to model_type before calling get_lora_dir.
+    
+    Args:
+        wgp_mod: WGP module instance
+        model_filename: Model filename or model type
+        
+    Returns:
+        LoRA directory path
+        
+    Raises:
+        Exception: If model type cannot be determined
+    """
+    # If it's already a model type (not a filename), use directly
+    if model_filename and not model_filename.endswith('.safetensors'):
+        model_type = model_filename
+    else:
+        # Convert filename to model type
+        model_type = wgp_mod.get_model_type(model_filename) if model_filename else None
+        
+    if not model_type:
+        print(f"[WARNING] Could not determine model type from: {model_filename}")
+        model_type = "t2v"  # Default fallback - should match t2v.json
+        
+    print(f"[DEBUG] LoRA directory lookup: {model_filename} → {model_type}")
+    return wgp_mod.get_lora_dir(model_type)
+
 def snap_resolution_to_model_grid(parsed_res: tuple[int, int]) -> tuple[int, int]:
     """
     Snaps resolution to model grid requirements (multiples of 16).
@@ -96,6 +126,7 @@ def process_additional_loras_shared(
     task_id: str, 
     dprint: callable
 ) -> dict[str, str]:
+    # DEPRECATED: This function is no longer used in the queue-only system
     """
     Shared function to process additional LoRAs for any task handler.
     
@@ -116,7 +147,7 @@ def process_additional_loras_shared(
     
     try:
         import urllib.parse
-        base_lora_dir_for_model = Path(wgp_mod.get_lora_dir(model_filename_for_task))
+        base_lora_dir_for_model = Path(get_lora_dir_from_filename(wgp_mod, model_filename_for_task))
         base_lora_dir_for_model.mkdir(parents=True, exist_ok=True)
         wan2gp_lora_root = Path("Wan2GP/loras")
         wan2gp_lora_root.mkdir(parents=True, exist_ok=True)
@@ -1521,7 +1552,7 @@ def _get_unique_target_path(target_dir: Path, base_name: str, extension: str) ->
     filename = f"{base_name}_{timestamp_short}_{unique_suffix}{extension}"
     return target_dir / filename
 
-def download_image_if_url(image_url_or_path: str, download_target_dir: Path | str | None, task_id_for_logging: str | None = "generic_task") -> str:
+def download_image_if_url(image_url_or_path: str, download_target_dir: Path | str | None, task_id_for_logging: str | None = "generic_task", debug_mode: bool = False, descriptive_name: str | None = None) -> str:
     """
     Checks if the given string is an HTTP/HTTPS URL. If so, and if download_target_dir is provided,
     downloads the image to a unique path within download_target_dir.
@@ -1532,6 +1563,9 @@ def download_image_if_url(image_url_or_path: str, download_target_dir: Path | st
 
     parsed_url = urlparse(image_url_or_path)
     if parsed_url.scheme in ['http', 'https'] and download_target_dir:
+        # Always download URLs when download_target_dir is provided
+        # Debug mode only affects logging verbosity and file retention
+            
         target_dir_path = Path(download_target_dir)
         try:
             target_dir_path.mkdir(parents=True, exist_ok=True)
@@ -1547,7 +1581,13 @@ def download_image_if_url(image_url_or_path: str, download_target_dir: Path | st
             if not original_suffix.startswith('.'):
                 original_suffix = '.' + original_suffix
             
-            base_name_for_download = f"downloaded_{Path(original_filename).stem[:50]}" # Limit stem length
+            # Use descriptive naming if provided, otherwise fall back to improved default
+            if descriptive_name:
+                base_name_for_download = descriptive_name[:50]  # Limit length
+            else:
+                # Improved default naming
+                cleaned_stem = Path(original_filename).stem[:30] if Path(original_filename).stem else "image"
+                base_name_for_download = f"input_{cleaned_stem}"
             
             # _get_unique_target_path expects a Path object for target_dir
             local_image_path = _get_unique_target_path(target_dir_path, base_name_for_download, original_suffix)
@@ -1583,7 +1623,7 @@ def download_image_if_url(image_url_or_path: str, download_target_dir: Path | st
         dprint(f"Task {task_id_for_logging}: Not downloading image (not URL or no target dir): {image_url_or_path}")
         return image_url_or_path
 
-def image_to_frame(image_path_str: str | Path, target_resolution_wh: tuple[int, int] | None = None, task_id_for_logging: str | None = "generic_task", image_download_dir: Path | str | None = None) -> np.ndarray | None:
+def image_to_frame(image_path_str: str | Path, target_resolution_wh: tuple[int, int] | None = None, task_id_for_logging: str | None = "generic_task", image_download_dir: Path | str | None = None, debug_mode: bool = False) -> np.ndarray | None:
     """
     Load an image, optionally resize, and convert to BGR NumPy array.
     If image_path_str is a URL and image_download_dir is provided, it attempts to download it first.
@@ -1591,7 +1631,7 @@ def image_to_frame(image_path_str: str | Path, target_resolution_wh: tuple[int, 
     resolved_image_path_str = image_path_str # Default to original path
 
     if isinstance(image_path_str, str): # Only attempt download if it's a string (potentially a URL)
-        resolved_image_path_str = download_image_if_url(image_path_str, image_download_dir, task_id_for_logging)
+        resolved_image_path_str = download_image_if_url(image_path_str, image_download_dir, task_id_for_logging, debug_mode)
     
     image_path = Path(resolved_image_path_str)
 
@@ -1808,8 +1848,9 @@ def _apply_special_lora_settings(task_id: str, lora_type: str, lora_basename: st
         multipliers_list.insert(0, "1.0")
     ui_defaults["loras_multipliers"] = " ".join(multipliers_list)
 
-# --- SM_RESTRUCTURE: Function moved from headless.py ---
-def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False):
+# --- SM_RESTRUCTURE: Function moved from worker.py ---
+def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False, model_type_override: str = None):
+    # DEPRECATED: This function is no longer used in the queue-only system
     state = {
         "model_filename": model_filename,
         "validate_success": 1,
@@ -1817,30 +1858,55 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         "gen": {"queue": [], "file_list": [], "file_settings_list": [], "prompt_no": 1, "prompts_max": 1},
         "loras": all_loras_for_model,
     }
-    model_type_key = wgp_mod.get_model_type(model_filename)
-    ui_defaults = wgp_mod.get_default_settings(model_filename).copy()
+    # [VACE_FIX] Use model_type_override if provided, otherwise derive from filename
+    if model_type_override:
+        model_type_key = model_type_override
+        print(f"[DEBUG] build_task_state: using model_type_override='{model_type_key}'")
+        
+        # [VACE_FIX] For VACE models, resolve to their underlying base type for WGP compatibility
+        # VACE models should use their base model type (t2v) for configuration, not the composite type
+        if model_type_key in ["vace_14B", "vace_1.3B", "vace_multitalk_14B"]:
+            # Get the URLs field to find the true base model type
+            try:
+                vace_urls = wgp_mod.get_model_recursive_prop(model_type_key, "URLs", return_list=False)
+                if isinstance(vace_urls, str) and vace_urls in ["t2v", "i2v"]:
+                    original_model_type = model_type_key
+                    model_type_key = vace_urls  # Use the base model type for WGP
+                    print(f"[VACE_FIX] Resolved VACE model '{original_model_type}' → base_type '{model_type_key}' for WGP compatibility")
+            except Exception as e:
+                print(f"[WARNING] Could not resolve VACE base type for '{model_type_key}': {e}")
+    else:
+        model_type_key = wgp_mod.get_model_type(model_filename)
+        if not model_type_key:
+            print(f"[ERROR] Could not determine model type from filename: {model_filename}")
+            model_type_key = "t2v"  # Fallback to known good model type
+        print(f"[DEBUG] build_task_state: model_filename='{model_filename}' → model_type='{model_type_key}'")
+    ui_defaults = wgp_mod.get_default_settings(model_type_key).copy()
 
-    # Override with task_params from JSON, but preserve some crucial ones if CausVid is used
-    causvid_active = task_params_dict.get("use_causvid_lora", False)
-    lighti2x_active = task_params_dict.get("use_lighti2x_lora", False)
-
+    # Override with task_params from JSON - all task parameters take priority over model defaults
     for key, value in task_params_dict.items():
-        if key not in ["output_sub_dir", "model", "task_id", "use_causvid_lora", "use_lighti2x_lora"]:
-            if (causvid_active or lighti2x_active) and key in ["steps", "guidance_scale", "flow_shift", "activated_loras", "loras_multipliers"]:
-                continue # These will be set by causvid/lighti2x logic if flag is true
+        if key not in ["output_sub_dir", "model", "task_id"]:
             ui_defaults[key] = value
     
     ui_defaults["prompt"] = task_params_dict.get("prompt", "Default prompt")
     ui_defaults["resolution"] = task_params_dict.get("resolution", "832x480")
-    # Allow task to specify frames/video_length, steps, guidance_scale, flow_shift unless overridden by CausVid
-    if not (causvid_active or lighti2x_active):
-        ui_defaults["video_length"] = task_params_dict.get("frames", task_params_dict.get("video_length", 81))
-        ui_defaults["num_inference_steps"] = task_params_dict.get("steps", task_params_dict.get("num_inference_steps", 30))
-        ui_defaults["guidance_scale"] = task_params_dict.get("guidance_scale", ui_defaults.get("guidance_scale", 5.0))
-        ui_defaults["flow_shift"] = task_params_dict.get("flow_shift", ui_defaults.get("flow_shift", 3.0))
-    else: # CausVid or LightI2X specific defaults if not touched by their logic yet
-        ui_defaults["video_length"] = task_params_dict.get("frames", task_params_dict.get("video_length", 81))
-        # steps, guidance_scale, flow_shift will be set below by specialised logic
+    # Allow task to specify frames/video_length, steps, guidance_scale, flow_shift - task params take absolute priority
+    ui_defaults["video_length"] = task_params_dict.get("frames", task_params_dict.get("video_length", 81))
+    
+    # Task parameters override any model defaults - no automatic LoRA optimizations in build_task_state
+    if "steps" in task_params_dict:
+        ui_defaults["num_inference_steps"] = task_params_dict["steps"]
+    elif "num_inference_steps" in task_params_dict:
+        ui_defaults["num_inference_steps"] = task_params_dict["num_inference_steps"]
+    # If no explicit task param, keep existing ui_defaults value from model definition
+    
+    if "guidance_scale" in task_params_dict:
+        ui_defaults["guidance_scale"] = task_params_dict["guidance_scale"]
+    # If no explicit task param, keep existing ui_defaults value from model definition
+    
+    if "flow_shift" in task_params_dict:
+        ui_defaults["flow_shift"] = task_params_dict["flow_shift"]
+    # If no explicit task param, keep existing ui_defaults value from model definition
 
     ui_defaults["seed"] = task_params_dict.get("seed", -1)
     ui_defaults["lset_name"] = "" 
@@ -1877,9 +1943,8 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         )
         if loaded: ui_defaults["image_refs"] = loaded
     
-    for key in ["video_source_path", "video_guide_path", "video_mask_path", "audio_guide_path"]:
-        if task_params_dict.get(key):
-            ui_defaults[key.replace("_path","")] = task_params_dict[key]
+    # REMOVED: Legacy parameter mapping for deprecated build_task_state function
+    # The queue-based system handles parameter mapping directly in headless_wgp.py
 
     if task_params_dict.get("prompt_enhancer_mode"):
         ui_defaults["prompt_enhancer"] = task_params_dict["prompt_enhancer_mode"]
@@ -1933,26 +1998,7 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         ui_defaults["activated_loras"] = current_activated_list # Update ui_defaults
     # --- End Custom LoRA Handling ---
 
-    # Apply special LoRA settings using shared helper
-    if causvid_active:
-        _apply_special_lora_settings(
-            current_task_id_for_log, "CausVid", 
-            "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
-            default_steps=9, guidance_scale=1.0, flow_shift=1.0,
-            ui_defaults=ui_defaults, task_params_dict=task_params_dict
-        )
-
-    if lighti2x_active:
-        _apply_special_lora_settings(
-            current_task_id_for_log, "LightI2X",
-            "wan_lcm_r16_fp32_comfy.safetensors", 
-            default_steps=4, guidance_scale=1.0, flow_shift=5.0,
-            ui_defaults=ui_defaults, task_params_dict=task_params_dict,
-            tea_cache_setting=0.0
-        )
-        # Additional LightI2X-specific settings
-        ui_defaults["sample_solver"] = "unipc"
-        ui_defaults["denoise_strength"] = 1.0
+    # No automatic LoRA optimizations - all parameters come from JSON/task configuration
 
     if apply_reward_lora:
         print(f"[Task ID: {task_params_dict.get('task_id')}] Applying Reward LoRA settings.")
@@ -2062,7 +2108,13 @@ def prepare_output_path(
             output_dir_for_task = main_output_dir_base
 
             # To avoid name collisions we prefix the filename with the task_id
-            if not filename.startswith(task_id):
+            # Skip prefixing for files with UUID patterns (they guarantee uniqueness)
+            import re
+            # Match UUID pattern: _HHMMSS_uuid6.ext 
+            uuid_pattern = r'_\d{6}_[a-f0-9]{6}\.(mp4|png|jpg|jpeg)$'
+            has_uuid_pattern = re.search(uuid_pattern, filename, re.IGNORECASE)
+            
+            if not filename.startswith(task_id) and not has_uuid_pattern:
                 filename = f"{task_id}_{filename}"
 
             dprint(
@@ -2087,6 +2139,42 @@ def prepare_output_path(
 
     return final_save_path, db_output_location
 
+def sanitize_filename_for_storage(filename: str) -> str:
+    """
+    Sanitizes a filename to be safe for storage systems like Supabase Storage.
+    
+    Removes characters that are invalid for S3/Supabase storage keys:
+    - Control characters (0x00-0x1F, 0x7F-0x9F)
+    - Special characters: § ® © ™ @ · º ½ ¾ ¿ ¡ ~ and others
+    - Path separators and other problematic characters
+    
+    Args:
+        filename: Original filename that may contain unsafe characters
+        
+    Returns:
+        Sanitized filename safe for storage systems
+    """
+    import re
+    
+    # Define characters to remove (includes the § character causing the issue)
+    # This is based on S3/Supabase storage key restrictions and common filesystem issues
+    unsafe_chars = r'[§®©™@·º½¾¿¡~\x00-\x1F\x7F-\x9F<>:"/\\|?*]'
+    
+    # Replace unsafe characters with empty string
+    sanitized = re.sub(unsafe_chars, '', filename)
+    
+    # Replace multiple consecutive spaces/dots with single ones
+    sanitized = re.sub(r'[ \.]{2,}', ' ', sanitized)
+    
+    # Remove leading/trailing whitespace and dots
+    sanitized = sanitized.strip(' .')
+    
+    # Ensure we have a non-empty filename
+    if not sanitized:
+        sanitized = "sanitized_file"
+    
+    return sanitized
+
 def prepare_output_path_with_upload(
     task_id: str, 
     filename: str, 
@@ -2109,9 +2197,16 @@ def prepare_output_path_with_upload(
     except Exception:  # pragma: no cover
         db_ops = None
 
-    # First, get the local path where we'll save the file
+    # Sanitize filename BEFORE any processing to prevent storage upload issues
+    original_filename = filename
+    sanitized_filename = sanitize_filename_for_storage(filename)
+    
+    if original_filename != sanitized_filename:
+        dprint(f"Task {task_id}: Sanitized filename '{original_filename}' -> '{sanitized_filename}'")
+
+    # First, get the local path where we'll save the file (using sanitized filename)
     local_save_path, initial_db_location = prepare_output_path(
-        task_id, filename, main_output_dir_base, 
+        task_id, sanitized_filename, main_output_dir_base, 
         dprint=dprint, custom_output_dir=custom_output_dir
     )
     

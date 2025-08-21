@@ -1,4 +1,4 @@
-"""Specialized task handlers for headless.py."""
+"""Specialized task handlers for worker.py."""
 
 import traceback
 import tempfile
@@ -217,7 +217,7 @@ def handle_extract_frame_task(task_params_dict: dict, main_output_dir_base: Path
         report_orchestrator_failure(task_params_dict, error_msg, dprint)
         return False, str(e)
 
-def handle_rife_interpolate_task(wgp_mod, task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable):
+def handle_rife_interpolate_task(task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable, task_queue=None):
     """Handles the 'rife_interpolate_images' task."""
     print(f"[Task ID: {task_id}] Handling 'rife_interpolate_images' task.")
 
@@ -269,8 +269,7 @@ def handle_rife_interpolate_task(wgp_mod, task_params_dict: dict, main_output_di
     dprint(f"[Task ID: {task_id}] Input images found.")
 
     temp_output_dir = tempfile.mkdtemp(prefix=f"wgp_rife_{task_id}_")
-    original_wgp_save_path = wgp_mod.save_path
-    wgp_mod.save_path = str(temp_output_dir)
+    # No longer using wgp_mod.save_path since we're using task_queue system
 
     try:
         pil_image_start = Image.open(input_image1_path).convert("RGB")
@@ -310,7 +309,8 @@ def handle_rife_interpolate_task(wgp_mod, task_params_dict: dict, main_output_di
         traceback.print_exc()
         generation_success = False
     finally:
-        wgp_mod.save_path = original_wgp_save_path
+        # No longer need to restore wgp_mod.save_path since we're using task_queue system
+        pass
 
     try:
         shutil.rmtree(temp_output_dir)
