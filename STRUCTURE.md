@@ -4,6 +4,8 @@
 
 Headless-Wan2GP is a queue-based video generation system built around the Wan2GP engine. It provides a scalable, headless interface for automated video generation tasks with support for both local SQLite and cloud Supabase backends.
 
+📋 **For detailed component interactions and responsibilities, see [HEADLESS_SYSTEM_ARCHITECTURE.md](HEADLESS_SYSTEM_ARCHITECTURE.md)**
+
 ## Architecture
 
 ### Runtime data flow with wgp.py (unified architecture)
@@ -229,6 +231,7 @@ This is the main application package.
 * **specialized_handlers.py** – Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation. Uses Supabase-compatible upload functions for all outputs.
 * **video_utils.py** – Provides utilities for video manipulation like cross-fading, frame extraction, and color matching.
 * **travel_segment_processor.py** – **NEW**: Shared processor that eliminates code duplication between travel segment handlers. Contains the unified logic for guide video creation, mask video creation, and video_prompt_type construction that was previously duplicated between `travel_between_images.py` and `worker.py`.
+* **lora_utils.py** – **NEW**: Centralized LoRA processing system with `process_all_loras()` function. Consolidates all LoRA handling (detection, optimization, download, formatting) into a single pipeline that replaces 200+ lines of scattered code. Supports auto-download of LightI2X/CausVid LoRAs and multiple input formats.
 
 
 ### source/sm_functions/ sub-package
@@ -371,20 +374,37 @@ This debugging system provides comprehensive visibility into the video generatio
 
 ## LoRA Support
 
+### Centralized LoRA Processing System (NEW)
+
+The system now features a comprehensive LoRA processing pipeline that consolidates all LoRA handling into a single entry point:
+
+* **`source/lora_utils.py`** – Central LoRA processing module with `process_all_loras()` function
+* **Consolidated Logic** – Replaces 200+ lines of scattered LoRA code across multiple files
+* **Auto-Download Support** – Automatically downloads missing LightI2X and CausVid LoRAs from HuggingFace
+* **Format Normalization** – Handles multiple input formats (`activated_loras`, `loras_multipliers`, `additional_loras`)
+* **URL Processing** – Supports `additional_loras` dict format with automatic URL downloads
+
 ### Special LoRA Flags and Auto-Detection
 
-* **`use_causvid_lora`** – Enables CausVid LoRA with optimized parameters (9 steps, guidance 1.0, flow-shift 1.0). Step optimization only applies when no explicit steps are set. Auto-downloads from HuggingFace if missing.
-* **`use_lighti2x_lora`** – Enables LightI2X LoRA with optimized parameters (6 steps, guidance 1.0, flow-shift 5.0). Step optimization only applies when no explicit steps are set. Auto-downloads from HuggingFace if missing.
+* **`use_causvid_lora`** – Enables CausVid LoRA (`Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors`) with optimized parameters (9 steps, guidance 1.0, flow-shift 1.0). Step optimization only applies when no explicit steps are set. Auto-downloads from HuggingFace if missing.
+* **`use_lighti2x_lora`** – Enables LightI2X LoRA (`Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors`) with optimized parameters (6 steps, guidance 1.0, flow-shift 5.0). Step optimization only applies when no explicit steps are set. Auto-downloads from HuggingFace if missing.
 
-### Smart LoRA Detection (NEW)
+### Smart LoRA Detection
 
-The system now auto-detects CausVid/LightI2X LoRAs included in model JSON configs:
+The system auto-detects CausVid/LightI2X LoRAs included in model JSON configs:
 
 * **Built-in LoRAs**: When LoRAs are listed in model config's `loras` array, uses the JSON's parameter settings instead of forcing optimization values
 * **Explicit flags**: When `use_causvid_lora=True` is explicitly set (but model doesn't have it built-in), applies standard optimization parameters
 * **Best of both**: Allows fine-tuned parameter control in JSON configs while maintaining backward compatibility with explicit LoRA requests
 
-Both flags automatically configure optimal generation parameters and handle LoRA downloads/activation.
+### Additional LoRA Support
+
+* **Multiple Formats**: Supports `activated_loras` (list), `loras_multipliers` (string), and `additional_loras` (dict with URLs)
+* **URL Downloads**: `additional_loras` can contain `{"url": multiplier}` pairs for automatic download and processing
+* **Directory Structure**: Auto-detects correct LoRA directories based on model type (WAN → `loras/`, Hunyuan → `loras_hunyuan/`, etc.)
+* **WGP Compatibility**: All processing outputs standard WGP-compatible parameter formats
+
+All LoRA processing automatically configures optimal generation parameters and handles downloads/activation through the centralized pipeline.
 
 ## Environment & config knobs (non-exhaustive)
 
