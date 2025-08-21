@@ -8,17 +8,24 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
  * - Service-role key: can update any task across all users
  * - User token: can only update tasks for that specific user's projects
  * 
+ * 🚨 PHANTOM TASK BUG PREVENTION:
+ * When setting status to "In Progress", worker_id and claimed_at are REQUIRED
+ * to prevent phantom tasks that count toward concurrency but can't be found by workers.
+ * Use claim-next-task edge function or safe_update_task_status RPC for proper task claiming.
+ * 
  * POST /functions/v1/update-task-status
  * Headers: Authorization: Bearer <JWT or PAT>
  * Body: {
  *   "task_id": "uuid-string",
- *   "status": "In Progress" | "Failed" | "Complete",
- *   "output_location": "optional-string"
+ *   "status": "Queued" | "In Progress" | "Failed" | "Complete",
+ *   "output_location": "optional-string",
+ *   "worker_id": "required-when-status-is-in-progress",
+ *   "claimed_at": "required-when-status-is-in-progress (ISO timestamp)"
  * }
  * 
  * Returns:
  * - 200 OK with success message
- * - 400 Bad Request if missing required fields
+ * - 400 Bad Request if missing required fields or invalid In Progress without claiming fields
  * - 401 Unauthorized if no valid token
  * - 403 Forbidden if token invalid or user not found
  * - 404 Not Found if task doesn't exist or user can't access it
@@ -67,6 +74,22 @@ serve(async (req) => {
   const validStatuses = ["Queued", "In Progress", "Complete", "Failed"];
   if (!validStatuses.includes(status)) {
     return new Response(`Invalid status. Must be one of: ${validStatuses.join(", ")}`, { status: 400 });
+  }
+
+  // 🚨 PHANTOM TASK BUG PREVENTION: Prevent misuse of update-task-status for worker claiming
+  // This function should NOT be used to assign tasks to workers ("In Progress" status)
+  // without proper claiming fields. Use claim-next-task or safe_update_task_status RPC instead.
+  if (status === "In Progress") {
+    const { worker_id, claimed_at } = requestBody;
+    if (!worker_id || !claimed_at) {
+      return new Response(
+        "ERROR: Cannot set status to 'In Progress' without worker_id and claimed_at. " +
+        "Use claim-next-task edge function or safe_update_task_status RPC for proper task claiming. " +
+        "This prevents phantom tasks that count toward concurrency but can't be found by workers.",
+        { status: 400 }
+      );
+    }
+    console.log(`🎯 VALID: Setting task ${task_id} to 'In Progress' with worker_id=${worker_id} and claimed_at=${claimed_at}`);
   }
 
   // Create admin client for database operations
@@ -140,6 +163,13 @@ serve(async (req) => {
     // Add optional fields based on status
     if (status === "In Progress") {
       updatePayload.generation_started_at = new Date().toISOString();
+      // When setting to "In Progress", include worker claiming fields (validated above)
+      if (requestBody.worker_id) {
+        updatePayload.worker_id = requestBody.worker_id;
+      }
+      if (requestBody.claimed_at) {
+        updatePayload.claimed_at = requestBody.claimed_at;
+      }
     }
 
     if (requestBody.output_location) {

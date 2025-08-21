@@ -80,6 +80,20 @@ DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
 - **Uploads**: `worker.py` and specialized task handlers use `prepare_output_path_with_upload` and `upload_and_get_final_output_location` to save locally first, then upload to Supabase Storage with stable paths `{task_id}/{filename}`.
 - **Chaining**: Orchestrators like `travel_between_images` queue sub-tasks (segments/stitch) via DB rows; after each primitive generation, `worker.py` runs chaining logic to advance the DAG.
 
+#### 🚨 Critical Bug Fix: Phantom Task Prevention
+
+**Issue**: The `update-task-status` Edge Function was being misused to set tasks to "In Progress" without proper worker claiming fields (`worker_id`, `claimed_at`). This created phantom tasks that counted toward concurrency limits but couldn't be found by workers, blocking the entire system.
+
+**Root Cause**: External services or misconfigured calls were using `update-task-status` with just `{task_id, status: "In Progress"}`, leaving tasks in a claimed-but-unfindable state.
+
+**Fix Applied**: Added validation to `update-task-status` Edge Function:
+- ✅ **Prevents Misuse**: Requires `worker_id` and `claimed_at` when setting status to "In Progress"
+- ✅ **Clear Error Messages**: Returns descriptive 400 error directing to proper claiming functions
+- ✅ **Proper Field Handling**: Includes worker claiming fields in update payload when provided
+- ✅ **Documentation**: Updated function docs to warn against phantom task creation
+
+**Correct Usage**: Use `claim-next-task` Edge Function or `safe_update_task_status` RPC for proper task claiming, not `update-task-status`.
+
 
 ### **Database Backends**
 - **SQLite**: Local file-based database for single-machine deployments
