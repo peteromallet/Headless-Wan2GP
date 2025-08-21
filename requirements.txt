@@ -1,13 +1,14 @@
 # Headless-Wan2GP project requirements
 # Only includes dependencies NOT already in Wan2GP/requirements.txt
 # Note: Install Wan2GP/requirements.txt first, then this file
+# CONFLICT-FREE: Removed packages that conflict with upstream Wan2GP
 
 # ===== Additional Dependencies for Headless Operation =====
-huggingface_hub>=0.25.0  # For reliable model/LoRA downloads with checksums (different from Wan2GP version)
+# huggingface_hub>=0.25.0  # REMOVED: Conflicts with Wan2GP's huggingface_hub[hf_xet]
 safetensors>=0.4.0  # For LoRA integrity verification
-opencv-python-headless  # For headless environments
-librosa  # Different version requirement than Wan2GP's librosa==0.11.0
-Pillow  # For image processing in headless tasks
+# opencv-python-headless  # REMOVED: Conflicts with Wan2GP's opencv-python
+# librosa  # REMOVED: Conflicts with Wan2GP's librosa==0.11.0
+# Pillow  # REMOVED: Usually included with other packages
 mediapipe
 
 # ===== Web UI and API =====
@@ -15,9 +16,9 @@ fastapi  # Often needed for gradio apps
 python-multipart  # For file uploads
 
 # ===== Database and Storage =====
-supabase  # For Supabase DB (via RPC) and Storage
+supabase>=2.0.0  # For Supabase DB (via RPC) and Storage - specify minimum version
 python-dotenv  # For .env file management
 
 # ===== Utilities =====
-requests  # For downloading LoRAs and videos
+# requests  # REMOVED: Usually included with other packages
 replicate  # For magic edit tasks via Replicate API
