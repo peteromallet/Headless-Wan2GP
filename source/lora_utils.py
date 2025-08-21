@@ -397,8 +397,8 @@ def _download_lora_auto(lora_filename: str, lora_type: str, dprint=None) -> bool
     lora_urls = {
         "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors": 
             "https://huggingface.co/DeepBeepMeep/Wan2.1_T2V_14B_lightx2v_cfg_step_distill_lora_rank32/resolve/main/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
-        "Wan21_T2V_14B_causVid_lora_rank32_9step.safetensors":
-            "https://huggingface.co/DeepBeepMeep/Wan2.1_T2V_14B_causVid_lora_rank32_9step/resolve/main/Wan21_T2V_14B_causVid_lora_rank32_9step.safetensors"
+        "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors":
+            "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
     }
     
     if lora_filename in lora_urls:
