@@ -15,6 +15,9 @@
 *.ckpt
 *.safetensors
 *.json
+!Wan2GP/defaults/*.json
+!Wan2GP/finetunes/*.json
+!Wan2GP/configs/*.json
 # *.txt
 *.backup
 *.pkl

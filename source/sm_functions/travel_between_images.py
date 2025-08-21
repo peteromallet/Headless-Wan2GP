@@ -5,6 +5,11 @@ import traceback
 from pathlib import Path
 import time
 import subprocess
+import uuid
+from datetime import datetime
+
+# Import structured logging
+from ..logging_utils import travel_logger
 
 try:
     import cv2
@@ -28,7 +33,7 @@ from ..common_utils import (
     snap_resolution_to_model_grid,
     ensure_valid_prompt,
     ensure_valid_negative_prompt,
-    process_additional_loras_shared,
+    # process_additional_loras_shared,  # DEPRECATED - no longer used in queue-only system
     wait_for_file_stable as sm_wait_for_file_stable,
 )
 from ..video_utils import (
@@ -43,7 +48,7 @@ from ..video_utils import (
     extract_last_frame_as_image as sm_extract_last_frame_as_image,
     overlay_start_end_images_above_video as sm_overlay_start_end_images_above_video,
 )
-from ..wgp_utils import generate_single_video
+# Legacy wgp_utils import removed - now using task_queue system exclusively
 
 # Add debugging helper function
 def debug_video_analysis(video_path: str | Path, label: str, task_id: str = "unknown") -> dict:
@@ -51,7 +56,7 @@ def debug_video_analysis(video_path: str | Path, label: str, task_id: str = "unk
     try:
         path_obj = Path(video_path)
         if not path_obj.exists():
-            print(f"[VIDEO_DEBUG] {label} ({task_id}): FILE MISSING - {video_path}")
+            travel_logger.debug(f"{label}: FILE MISSING - {video_path}", task_id=task_id)
             return {"exists": False, "path": str(video_path)}
         
         frame_count, fps = sm_get_video_frame_count_and_fps(str(path_obj))
@@ -68,35 +73,29 @@ def debug_video_analysis(video_path: str | Path, label: str, task_id: str = "unk
             "file_size_mb": round(file_size / (1024*1024), 2)
         }
         
-        print(f"[VIDEO_DEBUG] {label} ({task_id}):")
-        print(f"[VIDEO_DEBUG]   Path: {debug_info['path']}")
-        print(f"[VIDEO_DEBUG]   Frames: {debug_info['frame_count']}")
-        print(f"[VIDEO_DEBUG]   FPS: {debug_info['fps']}")
-        print(f"[VIDEO_DEBUG]   Duration: {debug_info['duration_seconds']:.2f}s")
-        print(f"[VIDEO_DEBUG]   Size: {debug_info['file_size_mb']} MB")
+        travel_logger.debug(f"{label}: {debug_info['frame_count']} frames, {debug_info['fps']} fps, {debug_info['duration_seconds']:.2f}s, {debug_info['file_size_mb']} MB", task_id=task_id)
         
         return debug_info
         
     except Exception as e:
-        print(f"[VIDEO_DEBUG] {label} ({task_id}): ERROR analyzing video - {e}")
+        travel_logger.debug(f"{label}: ERROR analyzing video - {e}", task_id=task_id)
         return {"exists": False, "error": str(e), "path": str(video_path)}
 
 # --- SM_RESTRUCTURE: New Handler Functions for Travel Tasks ---
 def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_base: Path, orchestrator_task_id_str: str, orchestrator_project_id: str | None, *, dprint):
-    dprint(f"_handle_travel_orchestrator_task: Starting for {orchestrator_task_id_str}")
-    dprint(f"Orchestrator Project ID: {orchestrator_project_id}") # Added dprint
-    dprint(f"Orchestrator task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
+    travel_logger.essential("Starting travel orchestrator task", task_id=orchestrator_task_id_str)
+    travel_logger.debug(f"Project ID: {orchestrator_project_id}", task_id=orchestrator_task_id_str)
+    travel_logger.debug(f"Task params: {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...", task_id=orchestrator_task_id_str)
     generation_success = False # Represents success of orchestration step
     output_message_for_orchestrator_db = f"Orchestration for {orchestrator_task_id_str} initiated."
 
     try:
         if 'orchestrator_details' not in task_params_from_db:
-            msg = f"[ERROR Task ID: {orchestrator_task_id_str}] 'orchestrator_details' not found in task_params_from_db."
-            print(msg)
-            return False, msg
+            travel_logger.error("'orchestrator_details' not found in task_params_from_db", task_id=orchestrator_task_id_str)
+            return False, "orchestrator_details missing"
         
         orchestrator_payload = task_params_from_db['orchestrator_details']
-        dprint(f"Orchestrator payload for {orchestrator_task_id_str} (first 500 chars): {json.dumps(orchestrator_payload, indent=2, default=str)[:500]}...")
+        travel_logger.debug(f"Orchestrator payload: {json.dumps(orchestrator_payload, indent=2, default=str)[:500]}...", task_id=orchestrator_task_id_str)
 
         run_id = orchestrator_payload.get("run_id", orchestrator_task_id_str)
         base_dir_for_this_run_str = orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
@@ -138,7 +137,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         expanded_negative_prompts = orchestrator_payload["negative_prompts_expanded"]
         expanded_segment_frames = orchestrator_payload["segment_frames_expanded"]
         expanded_frame_overlap = orchestrator_payload["frame_overlap_expanded"]
-        vace_refs_instructions_all = orchestrator_payload.get("vace_image_refs_to_prepare_by_headless", [])
+        vace_refs_instructions_all = orchestrator_payload.get("vace_image_refs_to_prepare_by_worker", [])
 
         # Preserve a copy of the original overlap list in case we need it later
         _orig_frame_overlap = list(expanded_frame_overlap)  # shallow copy
@@ -156,7 +155,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         quantized_segment_frames = []
         dprint(f"Orchestrator: Quantizing frame counts. Original segment_frames_expanded: {expanded_segment_frames}")
         for i, frames in enumerate(expanded_segment_frames):
-            # Quantize to 4*N+1 format to match model constraints, applied later in headless.py
+            # Quantize to 4*N+1 format to match model constraints, applied later in worker.py
             new_frames = (frames // 4) * 4 + 1
             print(f"[FRAME_DEBUG] Segment {i}: {frames} -> {new_frames} (4*N+1 quantization)")
             if new_frames != frames:
@@ -248,6 +247,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 if ref_instr.get("segment_idx_for_naming") == idx
             ]
 
+            # [DEEP_DEBUG] Log orchestrator payload values BEFORE creating segment payload
+            print(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: CREATING SEGMENT {idx} PAYLOAD")
+            print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_causvid'): {orchestrator_payload.get('apply_causvid')}")
+            print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('use_lighti2x_lora'): {orchestrator_payload.get('use_lighti2x_lora')}")
+            print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_reward_lora'): {orchestrator_payload.get('apply_reward_lora')}")
+            dprint(f"[DEEP_DEBUG] Orchestrator {orchestrator_task_id_str}: CREATING SEGMENT {idx} PAYLOAD")
+            dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('apply_causvid'): {orchestrator_payload.get('apply_causvid')}")
+            dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('use_lighti2x_lora'): {orchestrator_payload.get('use_lighti2x_lora')}")
+            dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('apply_reward_lora'): {orchestrator_payload.get('apply_reward_lora')}")
+            
             segment_payload = {
                 "task_id": current_segment_task_id,
                 "orchestrator_task_id_ref": orchestrator_task_id_str,
@@ -265,12 +274,13 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "frame_overlap_from_previous": current_frame_overlap_from_previous,
                 "frame_overlap_with_next": expanded_frame_overlap[idx] if len(expanded_frame_overlap) > idx else 0,
                 
-                "vace_image_refs_to_prepare_by_headless": vace_refs_for_this_segment, # Already filtered for this segment
+                "vace_image_refs_to_prepare_by_worker": vace_refs_for_this_segment, # Already filtered for this segment
 
                 "parsed_resolution_wh": orchestrator_payload["parsed_resolution_wh"],
                 "model_name": orchestrator_payload["model_name"],
                 "seed_to_use": orchestrator_payload.get("seed_base", 12345) + idx,
                 "use_causvid_lora": orchestrator_payload.get("apply_causvid", False),
+                "use_lighti2x_lora": orchestrator_payload.get("use_lighti2x_lora", False),
                 "apply_reward_lora": orchestrator_payload.get("apply_reward_lora", False),
                 "cfg_star_switch": orchestrator_payload.get("cfg_star_switch", 0),
                 "cfg_zero_step": orchestrator_payload.get("cfg_zero_step", -1),
@@ -292,6 +302,32 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "full_orchestrator_payload": orchestrator_payload, # Ensure full payload is passed to segment
             }
 
+            # [DEEP_DEBUG] Log segment payload values AFTER creation to verify they match
+            print(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: SEGMENT {idx} PAYLOAD CREATED")
+            print(f"[ORCHESTRATOR_DEBUG]   segment_payload['use_causvid_lora']: {segment_payload.get('use_causvid_lora')}")
+            print(f"[ORCHESTRATOR_DEBUG]   segment_payload['use_lighti2x_lora']: {segment_payload.get('use_lighti2x_lora')}")
+            print(f"[ORCHESTRATOR_DEBUG]   segment_payload['apply_reward_lora']: {segment_payload.get('apply_reward_lora')}")
+            print(f"[ORCHESTRATOR_DEBUG]   FULL segment_payload keys: {list(segment_payload.keys())}")
+            
+            # [DEEP_DEBUG] Also log what we're about to send to the Edge Function
+            edge_function_payload = {
+                "task_id": current_segment_task_id,
+                "params": segment_payload,
+                "task_type": "travel_segment",
+                "project_id": orchestrator_project_id,
+                "dependant_on": previous_segment_task_id
+            }
+            print(f"[ORCHESTRATOR_DEBUG] EDGE FUNCTION PAYLOAD keys: {list(edge_function_payload['params'].keys())}")
+            
+            dprint(f"[DEEP_DEBUG] Orchestrator {orchestrator_task_id_str}: SEGMENT {idx} PAYLOAD CREATED")
+            dprint(f"[DEEP_DEBUG]   segment_payload['use_causvid_lora']: {segment_payload.get('use_causvid_lora')}")
+            dprint(f"[DEEP_DEBUG]   segment_payload['use_lighti2x_lora']: {segment_payload.get('use_lighti2x_lora')}")
+            dprint(f"[DEEP_DEBUG]   segment_payload['apply_reward_lora']: {segment_payload.get('apply_reward_lora')}")
+            dprint(f"[DEEP_DEBUG]   FULL segment_payload keys: {list(segment_payload.keys())}")
+            
+            # [DEEP_DEBUG] Also log what we're about to send to the Edge Function
+            dprint(f"[DEEP_DEBUG] EDGE FUNCTION PAYLOAD keys: {list(edge_function_payload['params'].keys())}")
+
             dprint(f"Orchestrator: Enqueuing travel_segment {idx} (ID: {current_segment_task_id}) depends_on={previous_segment_task_id}")
             db_ops.add_task_to_db(
                 task_payload=segment_payload, 
@@ -306,7 +342,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         final_stitched_video_name = f"travel_final_stitched_{run_id}.mp4"
         # Stitcher saves its final primary output directly under main_output_dir (e.g., ./steerable_motion_output/)
         # NOT under current_run_output_dir (which is .../travel_run_XYZ/)
-        # The main_output_dir_base is the one passed to headless.py (e.g. server's ./outputs or steerable_motion's ./steerable_motion_output)
+        # The main_output_dir_base is the one passed to worker.py (e.g. server's ./outputs or steerable_motion's ./steerable_motion_output)
         # The orchestrator_payload["main_output_dir_for_run"] is this main_output_dir_base.
         final_stitched_output_path = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))) / final_stitched_video_name
 
@@ -355,7 +391,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
     
     return generation_success, output_message_for_orchestrator_db
 
-def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True, *, process_single_task, dprint):
+def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True, *, process_single_task, dprint, task_queue=None):
     dprint(f"_handle_travel_segment_task: Starting for {segment_task_id_str}")
     dprint(f"Segment task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
     # task_params_from_db contains what was enqueued for this specific segment,
@@ -375,7 +411,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
 
         if orchestrator_task_id_ref is None or orchestrator_run_id is None or segment_idx is None:
             msg = f"Segment task {segment_task_id_str} missing critical orchestrator refs or segment_index."
-            print(f"[ERROR Task {segment_task_id_str}]: {msg}")
+            travel_logger.error(msg, task_id=segment_task_id_str)
             return False, msg
 
         full_orchestrator_payload = segment_params.get("full_orchestrator_payload")
@@ -404,6 +440,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # FIX: Prioritize job-specific settings from orchestrator payload over server-wide CLI flags.
         effective_colour_match_enabled = full_orchestrator_payload.get("colour_match_videos", colour_match_videos)
         effective_apply_reward_lora = full_orchestrator_payload.get("apply_reward_lora", apply_reward_lora)
+        debug_enabled = segment_params.get("debug_mode_enabled", full_orchestrator_payload.get("debug_mode_enabled", False))
 
         additional_loras = full_orchestrator_payload.get("additional_loras", {})
         if additional_loras:
@@ -414,18 +451,15 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             current_run_base_output_dir_str = full_orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
             current_run_base_output_dir_str = str(Path(current_run_base_output_dir_str) / f"travel_run_{orchestrator_run_id}")
 
+        from pathlib import Path  # Ensure Path is available in local scope
         current_run_base_output_dir = Path(current_run_base_output_dir_str)
         # Use the base directory directly without creating segment-specific subdirectories
         segment_processing_dir = current_run_base_output_dir
         segment_processing_dir.mkdir(parents=True, exist_ok=True)
 
-        # ─── Ensure we have a directory for downloading remote images ────────────
+        # ─── Use main processing directory for image downloads (no subfolders) ────────────
         if segment_image_download_dir is None:
-            segment_image_download_dir = segment_processing_dir / "image_downloads"
-            try:
-                segment_image_download_dir.mkdir(parents=True, exist_ok=True)
-            except Exception as e_mkdir_dl:
-                dprint(f"[WARNING] Segment {segment_idx}: Could not create image_downloads dir {segment_image_download_dir}: {e_mkdir_dl}")
+            segment_image_download_dir = segment_processing_dir  # Save directly to main output dir
         dprint(f"Segment {segment_idx} (Task {segment_task_id_str}): Processing in {segment_processing_dir.resolve()} | image_download_dir={segment_image_download_dir}")
 
         # --- Color Match Reference Image Determination ---
@@ -453,14 +487,26 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             
             # Download images if they are URLs so they exist locally for the color matching function.
             if start_ref_path_for_cm:
-                start_ref_path_for_cm = sm_download_image_if_url(start_ref_path_for_cm, segment_processing_dir, segment_task_id_str)
+                start_ref_path_for_cm = sm_download_image_if_url(
+                    start_ref_path_for_cm, 
+                    segment_processing_dir,  # Save directly to main output dir, no subfolder
+                    segment_task_id_str, 
+                    debug_mode=debug_enabled,
+                    descriptive_name=f"seg{segment_idx:02d}_start_ref"
+                )
             if end_ref_path_for_cm:
-                end_ref_path_for_cm = sm_download_image_if_url(end_ref_path_for_cm, segment_processing_dir, segment_task_id_str)
+                end_ref_path_for_cm = sm_download_image_if_url(
+                    end_ref_path_for_cm, 
+                    segment_processing_dir,  # Save directly to main output dir, no subfolder
+                    segment_task_id_str,
+                    debug_mode=debug_enabled,
+                    descriptive_name=f"seg{segment_idx:02d}_end_ref"
+                )
 
             dprint(f"Seg {segment_idx} CM Refs: Start='{start_ref_path_for_cm}', End='{end_ref_path_for_cm}'")
         # --- End Color Match Reference Image Determination ---
 
-        # --- Prepare VACE Refs for this Segment (moved to headless) ---
+        # --- Prepare VACE Refs for this Segment (moved to worker) ---
         actual_vace_image_ref_paths_for_wgp = []
         # Get the list of VACE ref instructions from the full orchestrator payload
         vace_ref_instructions_from_orchestrator = full_orchestrator_payload.get("", [])
@@ -495,7 +541,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 dprint(f"[WARNING] Segment {segment_idx}: parsed_resolution_wh not found in full_orchestrator_payload. VACE refs might not be resized correctly.")
 
             for ref_instr in relevant_vace_instructions:
-                # Pass segment_image_download_dir to _prepare_vace_ref_for_segment_headless
+                # Pass segment_image_download_dir to _prepare_vace_ref_for_segment_worker
                 dprint(f"Segment {segment_idx}: Preparing VACE ref from instruction: {ref_instr}")
                 processed_ref_path = sm_prepare_vace_ref_for_segment(
                     ref_instruction=ref_instr,
@@ -565,72 +611,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         # Define gray_frame_bgr here for use in subsequent segment strength adjustment
         gray_frame_bgr = sm_create_color_frame(parsed_res_wh, (128, 128, 128))
 
-        # -------------------------------------------------------------
-        #   Generate mask video for active/inactive frames if enabled
-        # -------------------------------------------------------------
-        mask_video_path_for_wgp: Path | None = None  # default
-        if mask_active_frames:
-            try:
-                # --- Determine which frame indices should be kept (inactive = black) ---
-                inactive_indices: set[int] = set()
 
-                # Define overlap_count up front for consistent logging
-                overlap_count = max(0, int(frame_overlap_from_previous))
-
-                if is_single_image_journey:
-                    # For a single image journey, only the first frame is kept from the guide.
-                    inactive_indices.add(0)
-                    dprint(f"Seg {segment_idx} Mask: Single image journey - keeping only frame 0 inactive.")
-                else:
-                    # 1) Frames reused from the previous segment (overlap)
-                    inactive_indices.update(range(overlap_count))
-
-                # 2) First frame when this is the very first segment from scratch
-                is_first_segment_val = segment_params.get("is_first_segment", False)
-                is_continue_scenario = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
-                if is_first_segment_val and not is_continue_scenario:
-                    inactive_indices.add(0)
-
-                # 3) Last frame for ALL segments - each segment travels TO a target image
-                # Every segment ends at its target image, which should be kept (inactive/black)
-                inactive_indices.add(total_frames_for_segment - 1)
-
-                # --- NEW DEBUG LOGGING FOR MASK/OVERLAP DETAILS ---
-                print(f"[MASK_DEBUG] Segment {segment_idx}: frame_overlap_from_previous={frame_overlap_from_previous}")
-                print(f"[MASK_DEBUG] Segment {segment_idx}: inactive (masked) frame indices: {sorted(list(inactive_indices))}")
-                print(f"[MASK_DEBUG] Segment {segment_idx}: active (unmasked) frame indices: {[i for i in range(total_frames_for_segment) if i not in inactive_indices]}")
-                # --- END DEBUG LOGGING ---
-
-                # Debug: Show the conditions that determined inactive indices
-                dprint(
-                    f"Seg {segment_idx}: Mask conditions - is_first_segment={segment_params.get('is_first_segment', False)}, "
-                    f"is_continue_scenario={full_orchestrator_payload.get('continue_from_video_resolved_path') is not None}, is_last_segment={segment_params.get('is_last_segment', False)}, "
-                    f"overlap_count={frame_overlap_from_previous}, is_single_image_journey={is_single_image_journey}"
-                )
-
-                mask_filename = f"{orchestrator_run_id}_seg{segment_idx:02d}_mask.mp4"
-                # Create mask video in the same directory as guide video for consistency
-                mask_out_path_tmp = segment_processing_dir / mask_filename
-                
-                # Use the generalized mask creation function
-                from ..common_utils import create_mask_video_from_inactive_indices
-                created_mask_vid = create_mask_video_from_inactive_indices(
-                    total_frames=total_frames_for_segment,
-                    resolution_wh=parsed_res_wh,
-                    inactive_frame_indices=inactive_indices,
-                    output_path=mask_out_path_tmp,
-                    fps=fps_helpers,
-                    task_id_for_logging=segment_task_id_str,
-                    dprint=dprint
-                )
-                
-                if created_mask_vid:
-                    mask_video_path_for_wgp = created_mask_vid
-                    dprint(f"Seg {segment_idx}: mask video generated at {mask_video_path_for_wgp}")
-                else:
-                    dprint(f"[WARNING] Seg {segment_idx}: Failed to generate mask video.")
-            except Exception as e_mask_gen2:
-                dprint(f"[WARNING] Seg {segment_idx}: Mask video generation error: {e_mask_gen2}")
 
         try: # Parsing fade params
             fade_in_p = json.loads(fade_in_duration_str)
@@ -700,92 +681,95 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
                 msg = f"Seg {segment_idx}: Prev segment output for guide invalid/not found. Expected from prev task output. Path: {error_detail_path}"
                 print(f"[ERROR Task {segment_task_id_str}]: {msg}"); return False, msg
         
-        try: # Guide Video Creation Block
-            guide_video_base_name = f"{orchestrator_run_id}_seg{segment_idx:02d}_guide"
-            input_images_resolved_original = full_orchestrator_payload["input_image_paths_resolved"]
+        # ------------------------------------------------------------------
+        #  Show-input-images (banner) – determine start/end images now so the
+        #  information can be propagated downstream to the chaining stage.
+        # ------------------------------------------------------------------
+        show_input_images_enabled = bool(full_orchestrator_payload.get("show_input_images", False))
+        start_image_for_banner = None
+        end_image_for_banner = None
+        if show_input_images_enabled:
+            try:
+                input_images_resolved_original = full_orchestrator_payload["input_image_paths_resolved"]
+                # For banner overlay, always show the first and last images of the entire journey
+                # This provides consistent context across all segments
+                if len(input_images_resolved_original) > 0:
+                    start_image_for_banner = input_images_resolved_original[0]  # Always first image
+
+                if len(input_images_resolved_original) > 1:
+                    end_image_for_banner = input_images_resolved_original[-1]  # Always last image
+                elif len(input_images_resolved_original) == 1:
+                    # Single image journey - use the same image for both
+                    end_image_for_banner = input_images_resolved_original[0]
+
+                # Ensure both banner images are local paths (download if URL)
+                if start_image_for_banner:
+                    start_image_for_banner = sm_download_image_if_url(
+                        start_image_for_banner,
+                        segment_processing_dir,
+                        segment_task_id_str,
+                        debug_mode=debug_enabled,
+                        descriptive_name="journey_start_image"
+                    )
+                if end_image_for_banner:
+                    end_image_for_banner = sm_download_image_if_url(
+                        end_image_for_banner,
+                        segment_processing_dir,
+                        segment_task_id_str,
+                        debug_mode=debug_enabled,
+                        descriptive_name="journey_end_image"
+                    )
+
+            except Exception as e_banner_sel:
+                dprint(f"Seg {segment_idx}: Error selecting banner images for show_input_images: {e_banner_sel}")
+        # ------------------------------------------------------------------
+
+        # Use the shared TravelSegmentProcessor to eliminate code duplication
+        try:
+            from ..travel_segment_processor import TravelSegmentProcessor, TravelSegmentContext
             
-            # Guide video path will be handled by sm_create_guide_video_for_travel_segment using centralized logic
-            guide_video_target_dir = segment_processing_dir
-            dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Guide video will be created in {guide_video_target_dir}")
-
-            # The download is now handled inside sm_create_guide_video_for_travel_segment (via sm_image_to_frame)
-            # Just pass the original paths.
-            input_images_resolved_for_guide = input_images_resolved_original
-
-            end_anchor_img_path_str_idx = segment_idx + 1
-            if full_orchestrator_payload.get("continue_from_video_resolved_path"):
-                 end_anchor_img_path_str_idx = segment_idx
-            
-            # SAFETY: If this is the last segment (i.e. there is no subsequent image),
-            # the "+1" logic above will be out of range.  When that happens we
-            # signal the guide-creator that there is *no* end anchor by passing -1.
-            if end_anchor_img_path_str_idx >= len(input_images_resolved_for_guide):
-                end_anchor_img_path_str_idx = -1  # No end anchor image available.
-            
-            # For a single image journey, there is no end anchor image.
-            if is_single_image_journey:
-                end_anchor_img_path_str_idx = -1 # Signal no end image to the creation function
-
-            # ------------------------------------------------------------------
-            #  Show-input-images (banner) – determine start/end images now so the
-            #  information can be propagated downstream to the chaining stage.
-            # ------------------------------------------------------------------
-            show_input_images_enabled = bool(full_orchestrator_payload.get("show_input_images", False))
-            start_image_for_banner = None
-            end_image_for_banner = None
-            if show_input_images_enabled:
-                try:
-                    # For banner overlay, always show the first and last images of the entire journey
-                    # This provides consistent context across all segments
-                    if len(input_images_resolved_original) > 0:
-                        start_image_for_banner = input_images_resolved_original[0]  # Always first image
-
-                    if len(input_images_resolved_original) > 1:
-                        end_image_for_banner = input_images_resolved_original[-1]  # Always last image
-                    elif len(input_images_resolved_original) == 1:
-                        # Single image journey - use the same image for both
-                        end_image_for_banner = input_images_resolved_original[0]
-
-                    # Ensure both banner images are local paths (download if URL)
-                    if start_image_for_banner:
-                        start_image_for_banner = sm_download_image_if_url(
-                            start_image_for_banner,
-                            segment_processing_dir,
-                            segment_task_id_str,
-                        )
-                    if end_image_for_banner:
-                        end_image_for_banner = sm_download_image_if_url(
-                            end_image_for_banner,
-                            segment_processing_dir,
-                            segment_task_id_str,
-                        )
-
-                except Exception as e_banner_sel:
-                    dprint(f"Seg {segment_idx}: Error selecting banner images for show_input_images: {e_banner_sel}")
-            # ------------------------------------------------------------------
-
-            actual_guide_video_path_for_wgp = sm_create_guide_video_for_travel_segment(
-                segment_idx_for_logging=segment_idx,
-                end_anchor_image_index=end_anchor_img_path_str_idx,
-                is_first_segment_from_scratch=is_first_segment_from_scratch,
+            # Create context for the shared processor
+            processor_context = TravelSegmentContext(
+                task_id=segment_task_id_str,
+                segment_idx=segment_idx,
+                model_name=full_orchestrator_payload["model_name"],
                 total_frames_for_segment=total_frames_for_segment,
                 parsed_res_wh=parsed_res_wh,
-                fps_helpers=fps_helpers,
-                input_images_resolved_for_guide=input_images_resolved_for_guide,
-                path_to_previous_segment_video_output_for_guide=path_to_previous_segment_video_output_for_guide,
-                output_target_dir=guide_video_target_dir,
-                guide_video_base_name=guide_video_base_name,
-                segment_image_download_dir=segment_image_download_dir,
-                task_id_for_logging=segment_task_id_str, # Corrected keyword argument
+                segment_processing_dir=segment_processing_dir,
                 full_orchestrator_payload=full_orchestrator_payload,
                 segment_params=segment_params,
-                single_image_journey=is_single_image_journey,
+                mask_active_frames=mask_active_frames,
+                debug_enabled=debug_enabled,
                 dprint=dprint
             )
-        except Exception as e_guide:
-            print(f"ERROR Task {segment_task_id_str} guide prep: {e_guide}")
+            
+            # Create and use the shared processor
+            processor = TravelSegmentProcessor(processor_context)
+            segment_outputs = processor.process_segment()
+            
+            # Extract outputs
+            actual_guide_video_path_for_wgp = Path(segment_outputs["video_guide"]) if segment_outputs["video_guide"] else None
+            mask_video_path_for_wgp = Path(segment_outputs["video_mask"]) if segment_outputs["video_mask"] else None
+            video_prompt_type_str = segment_outputs["video_prompt_type"]
+            
+            # Get VACE model detection result from processor
+            is_vace_model = processor.is_vace_model
+            
+            dprint(f"[SHARED_PROCESSOR] Seg {segment_idx}: Guide video: {actual_guide_video_path_for_wgp}")
+            dprint(f"[SHARED_PROCESSOR] Seg {segment_idx}: Mask video: {mask_video_path_for_wgp}")
+            dprint(f"[SHARED_PROCESSOR] Seg {segment_idx}: Video prompt type: {video_prompt_type_str}")
+            dprint(f"[SHARED_PROCESSOR] Seg {segment_idx}: Is VACE model: {is_vace_model}")
+            
+        except Exception as e_shared_processor:
+            dprint(f"[ERROR] Seg {segment_idx}: Shared processor failed: {e_shared_processor}")
             traceback.print_exc()
-            actual_guide_video_path_for_wgp = None
+            return False, f"Shared processor failed: {e_shared_processor}", None
+        
+        # [GUIDE_CONTENT_DEBUG] Log guide and mask video paths for content verification  
+        dprint(f"[GUIDE_CONTENT_DEBUG] Seg {segment_idx}: Video guide path: {actual_guide_video_path_for_wgp}")
+        dprint(f"[GUIDE_CONTENT_DEBUG] Seg {segment_idx}: Video mask path: {mask_video_path_for_wgp}")
+        dprint(f"[GUIDE_CONTENT_DEBUG] Seg {segment_idx}: Empty prompt may cause generic generation - consider adding descriptive prompt")
+        
         # --- Invoke WGP Generation directly ---
         if actual_guide_video_path_for_wgp is None and not is_first_segment_from_scratch:
             # If guide creation failed AND it was essential (i.e., for any segment except the very first one from scratch)
@@ -834,17 +818,24 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         
         dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Effective prompt for WGP: '{prompt_for_wgp}'")
 
-        # Compute video_prompt_type for wgp: always include 'V' when a guide video is provided; add 'M' if a mask video is also attached.
-        # Additionally, include 'I' when reference images are supplied so that VACE models
-        # properly process the `image_refs` list.  Passing image refs without the 'I'
-        # flag causes Wan2GP to attempt to pre-process the paths as PIL images and
-        # raises AttributeError ('str' object has no attribute size').
-        video_prompt_type_str = (
-            "V" +
-            ("M" if mask_video_path_for_wgp else "") +
-            ("I" if safe_vace_image_ref_paths_for_wgp else "")
-        )
+        # Get model name for JSON config loading
+        model_name = full_orchestrator_payload["model_name"]
         
+        # Load model defaults from JSON config BEFORE building wgp_payload
+        model_defaults_from_config = {}
+        try:
+            import sys
+            import os
+            wan_dir = Path(__file__).parent.parent.parent / "Wan2GP"
+            if str(wan_dir) not in sys.path:
+                sys.path.insert(0, str(wan_dir))
+            
+            import wgp
+            model_defaults_from_config = wgp.get_default_settings(model_name)
+            dprint(f"[MODEL_CONFIG_DEBUG] Segment {segment_idx}: Loaded model defaults for '{model_name}': {model_defaults_from_config}")
+        except Exception as e:
+            dprint(f"[MODEL_CONFIG_DEBUG] Segment {segment_idx}: Warning - could not load model defaults for '{model_name}': {e}")
+
         wgp_payload = {
             "task_id": wgp_inline_task_id, # ID for this specific WGP generation operation
             "model": full_orchestrator_payload["model_name"],
@@ -859,6 +850,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             "output_path": str(wgp_final_output_path_for_this_segment.resolve()), 
             "video_guide_path": str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
             "use_causvid_lora": full_orchestrator_payload.get("apply_causvid", False),
+            "use_lighti2x_lora": full_orchestrator_payload.get("use_lighti2x_lora", False),
             "apply_reward_lora": full_orchestrator_payload.get("apply_reward_lora", False),
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
@@ -868,8 +860,18 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             # Attach mask video if available
             **({"video_mask": str(mask_video_path_for_wgp.resolve())} if mask_video_path_for_wgp else {}),
         }
+        
+        # Add model config defaults to wgp_payload so they're available in parameter precedence chain
+        # Note: HeadlessTaskQueue will properly handle task parameter overrides
+        if model_defaults_from_config:
+            for param in ["guidance_scale", "flow_shift", "num_inference_steps", "switch_threshold"]:
+                if param in model_defaults_from_config:
+                    wgp_payload[param] = model_defaults_from_config[param]
+                    dprint(f"[MODEL_CONFIG_DEBUG] Segment {segment_idx}: Added {param}={model_defaults_from_config[param]} to wgp_payload from model config")
         if additional_loras:
+            # Pass additional_loras in dict format - HeadlessTaskQueue handles conversion centrally
             wgp_payload["additional_loras"] = additional_loras
+            dprint(f"Seg {segment_idx}: Added {len(additional_loras)} additional LoRAs to payload")
 
         if full_orchestrator_payload.get("params_json_str_override"):
             try:
@@ -902,82 +904,90 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
 
         dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Invoking WGP generation via centralized wrapper (task_id for WGP op: {wgp_inline_task_id})")
         
+        # Log VACE control weights if using VACE
+        if is_vace_model:
+            control_weight = full_orchestrator_payload.get("control_net_weight", 1.0)
+            control_weight2 = full_orchestrator_payload.get("control_net_weight2", 1.0)
+            dprint(f"[VACEWeights] Seg {segment_idx}: control_net_weight={control_weight}, control_net_weight2={control_weight2}")
+        
         # Process additional LoRAs using shared function
         processed_additional_loras = {}
         if additional_loras:
             dprint(f"Seg {segment_idx}: Processing additional LoRAs using shared function")
-            model_filename_for_task = wgp_mod.get_model_filename(
-                full_orchestrator_payload["model_name"],
-                wgp_mod.transformer_quantization,
-                wgp_mod.transformer_dtype_policy,
-            )
-            processed_additional_loras = process_additional_loras_shared(
-                additional_loras, 
-                wgp_mod, 
-                model_filename_for_task, 
-                segment_task_id_str, 
-                dprint
-            )
+            # Since legacy system is removed, use task_queue system for LoRA processing
+            if task_queue is not None:
+                # The new queue system handles LoRAs internally, so just pass them as-is
+                processed_additional_loras = additional_loras
+                dprint(f"Seg {segment_idx}: Using task_queue system for LoRA processing: {len(processed_additional_loras)} LoRAs")
+            else:
+                # Fallback: pass LoRAs as-is if no task_queue
+                processed_additional_loras = additional_loras
+                dprint(f"Seg {segment_idx}: Fallback LoRA processing: {len(processed_additional_loras)} LoRAs")
 
         # ------------------------------------------------------------------
-        # Ensure sensible defaults for critical generation params
+        # Ensure sensible defaults for critical generation params using shared utilities
         # ------------------------------------------------------------------
-        lighti2x_enabled = bool(segment_params.get("use_lighti2x_lora", False) or full_orchestrator_payload.get("use_lighti2x_lora", False))
-
-        num_inference_steps = (
-            segment_params.get("num_inference_steps")
-            or segment_params.get("steps")  # Check for "steps" as alternative
-            or full_orchestrator_payload.get("num_inference_steps")
-            or full_orchestrator_payload.get("steps")  # Check for "steps" as alternative
-            or wgp_payload.get("num_inference_steps")  # Check wgp_payload after JSON override
-            or wgp_payload.get("steps")  # Check for "steps" in wgp_payload
-            or (5 if lighti2x_enabled else 30)
+        import sys
+        from pathlib import Path
+        source_dir = Path(__file__).parent.parent
+        if str(source_dir) not in sys.path:
+            sys.path.insert(0, str(source_dir))
+        from lora_utils import detect_lora_optimization_flags, apply_lora_parameter_optimization
+        
+        model_name = full_orchestrator_payload["model_name"]
+        
+        # Detect LoRA optimization flags using shared logic
+        causvid_enabled, lighti2x_enabled = detect_lora_optimization_flags(
+            task_params=segment_params,
+            orchestrator_payload=full_orchestrator_payload,
+            model_name=model_name,
+            dprint=dprint
         )
 
-        if lighti2x_enabled:
-            guidance_scale_default = 1.0
-            flow_shift_default = 5.0
-        else:
-            guidance_scale_default = full_orchestrator_payload.get("guidance_scale", 5.0)
-            flow_shift_default = full_orchestrator_payload.get("flow_shift", 3.0)
+        # [CausVidDebugTrace] Add detailed parameter precedence logging
+        dprint(f"[CausVidDebugTrace] Segment {segment_idx}: Parameter precedence analysis:")
+        dprint(f"[CausVidDebugTrace]   causvid_enabled: {causvid_enabled}")
+        dprint(f"[CausVidDebugTrace]   lighti2x_enabled: {lighti2x_enabled}")
+        dprint(f"[CausVidDebugTrace]   segment_params.get('num_inference_steps'): {segment_params.get('num_inference_steps')}")
+        dprint(f"[CausVidDebugTrace]   segment_params.get('steps'): {segment_params.get('steps')}")
+        dprint(f"[CausVidDebugTrace]   full_orchestrator_payload.get('num_inference_steps'): {full_orchestrator_payload.get('num_inference_steps')}")
+        dprint(f"[CausVidDebugTrace]   full_orchestrator_payload.get('steps'): {full_orchestrator_payload.get('steps')}")
+        dprint(f"[CausVidDebugTrace]   wgp_payload.get('num_inference_steps'): {wgp_payload.get('num_inference_steps')}")
+        dprint(f"[CausVidDebugTrace]   wgp_payload.get('steps'): {wgp_payload.get('steps')}")
+        dprint(f"[CausVidDebugTrace]   default would be: {6 if lighti2x_enabled else (9 if causvid_enabled else 30)}")
 
-        # Use the centralized WGP wrapper instead of process_single_task
-        generation_success, wgp_output_path_or_msg = generate_single_video(
-             wgp_mod=wgp_mod,
-             task_id=wgp_inline_task_id,
-             prompt=prompt_for_wgp,
-             negative_prompt=negative_prompt_for_wgp,
-             resolution=f"{parsed_res_wh[0]}x{parsed_res_wh[1]}",
-             video_length=final_frames_for_wgp_generation,
-             seed=segment_params["seed_to_use"],
-             num_inference_steps=num_inference_steps,
-             guidance_scale=guidance_scale_default,
-             flow_shift=flow_shift_default,
-             # Resolve the actual model .safetensors file that WGP expects – the
-             # orchestrator payload only contains the shorthand model alias
-             # (e.g. "vace_14B").
-             model_filename=wgp_mod.get_model_filename(
-                 full_orchestrator_payload["model_name"],
-                 wgp_mod.transformer_quantization,
-                 wgp_mod.transformer_dtype_policy,
-             ),
-             video_guide=str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
-             video_mask=str(mask_video_path_for_wgp.resolve()) if mask_video_path_for_wgp else None,
-             image_refs=safe_vace_image_ref_paths_for_wgp,
-             use_causvid_lora=full_orchestrator_payload.get("apply_causvid", False) or full_orchestrator_payload.get("use_causvid_lora", False),
-             use_lighti2x_lora=full_orchestrator_payload.get("use_lighti2x_lora", False) or segment_params.get("use_lighti2x_lora", False),
-             apply_reward_lora=effective_apply_reward_lora,
-             additional_loras=processed_additional_loras,
-             video_prompt_type=video_prompt_type_str,
-             dprint=dprint,
-             **({k: v for k, v in wgp_payload.items() if k not in [
-                 'task_id', 'prompt', 'negative_prompt', 'resolution', 'frames', 'seed',
-                 'model', 'model_filename', 'video_guide', 'video_mask', 'image_refs',
-                 'use_causvid_lora', 'apply_reward_lora', 'additional_loras', 'video_prompt_type',
-                 'use_lighti2x_lora',
-                 'num_inference_steps', 'guidance_scale', 'flow_shift'
-             ]})
-         )
+        # Apply LoRA parameter optimization using shared logic
+        optimized_params = apply_lora_parameter_optimization(
+            params=wgp_payload.copy(),  # Work on a copy to avoid modifying original
+            causvid_enabled=causvid_enabled,
+            lighti2x_enabled=lighti2x_enabled,
+            model_name=model_name,
+            task_params=segment_params,
+            orchestrator_payload=full_orchestrator_payload,
+            task_id=segment_task_id_str,
+            dprint=dprint
+        )
+        
+        # Extract the optimized values
+        num_inference_steps = optimized_params["num_inference_steps"]
+        guidance_scale_default = optimized_params["guidance_scale"]
+        flow_shift_default = optimized_params["flow_shift"]
+        
+        dprint(f"[CausVidDebugTrace] Segment {segment_idx}: FINAL SELECTED num_inference_steps = {num_inference_steps}")
+        dprint(f"[CausVidDebugTrace] Segment {segment_idx}: FINAL SELECTED guidance_scale = {guidance_scale_default}")
+        dprint(f"[CausVidDebugTrace] Segment {segment_idx}: FINAL SELECTED flow_shift = {flow_shift_default}")
+
+        # Parameter defaults now handled in the shared optimization logic above
+
+        # DEPRECATED: Legacy task queue system code - travel segments now processed via direct queue integration
+        # Travel segments are now routed through worker.py's _handle_travel_segment_via_queue function
+        # which eliminates the blocking wait pattern and provides better model persistence.
+        generation_success = False
+        wgp_output_path_or_msg = (
+            f"DEPRECATED: Travel segment {segment_idx} should be processed via direct queue integration. "
+            f"This indicates that worker.py is incorrectly routing travel_segment tasks to the legacy handler "
+            f"instead of using _handle_travel_segment_via_queue. Check task routing configuration."
+        )
 
         print(f"[WGP_DEBUG] Segment {segment_idx}: GENERATION RESULT")
         print(f"[WGP_DEBUG]   generation_success: {generation_success}")
@@ -996,7 +1006,6 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
             chain_success, chain_message, final_chained_path = _handle_travel_chaining_after_wgp(
                 wgp_task_params=wgp_payload,
                 actual_wgp_output_video_path=wgp_output_path_or_msg,
-                wgp_mod=wgp_mod,
                 image_download_dir=segment_image_download_dir,
                 dprint=dprint
             )
@@ -1068,7 +1077,7 @@ def _handle_travel_segment_task(wgp_mod, task_params_from_db: dict, main_output_
         return False, f"Segment {segment_idx if 'segment_idx' in locals() else 'unknown'} failed: {str(e)[:200]}"
 
 # --- SM_RESTRUCTURE: New function to handle chaining after WGP/Comfy sub-task ---
-def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_video_path: str | None, wgp_mod, image_download_dir: Path | str | None = None, *, dprint) -> tuple[bool, str, str | None]:
+def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_video_path: str | None, image_download_dir: Path | str | None = None, *, dprint) -> tuple[bool, str, str | None]:
     """
     Handles the chaining logic after a WGP  sub-task for a travel segment completes.
     This includes post-generation saturation and enqueuing the next segment or stitch task.
@@ -1116,40 +1125,36 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
         dprint(f"Chaining for WGP task {wgp_task_id} (segment {segment_idx_completed} of run {orchestrator_run_id}). Initial video: {video_to_process_abs_path}")
 
         # --- Always move WGP output to proper location first ---
-        # For SQLite, this moves the file from outputs/ to public/files/
-        # For other DBs, this ensures consistent file management
-        moved_filename = f"{orchestrator_run_id}_seg{segment_idx_completed:02d}_output{video_to_process_abs_path.suffix}"
-        moved_video_abs_path, moved_db_path = prepare_output_path(
-            task_id=wgp_task_id,
-            filename=moved_filename,
-            main_output_dir_base=Path(segment_processing_dir_for_saturation_str)
-        )
+        # Use consistent UUID-based naming and MOVE (not copy) to avoid duplicates
+        timestamp_short = datetime.now().strftime("%H%M%S")
+        unique_suffix = uuid.uuid4().hex[:6]
+        moved_filename = f"seg{segment_idx_completed:02d}_output_{timestamp_short}_{unique_suffix}{video_to_process_abs_path.suffix}"
         
-        # Copy the WGP output to the proper location
+        # Use segment processing dir directly without task_id prefixing since UUID guarantees uniqueness
+        moved_video_abs_path = Path(segment_processing_dir_for_saturation_str) / moved_filename
+        moved_video_abs_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # MOVE (not copy) the WGP output to avoid creating duplicates
         try:
             # Ensure encoder has finished writing the source file
             sm_wait_for_file_stable(video_to_process_abs_path, checks=3, interval=1.0, dprint=dprint)
 
-            shutil.copy2(video_to_process_abs_path, moved_video_abs_path)
+            shutil.move(str(video_to_process_abs_path), str(moved_video_abs_path))
             print(f"[CHAIN_DEBUG] Moved WGP output from {video_to_process_abs_path} to {moved_video_abs_path}")
             debug_video_analysis(moved_video_abs_path, f"MOVED_WGP_OUTPUT_Seg{segment_idx_completed}", wgp_task_id)
             dprint(f"Chain (Seg {segment_idx_completed}): Moved WGP output from {video_to_process_abs_path} to {moved_video_abs_path}")
             
             # Update paths for further processing
             video_to_process_abs_path = moved_video_abs_path
-            final_video_path_for_db = moved_db_path
+            final_video_path_for_db = str(moved_video_abs_path)  # Use absolute path as DB path
             
-            # Clean up original WGP output if not in debug mode
-            if not full_orchestrator_payload.get("skip_cleanup_enabled", False) and \
-               not full_orchestrator_payload.get("debug_mode_enabled", False):
-                try:
-                    Path(actual_wgp_output_video_path).unlink()
-                    dprint(f"Chain (Seg {segment_idx_completed}): Cleaned up original WGP output {actual_wgp_output_video_path}")
-                except Exception as e_cleanup:
-                    dprint(f"Chain (Seg {segment_idx_completed}): Warning - could not clean up original WGP output: {e_cleanup}")
+            # No cleanup needed since we moved (not copied) the file
+            dprint(f"Chain (Seg {segment_idx_completed}): WGP output successfully moved to final location")
                     
         except Exception as e_move:
             dprint(f"Chain (Seg {segment_idx_completed}): Warning - could not move WGP output to proper location: {e_move}. Using original path.")
+            # If move failed, keep original paths for further processing
+            final_video_path_for_db = str(video_to_process_abs_path)
 
         # --- Post-generation Processing Chain ---
         # Saturation and Brightness are only applied to segments AFTER the first one.
@@ -1311,7 +1316,7 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
 def _cleanup_intermediate_video(orchestrator_payload, video_path: Path, segment_idx: int, stage: str, dprint):
     """Helper to cleanup intermediate video files during chaining."""
     # Delete intermediates **only** when every cleanup-bypass flag is false.
-    # That now includes the headless-server global debug flag (db_ops.debug_mode)
+    # That now includes the worker-server global debug flag (db_ops.debug_mode)
     # so that running the server with --debug automatically preserves files.
     if (
         not orchestrator_payload.get("skip_cleanup_enabled", False)
@@ -1348,7 +1353,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
 
         if not all([orchestrator_task_id_ref, orchestrator_run_id, full_orchestrator_payload]):
             msg = f"Stitch task {stitch_task_id_str} missing critical orchestrator refs or full_orchestrator_payload."
-            print(f"[ERROR Task {stitch_task_id_str}]: {msg}")
+            travel_logger.error(msg, task_id=stitch_task_id_str)
             return False, msg
 
         project_id_for_stitch = stitch_params.get("project_id")
@@ -1455,7 +1460,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 dprint(f"[WARNING] Stitch: Segment {seg_idx} has empty video_path in DB; skipping.")
                 continue
 
-            # Case A: Relative path that starts with files/ (works for both sqlite and supabase when headless has local access)
+            # Case A: Relative path that starts with files/ (works for both sqlite and supabase when worker has local access)
             if video_path_str_from_db.startswith("files/") or video_path_str_from_db.startswith("public/files/"):
                 print(f"[STITCH_DEBUG] Case A: Relative path detected for segment {seg_idx}")
                 sqlite_db_parent = None
@@ -1730,7 +1735,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             else: 
                 dprint(f"Stitch: Using simple FFmpeg concatenation. Output to: {path_for_raw_stitched_video}")
                 try:
-                    from .common_utils import stitch_videos_ffmpeg as sm_stitch_videos_ffmpeg
+                    from ..common_utils import stitch_videos_ffmpeg as sm_stitch_videos_ffmpeg
                 except ImportError:
                     print(f"[CRITICAL ERROR Task ID: {stitch_task_id_str}] Failed to import 'stitch_videos_ffmpeg'. Cannot proceed with stitching.")
                     raise
@@ -1844,10 +1849,13 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             print(f"[STITCH UPSCALE] No upscaling requested (factor: {upscale_factor})")
             dprint(f"Stitch: No upscaling (factor: {upscale_factor})")
 
-        # Use prepare_output_path_with_upload to handle final video location consistently (with Supabase upload support)
-        final_video_filename = f"{orchestrator_run_id}_final{video_path_after_optional_upscale.suffix}"
+        # Use consistent UUID-based naming for final video
+        timestamp_short = datetime.now().strftime("%H%M%S")
+        unique_suffix = uuid.uuid4().hex[:6]
         if upscale_factor > 1.0:
-            final_video_filename = f"{orchestrator_run_id}_final_upscaled_{upscale_factor:.1f}x{video_path_after_optional_upscale.suffix}"
+            final_video_filename = f"travel_final_upscaled_{upscale_factor:.1f}x_{timestamp_short}_{unique_suffix}{video_path_after_optional_upscale.suffix}"
+        else:
+            final_video_filename = f"travel_final_{timestamp_short}_{unique_suffix}{video_path_after_optional_upscale.suffix}"
         
         final_video_path, initial_db_location = prepare_output_path_with_upload(
             task_id=stitch_task_id_str,
@@ -1881,10 +1889,24 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             print(f"[STITCH_FINAL_ANALYSIS] Complete stitching analysis:")
             print(f"[STITCH_FINAL_ANALYSIS]   Input segments: {len(segment_video_paths_for_stitch)}")
             print(f"[STITCH_FINAL_ANALYSIS]   Overlap settings: {expanded_frame_overlaps}")
-            print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: {expected_final_length if 'expected_final_length' in locals() else 'Not calculated'}")
-            print(f"[STITCH_FINAL_ANALYSIS]   Actual final frames: {final_frame_count}")
-            if 'expected_final_length' in locals() and final_frame_count != expected_final_length:
-                print(f"[STITCH_FINAL_ANALYSIS]   ⚠️  FINAL LENGTH MISMATCH! Expected {expected_final_length}, got {final_frame_count}")
+            # Calculate expected final length for analysis
+            try:
+                # Try to calculate expected final length from orchestrator data
+                expected_segment_frames = full_orchestrator_payload.get("segment_frames_expanded", [])
+                if expected_segment_frames:
+                    total_input_frames = sum(expected_segment_frames)
+                    total_overlaps = sum(expanded_frame_overlaps)
+                    expected_final_length = total_input_frames - total_overlaps
+                    print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: {expected_final_length}")
+                    print(f"[STITCH_FINAL_ANALYSIS]   Actual final frames: {final_frame_count}")
+                    if final_frame_count != expected_final_length:
+                        print(f"[STITCH_FINAL_ANALYSIS]   ⚠️  FINAL LENGTH MISMATCH! Expected {expected_final_length}, got {final_frame_count}")
+                else:
+                    print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: Not available (no segment_frames_expanded)")
+                    print(f"[STITCH_FINAL_ANALYSIS]   Actual final frames: {final_frame_count}")
+            except Exception as e:
+                print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: Not calculated ({e})")
+                print(f"[STITCH_FINAL_ANALYSIS]   Actual final frames: {final_frame_count}")
             
             # Detailed analysis of the final video
             debug_video_analysis(final_video_path, "FINAL_STITCHED_VIDEO", stitch_task_id_str)
@@ -1908,8 +1930,8 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         return stitch_success, str(final_video_path.resolve())
 
     except Exception as e:
-        print(f"[ERROR] Stitch task {stitch_task_id_str}: Unexpected error during stitching: {e}")
-        traceback.print_exc()
+        travel_logger.error(f"Stitch: Unexpected error during stitching: {e}", task_id=stitch_task_id_str)
+        travel_logger.debug(traceback.format_exc(), task_id=stitch_task_id_str)
         
         # Notify orchestrator of stitch failure
         if 'orchestrator_task_id_ref' in locals() and orchestrator_task_id_ref:
