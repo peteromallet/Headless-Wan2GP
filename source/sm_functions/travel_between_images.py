@@ -219,33 +219,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         expanded_frame_overlap = quantized_frame_overlap
         # --- END SM_QUANTIZE_FRAMES_AND_OVERLAPS ---
 
-        # --- SM_BATCH_OPTIMIZATION ---
-        # Check if batching would be beneficial for this orchestration
-        from ..batch_optimizer import calculate_optimal_batching
-        
-        batching_analysis = calculate_optimal_batching(
-            segment_frames_expanded=expanded_segment_frames,
-            frame_overlap_expanded=expanded_frame_overlap,
-            base_prompts_expanded=expanded_base_prompts,
-            negative_prompts_expanded=expanded_negative_prompts,
-            max_total_frames=81,
-            min_segments_for_batching=3,
-            task_id=orchestrator_task_id_str
-        )
-        
-        print(f"[BATCH_DEBUG] Batching analysis: {batching_analysis.reason}")
-        print(f"[BATCH_DEBUG] Should use batching: {batching_analysis.should_use_batching}")
-        print(f"[BATCH_DEBUG] Efficiency gain: {batching_analysis.efficiency_gain:.2f}x")
-        print(f"[BATCH_DEBUG] Original tasks: {batching_analysis.original_task_count} -> Batched: {batching_analysis.batched_task_count}")
-        
-        use_batching = batching_analysis.should_use_batching
-        
-        if use_batching:
-            dprint(f"Orchestrator: Using batched generation for efficiency: {batching_analysis.batched_task_count} batches instead of {num_segments} individual segments")
-        else:
-            dprint(f"Orchestrator: Using individual segment processing: {batching_analysis.reason}")
-        # --- END SM_BATCH_OPTIMIZATION ---
-
         # If quantisation resulted in an empty overlap list (e.g. single-segment run) but the
         # original payload DID contain an overlap value, restore that so the first segment
         # can still reuse frames from the previous/continued video.  This is crucial for
@@ -253,94 +226,18 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         if (not expanded_frame_overlap) and _orig_frame_overlap:
             expanded_frame_overlap = _orig_frame_overlap
 
-        # Choose between batched and individual segment processing
-        if use_batching:
-            # --- BATCH PROCESSING PATH ---
-            previous_batch_task_id = None
-            for batch_group in batching_analysis.batch_groups:
-                batch_task_id = sm_generate_unique_task_id(f"travel_batch_{run_id}_{batch_group.batch_index:02d}_")
-                
-                # Validate batching integrity
-                from ..batch_optimizer import validate_batching_integrity
-                batch_validation = validate_batching_integrity(
-                    batching_analysis,
-                    expanded_segment_frames,
-                    expanded_frame_overlap,
-                    task_id=orchestrator_task_id_str
-                )
-                
-                if not batch_validation["is_valid"]:
-                    dprint(f"Orchestrator: Batch validation failed: {batch_validation['issues']}. Falling back to individual segments.")
-                    use_batching = False
-                    break
-                
-                batch_payload = {
-                    "task_id": batch_task_id,
-                    "orchestrator_task_id_ref": orchestrator_task_id_str,
-                    "orchestrator_run_id": run_id,
-                    "project_id": orchestrator_project_id,
-                    "batch_index": batch_group.batch_index,
-                    "segment_indices_in_batch": batch_group.segment_indices,
-                    "is_first_batch": (batch_group.batch_index == 0),
-                    "is_last_batch": (batch_group.batch_index == len(batching_analysis.batch_groups) - 1),
-                    
-                    # Batch properties from analysis
-                    "total_batch_frames": batch_group.total_frames,
-                    "internal_overlaps": batch_group.internal_overlaps,
-                    "combined_prompt": batch_group.combined_prompt,
-                    "combined_negative_prompt": batch_group.combined_negative_prompt,
-                    
-                    # Pass through orchestrator data needed for processing
-                    "current_run_base_output_dir": str(current_run_output_dir.resolve()),
-                    "parsed_resolution_wh": orchestrator_payload["parsed_resolution_wh"],
-                    "model_name": orchestrator_payload["model_name"],
-                    "seed_to_use": orchestrator_payload.get("seed_base", 12345) + batch_group.batch_index * 100,
-                    "use_causvid_lora": orchestrator_payload.get("apply_causvid", False),
-                    "use_lighti2x_lora": orchestrator_payload.get("use_lighti2x_lora", False),
-                    "apply_reward_lora": orchestrator_payload.get("apply_reward_lora", False),
-                    "cfg_star_switch": orchestrator_payload.get("cfg_star_switch", 0),
-                    "cfg_zero_step": orchestrator_payload.get("cfg_zero_step", -1),
-                    "params_json_str_override": orchestrator_payload.get("params_json_str_override"),
-                    "fps_helpers": orchestrator_payload.get("fps_helpers", 16),
-                    "fade_in_params_json_str": orchestrator_payload["fade_in_params_json_str"],
-                    "fade_out_params_json_str": orchestrator_payload["fade_out_params_json_str"],
-                    "segment_image_download_dir": segment_image_download_dir_str,
-                    "debug_mode_enabled": orchestrator_payload.get("debug_mode_enabled", False),
-                    "skip_cleanup_enabled": orchestrator_payload.get("skip_cleanup_enabled", False),
-                    "continue_from_video_resolved_path_for_guide": orchestrator_payload.get("continue_from_video_resolved_path") if batch_group.batch_index == 0 else None,
-                    "full_orchestrator_payload": orchestrator_payload,
-                    "batching_analysis": batching_analysis,  # Include full analysis for reference
-                }
-                
-                dprint(f"Orchestrator: Enqueuing travel_batch {batch_group.batch_index} (ID: {batch_task_id}) segments {batch_group.segment_indices} -> {batch_group.total_frames} frames")
-                db_ops.add_task_to_db(
-                    task_payload=batch_payload,
-                    task_type_str="travel_batch",
-                    dependant_on=previous_batch_task_id
-                )
-                previous_batch_task_id = batch_task_id
+        for idx in range(num_segments):
+            current_segment_task_id = sm_generate_unique_task_id(f"travel_seg_{run_id}_{idx:02d}_")
             
-            if use_batching:
-                # Set up stitch to depend on final batch instead of final segment
-                previous_segment_task_id = previous_batch_task_id
-            else:
-                # Fall through to individual segment processing
-                pass
-        
-        if not use_batching:
-            # --- INDIVIDUAL SEGMENT PROCESSING PATH ---
-            for idx in range(num_segments):
-                current_segment_task_id = sm_generate_unique_task_id(f"travel_seg_{run_id}_{idx:02d}_")
-                
-                # Note: segment handler now manages its own output paths using prepare_output_path()
+            # Note: segment handler now manages its own output paths using prepare_output_path()
 
-                # Determine frame_overlap_from_previous for current segment `idx`
-                current_frame_overlap_from_previous = 0
-                if idx == 0 and orchestrator_payload.get("continue_from_video_resolved_path"):
-                    current_frame_overlap_from_previous = expanded_frame_overlap[0] if expanded_frame_overlap else 0
-                elif idx > 0:
-                    # SM_RESTRUCTURE_FIX_OVERLAP_IDX: Use idx-1 for subsequent segments
-                    current_frame_overlap_from_previous = expanded_frame_overlap[idx-1] if len(expanded_frame_overlap) > (idx-1) else 0
+            # Determine frame_overlap_from_previous for current segment `idx`
+            current_frame_overlap_from_previous = 0
+            if idx == 0 and orchestrator_payload.get("continue_from_video_resolved_path"):
+                current_frame_overlap_from_previous = expanded_frame_overlap[0] if expanded_frame_overlap else 0
+            elif idx > 0:
+                # SM_RESTRUCTURE_FIX_OVERLAP_IDX: Use idx-1 for subsequent segments
+                current_frame_overlap_from_previous = expanded_frame_overlap[idx-1] if len(expanded_frame_overlap) > (idx-1) else 0
             
             # VACE refs for this specific segment
             # Ensure vace_refs_instructions_all is a list, default to empty list if None
