@@ -727,221 +727,27 @@ class HeadlessTaskQueue:
         if sample_solver:
             self._apply_sampler_cfg_preset(task.model, sample_solver, wgp_params)
         
-        # Apply special LoRA settings (CausVid, LightI2X) using shared utilities
+        # Complete LoRA processing pipeline using centralized utilities
         import sys
         source_dir = Path(__file__).parent / "source"
         if str(source_dir) not in sys.path:
             sys.path.insert(0, str(source_dir))
-        from lora_utils import detect_lora_optimization_flags, apply_lora_parameter_optimization, ensure_lora_in_list
+        from lora_utils import process_all_loras
         
-        # [DEBUG] Log task parameters for LoRA detection debugging
-        self.logger.info(f"[LORA_DEBUG] Task {task.id}: task.parameters keys: {list(task.parameters.keys())}")
-        self.logger.info(f"[LORA_DEBUG] Task {task.id}: use_causvid_lora in params: {'use_causvid_lora' in task.parameters}")
-        self.logger.info(f"[LORA_DEBUG] Task {task.id}: use_lighti2x_lora in params: {'use_lighti2x_lora' in task.parameters}")
-        if 'use_lighti2x_lora' in task.parameters:
-            self.logger.info(f"[LORA_DEBUG] Task {task.id}: use_lighti2x_lora value: {task.parameters['use_lighti2x_lora']}")
-        if 'use_causvid_lora' in task.parameters:
-            self.logger.info(f"[LORA_DEBUG] Task {task.id}: use_causvid_lora value: {task.parameters['use_causvid_lora']}")
+        # Use centralized LoRA processing pipeline
+        self.logger.info(f"[LORA_PROCESS] Task {task.id}: Starting centralized LoRA processing for model {task.model}")
         
-        # [DEEP_DEBUG] Log ALL parameters for this task to see everything
-        self.logger.info(f"[DEEP_DEBUG] Task {task.id}: FULL task.parameters: {task.parameters}")
-        
-        # Detect LoRA optimization flags using shared logic
-        use_causvid, use_lighti2x = detect_lora_optimization_flags(
+        wgp_params = process_all_loras(
+            params=wgp_params,
             task_params=task.parameters,
             model_name=task.model,
-            dprint=lambda msg: self.logger.info(msg)
+            orchestrator_payload=task.parameters.get("orchestrator_payload"),
+            task_id=task.id,
+            dprint=lambda msg: self.logger.info(f"[LORA_PROCESS] {msg}")
         )
         
-        # [CausVidDebugTrace] Enhanced parameter inspection
-        self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Pre-processing parameter analysis:")
-        self.logger.info(f"[CausVidDebugTrace]   use_causvid: {use_causvid}")
-        self.logger.info(f"[CausVidDebugTrace]   use_lighti2x: {use_lighti2x}")
-        self.logger.info(f"[CausVidDebugTrace]   wgp_params keys before LoRA optimization: {list(wgp_params.keys())}")
-        self.logger.info(f"[CausVidDebugTrace]   'num_inference_steps' in wgp_params: {'num_inference_steps' in wgp_params}")
-        if "num_inference_steps" in wgp_params:
-            self.logger.info(f"[CausVidDebugTrace]   existing num_inference_steps value: {wgp_params['num_inference_steps']}")
-        
-        # Apply LoRA parameter optimization using shared logic
-        if use_causvid or use_lighti2x:
-            wgp_params = apply_lora_parameter_optimization(
-                params=wgp_params,
-                causvid_enabled=use_causvid,
-                lighti2x_enabled=use_lighti2x,
-                model_name=task.model,
-                task_params=task.parameters,
-                task_id=task.id,
-                dprint=lambda msg: self.logger.info(msg)
-            )
-        
-        # Ensure required LoRAs are in the activated list
-        if use_causvid:
-            wgp_params = ensure_lora_in_list(
-                params=wgp_params,
-                lora_filename="Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
-                lora_type="CausVid",
-                task_id=task.id,
-                dprint=lambda msg: self.logger.info(msg)
-            )
-            
-            self.logger.info(f"[Task {task.id}] Applied CausVid LoRA settings via shared utilities")
-        
-        if use_lighti2x:
-            wgp_params = ensure_lora_in_list(
-                params=wgp_params,
-                lora_filename="Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
-                lora_type="LightI2X",
-                task_id=task.id,
-                dprint=lambda msg: self.logger.info(msg)
-            )
-            
-            # LightI2X-specific additional settings
-            wgp_params["sample_solver"] = "unipc"
-            wgp_params["denoise_strength"] = 1.0
-            
-            self.logger.info(f"[Task {task.id}] Applied LightI2X LoRA settings via shared utilities")
-        
-        if not use_causvid and not use_lighti2x:
-            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: No LoRA optimizations enabled")
-        
-        # ADDITIONAL LORAS: Process additional LoRA names and multipliers from task parameters
-        # Support both dict format ({"url": multiplier}) and list format ([names], [multipliers])
-        additional_lora_names = task.parameters.get("additional_lora_names", [])
-        additional_lora_multipliers = task.parameters.get("additional_lora_multipliers", [])
-        
-        # Check for dict format and convert if needed
-        additional_loras_dict = task.parameters.get("additional_loras", {})
-        self.logger.info(f"[PATH_TRACE] Task {task.id}: additional_loras_dict = {additional_loras_dict}")
-        self.logger.info(f"[PATH_TRACE] Task {task.id}: additional_loras_dict type = {type(additional_loras_dict)}")
-        self.logger.info(f"[PATH_TRACE] Task {task.id}: bool(additional_loras_dict) = {bool(additional_loras_dict)}")
-        self.logger.info(f"[PATH_TRACE] Task {task.id}: isinstance(additional_loras_dict, dict) = {isinstance(additional_loras_dict, dict)}")
-        
-        if additional_loras_dict and isinstance(additional_loras_dict, dict):
-            self.logger.info(f"[PATH_TRACE] Task {task.id}: ENTERING dict conversion branch")
-            # Convert dict format to lists format and handle URL downloading
-            dict_names = list(additional_loras_dict.keys())
-            dict_multipliers = list(additional_loras_dict.values())
-            
-            self.logger.info(f"[PATH_TRACE] Task {task.id}: dict_names = {dict_names}")
-            
-            # Process URLs - download if needed and convert to local filenames
-            processed_names = []
-            for i, lora_name_or_url in enumerate(dict_names):
-                self.logger.info(f"[PATH_TRACE] Task {task.id}: Processing LoRA {i}: '{lora_name_or_url}'")
-                self.logger.info(f"[PATH_TRACE] Task {task.id}: lora_name_or_url.startswith('http') = {lora_name_or_url.startswith('http')}")
-                
-                if lora_name_or_url.startswith("http"):
-                    self.logger.info(f"[PATH_TRACE] Task {task.id}: URL detected, starting download process")
-                    # It's a URL - download it
-                    try:
-                        # Extract filename from URL
-                        local_filename = lora_name_or_url.split("/")[-1]
-                        self.logger.info(f"[PATH_TRACE] Task {task.id}: local_filename = '{local_filename}'")
-                        
-                        # Get LoRA directory for the current model without importing WGP
-                        # Use the same logic as WGP's get_lora_dir but inline to avoid import issues
-                        if task.model in ['i2v', 'i2v_1_3B', 'i2v_14B']:
-                            lora_subdir = "loras_i2v"
-                        elif task.model in ['hunyuan_i2v']:
-                            lora_subdir = "loras_hunyuan_i2v"
-                        elif task.model in ['hunyuan']:
-                            lora_subdir = "loras_hunyuan"
-                        elif task.model in ['ltxv', 'ltxv_13b']:
-                            lora_subdir = "loras_ltxv"
-                        elif task.model in ['flux', 'flux_dev']:
-                            lora_subdir = "loras_flux"
-                        else:
-                            # Default for WAN models (t2v, vace, etc.)
-                            lora_subdir = "loras"
-                        
-                        # Build full path to Wan2GP/loras directory
-                        lora_dir = os.path.join("Wan2GP", lora_subdir)
-                        local_path = os.path.join(lora_dir, local_filename)
-                        self.logger.info(f"[PATH_TRACE] Task {task.id}: lora_dir = '{lora_dir}'")
-                        self.logger.info(f"[PATH_TRACE] Task {task.id}: local_path = '{local_path}'")
-                        self.logger.info(f"[PATH_TRACE] Task {task.id}: os.path.isfile(local_path) = {os.path.isfile(local_path)}")
-                        
-                        # Check if file already exists
-                        if not os.path.isfile(local_path):
-                            self.logger.info(f"[LORA_DOWNLOAD] Task {task.id}: Downloading LoRA from {lora_name_or_url}")
-                            
-                            # Use existing download logic pattern from WGP
-                            
-                            # Use WGP's download_file logic - need to import it properly
-                            if lora_name_or_url.startswith("https://huggingface.co/") and "/resolve/main/" in lora_name_or_url:
-                                from huggingface_hub import hf_hub_download
-                                import shutil
-                                
-                                # Parse HuggingFace URL
-                                url = lora_name_or_url[len("https://huggingface.co/"):]
-                                url_parts = url.split("/resolve/main/")
-                                repo_id = url_parts[0]
-                                filename = os.path.basename(url_parts[-1])
-                                
-                                # Ensure LoRA directory exists
-                                os.makedirs(lora_dir, exist_ok=True)
-                                
-                                # Download using HuggingFace hub
-                                hf_hub_download(repo_id=repo_id, filename=filename, local_dir=lora_dir)
-                                self.logger.info(f"[LORA_DOWNLOAD] Task {task.id}: Successfully downloaded {filename} to {lora_dir}")
-                            else:
-                                # Use urllib for other URLs
-                                from urllib.request import urlretrieve
-                                os.makedirs(lora_dir, exist_ok=True)
-                                urlretrieve(lora_name_or_url, local_path)
-                                self.logger.info(f"[LORA_DOWNLOAD] Task {task.id}: Successfully downloaded {local_filename} to {lora_dir}")
-                        else:
-                            self.logger.info(f"[LORA_DOWNLOAD] Task {task.id}: LoRA {local_filename} already exists locally")
-                        
-                        # Use local filename instead of URL
-                        processed_names.append(local_filename)
-                        
-                    except Exception as e:
-                        self.logger.error(f"[LORA_DOWNLOAD] Task {task.id}: Failed to download LoRA from {lora_name_or_url}: {e}")
-                        # Keep original URL in case there's a fallback mechanism
-                        processed_names.append(lora_name_or_url)
-                else:
-                    # It's already a local filename
-                    self.logger.info(f"[PATH_TRACE] Task {task.id}: Local filename detected: '{lora_name_or_url}'")
-                    processed_names.append(lora_name_or_url)
-            
-            # Merge with existing lists (dict format takes precedence)
-            additional_lora_names.extend(processed_names)
-            additional_lora_multipliers.extend(dict_multipliers)
-            
-            self.logger.info(f"[PATH_TRACE] Task {task.id}: processed_names = {processed_names}")
-            self.logger.info(f"[PATH_TRACE] Task {task.id}: final additional_lora_names = {additional_lora_names}")
-            
-            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Converted additional_loras dict to lists: {len(processed_names)} LoRAs")
-            for i, (name, mult) in enumerate(zip(processed_names, dict_multipliers)):
-                self.logger.info(f"[CausVidDebugTrace]   {i+1}. {name} (multiplier: {mult})")
-        else:
-            self.logger.info(f"[PATH_TRACE] Task {task.id}: NOT entering dict conversion branch - using existing lists")
-        
-        if additional_lora_names:
-            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Processing {len(additional_lora_names)} additional LoRAs")
-            
-            # Get current LoRA lists (may have been modified by CausVid/LightI2X logic above)
-            current_loras = wgp_params.get("lora_names", [])
-            current_multipliers = wgp_params.get("lora_multipliers", [])
-            
-            # Add additional LoRAs to the lists
-            for i, lora_name in enumerate(additional_lora_names):
-                if lora_name not in current_loras:
-                    current_loras.append(lora_name)
-                    multiplier = additional_lora_multipliers[i] if i < len(additional_lora_multipliers) else 1.0
-                    current_multipliers.append(multiplier)
-                    self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Added additional LoRA: {lora_name} (multiplier: {multiplier})")
-                else:
-                    self.logger.debug(f"[CausVidDebugTrace] Task {task.id}: Additional LoRA {lora_name} already in list")
-            
-            # Update the wgp_params with combined LoRA lists
-            wgp_params["lora_names"] = current_loras
-            wgp_params["lora_multipliers"] = current_multipliers
-            
-            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Final combined LoRA list: {current_loras}")
-            self.logger.info(f"[CausVidDebugTrace] Task {task.id}: Final combined multipliers: {current_multipliers}")
-            self.logger.info(f"[PATH_TRACE] Task {task.id}: About to pass these LoRAs to WGP: {current_loras}")
+        self.logger.info(f"[LORA_PROCESS] Task {task.id}: Centralized LoRA processing complete")
+
         
         return wgp_params
     

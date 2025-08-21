@@ -571,6 +571,47 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                 with open(output_path, 'rb') as f:
                     file_data = base64.b64encode(f.read()).decode('utf-8')
                 
+                # Check if this is a video file and extract first frame
+                first_frame_data = None
+                video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v'}
+                if output_path.suffix.lower() in video_extensions:
+                    try:
+                        import tempfile
+                        from .common_utils import save_frame_from_video
+                        import cv2
+                        
+                        # Create temporary file for first frame
+                        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_frame:
+                            temp_frame_path = Path(temp_frame.name)
+                        
+                        # Get video resolution for frame extraction
+                        cap = cv2.VideoCapture(str(output_path))
+                        if cap.isOpened():
+                            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                            cap.release()
+                            
+                            # Extract first frame (index 0)
+                            if save_frame_from_video(output_path, 0, temp_frame_path, (width, height)):
+                                # Read the first frame and encode as base64
+                                with open(temp_frame_path, 'rb') as f:
+                                    first_frame_data = base64.b64encode(f.read()).decode('utf-8')
+                                dprint(f"[DEBUG] Extracted first frame from video {output_path.name}")
+                            else:
+                                dprint(f"[WARNING] Failed to extract first frame from video {output_path.name}")
+                        else:
+                            dprint(f"[WARNING] Could not open video {output_path.name} for frame extraction")
+                        
+                        # Clean up temporary file
+                        try:
+                            temp_frame_path.unlink()
+                        except:
+                            pass
+                            
+                    except Exception as e:
+                        dprint(f"[WARNING] Error extracting first frame from {output_path.name}: {e}")
+                        # Continue without first frame if extraction fails
+                
                 headers = {"Content-Type": "application/json"}
                 if SUPABASE_ACCESS_TOKEN:
                     headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
@@ -580,6 +621,11 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                     "file_data": file_data,
                     "filename": output_path.name
                 }
+                
+                # Add first frame data if available
+                if first_frame_data:
+                    payload["first_frame_data"] = first_frame_data
+                    payload["first_frame_filename"] = f"{output_path.stem}_frame_0.jpg"
                 dprint(f"[DEBUG] Calling complete-task Edge Function with file upload for task {task_id_str}")
                 resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)
                 

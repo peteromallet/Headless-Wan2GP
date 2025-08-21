@@ -17,12 +17,17 @@ cd Headless-Wan2GP
 python3 -m venv venv
 source venv/bin/activate
 
-# 3) Install PyTorch (pick the wheel that matches your hardware)
+# 3) Install PyTorch (CRITICAL: Use CUDA version for GPU)
+# For NVIDIA GPUs (REQUIRED for video generation):
 pip install torch==2.6.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+# For CPU-only (will NOT work): pip install torch torchvision torchaudio
 
 # 4) Project requirements
 pip install -r Wan2GP/requirements.txt
 pip install -r requirements.txt
+
+# 5) Verify CUDA setup (Windows users should run this first)
+python check_cuda.py
 
 # 5) Start the worker – polls the local SQLite DB every 10 s
 python worker.py --main-output-dir ./outputs
