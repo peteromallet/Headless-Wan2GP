@@ -24,14 +24,13 @@ This document summarizes the major development work completed across 9 commits, 
 - Returns descriptive 400 errors directing users to proper claiming functions
 - Updated documentation to prevent future misuse
 
-#### Supabase Storage Upload Failures
-- **Fixed filename sanitization issue** causing single_image and other generation tasks to fail Supabase uploads
-- **Root cause**: WGP auto-generated filenames included user prompt text with invalid storage characters (§, ®, ©, ™, etc.)
-- **Impact**: Tasks generated successfully but failed during upload with "Invalid key" errors, preventing task completion
-- **Solution**: Added automatic filename sanitization in `WanOrchestrator.generate()` for all generation types
-- Uses existing `sanitize_filename_for_storage()` function with fallback regex sanitization
-- Applied universally to single_image, vace, flux, t2v, and custom tasks via `output_path` parameter
-- Travel segments already worked correctly due to explicit filename control
+#### Filename Sanitization for Single Image Tasks
+- **Fixed Supabase upload failures** for single_image tasks with special characters in prompts
+- **Root cause**: User prompts containing characters like `§`, `®`, `©`, `™`, `@`, `,` caused WGP to generate invalid storage keys
+- **Impact**: Generation succeeded but upload failed with "Invalid key" errors
+- **Solution**: Added filename sanitization in PNG conversion pipeline using existing `sanitize_filename_for_storage()` function
+- Enhanced character removal pattern to include comma and other problematic symbols
+- Travel segments already worked due to existing sanitization in upload utilities
 
 ### Video Processing Enhancements
 - **Automatic first frame extraction** for video uploads
