@@ -17,9 +17,10 @@ Wan 2.2 Support:
 • Default task_type "vace" now uses Wan 2.2 (vace_14B_cocktail_2_2) for 2.5x speed improvement
 • Use task_type "vace_21" to explicitly request Wan 2.1 compatibility
 • Use task_type "vace_22" to explicitly request Wan 2.2 optimizations
-• Wan 2.2 models automatically apply optimized settings (10 steps, guidance_scale=1.0, etc.)
-• Built-in acceleration LoRAs (CausVid, DetailEnhancer) are auto-enabled for Wan 2.2
+• Parameter resolution is centralized in WanOrchestrator; model presets apply unless overridden
+• Built-in acceleration LoRAs (CausVid, DetailEnhancer) are auto-enabled for Wan 2.2 when no explicit LoRAs are provided
 • All optimizations can be overridden by explicit task parameters
+• All generation is routed through HeadlessTaskQueue (no legacy blocking pipelines)
 """
 
 import argparse
