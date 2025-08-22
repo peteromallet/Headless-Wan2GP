@@ -247,17 +247,19 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 if ref_instr.get("segment_idx_for_naming") == idx
             ]
 
-            # [DEEP_DEBUG] Log orchestrator payload values BEFORE creating segment payload
-            print(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: CREATING SEGMENT {idx} PAYLOAD")
-            print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_causvid'): {orchestrator_payload.get('apply_causvid')}")
-            print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('use_lighti2x_lora'): {orchestrator_payload.get('use_lighti2x_lora')}")
-            print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_reward_lora'): {orchestrator_payload.get('apply_reward_lora')}")
-            dprint(f"[DEEP_DEBUG] Orchestrator {orchestrator_task_id_str}: CREATING SEGMENT {idx} PAYLOAD")
-            dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('apply_causvid'): {orchestrator_payload.get('apply_causvid')}")
-            dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('use_lighti2x_lora'): {orchestrator_payload.get('use_lighti2x_lora')}")
-            dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('apply_reward_lora'): {orchestrator_payload.get('apply_reward_lora')}")
-            
-            segment_payload = {
+                    # [DEEP_DEBUG] Log orchestrator payload values BEFORE creating segment payload
+        print(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: CREATING SEGMENT {idx} PAYLOAD")
+        print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_causvid'): {orchestrator_payload.get('apply_causvid')}")
+        print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('use_lighti2x_lora'): {orchestrator_payload.get('use_lighti2x_lora')}")
+        print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_reward_lora'): {orchestrator_payload.get('apply_reward_lora')}")
+        print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('additional_loras'): {orchestrator_payload.get('additional_loras')}")
+        dprint(f"[DEEP_DEBUG] Orchestrator {orchestrator_task_id_str}: CREATING SEGMENT {idx} PAYLOAD")
+        dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('apply_causvid'): {orchestrator_payload.get('apply_causvid')}")
+        dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('use_lighti2x_lora'): {orchestrator_payload.get('use_lighti2x_lora')}")
+        dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('apply_reward_lora'): {orchestrator_payload.get('apply_reward_lora')}")
+        dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('additional_loras'): {orchestrator_payload.get('additional_loras')}")
+        
+        segment_payload = {
                 "task_id": current_segment_task_id,
                 "orchestrator_task_id_ref": orchestrator_task_id_str,
                 "orchestrator_run_id": run_id,
@@ -300,6 +302,9 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "skip_cleanup_enabled": orchestrator_payload.get("skip_cleanup_enabled", False),
                 "continue_from_video_resolved_path_for_guide": orchestrator_payload.get("continue_from_video_resolved_path") if idx == 0 else None,
                 "full_orchestrator_payload": orchestrator_payload, # Ensure full payload is passed to segment
+                
+                # Extract additional_loras to top level for HeadlessTaskQueue processing
+                "additional_loras": orchestrator_payload.get("additional_loras", {}),
             }
 
             # [DEEP_DEBUG] Log segment payload values AFTER creation to verify they match
@@ -307,6 +312,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             print(f"[ORCHESTRATOR_DEBUG]   segment_payload['use_causvid_lora']: {segment_payload.get('use_causvid_lora')}")
             print(f"[ORCHESTRATOR_DEBUG]   segment_payload['use_lighti2x_lora']: {segment_payload.get('use_lighti2x_lora')}")
             print(f"[ORCHESTRATOR_DEBUG]   segment_payload['apply_reward_lora']: {segment_payload.get('apply_reward_lora')}")
+            print(f"[ORCHESTRATOR_DEBUG]   segment_payload['additional_loras']: {segment_payload.get('additional_loras')}")
             print(f"[ORCHESTRATOR_DEBUG]   FULL segment_payload keys: {list(segment_payload.keys())}")
             
             # [DEEP_DEBUG] Also log what we're about to send to the Edge Function
@@ -323,6 +329,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             dprint(f"[DEEP_DEBUG]   segment_payload['use_causvid_lora']: {segment_payload.get('use_causvid_lora')}")
             dprint(f"[DEEP_DEBUG]   segment_payload['use_lighti2x_lora']: {segment_payload.get('use_lighti2x_lora')}")
             dprint(f"[DEEP_DEBUG]   segment_payload['apply_reward_lora']: {segment_payload.get('apply_reward_lora')}")
+            dprint(f"[DEEP_DEBUG]   segment_payload['additional_loras']: {segment_payload.get('additional_loras')}")
             dprint(f"[DEEP_DEBUG]   FULL segment_payload keys: {list(segment_payload.keys())}")
             
             # [DEEP_DEBUG] Also log what we're about to send to the Edge Function
