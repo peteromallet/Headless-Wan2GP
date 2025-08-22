@@ -64,20 +64,16 @@ def _handle_magic_edit_task(
             report_orchestrator_failure(task_params_from_db, msg, dprint)
             return False, msg
             
-        # Extract orchestrator details
-        orchestrator_details = task_params_from_db.get("orchestrator_details", {})
-        if not orchestrator_details:
-            msg = "No orchestrator_details found in task parameters"
-            print(f"[ERROR Task ID: {task_id}] {msg}")
-            report_orchestrator_failure(task_params_from_db, msg, dprint)
-            return False, msg
-            
-        # Required parameters
-        image_url = orchestrator_details.get("image_url")
-        prompt = orchestrator_details.get("prompt", "Make a shot in the same scene from a different angle")
-        resolution = orchestrator_details.get("resolution", "768x576")
-        seed = orchestrator_details.get("seed")
-        in_scene = orchestrator_details.get("in_scene", False)  # Default to False
+        # Use centralized extraction function for orchestrator_details
+        from common_utils import extract_orchestrator_parameters
+        extracted_params = extract_orchestrator_parameters(task_params_from_db, task_id, dprint)
+        
+        # Required parameters (now available at top level)
+        image_url = extracted_params.get("image_url")
+        prompt = extracted_params.get("prompt", "Make a shot in the same scene from a different angle")
+        resolution = extracted_params.get("resolution", "768x576")
+        seed = extracted_params.get("seed")
+        in_scene = extracted_params.get("in_scene", False)  # Default to False
         
         if not image_url:
             msg = "image_url is required in orchestrator_details"

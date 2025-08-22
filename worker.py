@@ -179,17 +179,20 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         if param in db_task_params:
             generation_params[param] = db_task_params[param]
     
-    # Extract parameters from orchestrator_details if present
-    orchestrator_details = db_task_params.get("orchestrator_details", {})
-    if orchestrator_details:
-        # Extract additional_loras from orchestrator_details
-        if "additional_loras" in orchestrator_details:
-            generation_params["additional_loras"] = orchestrator_details["additional_loras"]
-            dprint(f"Task {task_id}: Extracted additional_loras from orchestrator_details: {orchestrator_details['additional_loras']}")
-        
-        # Pass orchestrator_details as orchestrator_payload for LoRA processing
-        generation_params["orchestrator_payload"] = orchestrator_details
-        dprint(f"Task {task_id}: Added orchestrator_payload for LoRA processing")
+    # Use centralized extraction function for orchestrator_details
+    import sys
+    source_dir = Path(__file__).parent / "source"
+    if str(source_dir) not in sys.path:
+        sys.path.insert(0, str(source_dir))
+    from common_utils import extract_orchestrator_parameters  # type: ignore
+    
+    # Extract parameters from orchestrator_details using centralized function
+    extracted_params = extract_orchestrator_parameters(db_task_params, task_id, dprint)
+    
+    # Update generation_params with extracted parameters
+    for param in ["additional_loras", "orchestrator_payload"]:
+        if param in extracted_params and param not in generation_params:
+            generation_params[param] = extracted_params[param]
     
     # [DEEP_DEBUG] Log LoRA parameter transfer for debugging
     print(f"[WORKER_DEBUG] Worker {task_id}: CONVERTING DB TASK TO GENERATION TASK")
