@@ -536,8 +536,36 @@ class HeadlessTaskQueue:
                 self.logger.error(f"Video file does not exist for PNG conversion: {video_path}")
                 return video_path  # Return original path if conversion fails
             
-            # Create PNG output path (same directory, different extension)
-            png_path = video_path_obj.with_suffix('.png')
+            # Create PNG output path with sanitized filename to prevent upload issues
+            original_filename = video_path_obj.stem
+            
+            # Sanitize the filename for storage compatibility
+            try:
+                # Try to import the existing sanitization function
+                import sys
+                source_dir = Path(__file__).parent / "source"
+                if str(source_dir) not in sys.path:
+                    sys.path.insert(0, str(source_dir))
+                from common_utils import sanitize_filename_for_storage  # type: ignore
+                
+                sanitized_filename = sanitize_filename_for_storage(original_filename)
+                if not sanitized_filename:
+                    sanitized_filename = "generated_image"
+                    
+            except ImportError:
+                # Fallback sanitization if import fails
+                import re
+                sanitized_filename = re.sub(r'[§®©™@·º½¾¿¡~\x00-\x1F\x7F-\x9F<>:"/\\|?*,]', '', original_filename)
+                sanitized_filename = re.sub(r'\s+', '_', sanitized_filename.strip())
+                if not sanitized_filename:
+                    sanitized_filename = "generated_image"
+            
+            # Create PNG path with sanitized filename
+            png_path = video_path_obj.parent / f"{sanitized_filename}.png"
+            
+            # Log sanitization if filename changed
+            if sanitized_filename != original_filename:
+                self.logger.info(f"[PNG_CONVERSION] Task {task.id}: Sanitized filename '{original_filename}' -> '{sanitized_filename}'")
             
             self.logger.info(f"[PNG_CONVERSION] Task {task.id}: Converting {video_path_obj.name} to {png_path.name}")
             
