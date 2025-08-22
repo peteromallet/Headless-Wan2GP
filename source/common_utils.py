@@ -43,6 +43,73 @@ def dprint(msg: str):
     if DEBUG_MODE:
         print(f"[DEBUG SM-COMMON {datetime.utcnow().isoformat()}Z] {msg}")
 
+def extract_orchestrator_parameters(db_task_params: dict, task_id: str = "unknown", dprint=None) -> dict:
+    """
+    Centralized extraction of parameters from orchestrator_details.
+    
+    This handles the common pattern where task parameters contain nested orchestrator_details
+    that need to be extracted and flattened into the main parameter space.
+    
+    Args:
+        db_task_params: Raw task parameters from database
+        task_id: Task ID for logging
+        dprint: Optional debug print function
+        
+    Returns:
+        Dict with extracted parameters added at the top level
+    """
+    extracted_params = db_task_params.copy()
+    
+    orchestrator_details = db_task_params.get("orchestrator_details", {})
+    if orchestrator_details:
+        if dprint:
+            dprint(f"Task {task_id}: Found orchestrator_details with {len(orchestrator_details)} parameters")
+        
+        # Extract specific parameters that should be available at top level
+        extraction_map = {
+            "additional_loras": "additional_loras",
+            "prompt": "prompt", 
+            "negative_prompt": "negative_prompt",
+            "resolution": "resolution",
+            "video_length": "video_length",
+            "seed": "seed",
+            "model": "model",
+            "num_inference_steps": "num_inference_steps",
+            "guidance_scale": "guidance_scale",
+            "flow_shift": "flow_shift",
+            "switch_threshold": "switch_threshold",
+            "sample_solver": "sample_solver",
+            "use_causvid_lora": "use_causvid_lora",
+            "use_lighti2x_lora": "use_lighti2x_lora",
+            "apply_reward_lora": "apply_reward_lora",
+            # Magic edit parameters
+            "image_url": "image_url",
+            "in_scene": "in_scene",
+            # Additional common orchestrator parameters
+            "video_guide": "video_guide",
+            "video_mask": "video_mask",
+            "video_prompt_type": "video_prompt_type",
+            "control_net_weight": "control_net_weight",
+        }
+        
+        extracted_count = 0
+        for orchestrator_key, param_key in extraction_map.items():
+            if orchestrator_key in orchestrator_details:
+                # Only extract if not already present at top level (top level takes precedence)
+                if param_key not in extracted_params:
+                    extracted_params[param_key] = orchestrator_details[orchestrator_key]
+                    extracted_count += 1
+                    if dprint:
+                        dprint(f"Task {task_id}: Extracted {orchestrator_key} from orchestrator_details")
+        
+        # Pass orchestrator_details as orchestrator_payload for LoRA processing
+        extracted_params["orchestrator_payload"] = orchestrator_details
+        
+        if dprint and extracted_count > 0:
+            dprint(f"Task {task_id}: Extracted {extracted_count} parameters from orchestrator_details")
+    
+    return extracted_params
+
 # --- Helper Functions ---
 
 def get_lora_dir_from_filename(wgp_mod, model_filename: str) -> str:

@@ -442,6 +442,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         effective_apply_reward_lora = full_orchestrator_payload.get("apply_reward_lora", apply_reward_lora)
         debug_enabled = segment_params.get("debug_mode_enabled", full_orchestrator_payload.get("debug_mode_enabled", False))
 
+        # Use centralized extraction function (additional_loras already extracted from full_orchestrator_payload)
         additional_loras = full_orchestrator_payload.get("additional_loras", {})
         if additional_loras:
             dprint(f"Segment {segment_idx}: Found additional_loras in orchestrator payload: {additional_loras}")
