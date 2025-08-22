@@ -745,6 +745,11 @@ class HeadlessTaskQueue:
                 wgp_params["lora_multipliers"] = [float(x.strip()) for x in multipliers_str.split(",") if x.strip()]
             else:
                 wgp_params["lora_multipliers"] = task.parameters["loras_multipliers"]
+
+        # Ensure additional_loras is forwarded so LoRA processing can normalize/download them
+        if "additional_loras" in task.parameters:
+            wgp_params["additional_loras"] = task.parameters["additional_loras"]
+            self.logger.info(f"[LORA_PROCESS] Task {task.id}: Forwarded {len(task.parameters['additional_loras'])} additional LoRAs to processor")
         
         # Parameter resolution is now handled by WanOrchestrator._resolve_parameters()
         # This provides clean separation: HeadlessTaskQueue manages tasks, WanOrchestrator handles parameters
