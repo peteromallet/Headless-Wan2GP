@@ -236,11 +236,57 @@ Created `TravelSegmentProcessor` class that:
 - ✅ Reduced codebase size and complexity
 - ✅ Preserved existing functionality and parameter precedence
 
+## Centralized Parameter Extraction System
+
+### Problem Addressed
+Previously, multiple files manually extracted parameters from `orchestrator_details` with inconsistent logic:
+
+1. **`worker.py`** - Manual extraction for single_image tasks
+2. **`travel_between_images.py`** - Different manual extraction for travel segments  
+3. **`magic_edit.py`** - Yet another manual extraction implementation
+
+**Issues:**
+- Code duplication across multiple task handlers
+- Inconsistent parameter precedence rules
+- Manual maintenance of parameter mapping in each location
+- Risk of missing parameters when adding new task types
+
+### Solution: Centralized Extraction Function
+Created `extract_orchestrator_parameters()` function in `common_utils.py` that:
+- Provides single source of truth for parameter extraction logic
+- Maintains consistent parameter precedence across all task types
+- Supports extensible parameter mapping via centralized configuration
+- Handles all parameter types (LoRAs, generation settings, task-specific params)
+
+**Implementation:**
+```python
+# All task types now use the same extraction pattern:
+extracted_params = extract_orchestrator_parameters(
+    task_params_with_orchestrator_details, 
+    task_id=task_id, 
+    dprint=dprint
+)
+```
+
+**Files Modified:**
+- `source/common_utils.py` - **NEW**: `extract_orchestrator_parameters()` function
+- `worker.py` - Refactored to use centralized extraction
+- `source/sm_functions/travel_between_images.py` - Refactored to use centralized extraction (both orchestrator and segment levels)
+- `source/sm_functions/magic_edit.py` - Refactored to use centralized extraction
+
+**Benefits:**
+- ✅ DRY principle: Single extraction implementation used everywhere
+- ✅ Consistent parameter handling across all task types
+- ✅ Easy maintenance: Add new parameters in one place
+- ✅ Reduced bugs: Eliminates manual parameter extraction errors
+- ✅ Automatic support: New task types get parameter extraction for free
+- ✅ Fixed custom LoRA support: `additional_loras` now work consistently across single_image and travel_segment tasks
+
 ## source/ package
 
 This is the main application package.
 
-* **common_utils.py** – Reusable helpers (file downloads, ffmpeg helpers, MediaPipe keypoint interpolation, debug utilities, etc.). Includes generalized Supabase upload functions (`prepare_output_path_with_upload`, `upload_and_get_final_output_location`) used by all task types.
+* **common_utils.py** – Reusable helpers (file downloads, ffmpeg helpers, MediaPipe keypoint interpolation, debug utilities, etc.). Includes generalized Supabase upload functions (`prepare_output_path_with_upload`, `upload_and_get_final_output_location`) used by all task types. **NEW**: Contains `extract_orchestrator_parameters()` function that provides centralized parameter extraction from `orchestrator_details` across all task types, eliminating code duplication and ensuring consistent parameter handling.
 * **db_operations.py** – Handles all database interactions for both SQLite and Supabase. Includes Supabase client initialization, Edge Function integration, and automatic backend selection based on `DB_TYPE`.
 * **specialized_handlers.py** – Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation. Uses Supabase-compatible upload functions for all outputs.
 * **video_utils.py** – Provides utilities for video manipulation like cross-fading, frame extraction, and color matching.
