@@ -179,6 +179,18 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         if param in db_task_params:
             generation_params[param] = db_task_params[param]
     
+    # Extract parameters from orchestrator_details if present
+    orchestrator_details = db_task_params.get("orchestrator_details", {})
+    if orchestrator_details:
+        # Extract additional_loras from orchestrator_details
+        if "additional_loras" in orchestrator_details:
+            generation_params["additional_loras"] = orchestrator_details["additional_loras"]
+            dprint(f"Task {task_id}: Extracted additional_loras from orchestrator_details: {orchestrator_details['additional_loras']}")
+        
+        # Pass orchestrator_details as orchestrator_payload for LoRA processing
+        generation_params["orchestrator_payload"] = orchestrator_details
+        dprint(f"Task {task_id}: Added orchestrator_payload for LoRA processing")
+    
     # [DEEP_DEBUG] Log LoRA parameter transfer for debugging
     print(f"[WORKER_DEBUG] Worker {task_id}: CONVERTING DB TASK TO GENERATION TASK")
     print(f"[WORKER_DEBUG]   task_type: {task_type}")
