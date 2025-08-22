@@ -258,7 +258,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('apply_reward_lora'): {orchestrator_payload.get('apply_reward_lora')}")
             
             # Use centralized extraction to get all parameters that should be at top level
-            from common_utils import extract_orchestrator_parameters
+            from ..common_utils import extract_orchestrator_parameters
             
             # Extract parameters using centralized function
             task_params_for_extraction = {
@@ -463,7 +463,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         debug_enabled = segment_params.get("debug_mode_enabled", full_orchestrator_payload.get("debug_mode_enabled", False))
 
         # Use centralized extraction function for all orchestrator parameters
-        from common_utils import extract_orchestrator_parameters
+        from ..common_utils import extract_orchestrator_parameters
         
         # Convert task params to match the expected format for extraction
         task_params_for_extraction = {

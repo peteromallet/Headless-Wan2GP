@@ -65,7 +65,7 @@ def _handle_magic_edit_task(
             return False, msg
             
         # Use centralized extraction function for orchestrator_details
-        from common_utils import extract_orchestrator_parameters
+        from ..common_utils import extract_orchestrator_parameters
         extracted_params = extract_orchestrator_parameters(task_params_from_db, task_id, dprint)
         
         # Required parameters (now available at top level)
