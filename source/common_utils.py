@@ -2158,7 +2158,7 @@ def sanitize_filename_for_storage(filename: str) -> str:
     
     # Define characters to remove (includes the § character causing the issue)
     # This is based on S3/Supabase storage key restrictions and common filesystem issues
-    unsafe_chars = r'[§®©™@·º½¾¿¡~\x00-\x1F\x7F-\x9F<>:"/\\|?*]'
+    unsafe_chars = r'[§®©™@·º½¾¿¡~\x00-\x1F\x7F-\x9F<>:"/\\|?*,]'
     
     # Replace unsafe characters with empty string
     sanitized = re.sub(unsafe_chars, '', filename)

@@ -154,11 +154,36 @@ serve(async (req) => {
 
   // ─── 7. Insert row using admin client ───────────────────────────
   try {
+    // Determine user_id for the task
+    let taskUserId: string | null = null;
+    
+    if (isServiceRole) {
+      // Service role: derive user_id from project ownership
+      const { data: projectData, error: projectError } = await supabaseAdmin
+        .from("projects")
+        .select("user_id")
+        .eq("id", finalProjectId)
+        .single();
+      
+      if (projectError) {
+        console.error("Project lookup error for user_id derivation:", projectError);
+        return new Response("Project not found for user_id derivation", { status: 404 });
+      }
+      
+      taskUserId = projectData.user_id;
+      console.log(`Service role: derived user_id ${taskUserId} from project ${finalProjectId}`);
+    } else {
+      // User token: use the resolved callerId
+      taskUserId = callerId;
+      console.log(`User token: using callerId ${taskUserId} as user_id`);
+    }
+
     const { error } = await supabaseAdmin.from("tasks").insert({
       id: task_id,
       params,
       task_type,
       project_id: finalProjectId,
+      user_id: taskUserId,
       dependant_on: dependant_on ?? null,
       status: "Queued",
       created_at: new Date().toISOString(),

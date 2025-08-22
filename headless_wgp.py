@@ -690,6 +690,58 @@ class WanOrchestrator:
             'model_filename': "",
         }
         
+        # Add sanitized output_path if not provided to prevent filename issues with special characters
+        if 'output_path' not in kwargs:
+            # Import sanitization function
+            import sys
+            from pathlib import Path
+            try:
+                source_dir = Path(__file__).parent / "source"
+                if str(source_dir) not in sys.path:
+                    sys.path.insert(0, str(source_dir))
+                from common_utils import sanitize_filename_for_storage  # type: ignore
+                
+                # Create a safe filename based on prompt and timestamp
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%Y-%m-%d-%Hh%Mm%Ss")
+                # Sanitize the prompt for filename use (handle empty/invalid prompts)
+                safe_prompt = sanitize_filename_for_storage(prompt[:50] if prompt else "generated")
+                if not safe_prompt:  # fallback if sanitization results in empty string
+                    safe_prompt = "generated"
+                    
+                extension = "jpg" if is_flux else "mp4"
+                safe_filename = f"{timestamp}_{safe_prompt}.{extension}"
+                
+                # Set a clean output path in the outputs directory
+                output_dir = Path("outputs")
+                output_dir.mkdir(exist_ok=True)
+                safe_output_path = output_dir / safe_filename
+                
+                generation_logger.debug(f"Setting sanitized output_path: {safe_output_path}")
+                wgp_params['output_path'] = str(safe_output_path)
+                
+            except ImportError as e:
+                generation_logger.warning(f"Could not import sanitization function: {e}. Using basic filename sanitization.")
+                # Fallback: basic sanitization
+                import re
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%Y-%m-%d-%Hh%Mm%Ss")
+                # Remove problematic characters manually
+                safe_prompt = re.sub(r'[§®©™@·º½¾¿¡~\x00-\x1F\x7F-\x9F<>:"/\\|?*,]', '', prompt[:50] if prompt else "generated")
+                safe_prompt = re.sub(r'\s+', '_', safe_prompt.strip())  # Replace spaces with underscores
+                if not safe_prompt:
+                    safe_prompt = "generated"
+                    
+                extension = "jpg" if is_flux else "mp4"
+                safe_filename = f"{timestamp}_{safe_prompt}.{extension}"
+                
+                output_dir = Path("outputs")
+                output_dir.mkdir(exist_ok=True)
+                safe_output_path = output_dir / safe_filename
+                
+                generation_logger.debug(f"Setting fallback sanitized output_path: {safe_output_path}")
+                wgp_params['output_path'] = str(safe_output_path)
+
         # Override ANY parameter provided in kwargs
         # This allows complete customization of generation parameters
         for key, value in kwargs.items():
