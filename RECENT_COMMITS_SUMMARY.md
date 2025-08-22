@@ -32,6 +32,14 @@ This document summarizes the major development work completed across 9 commits, 
 - Enhanced character removal pattern to include comma and other problematic symbols
 - Travel segments already worked due to existing sanitization in upload utilities
 
+#### Custom LoRA Application for Single Image Tasks
+- **Fixed custom LoRAs not being applied** to single_image tasks despite being specified in orchestrator_details
+- **Root cause**: `db_task_to_generation_task()` only processed top-level parameters, ignoring `additional_loras` inside `orchestrator_details`
+- **Impact**: Custom LoRAs like `fractal-t2v.safetensors` were ignored, only default model LoRAs were applied
+- **Solution**: Added extraction logic to pull `additional_loras` from `orchestrator_details` into generation parameters
+- Added `orchestrator_payload` parameter passing for proper LoRA processing pipeline integration
+- Custom LoRAs now properly downloaded and applied alongside default model LoRAs
+
 ### Video Processing Enhancements
 - **Automatic first frame extraction** for video uploads
 - Enhanced complete-task edge function payload to include first frame thumbnails
