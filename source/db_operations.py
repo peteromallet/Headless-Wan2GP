@@ -959,6 +959,158 @@ def get_task_dependency(task_id: str) -> str | None:
             return None
     return None
 
+def get_orchestrator_child_tasks(orchestrator_task_id: str) -> dict:
+    """
+    Gets all child tasks for a given orchestrator task ID.
+    Returns dict with 'segments' and 'stitch' lists.
+    """
+    if DB_TYPE == "sqlite":
+        def _get_op(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, task_type, status, params 
+                FROM tasks 
+                WHERE JSON_EXTRACT(params, '$.orchestrator_task_id_ref') = ?
+                ORDER BY created_at ASC
+            """, (orchestrator_task_id,))
+            rows = cursor.fetchall()
+            
+            segments = []
+            stitch = []
+            for row in rows:
+                task_data = {
+                    'id': row[0],
+                    'task_type': row[1], 
+                    'status': row[2],
+                    'params': json.loads(row[3]) if row[3] else {}
+                }
+                if row[1] == 'travel_segment':
+                    segments.append(task_data)
+                elif row[1] == 'travel_stitch':
+                    stitch.append(task_data)
+            
+            return {'segments': segments, 'stitch': stitch}
+        
+        try:
+            return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_op)
+        except Exception as e:
+            dprint(f"Error querying SQLite for orchestrator child tasks {orchestrator_task_id}: {e}")
+            return {'segments': [], 'stitch': []}
+            
+    elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
+        try:
+            # Query for child tasks referencing this orchestrator
+            response = SUPABASE_CLIENT.table(PG_TABLE_NAME)\
+                .select("id, task_type, status, params")\
+                .contains("params", {"orchestrator_task_id_ref": orchestrator_task_id})\
+                .order("created_at", desc=False)\
+                .execute()
+            
+            segments = []
+            stitch = []
+            
+            if response.data:
+                for task in response.data:
+                    task_data = {
+                        'id': task['id'],
+                        'task_type': task['task_type'],
+                        'status': task['status'],
+                        'params': task.get('params', {})
+                    }
+                    if task['task_type'] == 'travel_segment':
+                        segments.append(task_data)
+                    elif task['task_type'] == 'travel_stitch':
+                        stitch.append(task_data)
+            
+            return {'segments': segments, 'stitch': stitch}
+            
+        except Exception as e:
+            dprint(f"Error querying Supabase for orchestrator child tasks {orchestrator_task_id}: {e}")
+            traceback.print_exc()
+            return {'segments': [], 'stitch': []}
+    
+    dprint(f"DB type {DB_TYPE} not supported for get_orchestrator_child_tasks")
+    return {'segments': [], 'stitch': []}
+
+def cleanup_duplicate_child_tasks(orchestrator_task_id: str, expected_segments: int) -> dict:
+    """
+    Detects and removes duplicate child tasks for an orchestrator.
+    Returns summary of cleanup actions.
+    """
+    child_tasks = get_orchestrator_child_tasks(orchestrator_task_id)
+    segments = child_tasks['segments']
+    stitch_tasks = child_tasks['stitch']
+    
+    cleanup_summary = {
+        'duplicate_segments_removed': 0,
+        'duplicate_stitch_removed': 0, 
+        'errors': []
+    }
+    
+    try:
+        # Remove duplicate segments (keep the oldest for each segment_index)
+        segment_by_index = {}
+        for segment in segments:
+            segment_idx = segment['params'].get('segment_index', -1)
+            if segment_idx in segment_by_index:
+                # We have a duplicate - keep the older one (first created)
+                existing = segment_by_index[segment_idx]
+                duplicate_id = segment['id']
+                
+                dprint(f"[IDEMPOTENCY] Found duplicate segment {segment_idx}: keeping {existing['id']}, removing {duplicate_id}")
+                
+                # Remove the duplicate
+                if _delete_task_by_id(duplicate_id):
+                    cleanup_summary['duplicate_segments_removed'] += 1
+                else:
+                    cleanup_summary['errors'].append(f"Failed to delete duplicate segment {duplicate_id}")
+            else:
+                segment_by_index[segment_idx] = segment
+        
+        # Remove duplicate stitch tasks (should only be 1)
+        if len(stitch_tasks) > 1:
+            # Keep the oldest stitch task, remove others
+            stitch_sorted = sorted(stitch_tasks, key=lambda x: x.get('created_at', ''))
+            for stitch in stitch_sorted[1:]:  # Remove all but first
+                duplicate_id = stitch['id']
+                dprint(f"[IDEMPOTENCY] Found duplicate stitch task: removing {duplicate_id}")
+                
+                if _delete_task_by_id(duplicate_id):
+                    cleanup_summary['duplicate_stitch_removed'] += 1
+                else:
+                    cleanup_summary['errors'].append(f"Failed to delete duplicate stitch {duplicate_id}")
+    
+    except Exception as e:
+        cleanup_summary['errors'].append(f"Cleanup error: {str(e)}")
+        dprint(f"Error during duplicate cleanup: {e}")
+        traceback.print_exc()
+    
+    return cleanup_summary
+
+def _delete_task_by_id(task_id: str) -> bool:
+    """Helper to delete a task by ID. Returns True if successful."""
+    if DB_TYPE == "sqlite":
+        def _delete_op(conn):
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+            return cursor.rowcount > 0
+        
+        try:
+            return execute_sqlite_with_retry(SQLITE_DB_PATH, _delete_op)
+        except Exception as e:
+            dprint(f"Error deleting SQLite task {task_id}: {e}")
+            return False
+            
+    elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
+        try:
+            response = SUPABASE_CLIENT.table(PG_TABLE_NAME).delete().eq("id", task_id).execute()
+            return len(response.data) > 0 if response.data else False
+        except Exception as e:
+            dprint(f"Error deleting Supabase task {task_id}: {e}")
+            return False
+    
+    return False
+
 def get_predecessor_output_via_edge_function(task_id: str) -> tuple[str | None, str | None]:
     """
     Gets both the predecessor task ID and its output location in a single call using Edge Function.
