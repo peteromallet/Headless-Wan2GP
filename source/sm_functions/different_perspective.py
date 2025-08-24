@@ -31,6 +31,35 @@ def _handle_different_perspective_orchestrator_task(task_params_from_db: dict, m
     dprint(f"Orchestrator Task Params: {task_params_from_db}")
 
     try:
+        # IDEMPOTENCY CHECK: Look for existing child tasks before creating new ones
+        print(f"[IDEMPOTENCY] Checking for existing child tasks for orchestrator {orchestrator_task_id_str}")
+        existing_child_tasks = db_ops.get_orchestrator_child_tasks(orchestrator_task_id_str)
+        
+        # For different_perspective, we expect specific task types
+        existing_openpose_or_depth = [t for t in existing_child_tasks['segments'] if t['task_type'] in ['generate_openpose', 'generate_depth']]
+        existing_wgp = [t for t in existing_child_tasks['segments'] if t['task_type'] == 'wgp']
+        existing_dp_extract = [t for t in existing_child_tasks['segments'] if t['task_type'] == 'dp_extract_poses' or t['task_type'] == 'dp_extract_depth']
+        existing_dp_final = [t for t in existing_child_tasks['segments'] if t['task_type'] == 'dp_final_gen']
+        
+        # Expected: 1 pose/depth task, 1 t2i task, 1 extract task, 1 t2i_pose task, 1 final_gen task
+        expected_total = 5
+        existing_total = len(existing_openpose_or_depth) + len(existing_wgp) + len(existing_dp_extract) + len(existing_dp_final)
+        
+        if existing_total >= expected_total:
+            # Clean up any duplicates but don't create new tasks
+            cleanup_summary = db_ops.cleanup_duplicate_child_tasks(orchestrator_task_id_str, expected_total)
+            
+            if cleanup_summary['duplicate_segments_removed'] > 0:
+                print(f"[IDEMPOTENCY] Cleaned up {cleanup_summary['duplicate_segments_removed']} duplicate child tasks")
+            
+            generation_success = True
+            output_message = f"[IDEMPOTENT] Child tasks already exist for different_perspective orchestrator {orchestrator_task_id_str}. Found {existing_total} tasks."
+            print(output_message)
+            return generation_success, output_message
+        elif existing_total > 0:
+            print(f"[IDEMPOTENCY] Partial child tasks found: {existing_total}/{expected_total}. Will continue with orchestration to create missing tasks.")
+        else:
+            print(f"[IDEMPOTENCY] No existing child tasks found. Proceeding with normal orchestration.")
         public_files_dir = Path.cwd() / "public" / "files"
         public_files_dir.mkdir(parents=True, exist_ok=True)
         main_output_dir_base = public_files_dir
@@ -173,12 +202,15 @@ def _handle_dp_final_gen_task(
         perspective_type = orchestrator_payload.get("perspective_type", "pose").lower()
 
         user_persp_id = task_ids["user_persp"]
+        t2i_id = task_ids["t2i"]
         t2i_persp_id = task_ids["t2i_persp"]
 
         user_persp_path_db = db_ops.get_task_output_location_from_db(user_persp_id)
+        t2i_path_db = db_ops.get_task_output_location_from_db(t2i_id)
         t2i_persp_path_db = db_ops.get_task_output_location_from_db(t2i_persp_id)
 
         user_persp_image_path = db_ops.get_abs_path_from_db_path(user_persp_path_db, dprint)
+        t2i_image_path = db_ops.get_abs_path_from_db_path(t2i_path_db, dprint)
         t2i_persp_image_path = db_ops.get_abs_path_from_db_path(t2i_persp_path_db, dprint)
 
         if not all([user_persp_image_path, t2i_persp_image_path, t2i_image_path]):
