@@ -517,8 +517,8 @@ def get_oldest_queued_task_supabase(worker_id: str = None): # Renamed from get_o
                 'Authorization': f'Bearer {SUPABASE_ACCESS_TOKEN}'
             }
             
-            # Pass worker_id in the request body for edge function to use
-            payload = {"worker_id": worker_id}
+            # Pass worker_id and run_type in the request body for edge function to use
+            payload = {"worker_id": worker_id, "run_type": "gpu"}
             
             resp = httpx.post(edge_url, json=payload, headers=headers, timeout=15)
             dprint(f"Edge Function response status: {resp.status_code}")
