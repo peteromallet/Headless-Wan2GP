@@ -334,7 +334,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             )
             
             segment_payload = {
-                "task_id": current_segment_task_id,
                 "orchestrator_task_id_ref": orchestrator_task_id_str,
                 "orchestrator_run_id": run_id,
                 "project_id": orchestrator_project_id, # Added project_id
@@ -435,7 +434,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             final_stitched_output_path = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))) / final_stitched_video_name
 
             stitch_payload = {
-                "task_id": stitch_task_id,
                 "orchestrator_task_id_ref": orchestrator_task_id_str,
                 "orchestrator_run_id": run_id,
                 "project_id": orchestrator_project_id, # Added project_id

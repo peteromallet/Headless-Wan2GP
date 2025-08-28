@@ -98,7 +98,6 @@ def _handle_different_perspective_orchestrator_task(task_params_from_db: dict, m
         previous_task_id = None
 
         payload_user_persp = {
-            "task_id": task_id_user_pose,
             "input_image_path": task_params_from_db['input_image_path'],
             "dp_orchestrator_payload": orchestrator_payload,
             "output_dir": str(work_dir.resolve()),
@@ -109,7 +108,6 @@ def _handle_different_perspective_orchestrator_task(task_params_from_db: dict, m
         previous_task_id = actual_user_persp_db_id  # Use actual database row ID for dependency chain
 
         payload_t2i = {
-            "task_id": task_id_t2i,
             "prompt": task_params_from_db.get("prompt"),
             "model": task_params_from_db.get("model_name"),
             "resolution": task_params_from_db.get("resolution"),
@@ -124,7 +122,6 @@ def _handle_different_perspective_orchestrator_task(task_params_from_db: dict, m
         previous_task_id = actual_t2i_db_id  # Use actual database row ID for dependency chain
 
         payload_extract = {
-            "task_id": task_id_extract,
             "input_video_task_id": task_id_t2i,
             "frame_index": 0,
             "dp_orchestrator_payload": orchestrator_payload,
@@ -135,7 +132,6 @@ def _handle_different_perspective_orchestrator_task(task_params_from_db: dict, m
         previous_task_id = actual_extract_db_id  # Use actual database row ID for dependency chain
 
         payload_t2i_persp = {
-            "task_id": task_id_t2i_pose,
             "input_image_task_id": task_id_extract,
             "dp_orchestrator_payload": orchestrator_payload,
             "output_dir": str(work_dir.resolve()),
@@ -145,7 +141,6 @@ def _handle_different_perspective_orchestrator_task(task_params_from_db: dict, m
         previous_task_id = actual_t2i_persp_db_id  # Use actual database row ID for dependency chain
 
         payload_final_gen = {
-            "task_id": task_id_final_gen,
             "dp_orchestrator_payload": orchestrator_payload,
         }
         actual_final_gen_db_id = db_ops.add_task_to_db(payload_final_gen, "dp_final_gen", dependant_on=previous_task_id)
