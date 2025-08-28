@@ -487,8 +487,51 @@ def init_db_supabase(): # Renamed from init_db_postgres
         # Let the actual operations try and fail gracefully
         return False
 
+def check_task_counts_supabase(run_type: str = "gpu") -> dict | None:
+    """Check task counts via Supabase Edge Function before attempting to claim tasks."""
+    if not SUPABASE_CLIENT or not SUPABASE_ACCESS_TOKEN:
+        dprint("[ERROR] Supabase client or access token not initialized. Cannot check task counts.")
+        return None
+    
+    # Build task-counts edge function URL using same pattern as other functions
+    edge_url = (
+        os.getenv('SUPABASE_EDGE_TASK_COUNTS_URL')
+        or (f"{SUPABASE_URL.rstrip('/')}/functions/v1/task-counts" if SUPABASE_URL else None)
+    )
+    
+    if not edge_url:
+        dprint("ERROR: No task-counts edge function URL available")
+        return None
+    
+    try:
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {SUPABASE_ACCESS_TOKEN}'
+        }
+        
+        payload = {
+            "run_type": run_type,
+            "include_active": True
+        }
+        
+        dprint(f"DEBUG check_task_counts_supabase: Calling task-counts at {edge_url}")
+        resp = httpx.post(edge_url, json=payload, headers=headers, timeout=10)
+        dprint(f"Task-counts response status: {resp.status_code}")
+        
+        if resp.status_code == 200:
+            counts_data = resp.json()
+            dprint(f"Task-counts result: {counts_data.get('totals', {})}")
+            return counts_data
+        else:
+            dprint(f"Task-counts returned {resp.status_code}: {resp.text}")
+            return None
+            
+    except Exception as e_counts:
+        dprint(f"Task-counts call failed: {e_counts}")
+        return None
+
 def get_oldest_queued_task_supabase(worker_id: str = None): # Renamed from get_oldest_queued_task_postgres
-    """Fetches the oldest task via Supabase Edge Function only."""
+    """Fetches the oldest task via Supabase Edge Function only. First checks task counts to avoid unnecessary claim attempts."""
     if not SUPABASE_CLIENT:
         print("[ERROR] Supabase client not initialized. Cannot get task.")
         return None
@@ -499,6 +542,25 @@ def get_oldest_queued_task_supabase(worker_id: str = None): # Renamed from get_o
         dprint(f"DEBUG: No worker_id provided, using default GPU worker: {worker_id}")
     else:
         dprint(f"DEBUG: Using provided worker_id: {worker_id}")
+    
+    # OPTIMIZATION: Check task counts first to avoid unnecessary claim attempts
+    dprint("Checking task counts before attempting to claim...")
+    task_counts = check_task_counts_supabase("gpu")
+    
+    if task_counts is None:
+        dprint("WARNING: Could not check task counts, proceeding with direct claim attempt")
+    else:
+        totals = task_counts.get('totals', {})
+        # Gate claim by queued_only to avoid claiming when only active tasks exist
+        available_tasks = totals.get('queued_only', 0)
+        
+        dprint(f"Task counts - queued_only available: {available_tasks}")
+        
+        if available_tasks <= 0:
+            dprint("No queued tasks according to task-counts, skipping claim attempt")
+            return None
+        else:
+            dprint(f"Found {available_tasks} queued tasks, proceeding with claim")
     
     # Use Edge Function exclusively
     edge_url = (
