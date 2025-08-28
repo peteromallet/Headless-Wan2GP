@@ -351,7 +351,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             }
             extracted_params = extract_orchestrator_parameters(
                 task_params_for_extraction, 
-                task_id=current_segment_task_id, 
+                task_id=f"seg_{idx}_{orchestrator_task_id_str[:8]}", 
                 dprint=dprint
             )
             
@@ -414,14 +414,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             print(f"[ORCHESTRATOR_DEBUG]   FULL segment_payload keys: {list(segment_payload.keys())}")
             
             # [DEEP_DEBUG] Also log what we're about to send to the Edge Function
-            edge_function_payload = {
-                "task_id": current_segment_task_id,
-                "params": segment_payload,
-                "task_type": "travel_segment",
-                "project_id": orchestrator_project_id,
-                "dependant_on": previous_segment_task_id
-            }
-            print(f"[ORCHESTRATOR_DEBUG] EDGE FUNCTION PAYLOAD keys: {list(edge_function_payload['params'].keys())}")
+            # NOTE: task_id will be the actual DB row ID returned by add_task_to_db
             
             dprint(f"[DEEP_DEBUG] Orchestrator {orchestrator_task_id_str}: SEGMENT {idx} PAYLOAD CREATED")
             dprint(f"[DEEP_DEBUG]   segment_payload['use_causvid_lora']: {segment_payload.get('use_causvid_lora')}")
