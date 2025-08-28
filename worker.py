@@ -102,7 +102,7 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
     Raises:
         ValueError: If required parameters are missing or invalid
     """
-    dprint(f"Converting DB task {task_id} to GenerationTask")
+    headless_logger.debug(f"Converting DB task to GenerationTask", task_id=task_id)
     
     # Extract basic parameters
     prompt = db_task_params.get("prompt", "")
@@ -215,7 +215,7 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
     # Map 'steps' to 'num_inference_steps' for compatibility
     if "steps" in db_task_params and "num_inference_steps" not in generation_params:
         generation_params["num_inference_steps"] = db_task_params["steps"]
-        dprint(f"Task {task_id}: Mapped 'steps' ({db_task_params['steps']}) to 'num_inference_steps'")
+        headless_logger.debug(f"Mapped 'steps' ({db_task_params['steps']}) to 'num_inference_steps'", task_id=task_id)
     
     # Handle LoRA parameter format conversion
     if "activated_loras" in generation_params:
@@ -266,7 +266,7 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
     if ("2_2" in model or "cocktail_2_2" in model) and "lora_names" not in generation_params and "activated_loras" not in db_task_params:
         generation_params["lora_names"] = ["CausVid", "DetailEnhancerV1"]
         generation_params["lora_multipliers"] = [1.0, 0.2]  # DetailEnhancer at reduced strength
-        dprint(f"Task {task_id}: Auto-enabled Wan 2.2 acceleration LoRAs (no parameter overrides)")
+        headless_logger.debug(f"Auto-enabled Wan 2.2 acceleration LoRAs (no parameter overrides)", task_id=task_id)
     
     # Determine task priority (orchestrator tasks get higher priority)
     priority = db_task_params.get("priority", 0)
@@ -282,7 +282,7 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         priority=priority
     )
     
-    dprint(f"Created GenerationTask for {task_id}: model={model}, priority={priority}")
+    headless_logger.debug(f"Created GenerationTask: model={model}, priority={priority}", task_id=task_id)
     return generation_task
 
 # -----------------------------------------------------------------------------
@@ -367,7 +367,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
     This replaces the complex blocking logic in travel_between_images.py with direct
     queue submission, maintaining model persistence and eliminating triple-queue inefficiency.
     """
-    dprint(f"_handle_travel_segment_via_queue: Starting for {task_id}")
+    headless_logger.debug(f"Starting travel segment queue processing", task_id=task_id)
     
     try:
         # Import required functions from travel_between_images
@@ -552,7 +552,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         
         # Submit to queue
         submitted_task_id = task_queue.submit_task(generation_task)
-        dprint(f"Travel segment {task_id}: Submitted to queue as {submitted_task_id}")
+        headless_logger.debug(f"Travel segment submitted to queue as {submitted_task_id}", task_id=task_id)
         
         # Wait for completion with timeout
         max_wait_time = 1800  # 30 minutes for travel segments
@@ -565,7 +565,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 return False, f"Travel segment {task_id}: Task status became None"
             
             if status.status == "completed":
-                dprint(f"Travel segment {task_id}: Generation completed: {status.result_path}")
+                headless_logger.success(f"Travel segment generation completed: {status.result_path}", task_id=task_id)
                 
                 # Apply post-processing chain (saturation, brightness, color matching)
                 chain_success, chain_message, final_chained_path = _handle_travel_chaining_after_wgp(
@@ -605,7 +605,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         return False, f"Travel segment {task_id}: Generation timeout after {max_wait_time}s"
         
     except Exception as e:
-        dprint(f"Travel segment {task_id}: Exception: {e}")
+        headless_logger.error(f"Travel segment exception: {e}", task_id=task_id)
         traceback.print_exc()
         return False, f"Travel segment {task_id}: Exception: {str(e)}"
 
@@ -664,7 +664,7 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
             while elapsed_time < max_wait_time:
                 status = task_queue.get_task_status(task_id)
                 if status is None:
-                    print(f"[ERROR Task ID: {task_id}] Task status became None, assuming failure")
+                    headless_logger.error("Task status became None, assuming failure", task_id=task_id)
                     generation_success = False
                     output_location_to_db = "Error: Task status became None during processing"
                     break
@@ -673,35 +673,35 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
                     generation_success = True
                     output_location_to_db = status.result_path
                     processing_time = status.processing_time or 0
-                    print(f"[Task ID: {task_id}] Queue processing completed in {processing_time:.1f}s")
-                    print(f"[Task ID: {task_id}] Output: {output_location_to_db}")
+                    headless_logger.success(f"Queue processing completed in {processing_time:.1f}s", task_id=task_id)
+                    headless_logger.essential(f"Output: {output_location_to_db}", task_id=task_id)
                     break
                 elif status.status == "failed":
                     generation_success = False
                     output_location_to_db = status.error_message or "Generation failed without specific error message"
-                    print(f"[ERROR Task ID: {task_id}] Queue processing failed: {output_location_to_db}")
+                    headless_logger.error(f"Queue processing failed: {output_location_to_db}", task_id=task_id)
                     break
                 else:
                     # Still processing
-                    dprint(f"[Task ID: {task_id}] Queue status: {status.status}, waiting...")
+                    headless_logger.debug(f"Queue status: {status.status}, waiting...", task_id=task_id)
                     time.sleep(wait_interval)
                     elapsed_time += wait_interval
             else:
                 # Timeout reached
-                print(f"[ERROR Task ID: {task_id}] Queue processing timeout after {max_wait_time}s")
+                headless_logger.error(f"Queue processing timeout after {max_wait_time}s", task_id=task_id)
                 generation_success = False
                 output_location_to_db = f"Error: Processing timeout after {max_wait_time} seconds"
             
             # Return early for direct queue tasks
-            print(f"--- Finished task ID: {task_id} (Success: {generation_success}) ---")
+            headless_logger.essential(f"Finished task (Success: {generation_success})", task_id=task_id)
             return generation_success, output_location_to_db
             
         except Exception as e_queue:
-            print(f"[ERROR Task ID: {task_id}] Queue processing error: {e_queue}")
+            headless_logger.error(f"Queue processing error: {e_queue}", task_id=task_id)
             traceback.print_exc()
             generation_success = False
             output_location_to_db = f"Error: Queue processing failed - {str(e_queue)}"
-            print(f"--- Finished task ID: {task_id} (Success: {generation_success}) ---")
+            headless_logger.essential(f"Finished task (Success: {generation_success})", task_id=task_id)
             return generation_success, output_location_to_db
 
     # --- Orchestrator & Self-Contained Task Handlers ---
@@ -795,7 +795,7 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
             while elapsed_time < max_wait_time:
                 status = task_queue.get_task_status(task_id)
                 if status is None:
-                    print(f"[ERROR Task ID: {task_id}] Task status became None, assuming failure")
+                    headless_logger.error("Task status became None, assuming failure", task_id=task_id)
                     generation_success = False
                     output_location_to_db = "Error: Task status became None during processing"
                     break
@@ -804,27 +804,27 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
                     generation_success = True
                     output_location_to_db = status.result_path
                     processing_time = status.processing_time or 0
-                    print(f"[Task ID: {task_id}] Queue processing completed in {processing_time:.1f}s")
-                    print(f"[Task ID: {task_id}] Output: {output_location_to_db}")
+                    headless_logger.success(f"Queue processing completed in {processing_time:.1f}s", task_id=task_id)
+                    headless_logger.essential(f"Output: {output_location_to_db}", task_id=task_id)
                     break
                 elif status.status == "failed":
                     generation_success = False
                     output_location_to_db = status.error_message or "Generation failed without specific error message"
-                    print(f"[ERROR Task ID: {task_id}] Queue processing failed: {output_location_to_db}")
+                    headless_logger.error(f"Queue processing failed: {output_location_to_db}", task_id=task_id)
                     break
                 else:
                     # Still processing
-                    dprint(f"[Task ID: {task_id}] Queue status: {status.status}, waiting...")
+                    headless_logger.debug(f"Queue status: {status.status}, waiting...", task_id=task_id)
                     time.sleep(wait_interval)
                     elapsed_time += wait_interval
             else:
                 # Timeout reached
-                print(f"[ERROR Task ID: {task_id}] Queue processing timeout after {max_wait_time}s")
+                headless_logger.error(f"Queue processing timeout after {max_wait_time}s", task_id=task_id)
                 generation_success = False
                 output_location_to_db = f"Error: Processing timeout after {max_wait_time} seconds"
             
         except Exception as e_queue:
-            print(f"[ERROR Task ID: {task_id}] Queue processing error: {e_queue}")
+            headless_logger.error(f"Queue processing error: {e_queue}", task_id=task_id)
             traceback.print_exc()
             generation_success = False
             output_location_to_db = f"Error: Queue processing failed - {str(e_queue)}"
@@ -835,7 +835,7 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
         chaining_result_path_override = None
 
         if task_params_dict.get("travel_chain_details"):
-            dprint(f"WGP Task {task_id} is part of a travel sequence. Attempting to chain.")
+            headless_logger.debug(f"Task is part of a travel sequence. Attempting to chain.", task_id=task_id)
             chain_success, chain_message, final_path_from_chaining = tbi._handle_travel_chaining_after_wgp(
                 wgp_task_params=task_params_dict, 
                 actual_wgp_output_video_path=output_location_to_db,
@@ -844,15 +844,15 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
             )
             if chain_success:
                 chaining_result_path_override = final_path_from_chaining
-                dprint(f"Task {task_id}: Travel chaining successful. Message: {chain_message}")
+                headless_logger.debug(f"Travel chaining successful. Message: {chain_message}", task_id=task_id)
             else:
-                print(f"[ERROR Task ID: {task_id}] Travel sequence chaining failed after WGP completion: {chain_message}. The raw WGP output '{output_location_to_db}' will be used for this task's DB record.")
+                headless_logger.error(f"Travel sequence chaining failed after WGP completion: {chain_message}. The raw WGP output '{output_location_to_db}' will be used for this task's DB record.", task_id=task_id)
         
         elif task_params_dict.get("different_perspective_chain_details"):
             # SM_RESTRUCTURE_FIX: Prevent double-chaining. This is now handled in the 'generate_openpose' block.
             # The only other task type that can have these details is 'wgp', which is the intended target for this block.
             if task_type != 'generate_openpose':
-                dprint(f"Task {task_id} is part of a different_perspective sequence. Attempting to chain.")
+                headless_logger.debug(f"Task is part of a different_perspective sequence. Attempting to chain.", task_id=task_id)
                 
                 chain_success, chain_message, final_path_from_chaining = dp._handle_different_perspective_chaining(
                     completed_task_params=task_params_dict, 
@@ -861,9 +861,9 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
                 )
                 if chain_success:
                     chaining_result_path_override = final_path_from_chaining
-                    dprint(f"Task {task_id}: Different Perspective chaining successful. Message: {chain_message}")
+                    headless_logger.debug(f"Different Perspective chaining successful. Message: {chain_message}", task_id=task_id)
                 else:
-                    print(f"[ERROR Task ID: {task_id}] Different Perspective sequence chaining failed: {chain_message}. This may halt the sequence.")
+                    headless_logger.error(f"Different Perspective sequence chaining failed: {chain_message}. This may halt the sequence.", task_id=task_id)
 
 
         if chaining_result_path_override:
@@ -871,18 +871,18 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
             if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and isinstance(chaining_result_path_override, str) and chaining_result_path_override.startswith("files/"):
                 sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
                 path_to_check_existence = (sqlite_db_parent / "public" / chaining_result_path_override).resolve()
-                dprint(f"Task {task_id}: Chaining returned SQLite relative path '{chaining_result_path_override}'. Resolved to '{path_to_check_existence}' for existence check.")
+                headless_logger.debug(f"Chaining returned SQLite relative path '{chaining_result_path_override}'. Resolved to '{path_to_check_existence}' for existence check.", task_id=task_id)
             elif chaining_result_path_override:
                 path_to_check_existence = Path(chaining_result_path_override).resolve()
-                dprint(f"Task {task_id}: Chaining returned absolute-like path '{chaining_result_path_override}'. Resolved to '{path_to_check_existence}' for existence check.")
+                headless_logger.debug(f"Chaining returned absolute-like path '{chaining_result_path_override}'. Resolved to '{path_to_check_existence}' for existence check.", task_id=task_id)
 
             if path_to_check_existence and path_to_check_existence.exists() and path_to_check_existence.is_file():
                 is_output_path_different = str(chaining_result_path_override) != str(output_location_to_db)
                 if is_output_path_different:
-                    dprint(f"Task {task_id}: Chaining modified output path for DB. Original: {output_location_to_db}, New: {chaining_result_path_override} (Checked file: {path_to_check_existence})")
+                    headless_logger.debug(f"Chaining modified output path for DB. Original: {output_location_to_db}, New: {chaining_result_path_override} (Checked file: {path_to_check_existence})", task_id=task_id)
                 output_location_to_db = chaining_result_path_override
             elif chaining_result_path_override is not None:
-                print(f"[WARNING Task ID: {task_id}] Chaining reported success, but final path '{chaining_result_path_override}' (checked as '{path_to_check_existence}') is invalid or not a file. Using original WGP output '{output_location_to_db}' for DB.")
+                headless_logger.warning(f"Chaining reported success, but final path '{chaining_result_path_override}' (checked as '{path_to_check_existence}') is invalid or not a file. Using original WGP output '{output_location_to_db}' for DB.", task_id=task_id)
 
 
     # Ensure orchestrator tasks use their DB row ID as task_id so that
@@ -891,7 +891,7 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
         # Overwrite/insert the canonical task_id inside params to the DB row's ID
         task_params_dict["task_id"] = task_id
 
-    print(f"--- Finished task ID: {task_id} (Success: {generation_success}) ---")
+    headless_logger.essential(f"Finished task (Success: {generation_success})", task_id=task_id)
     return generation_success, output_location_to_db
 
 
@@ -1104,7 +1104,7 @@ def main():
     db_path_str = str(db_ops.SQLITE_DB_PATH) if db_ops.DB_TYPE == "sqlite" else db_ops.PG_TABLE_NAME # Use consistent string path for db functions
 
     # --- Initialize Task Queue System (required) ---
-    print(f"[INFO] Initializing queue-based task processing system...")
+    headless_logger.essential("Initializing queue-based task processing system...")
     wan_dir = str(Path(__file__).parent / "Wan2GP")
     if not Path(wan_dir).exists():
         wan_dir = str(Path(__file__).parent)  # Fallback if Wan2GP is in current dir
@@ -1112,12 +1112,12 @@ def main():
     try:
         task_queue = HeadlessTaskQueue(wan_dir=wan_dir, max_workers=cli_args.queue_workers)
         task_queue.start()
-        print(f"[INFO] Task queue initialized with {cli_args.queue_workers} workers")
-        print(f"[INFO] Queue system will handle generation tasks efficiently with model reuse")
+        headless_logger.success(f"Task queue initialized with {cli_args.queue_workers} workers")
+        headless_logger.essential("Queue system will handle generation tasks efficiently with model reuse")
     except Exception as e_queue_init:
-        print(f"[ERROR] Failed to initialize task queue: {e_queue_init}")
+        headless_logger.error(f"Failed to initialize task queue: {e_queue_init}")
         traceback.print_exc()
-        print("[FATAL] Queue initialization failed - cannot continue without task queue")
+        headless_logger.error("Queue initialization failed - cannot continue without task queue")
         sys.exit(1)
     # --- End Task Queue Initialization ---
 
@@ -1172,7 +1172,7 @@ def main():
             # This fallback logic remains, but it's less likely to be needed
             # if get_oldest_queued_task and its supabase equivalent are reliable.
             if current_project_id is None and current_task_id_for_status_update:
-                dprint(f"Project ID not directly available for task {current_task_id_for_status_update}. Attempting to fetch manually...")
+                headless_logger.debug(f"Project ID not directly available. Attempting to fetch manually...", task_id=current_task_id_for_status_update)
                 if db_ops.DB_TYPE == "supabase" and db_ops.SUPABASE_CLIENT:
                     try:
                         # Using 'id' as the column name for task_id based on Supabase schema conventions seen elsewhere (e.g. init_db)
@@ -1183,21 +1183,21 @@ def main():
                             .execute()
                         if response.data and response.data.get("project_id"):
                             current_project_id = response.data["project_id"]
-                            dprint(f"Successfully fetched project_id '{current_project_id}' for task {current_task_id_for_status_update} from Supabase.")
+                            headless_logger.debug(f"Successfully fetched project_id '{current_project_id}' from Supabase", task_id=current_task_id_for_status_update)
                         else:
-                            dprint(f"Could not fetch project_id for task {current_task_id_for_status_update} from Supabase. Response data: {response.data}, error: {response.error}")
+                            headless_logger.debug(f"Could not fetch project_id from Supabase. Response data: {response.data}, error: {response.error}", task_id=current_task_id_for_status_update)
                     except Exception as e_fetch_proj_id:
-                        dprint(f"Exception while fetching project_id for {current_task_id_for_status_update} from Supabase: {e_fetch_proj_id}")
+                        headless_logger.debug(f"Exception while fetching project_id from Supabase: {e_fetch_proj_id}", task_id=current_task_id_for_status_update)
                 elif db_ops.DB_TYPE == "sqlite": # Should have been fetched, but as a fallback
                     # This fallback no longer needs its own db connection logic.
                     # A new helper could be added to db_ops if this is truly needed,
                     # but for now, we assume the primary fetch works.
-                    dprint(f"Project_id was not fetched for {current_task_id_for_status_update} from SQLite. This is unexpected.")
+                    headless_logger.debug(f"Project_id was not fetched from SQLite. This is unexpected.", task_id=current_task_id_for_status_update)
 
             
             # Critical check: project_id is NOT NULL for sub-tasks created by orchestrator
             if current_project_id is None and current_task_type == "travel_orchestrator":
-                print(f"[CRITICAL ERROR] Task {current_task_id_for_status_update} (travel_orchestrator) has no project_id. Sub-tasks cannot be created. Skipping task.")
+                headless_logger.error(f"Orchestrator task has no project_id. Sub-tasks cannot be created. Skipping task.", task_id=current_task_id_for_status_update)
                 # Update status to FAILED to prevent re-processing this broken state
                 error_message_for_db = "Failed: Orchestrator task missing project_id, cannot create sub-tasks."
                 if db_ops.DB_TYPE == "supabase":
@@ -1207,7 +1207,7 @@ def main():
                 time.sleep(1) # Brief pause
                 continue # Skip to next polling cycle
 
-            print(f"Found task: {current_task_id_for_status_update} of type: {current_task_type}, Project ID: {current_project_id}")
+            headless_logger.essential(f"Found task of type: {current_task_type}, Project ID: {current_project_id}", task_id=current_task_id_for_status_update)
             # Status already set to IN_PROGRESS if task_info is not None
 
             # Inserted: define segment_image_download_dir from task params if available
