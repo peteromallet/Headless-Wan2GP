@@ -142,7 +142,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             return True, msg
 
         db_path_for_add = db_ops.SQLITE_DB_PATH if db_ops.DB_TYPE == "sqlite" else None
-        previous_segment_task_id = None
+        # Track actual DB row IDs by segment index to avoid mixing logical IDs
+        actual_segment_db_id_by_index: dict[int, str] = {}
 
         # Track which segments already exist to avoid re-creating them
         existing_segment_indices = set()
@@ -276,11 +277,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         # Loop to queue all segment tasks (skip existing ones for idempotency)
         segments_created = 0
         for idx in range(num_segments):
+            # Determine dependency strictly from previously resolved actual DB IDs
+            previous_segment_task_id = actual_segment_db_id_by_index.get(idx - 1) if idx > 0 else None
+
             # Skip if this segment already exists
             if idx in existing_segment_indices:
-                previous_segment_task_id = existing_segment_task_ids[idx]  # Use existing task ID for dependency chain
-                print(f"[IDEMPOTENCY] Skipping segment {idx} - already exists with ID {previous_segment_task_id}")
-                print(f"[DEBUG_DEPENDENCY_CHAIN] Setting previous_segment_task_id to existing ID: {previous_segment_task_id}")
+                # Record the existing DB row ID for this index so subsequent segments can depend on it
+                existing_db_id = existing_segment_task_ids[idx]
+                actual_segment_db_id_by_index[idx] = existing_db_id
+                print(f"[IDEMPOTENCY] Skipping segment {idx} - already exists with ID {existing_db_id}")
+                print(f"[DEBUG_DEPENDENCY_CHAIN] Using existing DB ID for segment {idx}: {existing_db_id}; next segment will depend on this")
                 continue
                 
             current_segment_task_id = sm_generate_unique_task_id(f"travel_seg_{run_id}_{idx:02d}_")
@@ -405,15 +411,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             # [DEEP_DEBUG] Also log what we're about to send to the Edge Function
             dprint(f"[DEEP_DEBUG] EDGE FUNCTION PAYLOAD keys: {list(edge_function_payload['params'].keys())}")
 
-            print(f"[DEBUG_DEPENDENCY_CHAIN] Creating new segment {idx}, depends_on: {previous_segment_task_id}")
+            print(f"[DEBUG_DEPENDENCY_CHAIN] Creating new segment {idx}, depends_on (prev idx {idx-1}): {previous_segment_task_id}")
             dprint(f"Orchestrator: Enqueuing travel_segment {idx} (logical ID: {current_segment_task_id}) depends_on={previous_segment_task_id}")
             actual_db_row_id = db_ops.add_task_to_db(
                 task_payload=segment_payload, 
                 task_type_str="travel_segment",
                 dependant_on=previous_segment_task_id
             )
-            previous_segment_task_id = actual_db_row_id  # Use actual database row ID for dependency chain
-            print(f"[DEBUG_DEPENDENCY_CHAIN] New segment {idx} created with actual DB ID: {actual_db_row_id}, next segment will depend on this")
+            # Record the actual DB ID so subsequent segments depend on the real DB row ID
+            actual_segment_db_id_by_index[idx] = actual_db_row_id
+            print(f"[DEBUG_DEPENDENCY_CHAIN] New segment {idx} created with actual DB ID: {actual_db_row_id}; next segment will depend on this")
             dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_segment {idx} (logical ID: {current_segment_task_id}, actual DB ID: {actual_db_row_id}) with payload (first 500 chars): {json.dumps(segment_payload, default=str)[:500]}... Depends on: {previous_segment_task_id}")
         
         # After loop, enqueue the stitch task (check for idempotency)
@@ -451,7 +458,9 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "full_orchestrator_payload": orchestrator_payload, # Added this line
             }
             
-            print(f"[DEBUG_DEPENDENCY_CHAIN] Creating stitch task, depends_on: {previous_segment_task_id}")
+            # Stitch should depend on the last segment's actual DB row ID
+            previous_segment_task_id = actual_segment_db_id_by_index.get(num_segments - 1)
+            print(f"[DEBUG_DEPENDENCY_CHAIN] Creating stitch task, depends_on (last seg idx {num_segments-1}): {previous_segment_task_id}")
             dprint(f"Orchestrator: Enqueuing travel_stitch task (logical ID: {stitch_task_id}) depends_on={previous_segment_task_id}")
             actual_stitch_db_row_id = db_ops.add_task_to_db(
                 task_payload=stitch_payload, 
