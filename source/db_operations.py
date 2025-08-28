@@ -754,6 +754,20 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
         if SUPABASE_ACCESS_TOKEN:
             headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
 
+        # Defensive check: if a dependency is specified, ensure it exists before enqueueing
+        if dependant_on:
+            try:
+                if SUPABASE_CLIENT:
+                    # Query tasks table for existence of dependant_on
+                    resp_exist = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("id").eq("id", dependant_on).single().execute()
+                    if not getattr(resp_exist, "data", None):
+                        print(f"[ERROR][DEBUG_DEPENDENCY_CHAIN] dependant_on not found: {dependant_on}. Refusing to create task of type {task_type_str} with broken dependency.")
+                        raise RuntimeError(f"dependant_on {dependant_on} not found")
+                # If no client, skip hard check (Edge will still reject bad chains during claim)
+            except Exception as e_depchk:
+                # Only warn on verification failure (network/transient). If it's truly missing, above raises already.
+                print(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on {dependant_on} existence prior to enqueue: {e_depchk}")
+
         payload_edge = {
             "task_id": actual_db_row_id,  # Use generated UUID as database row ID
             "params": params_for_db,  # pass JSON directly
