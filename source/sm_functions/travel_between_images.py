@@ -404,14 +404,14 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             # [DEEP_DEBUG] Also log what we're about to send to the Edge Function
             dprint(f"[DEEP_DEBUG] EDGE FUNCTION PAYLOAD keys: {list(edge_function_payload['params'].keys())}")
 
-            dprint(f"Orchestrator: Enqueuing travel_segment {idx} (ID: {current_segment_task_id}) depends_on={previous_segment_task_id}")
-            db_ops.add_task_to_db(
+            dprint(f"Orchestrator: Enqueuing travel_segment {idx} (logical ID: {current_segment_task_id}) depends_on={previous_segment_task_id}")
+            actual_db_row_id = db_ops.add_task_to_db(
                 task_payload=segment_payload, 
                 task_type_str="travel_segment",
                 dependant_on=previous_segment_task_id
             )
-            previous_segment_task_id = current_segment_task_id
-            dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_segment {idx} (ID: {current_segment_task_id}) with payload (first 500 chars): {json.dumps(segment_payload, default=str)[:500]}... Depends on: {previous_segment_task_id}")
+            previous_segment_task_id = actual_db_row_id  # Use actual database row ID for dependency chain
+            dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_segment {idx} (logical ID: {current_segment_task_id}, actual DB ID: {actual_db_row_id}) with payload (first 500 chars): {json.dumps(segment_payload, default=str)[:500]}... Depends on: {previous_segment_task_id}")
         
         # After loop, enqueue the stitch task (check for idempotency)
         stitch_created = 0
@@ -448,13 +448,13 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "full_orchestrator_payload": orchestrator_payload, # Added this line
             }
             
-            dprint(f"Orchestrator: Enqueuing travel_stitch task (ID: {stitch_task_id}) depends_on={previous_segment_task_id}")
-            db_ops.add_task_to_db(
+            dprint(f"Orchestrator: Enqueuing travel_stitch task (logical ID: {stitch_task_id}) depends_on={previous_segment_task_id}")
+            actual_stitch_db_row_id = db_ops.add_task_to_db(
                 task_payload=stitch_payload, 
                 task_type_str="travel_stitch",
                 dependant_on=previous_segment_task_id
             )
-            dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_stitch task (ID: {stitch_task_id}) with payload (first 500 chars): {json.dumps(stitch_payload, default=str)[:500]}... Depends on: {previous_segment_task_id}")
+            dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_stitch task (logical ID: {stitch_task_id}, actual DB ID: {actual_stitch_db_row_id}) with payload (first 500 chars): {json.dumps(stitch_payload, default=str)[:500]}... Depends on: {previous_segment_task_id}")
             stitch_created = 1
         else:
             print(f"[IDEMPOTENCY] Skipping stitch task creation - already exists with ID {existing_stitch_task_id}")
