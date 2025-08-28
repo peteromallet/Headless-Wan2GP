@@ -718,15 +718,18 @@ def _run_db_migrations():
     else:
         dprint(f"DB Migrations: No migration logic for DB_TYPE '{DB_TYPE}'. Skipping migrations.")
 
-def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | None = None, db_path: str | None = None):
+def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | None = None, db_path: str | None = None) -> str:
     """
     Adds a new task to the database, dispatching to SQLite or Supabase.
     The `db_path` argument is for legacy SQLite compatibility and is ignored for Supabase.
+    
+    Returns:
+        str: The actual database row ID (UUID) that was assigned to the task
     """
-    task_id = task_payload.get("task_id")
-    if not task_id:
-        raise ValueError("task_id must be present in the task_payload.")
-
+    # Generate a new UUID for the database row ID (ignore task_id from params)
+    import uuid
+    actual_db_row_id = str(uuid.uuid4())
+    
     # Shared logic: Sanitize payload and get project_id
     params_for_db = task_payload.copy()
     params_for_db.pop("task_type", None) # Ensure task_type is not duplicated in params
@@ -752,7 +755,7 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
             headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
 
         payload_edge = {
-            "task_id": task_id,
+            "task_id": actual_db_row_id,  # Use generated UUID as database row ID
             "params": params_for_db,  # pass JSON directly
             "task_type": task_type_str,
             "project_id": project_id,
@@ -765,8 +768,8 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
             resp = httpx.post(edge_url, json=payload_edge, headers=headers, timeout=30)
 
             if resp.status_code == 200:
-                print(f"Task {task_id} (Type: {task_type_str}) queued via Edge Function.")
-                return
+                print(f"Task {actual_db_row_id} (Type: {task_type_str}) queued via Edge Function.")
+                return actual_db_row_id
             else:
                 error_msg = f"Edge Function create-task failed: {resp.status_code} - {resp.text}"
                 print(f"[ERROR] {error_msg}")
@@ -788,7 +791,7 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
             cursor.execute(
                 f"INSERT INTO tasks (id, params, task_type, status, created_at, project_id, dependant_on) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
-                    task_id,
+                    actual_db_row_id,  # Use generated UUID as database row ID
                     params_json_str,
                     task_type_str,
                     STATUS_QUEUED,
@@ -799,9 +802,10 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
             )
         try:
             execute_sqlite_with_retry(db_to_use, _add_op)
-            print(f"Task {task_id} (Type: {task_type_str}) added to SQLite database {db_to_use}.")
+            print(f"Task {actual_db_row_id} (Type: {task_type_str}) added to SQLite database {db_to_use}.")
+            return actual_db_row_id
         except Exception as e:
-            print(f"SQLite error when adding task {task_id} (Type: {task_type_str}): {e}")
+            print(f"SQLite error when adding task {actual_db_row_id} (Type: {task_type_str}): {e}")
             raise
 
 def poll_task_status(task_id: str, poll_interval_seconds: int = 10, timeout_seconds: int = 1800, db_path: str | None = None) -> str | None:

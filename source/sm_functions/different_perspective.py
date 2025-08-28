@@ -104,9 +104,9 @@ def _handle_different_perspective_orchestrator_task(task_params_from_db: dict, m
             "output_dir": str(work_dir.resolve()),
         }
         user_gen_task_type = "generate_openpose" if perspective_type == "pose" else "generate_depth"
-        db_ops.add_task_to_db(payload_user_persp, user_gen_task_type, dependant_on=previous_task_id)
-        dprint(f"Orchestrator {orchestrator_task_id_str} enqueued {user_gen_task_type} ({task_id_user_pose})")
-        previous_task_id = task_id_user_pose
+        actual_user_persp_db_id = db_ops.add_task_to_db(payload_user_persp, user_gen_task_type, dependant_on=previous_task_id)
+        dprint(f"Orchestrator {orchestrator_task_id_str} enqueued {user_gen_task_type} (logical ID: {task_id_user_pose}, actual DB ID: {actual_user_persp_db_id})")
+        previous_task_id = actual_user_persp_db_id  # Use actual database row ID for dependency chain
 
         payload_t2i = {
             "task_id": task_id_t2i,
@@ -119,9 +119,9 @@ def _handle_different_perspective_orchestrator_task(task_params_from_db: dict, m
             "dp_orchestrator_payload": orchestrator_payload,
             "output_dir": str(work_dir.resolve()),
         }
-        db_ops.add_task_to_db(payload_t2i, "wgp", dependant_on=previous_task_id)
-        dprint(f"Orchestrator {orchestrator_task_id_str} enqueued t2i_gen ({task_id_t2i})")
-        previous_task_id = task_id_t2i
+        actual_t2i_db_id = db_ops.add_task_to_db(payload_t2i, "wgp", dependant_on=previous_task_id)
+        dprint(f"Orchestrator {orchestrator_task_id_str} enqueued t2i_gen (logical ID: {task_id_t2i}, actual DB ID: {actual_t2i_db_id})")
+        previous_task_id = actual_t2i_db_id  # Use actual database row ID for dependency chain
 
         payload_extract = {
             "task_id": task_id_extract,
@@ -130,9 +130,9 @@ def _handle_different_perspective_orchestrator_task(task_params_from_db: dict, m
             "dp_orchestrator_payload": orchestrator_payload,
             "output_dir": str(work_dir.resolve()),
         }
-        db_ops.add_task_to_db(payload_extract, "extract_frame", dependant_on=previous_task_id)
-        dprint(f"Orchestrator {orchestrator_task_id_str} enqueued extract_frame ({task_id_extract})")
-        previous_task_id = task_id_extract
+        actual_extract_db_id = db_ops.add_task_to_db(payload_extract, "extract_frame", dependant_on=previous_task_id)
+        dprint(f"Orchestrator {orchestrator_task_id_str} enqueued extract_frame (logical ID: {task_id_extract}, actual DB ID: {actual_extract_db_id})")
+        previous_task_id = actual_extract_db_id  # Use actual database row ID for dependency chain
 
         payload_t2i_persp = {
             "task_id": task_id_t2i_pose,
@@ -140,16 +140,16 @@ def _handle_different_perspective_orchestrator_task(task_params_from_db: dict, m
             "dp_orchestrator_payload": orchestrator_payload,
             "output_dir": str(work_dir.resolve()),
         }
-        db_ops.add_task_to_db(payload_t2i_persp, user_gen_task_type, dependant_on=previous_task_id)
-        dprint(f"Orchestrator {orchestrator_task_id_str} enqueued {user_gen_task_type} ({task_id_t2i_pose})")
-        previous_task_id = task_id_t2i_pose
+        actual_t2i_persp_db_id = db_ops.add_task_to_db(payload_t2i_persp, user_gen_task_type, dependant_on=previous_task_id)
+        dprint(f"Orchestrator {orchestrator_task_id_str} enqueued {user_gen_task_type} (logical ID: {task_id_t2i_pose}, actual DB ID: {actual_t2i_persp_db_id})")
+        previous_task_id = actual_t2i_persp_db_id  # Use actual database row ID for dependency chain
 
         payload_final_gen = {
             "task_id": task_id_final_gen,
             "dp_orchestrator_payload": orchestrator_payload,
         }
-        db_ops.add_task_to_db(payload_final_gen, "dp_final_gen", dependant_on=previous_task_id)
-        dprint(f"Orchestrator {orchestrator_task_id_str} enqueued dp_final_gen ({task_id_final_gen})")
+        actual_final_gen_db_id = db_ops.add_task_to_db(payload_final_gen, "dp_final_gen", dependant_on=previous_task_id)
+        dprint(f"Orchestrator {orchestrator_task_id_str} enqueued dp_final_gen (logical ID: {task_id_final_gen}, actual DB ID: {actual_final_gen_db_id})")
 
         return True, f"Successfully enqueued different_perspective job graph with run_id {run_id}."
     except Exception as e:
