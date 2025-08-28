@@ -283,6 +283,28 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             # Determine dependency strictly from previously resolved actual DB IDs
             previous_segment_task_id = actual_segment_db_id_by_index.get(idx - 1) if idx > 0 else None
 
+            # Defensive fallback: if we somehow don't have the previous segment's DB ID yet,
+            # try to resolve it from existing_segment_task_ids, and then from DB.
+            if idx > 0 and not previous_segment_task_id:
+                fallback_prev = existing_segment_task_ids.get(idx - 1)
+                if fallback_prev:
+                    print(f"[DEBUG_DEPENDENCY_CHAIN] Fallback resolved previous DB ID for seg {idx-1} from existing_segment_task_ids: {fallback_prev}")
+                    actual_segment_db_id_by_index[idx - 1] = fallback_prev
+                    previous_segment_task_id = fallback_prev
+                else:
+                    try:
+                        child_tasks = db_ops.get_orchestrator_child_tasks(orchestrator_task_id_str)
+                        for seg in child_tasks.get('segments', []):
+                            if seg.get('params', {}).get('segment_index') == idx - 1:
+                                prev_from_db = seg.get('id')
+                                if prev_from_db:
+                                    print(f"[DEBUG_DEPENDENCY_CHAIN] DB fallback resolved previous DB ID for seg {idx-1}: {prev_from_db}")
+                                    actual_segment_db_id_by_index[idx - 1] = prev_from_db
+                                    previous_segment_task_id = prev_from_db
+                                break
+                    except Exception as e_depdb:
+                        print(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not resolve previous DB ID for seg {idx-1} via DB fallback: {e_depdb}")
+
             # Skip if this segment already exists
             if idx in existing_segment_indices:
                 existing_db_id = existing_segment_task_ids[idx]
@@ -290,7 +312,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 print(f"[DEBUG_DEPENDENCY_CHAIN] Using existing DB ID for segment {idx}: {existing_db_id}; next segment will depend on this")
                 continue
                 
-            current_segment_task_id = sm_generate_unique_task_id(f"travel_seg_{run_id}_{idx:02d}_")
             segments_created += 1
             
             # Note: segment handler now manages its own output paths using prepare_output_path()
@@ -412,7 +433,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             dprint(f"[DEEP_DEBUG] EDGE FUNCTION PAYLOAD keys: {list(edge_function_payload['params'].keys())}")
 
             print(f"[DEBUG_DEPENDENCY_CHAIN] Creating new segment {idx}, depends_on (prev idx {idx-1}): {previous_segment_task_id}")
-            dprint(f"Orchestrator: Enqueuing travel_segment {idx} (logical ID: {current_segment_task_id}) depends_on={previous_segment_task_id}")
             actual_db_row_id = db_ops.add_task_to_db(
                 task_payload=segment_payload, 
                 task_type_str="travel_segment",
@@ -421,12 +441,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             # Record the actual DB ID so subsequent segments depend on the real DB row ID
             actual_segment_db_id_by_index[idx] = actual_db_row_id
             print(f"[DEBUG_DEPENDENCY_CHAIN] New segment {idx} created with actual DB ID: {actual_db_row_id}; next segment will depend on this")
-            dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_segment {idx} (logical ID: {current_segment_task_id}, actual DB ID: {actual_db_row_id}) with payload (first 500 chars): {json.dumps(segment_payload, default=str)[:500]}... Depends on: {previous_segment_task_id}")
+            # Post-insert verification of dependency from DB
+            try:
+                dep_saved = db_ops.get_task_dependency(actual_db_row_id)
+                print(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Segment {idx} saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
+            except Exception as e_ver:
+                print(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for seg {idx} ({actual_db_row_id}): {e_ver}")
         
         # After loop, enqueue the stitch task (check for idempotency)
         stitch_created = 0
         if not stitch_already_exists:
-            stitch_task_id = sm_generate_unique_task_id(f"travel_stitch_{run_id}_")
             final_stitched_video_name = f"travel_final_stitched_{run_id}.mp4"
             # Stitcher saves its final primary output directly under main_output_dir (e.g., ./steerable_motion_output/)
             # NOT under current_run_output_dir (which is .../travel_run_XYZ/)
@@ -460,14 +484,18 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             # Stitch should depend on the last segment's actual DB row ID
             previous_segment_task_id = actual_segment_db_id_by_index.get(num_segments - 1)
             print(f"[DEBUG_DEPENDENCY_CHAIN] Creating stitch task, depends_on (last seg idx {num_segments-1}): {previous_segment_task_id}")
-            dprint(f"Orchestrator: Enqueuing travel_stitch task (logical ID: {stitch_task_id}) depends_on={previous_segment_task_id}")
             actual_stitch_db_row_id = db_ops.add_task_to_db(
                 task_payload=stitch_payload, 
                 task_type_str="travel_stitch",
                 dependant_on=previous_segment_task_id
             )
             print(f"[DEBUG_DEPENDENCY_CHAIN] Stitch task created with actual DB ID: {actual_stitch_db_row_id}")
-            dprint(f"Orchestrator {orchestrator_task_id_str}: Enqueued travel_stitch task (logical ID: {stitch_task_id}, actual DB ID: {actual_stitch_db_row_id}) with payload (first 500 chars): {json.dumps(stitch_payload, default=str)[:500]}... Depends on: {previous_segment_task_id}")
+            # Post-insert verification of dependency from DB
+            try:
+                dep_saved = db_ops.get_task_dependency(actual_stitch_db_row_id)
+                print(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Stitch saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
+            except Exception as e_ver2:
+                print(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for stitch ({actual_stitch_db_row_id}): {e_ver2}")
             stitch_created = 1
         else:
             print(f"[IDEMPOTENCY] Skipping stitch task creation - already exists with ID {existing_stitch_task_id}")
