@@ -154,6 +154,9 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             if segment_idx >= 0:
                 existing_segment_indices.add(segment_idx)
                 existing_segment_task_ids[segment_idx] = segment['id']
+                # CRITICAL FIX: Pre-populate actual_segment_db_id_by_index with existing segments
+                # so that new segments can correctly depend on existing ones
+                actual_segment_db_id_by_index[segment_idx] = segment['id']
                 
         # Check if stitch task already exists
         stitch_already_exists = len(existing_stitch) > 0
@@ -282,9 +285,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
             # Skip if this segment already exists
             if idx in existing_segment_indices:
-                # Record the existing DB row ID for this index so subsequent segments can depend on it
                 existing_db_id = existing_segment_task_ids[idx]
-                actual_segment_db_id_by_index[idx] = existing_db_id
                 print(f"[IDEMPOTENCY] Skipping segment {idx} - already exists with ID {existing_db_id}")
                 print(f"[DEBUG_DEPENDENCY_CHAIN] Using existing DB ID for segment {idx}: {existing_db_id}; next segment will depend on this")
                 continue
