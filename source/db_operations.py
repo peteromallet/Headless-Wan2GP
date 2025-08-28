@@ -504,6 +504,8 @@ def check_task_counts_supabase(run_type: str = "gpu") -> dict | None:
         return None
     
     try:
+        # Use same authentication pattern as other edge functions - SUPABASE_ACCESS_TOKEN
+        # This can be a service key, PAT, or JWT - the edge function determines the type
         headers = {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {SUPABASE_ACCESS_TOKEN}'
