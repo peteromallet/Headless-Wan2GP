@@ -422,8 +422,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             dprint(f"[DEEP_DEBUG]   segment_payload['apply_reward_lora']: {segment_payload.get('apply_reward_lora')}")
             dprint(f"[DEEP_DEBUG]   FULL segment_payload keys: {list(segment_payload.keys())}")
             
-            # [DEEP_DEBUG] Also log what we're about to send to the Edge Function
-            dprint(f"[DEEP_DEBUG] EDGE FUNCTION PAYLOAD keys: {list(edge_function_payload['params'].keys())}")
+            # [DEEP_DEBUG] Segment payload ready for add_task_to_db
+            dprint(f"[DEEP_DEBUG] Segment payload keys: {list(segment_payload.keys())}")
 
             print(f"[DEBUG_DEPENDENCY_CHAIN] Creating new segment {idx}, depends_on (prev idx {idx-1}): {previous_segment_task_id}")
             actual_db_row_id = db_ops.add_task_to_db(
