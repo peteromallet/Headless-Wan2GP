@@ -206,11 +206,11 @@ def copy_results_for_comparison():
         "continue_video_1_image_512",
         "different_perspective_pose_700x400",
         "different_perspective_depth_640x480",
-        "single_image_1",
-        "single_image_2",
-        "single_image_3",
-        "single_image_4",
-        "single_image_5",
+        "wan_2_2_t2i_1",
+        "wan_2_2_t2i_2",
+        "wan_2_2_t2i_3",
+        "wan_2_2_t2i_4",
+        "wan_2_2_t2i_5",
     ]:
         test_dir = Path("tests") / test_name
         if not test_dir.exists():
@@ -402,16 +402,16 @@ def write_different_perspective_test_case(name: str,
 
 
 # ---------------------------------------------------------------------
-# New helper: Single-image test case
+# New helper: wan_2_2_t2i test case
 # ---------------------------------------------------------------------
 
 
-def write_single_image_test_case(name: str,
+def write_wan_2_2_t2i_test_case(name: str,
                                  prompt: str,
                                  resolution: str,
                                  enqueue: bool,
                                  additional_loras: dict | None = None) -> None:
-    """Create a single-image generation task (wgp single frame)."""
+    """Create a wan_2_2_t2i generation task (wgp single frame)."""
     test_dir = TESTS_ROOT / name
     test_dir.mkdir(parents=True, exist_ok=True)
 
@@ -421,7 +421,7 @@ def write_single_image_test_case(name: str,
         "project_id": PROJECT_ID,
         "run_id": run_id,
         "prompt": prompt,
-        "model": MODEL_NAME,  # 'single_image' handler expects key 'model'
+        "model": MODEL_NAME,  # 'wan_2_2_t2i' handler expects key 'model'
         "resolution": resolution,
         "seed": SEED_BASE,
         "negative_prompt": NEG_PROMPT,
@@ -438,7 +438,7 @@ def write_single_image_test_case(name: str,
     print(f"[WRITE] {json_path}")
 
     if enqueue:
-        cmd = [sys.executable, "add_task.py", "--type", "single_image",
+        cmd = [sys.executable, "add_task.py", "--type", "wan_2_2_t2i",
                "--params", f"@{json_path}"]
         print("[ENQUEUE]", " ".join(cmd))
         try:
@@ -522,27 +522,27 @@ def main(args) -> None:
         )
 
     # ------------------------------------------------------------
-    # single_image
+    # wan_2_2_t2i
     # ------------------------------------------------------------
-    elif args.task_type == "single_image":
-        single_image_specs = [
-            ("single_image_1", "studio ghibli style: A serene mountain landscape at sunset", "640x360"),
-            ("single_image_2", "studio ghibli style: A futuristic city skyline at night", "512x768"),
-            ("single_image_3", "studio ghibli style: A cute puppy in a field of flowers", "768x512"),
-            ("single_image_4", "studio ghibli style: A spaceship traveling through hyperspace", "720x1280"),
-            ("single_image_5", "studio ghibli style: A vibrant abstract painting of shapes and colours", "1024x576"),
+    elif args.task_type == "wan_2_2_t2i":
+        wan_2_2_t2i_specs = [
+            ("wan_2_2_t2i_1", "studio ghibli style: A serene mountain landscape at sunset", "640x360"),
+            ("wan_2_2_t2i_2", "studio ghibli style: A futuristic city skyline at night", "512x768"),
+            ("wan_2_2_t2i_3", "studio ghibli style: A cute puppy in a field of flowers", "768x512"),
+            ("wan_2_2_t2i_4", "studio ghibli style: A spaceship traveling through hyperspace", "720x1280"),
+            ("wan_2_2_t2i_5", "studio ghibli style: A vibrant abstract painting of shapes and colours", "1024x576"),
         ]
 
         ghibli_lora_url = "https://huggingface.co/peteromallet/ad_motion_loras/resolve/main/studio_ghibli_wan14b_t2v_v01.safetensors"
 
-        for name, prompt, res in single_image_specs:
-            # Ensure every single-image task applies the Studio-Ghibli LoRA (strength 1.0)
+        for name, prompt, res in wan_2_2_t2i_specs:
+            # Ensure every wan_2_2_t2i task applies the Studio-Ghibli LoRA (strength 1.0)
             loras_to_use = {ghibli_lora_url: 1.0}
             # Merge any global --loras values (caller-supplied) so they stack as well
             if additional_loras_global:
                 loras_to_use.update(additional_loras_global)
 
-            write_single_image_test_case(
+            write_wan_2_2_t2i_test_case(
                 name=name,
                 prompt=prompt,
                 resolution=res,
@@ -568,13 +568,13 @@ if __name__ == "__main__":
     parser.add_argument("--wait-minutes", type=int, default=30, help="Max minutes to wait for completion when waiting is enabled")
     parser.add_argument(
         "--task-type",
-        choices=["different_perspective", "travel_between_images", "single_image"],
+        choices=["different_perspective", "travel_between_images", "wan_2_2_t2i"],
         default="different_perspective",
         help=(
             "Select which kind of test task(s) to generate. "
             "'different_perspective' (default) creates both pose and depth perspective-variation tasks; "
             "'travel_between_images' creates the orchestrator travel tasks; "
-            "'single_image' creates the five single-image tasks."
+            "'wan_2_2_t2i' creates the five wan_2_2_t2i tasks."
         ),
     )
     parser.add_argument(

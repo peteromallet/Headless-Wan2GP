@@ -382,7 +382,7 @@ The submodule is updated periodically using standard git submodule commands. Onl
 | Travel orchestrator  | `_handle_travel_orchestrator_task` | `sm_functions/travel_between_images.py` |
 | Travel segment       | `_handle_travel_segment_task`      | " " |
 | Travel stitch        | `_handle_travel_stitch_task`       | " " |
-| Single image video   | `run_single_image_task`            | `sm_functions/single_image.py` |
+| Single image video   | Direct queue integration (wan_2_2_t2i) | `worker.py` (direct routing)   |
 | Different perspective | `run_different_perspective_task`   | `sm_functions/different_perspective.py` |
 | Magic edit           | `_handle_magic_edit_task`          | `sm_functions/magic_edit.py` |
 | OpenPose mask video  | `handle_openpose_task`             | `specialized_handlers.py` |
