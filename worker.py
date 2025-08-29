@@ -58,7 +58,7 @@ from source.common_utils import (
 )
 from source.sm_functions import travel_between_images as tbi
 from source.sm_functions import different_perspective as dp
-from source.sm_functions import single_image as si
+# single_image tasks now use direct queue integration (wan_2_2_t2i)
 from source.sm_functions import magic_edit as me
 # --- New Queue-based Architecture Imports ---
 # Protect sys.argv before importing queue management which imports wgp.py
@@ -118,6 +118,7 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             "vace": "vace_14B_cocktail_2_2",  # Default to Wan 2.2 for better performance
             "vace_21": "vace_14B",  # Explicit Wan 2.1 VACE
             "vace_22": "vace_14B_cocktail_2_2",  # Explicit Wan 2.2 VACE
+            "wan_2_2_t2i": "t2v_2_2",  # Wan 2.2 T2I
             "flux": "flux",
             "t2v": "t2v",
             "t2v_22": "t2v_2_2",  # Wan 2.2 T2V
@@ -628,7 +629,7 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
     # --- NEW: Direct Queue Integration for Simple Generation Tasks ---
     # Route simple generation tasks directly to HeadlessTaskQueue to eliminate blocking waits
     direct_queue_task_types = {
-        "single_image", "vace", "vace_21", "vace_22", "flux", "t2v", "t2v_22", 
+        "wan_2_2_t2i", "vace", "vace_21", "vace_22", "flux", "t2v", "t2v_22", 
         "i2v", "i2v_22", "hunyuan", "ltxv", "generate_video"
     }
     
@@ -639,10 +640,10 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
             # Create GenerationTask object from DB parameters
             generation_task = db_task_to_generation_task(task_params_dict, task_id, task_type)
             
-            # For single_image tasks, ensure video_length=1 for PNG conversion
-            if task_type == "single_image":
+            # For wan_2_2_t2i tasks, ensure video_length=1 for PNG conversion
+            if task_type == "wan_2_2_t2i":
                 generation_task.parameters["video_length"] = 1
-                headless_logger.debug(f"Overriding video_length=1 for single_image task", task_id=task_id)
+                headless_logger.debug(f"Overriding video_length=1 for wan_2_2_t2i task", task_id=task_id)
             
             # Apply global flags to task parameters
             if apply_reward_lora:

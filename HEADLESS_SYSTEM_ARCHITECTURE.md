@@ -23,7 +23,7 @@ The WanGP headless system consists of three main components that work together t
 - Handles graceful shutdown with proper cleanup
 
 **Task Processing Routes:**
-- **Direct Queue Integration**: `vace`, `vace_21`, `vace_22`, `flux`, `t2v`, `t2v_22`, `i2v`, `i2v_22`, `hunyuan`, `ltxv`, `generate_video`, `single_image`
+- **Direct Queue Integration**: `vace`, `vace_21`, `vace_22`, `flux`, `t2v`, `t2v_22`, `i2v`, `i2v_22`, `hunyuan`, `ltxv`, `generate_video`, `wan_2_2_t2i`
 - **Orchestrator Delegation**: `travel_orchestrator`, `different_perspective_orchestrator` → delegates to `source.sm_functions.*`
 - **Travel Segments**: `travel_segment` → `_handle_travel_segment_via_queue()` (eliminates blocking waits)
 - **Complex Workflows**: `travel_stitch`, `dp_final_gen`, `magic_edit` → specialized handlers

@@ -208,7 +208,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
         // Extract shot_id based on task type
         if (currentTask.task_type === 'travel_stitch') {
           shotId = currentTask.params?.full_orchestrator_payload?.shot_id;
-        } else if (currentTask.task_type === 'single_image') {
+        } else if (currentTask.task_type === 'wan_2_2_t2i') {
           shotId = currentTask.params?.shot_id;
         }
         // If there's a shot_id, validate it exists
@@ -221,7 +221,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
             // Remove shot_id from parameters
             if (currentTask.task_type === 'travel_stitch' && updatedParams.full_orchestrator_payload) {
               delete updatedParams.full_orchestrator_payload.shot_id;
-            } else if (currentTask.task_type === 'single_image') {
+            } else if (currentTask.task_type === 'wan_2_2_t2i') {
               delete updatedParams.shot_id;
             }
           } else {
