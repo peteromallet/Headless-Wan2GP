@@ -41,8 +41,8 @@ This guide provides step-by-step instructions for an AI agent to automatically m
 - Document path/import dependencies (Python path changes, working directory)
 - Create `maintenance_analysis/system_integration_analysis.md`
 
-### Step 1.3: Generate Update Checklist
-**Goal**: Create actionable checklist based on analysis
+### Step 1.3: Generate Update Checklist & Progress Tracking
+**Goal**: Create actionable checklist and progress tracking documents
 
 **Agent Actions**:
 - Based on diff analysis: identify files that need our attention
@@ -50,8 +50,10 @@ This guide provides step-by-step instructions for an AI agent to automatically m
 - Create verification items for each integration point
 - Include post-update validation steps
 - Create `maintenance_analysis/update_checklist.md`
+- **Create `maintenance_analysis/attempt_log.md`** - for detailed attempt summaries
+- **Create `maintenance_analysis/milestone_progress.md`** - for major milestone tracking
 
-**CRITICAL**: This checklist becomes your living document throughout the maintenance process. Update it after every task completion and regularly sense-check your progress against it.
+**CRITICAL**: These become your living documents throughout the maintenance process. Update them after every appropriate action and regularly sense-check your progress against them.
 
 ### Step 1.4: Clean Slate - Update Wan2GP
 **Goal**: Replace current Wan2GP with latest upstream
@@ -206,12 +208,51 @@ After each attempt, provide a succinct but complete summary:
 📋 Progress: [X/Y items completed on checklist]
 ```
 
+**Document Updates Required After Each Attempt:**
+
+1. **Update `maintenance_analysis/attempt_log.md`:**
+```markdown
+## Attempt #3 - [Timestamp]
+**Problem:** [1-line description]
+**Strategy:** [What you tried]
+**Outcome:** [SUCCESS/FAILED/PARTIAL]
+**Key Learning:** [What this taught us]
+**Files Changed:** [List any files modified]
+**Next Action:** [Specific next step]
+---
+```
+
+2. **Update `maintenance_analysis/milestone_progress.md`** (when reaching major milestones):
+```markdown
+## [Phase/Milestone Name] - [Timestamp]
+**Status:** [COMPLETED/IN_PROGRESS/BLOCKED]
+**Key Achievements:**
+- [Achievement 1]
+- [Achievement 2]
+**Blockers Resolved:**
+- [Blocker that was overcome]
+**Next Major Milestone:** [What's next]
+---
+```
+
+**Major Milestones Requiring Milestone Document Updates:**
+- ✅ **Phase 1 Complete**: All analysis documents created, Wan2GP updated
+- ✅ **Environment Ready**: Virtual environment set up, all dependencies installed
+- ✅ **First Successful Test**: At least one model generates video successfully
+- ✅ **All Models Working**: Complete baseline test suite passes
+- ✅ **Integration Verified**: All headless wrapper functions working with updated Wan2GP
+- ✅ **System Stable**: Multiple consecutive successful test runs
+- ❌ **Critical Blocker Resolved**: Any major obstacle that was blocking progress
+- ❌ **Recovery from Failure**: Successfully recovered from system-breaking error
+
 **Agent Persistence Rules**:
 - Maximum 10 fix attempts per loop
 - If no progress after 5 attempts, take a different approach
 - If system completely breaks, start fresh from Phase 1
 - Always document what was tried
 - **Update your checklist after each attempt** - mark progress, add new discovered issues, reassess priorities
+- **Update `attempt_log.md` after EVERY attempt** - maintain detailed attempt history
+- **Update `milestone_progress.md` after major milestones** - track phase completions, significant breakthroughs
 - **After each cycle of changes**: Sense-check your current approach against this base document - are you following the prescribed phases and protocols?
 
 
@@ -266,7 +307,9 @@ After each attempt, provide a succinct but complete summary:
 5. **Verify**: Confirm fix worked and didn't break anything else
 6. **Document**: Record what was done for future reference
 7. **Update Checklist**: Mark completion and add any new discovered tasks
-8. **Sense-Check vs Base Document**: After each cycle of changes, verify you're still following the prescribed phases and protocols in this guide
+8. **Update Attempt Log**: Add entry to `maintenance_analysis/attempt_log.md`
+9. **Update Milestones** (if applicable): Add entry to `maintenance_analysis/milestone_progress.md` for major achievements
+10. **Sense-Check vs Base Document**: After each cycle of changes, verify you're still following the prescribed phases and protocols in this guide
 
 ### Escalation Triggers:
 - More than 10 consecutive failures
