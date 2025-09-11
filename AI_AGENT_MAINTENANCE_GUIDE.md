@@ -189,7 +189,8 @@ else
     echo "NEXT ACTION: [specific next step based on this outcome]" >> attempt_log.txt
 fi
 echo "CHECKLIST STATUS: [brief update on overall progress]" >> attempt_log.txt
-echo "SANITY CHECK: Did I prioritize upstream fixes? Am I following the prescribed phases?" >> attempt_log.txt
+echo "SANITY CHECK: Did I prioritize upstream fixes? [YES/NO + brief justification]" >> attempt_log.txt
+echo "PHASE ALIGNMENT: Am I following the prescribed phases? [YES/NO + current phase/step]" >> attempt_log.txt
 echo "----------------------------------------" >> attempt_log.txt
 echo "" >> attempt_log.txt
 ```
@@ -251,7 +252,7 @@ _Definition_: A "loop" refers to a full Phase 3 cycle from the initial baseline 
 - **Update your checklist after each attempt** - mark progress, add new discovered issues, reassess priorities
 - **All attempt details are automatically logged to `attempt_log.txt`** via the structured bash logging protocol
 - **Update `milestone_progress.txt` after major milestones** - track phase completions, significant breakthroughs
-- **Sanity check after each attempt**: Did I prioritize upstream fixes? Am I following the prescribed phases?
+- **Sanity check after each attempt**: Answer YES/NO with justification - Did I prioritize upstream fixes? Am I following the prescribed phases?
 - **After each cycle of changes**: Sense-check your current approach against this base document - are you following the prescribed phases and protocols?
 
 ## Phase 5: Advanced Troubleshooting
@@ -308,7 +309,7 @@ _Definition_: A "loop" refers to a full Phase 3 cycle from the initial baseline 
 6. **Document**: Record what was done for future reference
 7. **Update Checklist**: Mark completion and add any new discovered tasks
 8. **Update Milestones** (if applicable): Add entry to `maintenance_analysis/milestone_progress.txt` for major achievements
-9. **Sanity Check**: Did I prioritize upstream fixes? Am I following the prescribed phases?
+9. **Sanity Check**: Answer YES/NO with justification - Did I prioritize upstream fixes? Am I following the prescribed phases?
 10. **Sense-Check vs Base Document**: After each cycle of changes, verify you're still following the prescribed phases and protocols in this guide
 
 *Note: Attempt details are automatically captured in `attempt_log.txt` via the structured bash logging protocol.*
