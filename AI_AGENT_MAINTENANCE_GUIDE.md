@@ -18,69 +18,226 @@ This guide provides step-by-step instructions for an AI agent to automatically m
 - All model configurations in `test_model_comparison.py` generate videos successfully without errors (baseline test)
 - Integration between Headless-Wan2GP and updated upstream Wan2GP remains functional
 
-## Phase 1: Environment Setup & Fresh Pull
+## Phase 1: Environment Setup & Wan2GP Analysis
 
-### Step 1.1: Clone/Pull Headless-Wan2GP Repository
+### Step 1.1: Analyze Current vs Upstream Wan2GP Differences
 ```bash
-# If starting fresh, clone the repository
-if [ ! -d "Headless-Wan2GP" ]; then
-    git clone https://github.com/peteromallet/Headless-Wan2GP.git
-    cd Headless-Wan2GP
-else
-    # If already exists, pull latest changes
-    cd Headless-Wan2GP
-    git pull origin main
-fi
-
-# Verify we're in the right place
+# Verify we're in the Headless-Wan2GP directory
 pwd
 ls -la | grep -E "(AI_AGENT_MAINTENANCE_GUIDE\.md|STRUCTURE\.md|worker\.py)"
+
+# Create analysis directory for documentation
+mkdir -p maintenance_analysis
+cd maintenance_analysis
+
+# Clone fresh upstream for comparison (temporary)
+echo "Cloning fresh upstream Wan2GP for comparison..."
+git clone https://github.com/deepbeepmeep/Wan2GP.git upstream_wan2gp_temp
+cd ..
+
+# Generate comprehensive diff analysis
+echo "=== WAN2GP UPDATE ANALYSIS $(date) ===" > maintenance_analysis/wan2gp_diff_analysis.md
+echo "" >> maintenance_analysis/wan2gp_diff_analysis.md
+
+# Compare directory structures
+echo "## Directory Structure Changes" >> maintenance_analysis/wan2gp_diff_analysis.md
+echo "\`\`\`bash" >> maintenance_analysis/wan2gp_diff_analysis.md
+echo "# Current Wan2GP structure:" >> maintenance_analysis/wan2gp_diff_analysis.md
+find Wan2GP -type f -name "*.py" | head -20 >> maintenance_analysis/wan2gp_diff_analysis.md
+echo "" >> maintenance_analysis/wan2gp_diff_analysis.md
+echo "# Upstream Wan2GP structure:" >> maintenance_analysis/wan2gp_diff_analysis.md
+find maintenance_analysis/upstream_wan2gp_temp -type f -name "*.py" | head -20 >> maintenance_analysis/wan2gp_diff_analysis.md
+echo "\`\`\`" >> maintenance_analysis/wan2gp_diff_analysis.md
+echo "" >> maintenance_analysis/wan2gp_diff_analysis.md
+
+# Compare key integration files
+echo "## Key File Changes Analysis" >> maintenance_analysis/wan2gp_diff_analysis.md
+for file in "wgp.py" "defaults" "requirements.txt"; do
+    if [ -f "Wan2GP/$file" ] && [ -f "maintenance_analysis/upstream_wan2gp_temp/$file" ]; then
+        echo "### Changes in $file:" >> maintenance_analysis/wan2gp_diff_analysis.md
+        echo "\`\`\`diff" >> maintenance_analysis/wan2gp_diff_analysis.md
+        diff -u "Wan2GP/$file" "maintenance_analysis/upstream_wan2gp_temp/$file" | head -50 >> maintenance_analysis/wan2gp_diff_analysis.md
+        echo "\`\`\`" >> maintenance_analysis/wan2gp_diff_analysis.md
+        echo "" >> maintenance_analysis/wan2gp_diff_analysis.md
+    fi
+done
+
+# Analyze new files
+echo "## New Files in Upstream" >> maintenance_analysis/wan2gp_diff_analysis.md
+echo "\`\`\`bash" >> maintenance_analysis/wan2gp_diff_analysis.md
+comm -13 <(find Wan2GP -name "*.py" | sort) <(find maintenance_analysis/upstream_wan2gp_temp -name "*.py" | sort) >> maintenance_analysis/wan2gp_diff_analysis.md
+echo "\`\`\`" >> maintenance_analysis/wan2gp_diff_analysis.md
+
+# Analyze removed files  
+echo "## Files Removed from Upstream" >> maintenance_analysis/wan2gp_diff_analysis.md
+echo "\`\`\`bash" >> maintenance_analysis/wan2gp_diff_analysis.md
+comm -23 <(find Wan2GP -name "*.py" | sort) <(find maintenance_analysis/upstream_wan2gp_temp -name "*.py" | sort) >> maintenance_analysis/wan2gp_diff_analysis.md
+echo "\`\`\`" >> maintenance_analysis/wan2gp_diff_analysis.md
+
+echo "Diff analysis complete. Review maintenance_analysis/wan2gp_diff_analysis.md"
 ```
 
-**Agent Behavior**: 
-- If clone fails, wait 30 seconds and retry up to 3 times
-- If git is not available, install it first
-- If directory exists but git pull fails, remove and re-clone fresh
-- Record the commit hash for tracking purposes
+**Agent Behavior**:
+- Thoroughly analyze ALL differences before making changes
+- Document new files, removed files, and modified files
+- Pay special attention to changes in wgp.py, model definitions, and requirements
+- Create detailed analysis for review before proceeding
 
-### Step 1.2: Clean Slate - Remove Existing Wan2GP Submodule
+### Step 1.2: Document Current System Integration
 ```bash
-# Should already be in the Headless-Wan2GP directory from Step 1.1
-# If not, navigate to wherever the repo was cloned
-pwd  # Verify current location
+# Create integration analysis document
+echo "=== HEADLESS-WAN2GP INTEGRATION ANALYSIS $(date) ===" > maintenance_analysis/system_integration_analysis.md
+echo "" >> maintenance_analysis/system_integration_analysis.md
 
-# Remove existing Wan2GP directory completely to get fresh upstream
+echo "## Our Integration Points with Wan2GP" >> maintenance_analysis/system_integration_analysis.md
+echo "" >> maintenance_analysis/system_integration_analysis.md
+
+echo "### 1. headless_model_management.py Integration" >> maintenance_analysis/system_integration_analysis.md
+echo "- **Purpose**: Task queue manager that wraps WGP functionality" >> maintenance_analysis/system_integration_analysis.md
+echo "- **Key WGP Dependencies**:" >> maintenance_analysis/system_integration_analysis.md
+grep -n "import.*wgp\|from.*wgp\|wgp\." headless_model_management.py | head -10 >> maintenance_analysis/system_integration_analysis.md
+echo "" >> maintenance_analysis/system_integration_analysis.md
+
+echo "### 2. headless_wgp.py Integration" >> maintenance_analysis/system_integration_analysis.md  
+echo "- **Purpose**: Direct orchestrator wrapper around wgp.generate_video()" >> maintenance_analysis/system_integration_analysis.md
+echo "- **Key WGP Dependencies**:" >> maintenance_analysis/system_integration_analysis.md
+grep -n "import.*wgp\|from.*wgp\|wgp\." headless_wgp.py | head -10 >> maintenance_analysis/system_integration_analysis.md
+echo "" >> maintenance_analysis/system_integration_analysis.md
+
+echo "### 3. Critical WGP Functions We Use" >> maintenance_analysis/system_integration_analysis.md
+echo "\`\`\`python" >> maintenance_analysis/system_integration_analysis.md
+echo "# From headless_wgp.py:" >> maintenance_analysis/system_integration_analysis.md
+grep -A 2 -B 2 "generate_video\|load_models\|get_model_def\|test_vace_module" headless_wgp.py | head -20 >> maintenance_analysis/system_integration_analysis.md
+echo "\`\`\`" >> maintenance_analysis/system_integration_analysis.md
+echo "" >> maintenance_analysis/system_integration_analysis.md
+
+echo "### 4. Model Configuration Dependencies" >> maintenance_analysis/system_integration_analysis.md
+echo "- We rely on Wan2GP/defaults/*.json files for model configurations" >> maintenance_analysis/system_integration_analysis.md
+echo "- Current model configs we use:" >> maintenance_analysis/system_integration_analysis.md
+ls -la Wan2GP/defaults/*.json | head -10 >> maintenance_analysis/system_integration_analysis.md
+echo "" >> maintenance_analysis/system_integration_analysis.md
+
+echo "### 5. Path and Import Dependencies" >> maintenance_analysis/system_integration_analysis.md
+echo "- Our system adds Wan2GP to Python path and changes working directory" >> maintenance_analysis/system_integration_analysis.md
+echo "- This is critical for WGP's relative path assumptions" >> maintenance_analysis/system_integration_analysis.md
+
+echo "Integration analysis complete. Review maintenance_analysis/system_integration_analysis.md"
+```
+
+### Step 1.3: Generate Update Checklist
+```bash
+# Create comprehensive update checklist based on analysis
+echo "=== WAN2GP UPDATE CHECKLIST $(date) ===" > maintenance_analysis/update_checklist.md
+echo "" >> maintenance_analysis/update_checklist.md
+
+echo "## Pre-Update Analysis" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Diff analysis completed (wan2gp_diff_analysis.md)" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Integration analysis completed (system_integration_analysis.md)" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Backup current working system created" >> maintenance_analysis/update_checklist.md
+echo "" >> maintenance_analysis/update_checklist.md
+
+echo "## Critical Integration Points to Verify" >> maintenance_analysis/update_checklist.md
+echo "- [ ] wgp.py generate_video() function signature unchanged" >> maintenance_analysis/update_checklist.md
+echo "- [ ] wgp.py load_models() function still works with our orchestrator" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Model definition loading (get_model_def) still compatible" >> maintenance_analysis/update_checklist.md
+echo "- [ ] VACE module detection (test_vace_module) still works" >> maintenance_analysis/update_checklist.md
+echo "- [ ] LoRA discovery and loading mechanisms unchanged" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Model family detection functions still available" >> maintenance_analysis/update_checklist.md
+echo "" >> maintenance_analysis/update_checklist.md
+
+echo "## File-Specific Updates Needed" >> maintenance_analysis/update_checklist.md
+echo "### Based on diff analysis:" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Review new Python files for integration impacts" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Check if removed files affect our imports" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Update any hardcoded paths or assumptions" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Verify model config JSON files still compatible" >> maintenance_analysis/update_checklist.md
+echo "" >> maintenance_analysis/update_checklist.md
+
+echo "## Our System Updates Required" >> maintenance_analysis/update_checklist.md
+echo "### headless_model_management.py:" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Update WGP import statements if needed" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Verify task queue integration still works" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Check LoRA processing pipeline compatibility" >> maintenance_analysis/update_checklist.md
+echo "" >> maintenance_analysis/update_checklist.md
+echo "### headless_wgp.py:" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Update generate_video() call parameters if changed" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Verify model loading pattern still matches WGP" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Check parameter resolution logic compatibility" >> maintenance_analysis/update_checklist.md
+echo "" >> maintenance_analysis/update_checklist.md
+echo "### test_model_comparison.py:" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Update model names if changed in upstream" >> maintenance_analysis/update_checklist.md
+echo "- [ ] Verify test parameters still valid" >> maintenance_analysis/update_checklist.md
+echo "" >> maintenance_analysis/update_checklist.md
+
+echo "## Post-Update Validation" >> maintenance_analysis/update_checklist.md
+echo "- [ ] All 3 baseline models load successfully" >> maintenance_analysis/update_checklist.md
+echo "- [ ] test_model_comparison.py runs without errors" >> maintenance_analysis/update_checklist.md
+echo "- [ ] VACE generation works with video guides" >> maintenance_analysis/update_checklist.md
+echo "- [ ] T2V generation works without video guides" >> maintenance_analysis/update_checklist.md
+echo "- [ ] LoRA loading and application works" >> maintenance_analysis/update_checklist.md
+echo "- [ ] No import errors in any of our modules" >> maintenance_analysis/update_checklist.md
+
+echo "Update checklist created. Review maintenance_analysis/update_checklist.md"
+```
+
+**Agent Behavior**:
+- Generate checklist based on actual diff analysis findings
+- Include specific items for each integration point discovered
+- Create actionable items that can be verified after update
+- Focus on our system's specific dependencies on WGP
+
+### Step 1.4: Clean Slate - Remove Current Wan2GP
+```bash
+# Backup current working Wan2GP for emergency rollback
+echo "Creating backup of current Wan2GP..."
+cp -r Wan2GP Wan2GP_backup_$(date +%Y%m%d_%H%M%S)
+
+# Remove current Wan2GP directory to get fresh upstream
+echo "Removing current Wan2GP directory..."
 rm -rf Wan2GP/
+
+# Clean up temporary analysis directory
+rm -rf maintenance_analysis/upstream_wan2gp_temp
 
 # Verify removal
 ls -la | grep -i wan2gp
 ```
 
 **Agent Behavior**: 
+- ALWAYS create backup before deletion for emergency rollback
 - This ensures we get the latest upstream version without any local modifications
 - If removal fails, try `sudo rm -rf Wan2GP/` 
 - If still fails, note the specific error and attempt file-by-file deletion
 - Continue only when Wan2GP directory is completely gone
 
-### Step 1.3: Fresh Clone from Upstream Wan2GP
+### Step 1.5: Fresh Clone from Upstream Wan2GP
 ```bash
 # Clone latest from upstream deepbeepmeep/Wan2GP repository
+echo "Cloning fresh upstream Wan2GP..."
 git clone https://github.com/deepbeepmeep/Wan2GP.git
 
 # Verify clone success and record version info
 cd Wan2GP/
 git status
 git log --oneline -5
-echo "Updated to Wan2GP commit: $(git rev-parse HEAD)"
+current_commit=$(git rev-parse HEAD)
+echo "Updated to Wan2GP commit: $current_commit"
+cd ..
+
+# Document the update in our analysis
+echo "## Update Completed" >> maintenance_analysis/wan2gp_diff_analysis.md
+echo "- **Previous version**: (backed up as Wan2GP_backup_*)" >> maintenance_analysis/wan2gp_diff_analysis.md
+echo "- **New version commit**: $current_commit" >> maintenance_analysis/wan2gp_diff_analysis.md
+echo "- **Update timestamp**: $(date)" >> maintenance_analysis/wan2gp_diff_analysis.md
 ```
 
 **Agent Behavior**:
-- This is the **critical step** - getting the latest upstream Wan2GP code
+- This is the **critical step** - getting the latest downstream Wan2GP code
 - If clone fails, wait 30 seconds and retry up to 3 times
 - Record the commit hash for tracking purposes and documentation
 - Ensure we're using the absolute latest version from deepbeepmeep/Wan2GP
 
-### Step 1.4: Update Structure Documentation
+### Step 1.6: Update Structure Documentation
 ```bash
 # Return to project root
 cd ..
@@ -392,17 +549,21 @@ print(f'Wan2GP Exists: {os.path.exists(\"Wan2GP/wgp.py\")}')
 
 ## Example Conversation Flow
 
-**Agent**: "Starting Headless-Wan2GP maintenance cycle. Pulling latest changes from repository..."
+**Agent**: "Starting Headless-Wan2GP maintenance cycle. Analyzing current vs upstream Wan2GP differences..."
 
-**Agent**: "Successfully updated Headless-Wan2GP. Updating Wan2GP submodule from upstream https://github.com/deepbeepmeep/Wan2GP.git..."
+**Agent**: "Diff analysis complete. Found 15 modified files, 3 new files, 1 removed file. Documenting integration points..."
 
-**Agent**: "Wan2GP submodule updated to latest commit (abc123). Installing dependencies..."
+**Agent**: "Integration analysis complete. Our system uses 12 critical WGP functions. Generating update checklist with 28 verification items..."
+
+**Agent**: "Creating backup of current Wan2GP. Updating to latest upstream commit (abc123)..."
+
+**Agent**: "Wan2GP updated successfully. Installing dependencies and running baseline test suite..."
 
 **Agent**: "Running baseline test suite (test_model_comparison.py)... vace_14B failed with 'CUDA out of memory'. Reducing video_length from 65 to 33 frames..."
 
-**Agent**: "Retesting baseline... vace_14B now successful. All 3 baseline models working."
+**Agent**: "Retesting baseline... vace_14B now successful. All 3 baseline models working. Verifying integration checklist..."
 
-**Agent**: "All baseline tests passing. System is healthy and ready for video generation."
+**Agent**: "✅ All 28 checklist items verified. System is healthy and ready for video generation."
 
 **Agent**: "Entering monitoring mode. Next baseline check in 60 minutes."
 
