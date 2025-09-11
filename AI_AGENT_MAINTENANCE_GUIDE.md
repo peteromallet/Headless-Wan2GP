@@ -2,15 +2,21 @@
 
 ## Overview
 
-This guide provides step-by-step instructions for an AI agent to automatically maintain the Headless-Wan2GP repository. The agent will pull the latest changes from the Headless-Wan2GP fork, update the upstream Wan2GP submodule, test the system, and fix issues to ensure continuous functionality.
+This guide provides step-by-step instructions for an AI agent to automatically maintain the Headless-Wan2GP repository. The agent will pull the latest changes from the Headless-Wan2GP fork, **update the upstream Wan2GP submodule from https://github.com/deepbeepmeep/Wan2GP.git**, test the system, and fix issues to ensure continuous functionality.
 
 ## Core Mission
 
-**Primary Goal**: Maintain a stable, working Headless-Wan2GP system that can successfully run video generation tests and headless worker operations without human intervention.
+**Primary Goal**: Update the Wan2GP submodule to the latest upstream version and maintain a stable, working Headless-Wan2GP system that can successfully run video generation tests without human intervention.
+
+**Key Objectives**:
+1. **Update Wan2GP submodule** from upstream https://github.com/deepbeepmeep/Wan2GP.git to latest version
+2. **Ensure compatibility** between updated Wan2GP and the Headless-Wan2GP wrapper system
+3. **Validate functionality** through comprehensive baseline testing
 
 **Success Criteria**: 
+- Wan2GP submodule successfully updated to latest upstream commit
 - All model configurations in `test_model_comparison.py` generate videos successfully without errors (baseline test)
-- Integration between Headless-Wan2GP and upstream Wan2GP remains functional
+- Integration between Headless-Wan2GP and updated upstream Wan2GP remains functional
 
 ## Phase 1: Environment Setup & Fresh Pull
 
@@ -51,24 +57,28 @@ ls -la | grep -i wan2gp
 ```
 
 **Agent Behavior**: 
+- This ensures we get the latest upstream version without any local modifications
 - If removal fails, try `sudo rm -rf Wan2GP/` 
 - If still fails, note the specific error and attempt file-by-file deletion
 - Continue only when Wan2GP directory is completely gone
 
 ### Step 1.3: Fresh Clone from Upstream Wan2GP
 ```bash
-# Clone latest from deepbeepmeep/Wan2GP
+# Clone latest from upstream deepbeepmeep/Wan2GP repository
 git clone https://github.com/deepbeepmeep/Wan2GP.git
 
-# Verify clone success
+# Verify clone success and record version info
 cd Wan2GP/
 git status
 git log --oneline -5
+echo "Updated to Wan2GP commit: $(git rev-parse HEAD)"
 ```
 
 **Agent Behavior**:
+- This is the **critical step** - getting the latest upstream Wan2GP code
 - If clone fails, wait 30 seconds and retry up to 3 times
-- Record the commit hash for tracking purposes
+- Record the commit hash for tracking purposes and documentation
+- Ensure we're using the absolute latest version from deepbeepmeep/Wan2GP
 
 ### Step 1.4: Update Structure Documentation
 ```bash
@@ -384,7 +394,9 @@ print(f'Wan2GP Exists: {os.path.exists(\"Wan2GP/wgp.py\")}')
 
 **Agent**: "Starting Headless-Wan2GP maintenance cycle. Pulling latest changes from repository..."
 
-**Agent**: "Successfully updated Headless-Wan2GP. Refreshing upstream Wan2GP submodule (commit abc123). Installing dependencies..."
+**Agent**: "Successfully updated Headless-Wan2GP. Updating Wan2GP submodule from upstream https://github.com/deepbeepmeep/Wan2GP.git..."
+
+**Agent**: "Wan2GP submodule updated to latest commit (abc123). Installing dependencies..."
 
 **Agent**: "Running baseline test suite (test_model_comparison.py)... vace_14B failed with 'CUDA out of memory'. Reducing video_length from 65 to 33 frames..."
 
