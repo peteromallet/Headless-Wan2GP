@@ -1,23 +1,49 @@
-# AI Agent Maintenance Guide for Wan2GP Fork
+# AI Agent Maintenance Guide for Headless-Wan2GP
 
 ## Overview
 
-This guide provides step-by-step instructions for an AI agent to automatically maintain a working Wan2GP fork. The agent will pull the latest upstream changes, test the system, and fix issues to ensure continuous functionality.
+This guide provides step-by-step instructions for an AI agent to automatically maintain the Headless-Wan2GP repository. The agent will pull the latest changes from the Headless-Wan2GP fork, update the upstream Wan2GP submodule, test the system, and fix issues to ensure continuous functionality.
 
 ## Core Mission
 
-**Primary Goal**: Maintain a stable, working fork of Wan2GP that can successfully run video generation tests without human intervention.
+**Primary Goal**: Maintain a stable, working Headless-Wan2GP system that can successfully run video generation tests and headless worker operations without human intervention.
 
-**Success Criteria**: All model configurations in `test_model_comparison.py` generate videos successfully without errors.
+**Success Criteria**: 
+- All model configurations in `test_model_comparison.py` generate videos successfully without errors (baseline test)
+- Integration between Headless-Wan2GP and upstream Wan2GP remains functional
 
 ## Phase 1: Environment Setup & Fresh Pull
 
-### Step 1.1: Clean Slate - Remove Existing Wan2GP
+### Step 1.1: Clone/Pull Headless-Wan2GP Repository
 ```bash
-# Navigate to project root
-cd /Users/peteromalley/Documents/Headless-Wan2GP
+# If starting fresh, clone the repository
+if [ ! -d "Headless-Wan2GP" ]; then
+    git clone https://github.com/peteromallet/Headless-Wan2GP.git
+    cd Headless-Wan2GP
+else
+    # If already exists, pull latest changes
+    cd Headless-Wan2GP
+    git pull origin main
+fi
 
-# Remove existing Wan2GP directory completely
+# Verify we're in the right place
+pwd
+ls -la | grep -E "(AI_AGENT_MAINTENANCE_GUIDE\.md|STRUCTURE\.md|worker\.py)"
+```
+
+**Agent Behavior**: 
+- If clone fails, wait 30 seconds and retry up to 3 times
+- If git is not available, install it first
+- If directory exists but git pull fails, remove and re-clone fresh
+- Record the commit hash for tracking purposes
+
+### Step 1.2: Clean Slate - Remove Existing Wan2GP Submodule
+```bash
+# Should already be in the Headless-Wan2GP directory from Step 1.1
+# If not, navigate to wherever the repo was cloned
+pwd  # Verify current location
+
+# Remove existing Wan2GP directory completely to get fresh upstream
 rm -rf Wan2GP/
 
 # Verify removal
@@ -29,7 +55,7 @@ ls -la | grep -i wan2gp
 - If still fails, note the specific error and attempt file-by-file deletion
 - Continue only when Wan2GP directory is completely gone
 
-### Step 1.2: Fresh Clone from Upstream
+### Step 1.3: Fresh Clone from Upstream Wan2GP
 ```bash
 # Clone latest from deepbeepmeep/Wan2GP
 git clone https://github.com/deepbeepmeep/Wan2GP.git
@@ -42,10 +68,9 @@ git log --oneline -5
 
 **Agent Behavior**:
 - If clone fails, wait 30 seconds and retry up to 3 times
-- If git is not available, install it first
 - Record the commit hash for tracking purposes
 
-### Step 1.3: Update Structure Documentation
+### Step 1.4: Update Structure Documentation
 ```bash
 # Return to project root
 cd ..
@@ -67,9 +92,9 @@ echo "Commit: $(cd Wan2GP && git rev-parse HEAD)" >> STRUCTURE.md
 python --version
 python3 --version
 
-# Check if we're in the right directory
+# Check if we're in the right directory (should be in Headless-Wan2GP root)
 pwd
-ls -la | grep -E "(test_model_comparison\.py|headless_wgp\.py|Wan2GP/)"
+ls -la | grep -E "(test_model_comparison\.py|headless_wgp\.py|worker\.py|Wan2GP/)"
 ```
 
 **Agent Behavior**:
@@ -95,14 +120,14 @@ cd ..
 
 ## Phase 3: Iterative Testing & Fixing Loop
 
-### Step 3.1: Initial Test Run
+### Step 3.1: Initial Baseline Test Run
 ```bash
-# Run the model comparison test
-python test_model_comparison.py --output-dir outputs/test_run_$(date +%Y%m%d_%H%M%S)
+# Run the baseline model comparison test
+python test_model_comparison.py --output-dir outputs/baseline_test_$(date +%Y%m%d_%H%M%S)
 ```
 
 **Expected Outcomes**:
-- ✅ **Success**: All 3 models generate videos → Proceed to Phase 4
+- ✅ **Success**: All 3 models (vace_14B, vace_14B_fake_cocktail_2_2, optimised-t2i) generate videos → Proceed to Phase 4
 - ⚠️ **Partial Success**: Some models work → Analyze and fix failing ones
 - ❌ **Complete Failure**: System won't start → Debug environment issues
 
@@ -234,16 +259,16 @@ cat outputs/model_comparison_*/results.json | jq '.results[].status'
 while true; do
     echo "=== Monitoring Run $(date) ==="
     
-    # Run test suite
+    # Run baseline test suite
     python test_model_comparison.py --output-dir outputs/monitor_$(date +%Y%m%d_%H%M%S)
     
     exit_code=$?
     
     if [ $exit_code -eq 0 ]; then
-        echo "✅ All tests passed"
+        echo "✅ Baseline tests passed"
         sleep 3600  # Wait 1 hour before next check
     else
-        echo "❌ Tests failed, investigating..."
+        echo "❌ Baseline tests failed, investigating..."
         # Apply fix strategies from Phase 3
         sleep 300   # Wait 5 minutes before retry
     fi
@@ -350,23 +375,25 @@ print(f'Wan2GP Exists: {os.path.exists(\"Wan2GP/wgp.py\")}')
 - Upstream API changes that break core functionality
 
 ### Success Metrics:
-- All 3 test models generate videos without errors
+- All 3 baseline models in `test_model_comparison.py` generate videos without errors
 - Test completion time under 30 minutes total
 - No memory leaks or resource exhaustion
 - Stable operation for 24+ hours without intervention
 
 ## Example Conversation Flow
 
-**Agent**: "Starting Wan2GP maintenance cycle. Removing existing Wan2GP directory..."
+**Agent**: "Starting Headless-Wan2GP maintenance cycle. Pulling latest changes from repository..."
 
-**Agent**: "Successfully cloned latest Wan2GP (commit abc123). Installing dependencies..."
+**Agent**: "Successfully updated Headless-Wan2GP. Refreshing upstream Wan2GP submodule (commit abc123). Installing dependencies..."
 
-**Agent**: "Running test suite... vace_14B failed with 'CUDA out of memory'. Reducing video_length from 65 to 33 frames..."
+**Agent**: "Running baseline test suite (test_model_comparison.py)... vace_14B failed with 'CUDA out of memory'. Reducing video_length from 65 to 33 frames..."
 
-**Agent**: "Retesting... vace_14B now successful. All tests passing. System is healthy."
+**Agent**: "Retesting baseline... vace_14B now successful. All 3 baseline models working."
 
-**Agent**: "Entering monitoring mode. Next check in 60 minutes."
+**Agent**: "All baseline tests passing. System is healthy and ready for video generation."
+
+**Agent**: "Entering monitoring mode. Next baseline check in 60 minutes."
 
 ---
 
-This guide ensures continuous, automated maintenance of the Wan2GP fork with minimal human intervention while prioritizing stability and upstream compatibility.
+This guide ensures continuous, automated maintenance of the Headless-Wan2GP system with minimal human intervention while prioritizing stability and upstream Wan2GP compatibility.
