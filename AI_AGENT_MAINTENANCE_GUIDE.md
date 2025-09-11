@@ -133,7 +133,7 @@ python test_model_comparison.py --output-dir outputs/baseline_test_$(date +%Y%m%
 3. **File Path Errors**:
    ```bash
    # Verify required files exist
-   ls -la video.mp4 mask.mp4 2>/dev/null || echo "Missing input files"
+   ls -la samples/video.mp4 samples/mask.mp4 2>/dev/null || echo "Missing input files"
    ```
 
 **Agent Response Pattern**:
@@ -146,16 +146,16 @@ python test_model_comparison.py --output-dir outputs/baseline_test_$(date +%Y%m%
 #### Strategy A: Missing Input Files
 ```bash
 # Create dummy input files if missing
-if [ ! -f "video.mp4" ]; then
-    echo "Creating dummy video.mp4..."
+if [ ! -f "samples/video.mp4" ]; then
+    echo "Creating dummy samples/video.mp4..."
     # Use ffmpeg to create a test video or copy from samples/
-    cp samples/test.mp4 video.mp4 2>/dev/null || echo "No sample video available"
+    cp samples/test.mp4 samples/video.mp4 2>/dev/null || echo "No sample video available"
 fi
 
-if [ ! -f "mask.mp4" ]; then
-    echo "Creating dummy mask.mp4..."
+if [ ! -f "samples/mask.mp4" ]; then
+    echo "Creating dummy samples/mask.mp4..."
     # Create a simple mask video
-    cp samples/test.mp4 mask.mp4 2>/dev/null || echo "No sample mask available"
+    cp samples/test.mp4 samples/mask.mp4 2>/dev/null || echo "No sample mask available"
 fi
 ```
 

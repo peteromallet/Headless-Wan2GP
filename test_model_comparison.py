@@ -28,8 +28,8 @@ def run_model_comparison_tests(base_output_dir: str = "outputs/model_comparison_
             "model": "vace_14B",
             "name": "Vace ControlNet 14B",
             "test_type": "vace_video",
-            "video": "video.mp4",
-            "mask": "mask.mp4", 
+            "video": "samples/video.mp4",
+            "mask": "samples/mask.mp4", 
             "prompt": "camera rotates around him",
             "params": {
                 "video_prompt_type": "VM",
@@ -50,8 +50,8 @@ def run_model_comparison_tests(base_output_dir: str = "outputs/model_comparison_
             "model": "vace_14B_fake_cocktail_2_2", 
             "name": "Fake Vace Cocktail 14B",
             "test_type": "vace_video",
-            "video": "video.mp4",
-            "mask": "mask.mp4",
+            "video": "samples/video.mp4",
+            "mask": "samples/mask.mp4",
             "prompt": "he runs into the kitchen and starts cooking",
             "params": {
                 "video_prompt_type": "VM",
