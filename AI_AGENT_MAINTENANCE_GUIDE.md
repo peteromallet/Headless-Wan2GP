@@ -232,7 +232,7 @@ echo "- **Update timestamp**: $(date)" >> maintenance_analysis/wan2gp_diff_analy
 ```
 
 **Agent Behavior**:
-- This is the **critical step** - getting the latest downstream Wan2GP code
+- This is the **critical step** - getting the latest upstream Wan2GP code
 - If clone fails, wait 30 seconds and retry up to 3 times
 - Record the commit hash for tracking purposes and documentation
 - Ensure we're using the absolute latest version from deepbeepmeep/Wan2GP
