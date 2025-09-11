@@ -224,6 +224,7 @@ echo "" >> debug_log.txt
 - If system completely breaks, start fresh from Phase 1
 - Always document what was tried
 - **Update your checklist after each attempt** - mark progress, add new discovered issues, reassess priorities
+- **After each cycle of changes**: Sense-check your current approach against this base document - are you following the prescribed phases and protocols?
 
 ## Phase 4: Continuous Operation
 
@@ -360,6 +361,7 @@ print(f'Wan2GP Exists: {os.path.exists(\"Wan2GP/wgp.py\")}')
 - Have I been stuck on the same issue for too long without trying a different approach?
 - Are there critical integration points I haven't verified yet?
 - Is my current approach the most efficient path to success?
+- **After each cycle of changes**: Does my current state align with the guidance in this base document? Am I following the prescribed phases and protocols?
 
 ### Decision Making Framework:
 1. **Analyze**: What exactly failed and why?
@@ -369,6 +371,7 @@ print(f'Wan2GP Exists: {os.path.exists(\"Wan2GP/wgp.py\")}')
 5. **Verify**: Confirm fix worked and didn't break anything else
 6. **Document**: Record what was done for future reference
 7. **Update Checklist**: Mark completion and add any new discovered tasks
+8. **Sense-Check vs Base Document**: After each cycle of changes, verify you're still following the prescribed phases and protocols in this guide
 
 ### Escalation Triggers:
 - More than 10 consecutive failures
