@@ -50,6 +50,8 @@ This guide provides step-by-step instructions for an AI agent to automatically m
 - Include post-update validation steps
 - Create `maintenance_analysis/update_checklist.md`
 
+**CRITICAL**: This checklist becomes your living document throughout the maintenance process. Update it after every task completion and regularly sense-check your progress against it.
+
 ### Step 1.4: Clean Slate - Update Wan2GP
 **Goal**: Replace current Wan2GP with latest upstream
 
@@ -221,6 +223,7 @@ echo "" >> debug_log.txt
 - If no progress after 5 attempts, take a different approach
 - If system completely breaks, start fresh from Phase 1
 - Always document what was tried
+- **Update your checklist after each attempt** - mark progress, add new discovered issues, reassess priorities
 
 ## Phase 4: Continuous Operation
 
@@ -342,6 +345,21 @@ print(f'Wan2GP Exists: {os.path.exists(\"Wan2GP/wgp.py\")}')
 3. **Be Conservative**: Prefer upstream fixes over downstream changes
 4. **Be Thorough**: Read complete error messages, not just summaries
 5. **Be Documented**: Log every action and outcome
+6. **Maintain Living Checklist**: Update your checklist after every completed task and regularly sense-check your progress
+
+### Checklist Management Protocol:
+**After Every Task Completion**:
+1. **Update Status**: Mark completed items as ✅ DONE in your checklist
+2. **Add New Items**: If you discovered additional tasks, add them to the checklist
+3. **Sense-Check Progress**: Review the overall checklist - are you on track? Missing anything critical?
+4. **Prioritize Remaining**: Re-order remaining tasks by importance/dependencies
+5. **Estimate Completion**: Assess how much work remains
+
+**Regular Sense-Check Questions**:
+- Am I making meaningful progress toward the core mission (functional Wan2GP update)?
+- Have I been stuck on the same issue for too long without trying a different approach?
+- Are there critical integration points I haven't verified yet?
+- Is my current approach the most efficient path to success?
 
 ### Decision Making Framework:
 1. **Analyze**: What exactly failed and why?
@@ -350,6 +368,7 @@ print(f'Wan2GP Exists: {os.path.exists(\"Wan2GP/wgp.py\")}')
 4. **Execute**: Apply fix and test immediately
 5. **Verify**: Confirm fix worked and didn't break anything else
 6. **Document**: Record what was done for future reference
+7. **Update Checklist**: Mark completion and add any new discovered tasks
 
 ### Escalation Triggers:
 - More than 10 consecutive failures
