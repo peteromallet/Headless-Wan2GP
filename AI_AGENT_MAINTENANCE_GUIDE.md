@@ -50,8 +50,8 @@ This guide provides step-by-step instructions for an AI agent to automatically m
 - Create verification items for each integration point
 - Include post-update validation steps
 - Create `maintenance_analysis/update_checklist.md`
-- **Create `maintenance_analysis/milestone_progress.md`** - for major milestone tracking
-- **Use `debug_log.txt`** - for detailed attempt summaries (already structured for this)
+- **Create `maintenance_analysis/milestone_progress.txt`** - for major milestone tracking
+- **Use `attempt_log.txt`** - for detailed attempt summaries (structured logging format)
 
 **CRITICAL**: These become your living documents throughout the maintenance process. Update them after every appropriate action and regularly sense-check your progress against them.
 
@@ -138,7 +138,7 @@ python test_model_comparison.py --output-dir outputs/baseline_test_$(date +%Y%m%
 **🚨 EXTREMELY IMPORTANT: Focus UPSTREAM of Wan2GP as much as possible! 🚨**
 
 **Priority 1 (Upstream - STRONGLY Preferred)**:
-1. Fix paths in `headless_wgp.py` or `headless_model_management.py` 
+1. Fix paths in `headless_wgp.py` or `headless_model_management.py`
 2. Update model configuration mappings in our wrapper code
 3. Adjust parameters in `test_model_comparison.py`
 4. Install missing dependencies
@@ -161,34 +161,34 @@ python test_model_comparison.py --output-dir outputs/baseline_test_$(date +%Y%m%
 
 ```bash
 # BEFORE each fix attempt - log the plan
-ATTEMPT_NUM=$(( $(grep -c "=== Fix Attempt" debug_log.txt 2>/dev/null || echo 0) + 1 ))
-echo "=== Fix Attempt #${ATTEMPT_NUM} - $(date) ===" >> debug_log.txt
-echo "PROBLEM: [1-line description of what failed]" >> debug_log.txt
-echo "ROOT CAUSE: [your analysis of why it failed]" >> debug_log.txt
-echo "FIX STRATEGY: [specific action you're taking]" >> debug_log.txt
-echo "EXPECTED OUTCOME: [what should happen if this works]" >> debug_log.txt
+ATTEMPT_NUM=$(( $(grep -c "=== Fix Attempt" attempt_log.txt 2>/dev/null || echo 0) + 1 ))
+echo "=== Fix Attempt #${ATTEMPT_NUM} - $(date) ===" >> attempt_log.txt
+echo "PROBLEM: [1-line description of what failed]" >> attempt_log.txt
+echo "ROOT CAUSE: [your analysis of why it failed]" >> attempt_log.txt
+echo "FIX STRATEGY: [specific action you're taking]" >> attempt_log.txt
+echo "EXPECTED OUTCOME: [what should happen if this works]" >> attempt_log.txt
 
 # Apply the fix
 [your actual fix commands here]
 
 # Re-run test
-echo "TESTING: Running baseline test..." >> debug_log.txt
+echo "TESTING: Running baseline test..." >> attempt_log.txt
 python test_model_comparison.py --output-dir outputs/attempt_${ATTEMPT_NUM}_$(date +%H%M%S)
 EXIT_CODE=$?
 
 # AFTER test - record detailed outcome
 if [ $EXIT_CODE -eq 0 ]; then
-    echo "✅ RESULT: SUCCESS - All tests passed" >> debug_log.txt
-    echo "NEXT ACTION: Proceeding to validation phase" >> debug_log.txt
+    echo "✅ RESULT: SUCCESS - All tests passed" >> attempt_log.txt
+    echo "NEXT ACTION: Proceeding to validation phase" >> attempt_log.txt
 else
-    echo "❌ RESULT: FAILED (exit code: $EXIT_CODE)" >> debug_log.txt
-    echo "NEW ERROR: [describe what failed this time]" >> debug_log.txt
-    echo "ANALYSIS: [is this the same error, different error, or partial progress?]" >> debug_log.txt
-    echo "NEXT ACTION: [specific next step based on this outcome]" >> debug_log.txt
+    echo "❌ RESULT: FAILED (exit code: $EXIT_CODE)" >> attempt_log.txt
+    echo "NEW ERROR: [describe what failed this time]" >> attempt_log.txt
+    echo "ANALYSIS: [is this the same error, different error, or partial progress?]" >> attempt_log.txt
+    echo "NEXT ACTION: [specific next step based on this outcome]" >> attempt_log.txt
 fi
-echo "CHECKLIST STATUS: [brief update on overall progress]" >> debug_log.txt
-echo "----------------------------------------" >> debug_log.txt
-echo "" >> debug_log.txt
+echo "CHECKLIST STATUS: [brief update on overall progress]" >> attempt_log.txt
+echo "----------------------------------------" >> attempt_log.txt
+echo "" >> attempt_log.txt
 ```
 
 **Agent Must Provide Clear Summary After Each Attempt:**
@@ -208,24 +208,25 @@ After each attempt, provide a succinct but complete summary:
 📋 Progress: [X/Y items completed on checklist]
 ```
 
-**Attempt Summary Already Captured in `debug_log.txt`:**
-The bash logging protocol above already captures all necessary attempt details in a structured format that appends to `debug_log.txt`. This creates a complete chronological record of all attempts without needing a separate file.
+**Attempt Summary Captured in `attempt_log.txt`:**
+The bash logging protocol above captures all necessary attempt details in a structured format that appends to `attempt_log.txt`. This creates a complete chronological record of all attempts.
 
 **Document Update Required After Each Each Achievement:**
 
-**Update `maintenance_analysis/milestone_progress.md`** (when reaching major milestones):
-```markdown
-## [Phase/Milestone Name] - [Timestamp]
-**Status:** [COMPLETED/IN_PROGRESS/BLOCKED]
-**Key Achievements:**
+**Update `maintenance_analysis/milestone_progress.txt`** (when reaching major milestones):
+```
+=== [Phase/Milestone Name] - [Timestamp] ===
+STATUS: [COMPLETED/IN_PROGRESS/BLOCKED]
+KEY ACHIEVEMENTS:
 - [Achievement 1]
 - [Achievement 2]
-**Blockers Resolved:**
+BLOCKERS RESOLVED:
 - [Blocker that was overcome]
-**Overall Progress with Reasoning**
+OVERALL PROGRESS WITH REASONING:
 - [Brief Update on Progress]
-**Next Major Milestone:** [What's next]
----
+NEXT MAJOR MILESTONE: [What's next]
+========================================
+
 ```
 
 **Major Milestones Requiring Milestone Document Updates:**
@@ -244,8 +245,8 @@ The bash logging protocol above already captures all necessary attempt details i
 - If system completely breaks, start fresh from Phase 1
 - Always document what was tried
 - **Update your checklist after each attempt** - mark progress, add new discovered issues, reassess priorities
-- **All attempt details are automatically logged to `debug_log.txt`** via the structured bash logging protocol
-- **Update `milestone_progress.md` after major milestones** - track phase completions, significant breakthroughs
+- **All attempt details are automatically logged to `attempt_log.txt`** via the structured bash logging protocol
+- **Update `milestone_progress.txt` after major milestones** - track phase completions, significant breakthroughs
 - **After each cycle of changes**: Sense-check your current approach against this base document - are you following the prescribed phases and protocols?
 
 
@@ -300,10 +301,10 @@ The bash logging protocol above already captures all necessary attempt details i
 5. **Verify**: Confirm fix worked and didn't break anything else
 6. **Document**: Record what was done for future reference
 7. **Update Checklist**: Mark completion and add any new discovered tasks
-8. **Update Milestones** (if applicable): Add entry to `maintenance_analysis/milestone_progress.md` for major achievements
+8. **Update Milestones** (if applicable): Add entry to `maintenance_analysis/milestone_progress.txt` for major achievements
 9. **Sense-Check vs Base Document**: After each cycle of changes, verify you're still following the prescribed phases and protocols in this guide
 
-*Note: Attempt details are automatically captured in `debug_log.txt` via the structured bash logging protocol.*
+*Note: Attempt details are automatically captured in `attempt_log.txt` via the structured bash logging protocol.*
 
 ### Escalation Triggers:
 - More than 10 consecutive failures
