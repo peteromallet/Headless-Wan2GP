@@ -155,19 +155,55 @@ python test_model_comparison.py --output-dir outputs/baseline_test_$(date +%Y%m%
 
 ### Step 3.4: Iteration Loop Protocol
 
+**Each Attempt Must Be Clearly Documented:**
+
 ```bash
-# After each fix attempt:
-echo "=== Fix Attempt $(date) ===" >> debug_log.txt
-echo "Error: [describe the error]" >> debug_log.txt
-echo "Fix Applied: [describe the fix]" >> debug_log.txt
+# BEFORE each fix attempt - log the plan
+ATTEMPT_NUM=$(( $(grep -c "=== Fix Attempt" debug_log.txt 2>/dev/null || echo 0) + 1 ))
+echo "=== Fix Attempt #${ATTEMPT_NUM} - $(date) ===" >> debug_log.txt
+echo "PROBLEM: [1-line description of what failed]" >> debug_log.txt
+echo "ROOT CAUSE: [your analysis of why it failed]" >> debug_log.txt
+echo "FIX STRATEGY: [specific action you're taking]" >> debug_log.txt
+echo "EXPECTED OUTCOME: [what should happen if this works]" >> debug_log.txt
+
+# Apply the fix
+[your actual fix commands here]
 
 # Re-run test
-python test_model_comparison.py --output-dir outputs/test_attempt_$(date +%H%M%S)
+echo "TESTING: Running baseline test..." >> debug_log.txt
+python test_model_comparison.py --output-dir outputs/attempt_${ATTEMPT_NUM}_$(date +%H%M%S)
+EXIT_CODE=$?
 
-# Record outcome
-echo "Result: [SUCCESS/PARTIAL/FAILED]" >> debug_log.txt
-echo "Next Action: [describe next step]" >> debug_log.txt
+# AFTER test - record detailed outcome
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "✅ RESULT: SUCCESS - All tests passed" >> debug_log.txt
+    echo "NEXT ACTION: Proceeding to validation phase" >> debug_log.txt
+else
+    echo "❌ RESULT: FAILED (exit code: $EXIT_CODE)" >> debug_log.txt
+    echo "NEW ERROR: [describe what failed this time]" >> debug_log.txt
+    echo "ANALYSIS: [is this the same error, different error, or partial progress?]" >> debug_log.txt
+    echo "NEXT ACTION: [specific next step based on this outcome]" >> debug_log.txt
+fi
+echo "CHECKLIST STATUS: [brief update on overall progress]" >> debug_log.txt
+echo "----------------------------------------" >> debug_log.txt
 echo "" >> debug_log.txt
+```
+
+**Agent Must Provide Clear Summary After Each Attempt:**
+- **Before fixing**: State the problem, root cause, and strategy
+- **After testing**: Report exact outcome and analysis
+- **Progress tracking**: Update on overall mission progress
+- **Next steps**: Clear plan for the next attempt
+
+**Conversational Reporting (to User):**
+After each attempt, provide a succinct but complete summary:
+
+```
+🔧 Attempt #3: [Brief description of what you tried]
+❌ Result: [What happened - success/failure/partial]
+📊 Analysis: [Key insight about why it failed/succeeded]
+⏭️ Next: [What you'll try next, or if moving to next phase]
+📋 Progress: [X/Y items completed on checklist]
 ```
 
 **Agent Persistence Rules**:
