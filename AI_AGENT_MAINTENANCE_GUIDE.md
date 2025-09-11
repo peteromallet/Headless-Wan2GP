@@ -36,6 +36,7 @@ This guide provides step-by-step instructions for an AI agent to automatically m
 **Agent Actions**:
 - Analyze `headless_model_management.py` - identify all WGP imports and function calls
 - Analyze `headless_wgp.py` - identify critical WGP functions we use (generate_video, load_models, etc.)
+- Analyze `worker.py` - identify how it integrates with WGP and any critical dependencies
 - Document model config dependencies (defaults/*.json files)
 - Document path/import dependencies (Python path changes, working directory)
 - Create `maintenance_analysis/system_integration_analysis.md`
@@ -71,7 +72,7 @@ This guide provides step-by-step instructions for an AI agent to automatically m
 
 ## Phase 2: Environment Validation
 
-### Step 2.1: Python Environment Check
+### Step 2.1: Python Environment Setup
 ```bash
 # Verify Python version
 python --version
@@ -80,12 +81,17 @@ python3 --version
 # Check if we're in the right directory (should be in Headless-Wan2GP root)
 pwd
 ls -la | grep -E "(test_model_comparison\.py|headless_wgp\.py|worker\.py|Wan2GP/)"
+
+# Create and activate virtual environment for isolation
+python3 -m venv venv_headless_wan2gp
+source venv_headless_wan2gp/bin/activate  # On Windows: venv_headless_wan2gp\Scripts\activate
 ```
 
 **Agent Behavior**:
+- **Always create a fresh virtual environment** to avoid dependency conflicts
 - Ensure Python 3.8+ is available
-- If multiple Python versions exist, prefer the one that works with existing requirements.txt
-- If Python is missing, install it before proceeding
+- If virtual environment creation fails, try `python -m venv` instead of `python3 -m venv`
+- Activate the virtual environment before proceeding to dependency installation
 
 ### Step 2.2: Install/Update Dependencies
 ```bash
@@ -118,90 +124,36 @@ python test_model_comparison.py --output-dir outputs/baseline_test_$(date +%Y%m%
 
 ### Step 3.2: Log Analysis Protocol
 
-**When tests fail, analyze logs systematically:**
-
-1. **Import/Module Errors**:
-   ```bash
-   # Check for missing modules
-   python -c "import sys; print('\n'.join(sys.path))"
-   ```
-   
-2. **CUDA/GPU Errors**:
-   ```bash
-   # Check GPU availability
-   python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Devices: {torch.cuda.device_count()}')"
-   ```
-
-3. **File Path Errors**:
-   ```bash
-   # Verify required files exist
-   ls -la samples/video.mp4 samples/mask.mp4 2>/dev/null || echo "Missing input files"
-   ```
+**When tests fail, analyze logs systematically**
 
 **Agent Response Pattern**:
 - **Read the complete error message** - don't just look at the last line
 - **Identify the root cause** - is it missing files, wrong paths, import errors, or parameter issues?
-- **Apply the most upstream fix possible** - prefer fixes in the headless wrapper over Wan2GP modifications
+- **🚨 CRITICAL: Apply the most upstream fix possible** - prefer fixes in the headless wrapper over Wan2GP modifications. This is EXTREMELY important to maintain system stability and upgradeability.
 
-### Step 3.3: Common Error Resolution Strategies
+### Step 3.3: Fix Application Priority
 
-#### Strategy A: Missing Input Files
-```bash
-# Create dummy input files if missing
-if [ ! -f "samples/video.mp4" ]; then
-    echo "Creating dummy samples/video.mp4..."
-    # Use ffmpeg to create a test video or copy from samples/
-    cp samples/test.mp4 samples/video.mp4 2>/dev/null || echo "No sample video available"
-fi
+**🚨 EXTREMELY IMPORTANT: Focus UPSTREAM of Wan2GP as much as possible! 🚨**
 
-if [ ! -f "samples/mask.mp4" ]; then
-    echo "Creating dummy samples/mask.mp4..."
-    # Create a simple mask video
-    cp samples/test.mp4 samples/mask.mp4 2>/dev/null || echo "No sample mask available"
-fi
-```
-
-#### Strategy B: Parameter/Configuration Issues
-```bash
-# Check if model configs exist
-ls -la Wan2GP/defaults/vace_14B*.json
-ls -la Wan2GP/defaults/optimised-t2i.json
-
-# Validate JSON syntax
-python -c "import json; print('vace_14B:', json.load(open('Wan2GP/defaults/vace_14B.json')))"
-```
-
-**Agent Behavior**:
-- If configs are missing, check if the model names in `test_model_comparison.py` need updating
-- If JSON is malformed, attempt to fix or use a backup version
-- If models don't exist, update the test to use available models
-
-#### Strategy C: Memory/VRAM Issues
-```bash
-# Check available memory
-free -h
-nvidia-smi 2>/dev/null || echo "No NVIDIA GPU detected"
-```
-
-**Agent Actions**:
-- Reduce batch sizes in test configurations
-- Lower resolution/video length parameters
-- Enable CPU fallback if GPU memory insufficient
-
-### Step 3.4: Fix Application Priority
-
-**Priority 1 (Upstream - Preferred)**:
-1. Fix paths in `headless_wgp.py` or `headless_model_management.py`
-2. Update model configuration mappings
+**Priority 1 (Upstream - STRONGLY Preferred)**:
+1. Fix paths in `headless_wgp.py` or `headless_model_management.py` 
+2. Update model configuration mappings in our wrapper code
 3. Adjust parameters in `test_model_comparison.py`
 4. Install missing dependencies
+5. Modify `worker.py` integration logic
 
-**Priority 2 (Downstream - When Necessary)**:
+**Priority 2 (Downstream - AVOID if possible, use only when absolutely necessary)**:
 1. Fix import paths in Wan2GP files
 2. Patch configuration files in Wan2GP/defaults/
-3. Update model loading logic in wgp.py (last resort)
+3. Update model loading logic in wgp.py (absolute last resort)
 
-### Step 3.5: Iteration Loop Protocol
+**Why Upstream Fixes Matter**: 
+- Preserves ability to update Wan2GP submodule cleanly
+- Prevents merge conflicts on future updates
+- Maintains clear separation between our wrapper and upstream code
+- Makes debugging and maintenance significantly easier
+
+### Step 3.4: Iteration Loop Protocol
 
 ```bash
 # After each fix attempt:
@@ -219,107 +171,13 @@ echo "" >> debug_log.txt
 ```
 
 **Agent Persistence Rules**:
-- Maximum 10 fix attempts per session
+- Maximum 10 fix attempts per loop
 - If no progress after 5 attempts, take a different approach
 - If system completely breaks, start fresh from Phase 1
 - Always document what was tried
 - **Update your checklist after each attempt** - mark progress, add new discovered issues, reassess priorities
 - **After each cycle of changes**: Sense-check your current approach against this base document - are you following the prescribed phases and protocols?
 
-## Phase 4: Continuous Operation
-
-### Step 4.1: Success Validation
-```bash
-# Verify all outputs were generated
-ls -la outputs/model_comparison_*/
-find outputs/ -name "*.mp4" -exec ls -lh {} \;
-
-# Check results.json for success status
-cat outputs/model_comparison_*/results.json | jq '.results[].status'
-```
-
-### Step 4.2: Monitoring Loop (Run Continuously)
-```bash
-#!/bin/bash
-# monitoring_loop.sh
-
-while true; do
-    echo "=== Monitoring Run $(date) ==="
-    
-    # Run baseline test suite
-    python test_model_comparison.py --output-dir outputs/monitor_$(date +%Y%m%d_%H%M%S)
-    
-    exit_code=$?
-    
-    if [ $exit_code -eq 0 ]; then
-        echo "✅ Baseline tests passed"
-        sleep 3600  # Wait 1 hour before next check
-    else
-        echo "❌ Baseline tests failed, investigating..."
-        # Apply fix strategies from Phase 3
-        sleep 300   # Wait 5 minutes before retry
-    fi
-done
-```
-
-**Agent Behavior**:
-- Run tests regularly (every 1-6 hours depending on stability)
-- On failure, immediately apply Phase 3 debugging
-- Keep logs of all runs for pattern analysis
-- Auto-restart if system becomes completely unresponsive
-
-### Step 4.3: Maintenance Tasks
-
-#### Weekly Tasks:
-```bash
-# Check for upstream updates
-cd Wan2GP/
-git fetch origin
-git log HEAD..origin/main --oneline
-
-# If updates available, trigger fresh pull (Phase 1)
-if [ "$(git rev-list HEAD..origin/main --count)" -gt 0 ]; then
-    echo "Upstream updates detected, triggering refresh..."
-    cd ..
-    # Go back to Phase 1
-fi
-```
-
-#### Daily Tasks:
-```bash
-# Clean old outputs
-find outputs/ -name "test_*" -mtime +7 -exec rm -rf {} \;
-
-# Rotate logs
-if [ -f debug_log.txt ] && [ $(wc -l < debug_log.txt) -gt 1000 ]; then
-    mv debug_log.txt debug_log_$(date +%Y%m%d).txt
-    touch debug_log.txt
-fi
-```
-
-## Phase 5: Advanced Troubleshooting
-
-### Step 5.1: System Health Checks
-```bash
-# Comprehensive system diagnostic
-python -c "
-import torch
-import sys
-import subprocess
-import os
-
-print('=== System Diagnostic ===')
-print(f'Python: {sys.version}')
-print(f'PyTorch: {torch.__version__}')
-print(f'CUDA Available: {torch.cuda.is_available()}')
-if torch.cuda.is_available():
-    print(f'GPU: {torch.cuda.get_device_name(0)}')
-    print(f'VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f}GB')
-
-print(f'Working Dir: {os.getcwd()}')
-print(f'Wan2GP Exists: {os.path.exists(\"Wan2GP/wgp.py\")}')
-"
-```
 
 ### Step 5.2: Emergency Recovery Procedures
 
@@ -343,10 +201,11 @@ print(f'Wan2GP Exists: {os.path.exists(\"Wan2GP/wgp.py\")}')
 ### Core Principles:
 1. **Be Persistent**: Don't give up after first failure
 2. **Be Systematic**: Follow the phases in order
-3. **Be Conservative**: Prefer upstream fixes over downstream changes
+3. **🚨 Be Conservative: ALWAYS prefer upstream fixes over downstream changes** - This is CRITICAL for maintainability
 4. **Be Thorough**: Read complete error messages, not just summaries
 5. **Be Documented**: Log every action and outcome
 6. **Maintain Living Checklist**: Update your checklist after every completed task and regularly sense-check your progress
+7. **Focus UPSTREAM**: When in doubt, fix in headless wrapper code, NOT in Wan2GP submodule
 
 ### Checklist Management Protocol:
 **After Every Task Completion**:
