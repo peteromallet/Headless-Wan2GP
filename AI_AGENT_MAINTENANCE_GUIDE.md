@@ -50,8 +50,8 @@ This guide provides step-by-step instructions for an AI agent to automatically m
 - Create verification items for each integration point
 - Include post-update validation steps
 - Create `maintenance_analysis/update_checklist.md`
-- **Create `maintenance_analysis/attempt_log.md`** - for detailed attempt summaries
 - **Create `maintenance_analysis/milestone_progress.md`** - for major milestone tracking
+- **Use `debug_log.txt`** - for detailed attempt summaries (already structured for this)
 
 **CRITICAL**: These become your living documents throughout the maintenance process. Update them after every appropriate action and regularly sense-check your progress against them.
 
@@ -157,7 +157,7 @@ python test_model_comparison.py --output-dir outputs/baseline_test_$(date +%Y%m%
 
 ### Step 3.4: Iteration Loop Protocol
 
-**Each Attempt Must Be Clearly Documented:**
+**Each Attempt Must Be Clearly Documented In:**
 
 ```bash
 # BEFORE each fix attempt - log the plan
@@ -208,21 +208,12 @@ After each attempt, provide a succinct but complete summary:
 📋 Progress: [X/Y items completed on checklist]
 ```
 
-**Document Updates Required After Each Attempt:**
+**Attempt Summary Already Captured in `debug_log.txt`:**
+The bash logging protocol above already captures all necessary attempt details in a structured format that appends to `debug_log.txt`. This creates a complete chronological record of all attempts without needing a separate file.
 
-1. **Update `maintenance_analysis/attempt_log.md`:**
-```markdown
-## Attempt #3 - [Timestamp]
-**Problem:** [1-line description]
-**Strategy:** [What you tried]
-**Outcome:** [SUCCESS/FAILED/PARTIAL]
-**Key Learning:** [What this taught us]
-**Files Changed:** [List any files modified]
-**Next Action:** [Specific next step]
----
-```
+**Document Update Required After Each Each Achievement:**
 
-2. **Update `maintenance_analysis/milestone_progress.md`** (when reaching major milestones):
+**Update `maintenance_analysis/milestone_progress.md`** (when reaching major milestones):
 ```markdown
 ## [Phase/Milestone Name] - [Timestamp]
 **Status:** [COMPLETED/IN_PROGRESS/BLOCKED]
@@ -231,6 +222,8 @@ After each attempt, provide a succinct but complete summary:
 - [Achievement 2]
 **Blockers Resolved:**
 - [Blocker that was overcome]
+**Overall Progress with Reasoning**
+- [Brief Update on Progress]
 **Next Major Milestone:** [What's next]
 ---
 ```
@@ -251,7 +244,7 @@ After each attempt, provide a succinct but complete summary:
 - If system completely breaks, start fresh from Phase 1
 - Always document what was tried
 - **Update your checklist after each attempt** - mark progress, add new discovered issues, reassess priorities
-- **Update `attempt_log.md` after EVERY attempt** - maintain detailed attempt history
+- **All attempt details are automatically logged to `debug_log.txt`** via the structured bash logging protocol
 - **Update `milestone_progress.md` after major milestones** - track phase completions, significant breakthroughs
 - **After each cycle of changes**: Sense-check your current approach against this base document - are you following the prescribed phases and protocols?
 
@@ -307,9 +300,10 @@ After each attempt, provide a succinct but complete summary:
 5. **Verify**: Confirm fix worked and didn't break anything else
 6. **Document**: Record what was done for future reference
 7. **Update Checklist**: Mark completion and add any new discovered tasks
-8. **Update Attempt Log**: Add entry to `maintenance_analysis/attempt_log.md`
-9. **Update Milestones** (if applicable): Add entry to `maintenance_analysis/milestone_progress.md` for major achievements
-10. **Sense-Check vs Base Document**: After each cycle of changes, verify you're still following the prescribed phases and protocols in this guide
+8. **Update Milestones** (if applicable): Add entry to `maintenance_analysis/milestone_progress.md` for major achievements
+9. **Sense-Check vs Base Document**: After each cycle of changes, verify you're still following the prescribed phases and protocols in this guide
+
+*Note: Attempt details are automatically captured in `debug_log.txt` via the structured bash logging protocol.*
 
 ### Escalation Triggers:
 - More than 10 consecutive failures
