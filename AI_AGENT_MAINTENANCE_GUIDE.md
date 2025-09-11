@@ -18,13 +18,13 @@ This guide provides step-by-step instructions for an AI agent to automatically m
 - All model configurations in `test_model_comparison.py` generate videos successfully without errors (baseline test)
 - Integration between Headless-Wan2GP and updated upstream Wan2GP remains functional
 
-## Phase 1: Environment Setup & Wan2GP Analysis
+## Phase 1: Wan2GP Analysis & Planning
 
 ### Step 1.1: Analyze Current vs Upstream Differences
 **Goal**: Understand all changes before updating
 
 **Agent Actions**:
-- Clone fresh upstream Wan2GP to temporary location for comparison
+- Clone fresh upstream Wan2GP to temporary location for comparison at `maintenance_analysis/tmp_upstream_Wan2GP/` (delete this temporary clone after diff is complete)
 - Run diff analysis between current Wan2GP/ and upstream
 - Document new files, removed files, and modified files
 - Focus on key integration files: wgp.py, defaults/*.json, requirements.txt
@@ -59,7 +59,7 @@ This guide provides step-by-step instructions for an AI agent to automatically m
 **Goal**: Replace current Wan2GP with latest upstream
 
 **Agent Actions**:
-- Create backup of current Wan2GP directory (for rollback)
+- Create backup of current Wan2GP directory at `backups/Wan2GP_$(date +%Y%m%d_%H%M%S)/` (for rollback)
 - Remove current Wan2GP directory completely  
 - Clone fresh from https://github.com/deepbeepmeep/Wan2GP.git
 - Record new commit hash for tracking
@@ -69,7 +69,7 @@ This guide provides step-by-step instructions for an AI agent to automatically m
 
 **Agent Actions**:
 - Update STRUCTURE.md with new Wan2GP commit hash and timestamp
-- Clean up temporary analysis files
+- Remove only the temporary upstream clone directory (`maintenance_analysis/tmp_upstream_Wan2GP/`); keep analysis documents
 - Document update completion
 
 ## Phase 2: Environment Validation
@@ -107,8 +107,8 @@ cd ..
 ```
 
 **Agent Behavior**:
-- If pip fails, try `pip3` or create virtual environment
-- If dependency conflicts occur, document them and attempt resolution
+- Use `python -m pip` inside the active virtual environment if `pip` alias is ambiguous
+- If dependency conflicts occur, document them and attempt resolution (pin versions or recreate venv if needed)
 - Consider using `pip install --upgrade` for problematic packages
 
 ## Phase 3: Iterative Testing & Fixing Loop
@@ -116,11 +116,12 @@ cd ..
 ### Step 3.1: Initial Baseline Test Run
 ```bash
 # Run the baseline model comparison test
+mkdir -p outputs
 python test_model_comparison.py --output-dir outputs/baseline_test_$(date +%Y%m%d_%H%M%S)
 ```
 
 **Expected Outcomes**:
-- ✅ **Success**: All 3 models (vace_14B, vace_14B_fake_cocktail_2_2, optimised-t2i) generate videos → Proceed to Phase 4
+- ✅ **Success**: All 3 models (vace_14B, vace_14B_fake_cocktail_2_2, optimised-t2i) generate videos → Log success in `maintenance_analysis/milestone_progress.txt` and wrap up Phase 3
 - ⚠️ **Partial Success**: Some models work → Analyze and fix failing ones
 - ❌ **Complete Failure**: System won't start → Debug environment issues
 
@@ -173,6 +174,7 @@ echo "EXPECTED OUTCOME: [what should happen if this works]" >> attempt_log.txt
 
 # Re-run test
 echo "TESTING: Running baseline test..." >> attempt_log.txt
+mkdir -p outputs
 python test_model_comparison.py --output-dir outputs/attempt_${ATTEMPT_NUM}_$(date +%H%M%S)
 EXIT_CODE=$?
 
@@ -240,6 +242,7 @@ NEXT MAJOR MILESTONE: [What's next]
 - ❌ **Recovery from Failure**: Successfully recovered from system-breaking error
 
 **Agent Persistence Rules**:
+_Definition_: A "loop" refers to a full Phase 3 cycle from the initial baseline run through successive fix attempts until success, reset, or escalation.
 - Maximum 10 fix attempts per loop
 - If no progress after 5 attempts, take a different approach
 - If system completely breaks, start fresh from Phase 1
@@ -249,8 +252,9 @@ NEXT MAJOR MILESTONE: [What's next]
 - **Update `milestone_progress.txt` after major milestones** - track phase completions, significant breakthroughs
 - **After each cycle of changes**: Sense-check your current approach against this base document - are you following the prescribed phases and protocols?
 
+## Phase 5: Advanced Troubleshooting
 
-### Step 5.2: Emergency Recovery Procedures
+### Step 5.1: Emergency Recovery Procedures
 
 **If system becomes completely unresponsive:**
 1. Kill all Python processes: `pkill -f python`
@@ -334,7 +338,7 @@ NEXT MAJOR MILESTONE: [What's next]
 
 **Agent**: "All baseline tests passing. System is healthy and ready for video generation."
 
-**Agent**: "Entering monitoring mode. Next baseline check in 60 minutes."
+**Agent**: "Logging milestone and concluding the maintenance cycle."
 
 ---
 
