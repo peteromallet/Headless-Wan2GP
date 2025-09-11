@@ -8,6 +8,11 @@
 *.mp4
 *.mov
 *.mkv
+# Allow sample files
+!samples/*.jpg
+!samples/*.png
+!samples/*.mp4
+!samples/*.mov
 *.log
 *.zip
 *.pt
