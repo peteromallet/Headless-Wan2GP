@@ -652,7 +652,72 @@ def create_guide_video_for_travel_segment(
 
         dprint(f"Task {task_id_for_logging}: Interpolating guide video with {total_frames_for_segment} frames...")
         frames_for_guide_list = [sm_create_color_frame(parsed_res_wh, (128,128,128)).copy() for _ in range(total_frames_for_segment)]
-        
+
+        # Check for consolidated keyframe positions (frame consolidation optimization)
+        consolidated_keyframe_positions = segment_params.get("consolidated_keyframe_positions")
+        if consolidated_keyframe_positions and not single_image_journey:
+            dprint(f"Task {task_id_for_logging}: CONSOLIDATED SEGMENT - placing keyframes at positions {consolidated_keyframe_positions}")
+
+            # For consolidated segments, we need to determine which input images to use
+            # If this is the first segment, use images sequentially starting from 0
+            # If this is a subsequent segment, only place the final target image (end anchor)
+            if is_first_segment_from_scratch:
+                # First segment: place images starting from index 0
+                for img_idx, frame_pos in enumerate(consolidated_keyframe_positions):
+                    if img_idx < len(input_images_resolved_for_guide) and frame_pos <= total_frames_for_segment - 1:
+                        img_path = input_images_resolved_for_guide[img_idx]
+                        keyframe_np = sm_image_to_frame(img_path, parsed_res_wh, task_id_for_logging=task_id_for_logging, image_download_dir=segment_image_download_dir, debug_mode=debug_mode)
+                        if keyframe_np is not None:
+                            frames_for_guide_list[frame_pos] = keyframe_np.copy()
+                            dprint(f"Task {task_id_for_logging}: Placed image {img_idx} at frame {frame_pos}")
+            else:
+                # Subsequent consolidated segment: handle overlap + place end anchor
+                # First, extract overlap frames from previous video if needed
+                if frame_overlap_from_previous > 0 and path_to_previous_segment_video_output_for_guide:
+                    dprint(f"Task {task_id_for_logging}: CONSOLIDATED SEGMENT - extracting {frame_overlap_from_previous} overlap frames")
+
+                    # Extract the overlap frames from the previous video
+                    try:
+                        all_prev_frames = extract_frames_from_video(path_to_previous_segment_video_output_for_guide, dprint_func=dprint)
+                        if all_prev_frames and len(all_prev_frames) >= frame_overlap_from_previous:
+                            overlap_frames = all_prev_frames[-frame_overlap_from_previous:]
+                            # Place overlap frames at the beginning of this video
+                            for overlap_idx, overlap_frame in enumerate(overlap_frames):
+                                if overlap_idx < total_frames_for_segment:
+                                    frames_for_guide_list[overlap_idx] = overlap_frame.copy()
+                                    dprint(f"Task {task_id_for_logging}: Placed overlap frame {overlap_idx} from previous video")
+                    except Exception as e:
+                        dprint(f"Task {task_id_for_logging}: WARNING - Could not extract overlap frames: {e}")
+
+                # Then place ALL keyframe images at their positions (including intermediate ones)
+                # For subsequent consolidated segments, we need to place:
+                # 1. Intermediate keyframes at their positions
+                # 2. The end anchor at the final position
+
+                # Calculate which input images correspond to each keyframe position
+                # The consolidated end anchor tells us which image should be the final one
+                if len(consolidated_keyframe_positions) > 0:
+                    # For subsequent segments, we need to place all keyframes that belong to this segment
+                    # The end anchor index tells us which image should be at the final position
+                    final_frame_pos = consolidated_keyframe_positions[-1]
+
+                    # Calculate which input images should go at each keyframe position
+                    # This depends on which segment we are and how keyframes were distributed
+                    start_image_idx = end_anchor_image_index - len(consolidated_keyframe_positions) + 1
+
+                    for i, frame_pos in enumerate(consolidated_keyframe_positions):
+                        image_idx = start_image_idx + i
+                        if image_idx >= 0 and image_idx < len(input_images_resolved_for_guide) and frame_pos <= total_frames_for_segment - 1:
+                            img_path = input_images_resolved_for_guide[image_idx]
+                            keyframe_np = sm_image_to_frame(img_path, parsed_res_wh, task_id_for_logging=task_id_for_logging, image_download_dir=segment_image_download_dir, debug_mode=debug_mode)
+                            if keyframe_np is not None:
+                                frames_for_guide_list[frame_pos] = keyframe_np.copy()
+                                dprint(f"Task {task_id_for_logging}: Placed image {image_idx} at consolidated keyframe position {frame_pos}")
+
+                    dprint(f"Task {task_id_for_logging}: Placed {len(consolidated_keyframe_positions)} keyframes for consolidated segment (end anchor: image {end_anchor_image_index})")
+
+            return create_video_from_frames_list(frames_for_guide_list, predefined_output_path or output_target_dir / guide_video_base_name, fps_helpers, parsed_res_wh)
+
         end_anchor_frame_np = None
 
         if not single_image_journey:
