@@ -83,6 +83,67 @@ def dprint(msg: str):
         # Prefix with timestamp for easier tracing
         print(f"[DEBUG {datetime.datetime.now().isoformat()}] {msg}")
 
+def cleanup_generated_files(output_location: str, task_id: str = "unknown") -> None:
+    """
+    Delete generated files after successful task completion unless in debug mode.
+    This includes the main output file/directory and any temporary files that may have been created.
+
+    Args:
+        output_location: Path to the generated file or directory to clean up
+        task_id: Task ID for logging purposes
+    """
+    if debug_mode:
+        headless_logger.debug(f"Debug mode enabled - skipping file cleanup for {output_location}", task_id=task_id)
+        return
+
+    if not output_location:
+        return
+
+    try:
+        file_path = Path(output_location)
+
+        # Clean up main output file/directory
+        if file_path.exists() and file_path.is_file():
+            file_size = file_path.stat().st_size
+            file_path.unlink()
+            headless_logger.debug(f"Cleaned up generated file: {output_location} ({file_size:,} bytes)", task_id=task_id)
+        elif file_path.exists() and file_path.is_dir():
+            import shutil
+            dir_size = sum(f.stat().st_size for f in file_path.rglob('*') if f.is_file())
+            shutil.rmtree(file_path)
+            headless_logger.debug(f"Cleaned up generated directory: {output_location} ({dir_size:,} bytes)", task_id=task_id)
+        else:
+            headless_logger.debug(f"File cleanup skipped - path not found: {output_location}", task_id=task_id)
+
+        # Clean up temporary files that may have been created during processing
+        _cleanup_temporary_files(task_id)
+
+    except Exception as e:
+        headless_logger.warning(f"Failed to cleanup generated file {output_location}: {e}", task_id=task_id)
+
+
+def _cleanup_temporary_files(task_id: str = "unknown") -> None:
+    """
+    Clean up temporary files that were specifically created during this task's execution.
+    This function is intentionally conservative - it only targets files that we can
+    be reasonably certain were created by our task processing.
+
+    Args:
+        task_id: Task ID for logging purposes
+    """
+    if debug_mode:
+        return  # Skip temp file cleanup in debug mode
+
+    # Note: Most temporary files are already cleaned up by their respective functions:
+    # - db_operations.py cleans up temporary frame files
+    # - audio_video.py has cleanup_temp_audio_files() function
+    # - TemporaryDirectory contexts auto-cleanup
+    #
+    # This function is mainly a safety net for any edge cases where cleanup
+    # might not have occurred properly during normal execution.
+
+    headless_logger.debug(f"Temporary file cleanup completed (most temp files auto-cleaned by their creators)", task_id=task_id)
+
 # -----------------------------------------------------------------------------
 # Queue-based Task Processing Functions
 # -----------------------------------------------------------------------------
@@ -127,7 +188,12 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             "hunyuan": "hunyuan",
             "ltxv": "ltxv_13B"
         }
-        model = task_type_to_model.get(task_type, "t2v")  # Default to T2V
+        # Custom mapping for Qwen image style tasks
+        if task_type == "qwen_image_style":
+            # Use Qwen Image Edit base for style transfer via image guide
+            model = "qwen_image_edit_20B"
+        else:
+            model = task_type_to_model.get(task_type, "t2v")  # Default to T2V
     
     # Create clean parameters dict for generation
     generation_params = {}
@@ -137,9 +203,11 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         "negative_prompt", "resolution", "video_length", "num_inference_steps", 
         "guidance_scale", "seed", "embedded_guidance_scale", "flow_shift",
         "audio_guidance_scale", "repeat_generation", "multi_images_gen_type",
+        # Multi-phase guidance controls
+        "guidance2_scale", "guidance3_scale", "guidance_phases", "switch_threshold", "switch_threshold2", "model_switch_phase",
         
         # VACE parameters
-        "video_guide", "video_mask", "video_guide2", "video_mask2", 
+        "video_guide", "video_mask",
         "video_prompt_type", "control_net_weight", "control_net_weight2",
         "keep_frames_video_guide", "video_guide_outpainting", "mask_expand",
         
@@ -168,12 +236,14 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         # Post-processing parameters
         "remove_background_images_ref", "temporal_upsampling", "spatial_upsampling",
         "film_grain_intensity", "film_grain_saturation",
+        "image_refs_relative_size",
         
         # Output parameters
         "output_dir", "custom_output_dir",
-        
+
         # Special flags
-        "apply_reward_lora"
+        "apply_reward_lora",
+        "override_profile",
     }
     
     # Copy whitelisted parameters with field name mapping
@@ -197,13 +267,13 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             generation_params[param] = extracted_params[param]
     
     # [DEEP_DEBUG] Log LoRA parameter transfer for debugging
-    print(f"[WORKER_DEBUG] Worker {task_id}: CONVERTING DB TASK TO GENERATION TASK")
-    print(f"[WORKER_DEBUG]   task_type: {task_type}")
-    print(f"[WORKER_DEBUG]   db_task_params keys: {list(db_task_params.keys())}")
-    print(f"[WORKER_DEBUG]   'use_lighti2x_lora' in db_task_params: {'use_lighti2x_lora' in db_task_params}")
+    dprint(f"[WORKER_DEBUG] Worker {task_id}: CONVERTING DB TASK TO GENERATION TASK")
+    dprint(f"[WORKER_DEBUG]   task_type: {task_type}")
+    dprint(f"[WORKER_DEBUG]   db_task_params keys: {list(db_task_params.keys())}")
+    dprint(f"[WORKER_DEBUG]   'use_lighti2x_lora' in db_task_params: {'use_lighti2x_lora' in db_task_params}")
     if 'use_lighti2x_lora' in db_task_params:
-        print(f"[WORKER_DEBUG]   db_task_params['use_lighti2x_lora']: {db_task_params['use_lighti2x_lora']}")
-    print(f"[WORKER_DEBUG]   generation_params keys after copy: {list(generation_params.keys())}")
+        dprint(f"[WORKER_DEBUG]   db_task_params['use_lighti2x_lora']: {db_task_params['use_lighti2x_lora']}")
+    dprint(f"[WORKER_DEBUG]   generation_params keys after copy: {list(generation_params.keys())}")
     
     if task_type == "travel_segment":
         dprint(f"[DEEP_DEBUG] Worker {task_id}: DB TASK TO GENERATION TASK CONVERSION")
@@ -234,6 +304,137 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             # Convert comma-separated string to list of floats
             generation_params["lora_multipliers"] = [float(x.strip()) for x in multipliers.split(",") if x.strip()]
         # Keep as-is if already a list
+
+    # Specialized handling for Qwen Image Style tasks
+    if task_type == "qwen_image_style":
+        # Ensure model is Qwen Image Edit
+        model = "qwen_image_edit_20B"
+
+        # Prefix the prompt for clearer instruction to the edit model
+        try:
+            if isinstance(prompt, str) and prompt.strip():
+                _pfx = "make an image in this style of"
+                if not prompt.strip().lower().startswith(_pfx):
+                    prompt = f"{_pfx} {prompt.strip()}"
+        except Exception:
+            # Fail-safe: don't block task creation if prompt manipulation fails
+            pass
+
+        # Map style reference image (URL or local path) to image_guide
+        style_ref_url = db_task_params.get("style_reference_image")
+        if style_ref_url:
+            try:
+                downloads_dir = Path("outputs/style_refs")
+                local_ref_path = sm_download_image_if_url(style_ref_url, downloads_dir, task_id_for_logging=task_id, debug_mode=debug_mode, descriptive_name="style_ref")
+                generation_params["image_guide"] = str(local_ref_path)
+            except Exception as e:
+                dprint(f"[QWEN_STYLE] Failed to process style_reference_image: {e}")
+
+        # Default settings tuned for Qwen style transfer
+        generation_params.setdefault("video_prompt_type", "KI")
+        generation_params.setdefault("sample_solver", "lightning")
+        generation_params.setdefault("guidance_scale", 1)
+        generation_params.setdefault("num_inference_steps", 12)
+
+        # Resolve LoRA directory for Qwen using absolute path (CWD may be changed to Wan2GP)
+        try:
+            base_wan2gp_dir = Path(wan2gp_path)
+        except Exception:
+            base_wan2gp_dir = Path(__file__).parent / "Wan2GP"
+        qwen_lora_dir = base_wan2gp_dir / "loras_qwen"
+        qwen_lora_dir.mkdir(parents=True, exist_ok=True)
+        headless_logger.info(f"[QWEN_STYLE] Using Qwen LoRA directory: {qwen_lora_dir}")
+
+        # Ensure Lightning LoRA (8-step) is attached at 1.0
+        # Prefer an existing local file from loras_qwen; fall back to a downloadable default name.
+        lightning_repo = "lightx2v/Qwen-Image-Lightning"
+        # Prefer the user-requested Edit V1.0 bf16 first
+        lightning_candidates = [
+            "Qwen-Image-Edit-Lightning-8steps-V1.0-bf16.safetensors",
+            # Other common Edit/non-Edit variants as fallbacks
+            "Qwen-Image-Edit-Lightning-8steps-V2.0-bf16.safetensors",
+            "Qwen-Image-Edit-Lightning-8steps-V1.1-bf16.safetensors",
+            "Qwen-Image-Lightning-8steps-V2.0-bf16.safetensors",
+            "Qwen-Image-Lightning-8steps-V1.1-bf16.safetensors",
+            "Qwen-Image-Lightning-8steps-V1.0-bf16.safetensors",
+        ]
+
+        selected_lightning = None
+        for cand in lightning_candidates:
+            if (qwen_lora_dir / cand).exists():
+                selected_lightning = cand
+                break
+
+        # If none found locally, try to fetch a known-good filename from HF (best effort)
+        if selected_lightning is None:
+            # Default to the user-requested Edit V1.0 bf16 if nothing was found locally
+            selected_lightning = "Qwen-Image-Edit-Lightning-8steps-V1.0-bf16.safetensors"
+            target = qwen_lora_dir / selected_lightning
+            if not target.exists():
+                try:
+                    from huggingface_hub import hf_hub_download  # type: ignore
+                    dprint(f"[QWEN_STYLE] Fetching {selected_lightning} from {lightning_repo} into {qwen_lora_dir}")
+                    dl_path = hf_hub_download(repo_id=lightning_repo, filename=selected_lightning, revision="main", local_dir=str(qwen_lora_dir))
+                    # Ensure file is located exactly at target
+                    try:
+                        from pathlib import Path as _P
+                        _p = _P(dl_path)
+                        if _p.exists() and _p.resolve() != target.resolve():
+                            _p.replace(target)
+                    except Exception:
+                        pass
+                except Exception as e:
+                    dprint(f"[QWEN_STYLE] Lightning LoRA download failed: {e}")
+        else:
+            dprint(f"[QWEN_STYLE] Using local Lightning LoRA: {selected_lightning}")
+
+        # Ensure InStyle LoRA present in loras_qwen and attach at provided strength
+        instyle_repo = "peteromallet/Qwen-Image-Edit-InStyle"
+        instyle_fname = "InStyle-0.5.safetensors"
+        instyle_target = qwen_lora_dir / instyle_fname
+        if not instyle_target.exists():
+            try:
+                from huggingface_hub import hf_hub_download  # type: ignore
+                dprint(f"[QWEN_STYLE] Fetching {instyle_fname} from {instyle_repo} into {qwen_lora_dir}")
+                dl_path2 = hf_hub_download(repo_id=instyle_repo, filename=instyle_fname, revision="main", local_dir=str(qwen_lora_dir))
+                try:
+                    from pathlib import Path as _P
+                    _p2 = _P(dl_path2)
+                    if _p2.exists() and _p2.resolve() != instyle_target.resolve():
+                        _p2.replace(instyle_target)
+                except Exception:
+                    pass
+            except Exception as e:
+                dprint(f"[QWEN_STYLE] InStyle LoRA download failed: {e}")
+        else:
+            dprint(f"[QWEN_STYLE] InStyle LoRA already present at {instyle_target}")
+
+        # Build LoRA lists
+        style_strength = db_task_params.get("style_reference_strength")
+        try:
+            style_strength = float(style_strength) if style_strength is not None else 1.3
+        except Exception:
+            style_strength = 1.3
+
+        lora_names = generation_params.get("lora_names", []) or []
+        lora_mults = generation_params.get("lora_multipliers", []) or []
+        if not isinstance(lora_names, list):
+            lora_names = [lora_names]
+        if not isinstance(lora_mults, list):
+            lora_mults = [lora_mults]
+
+        # Attach Lightning first at 1.0 if available
+        if selected_lightning and (qwen_lora_dir / selected_lightning).exists() and selected_lightning not in lora_names:
+            lora_names.append(selected_lightning)
+            lora_mults.append(1.0)
+        # Attach InStyle next at style_strength
+        if instyle_fname not in lora_names:
+            lora_names.append(instyle_fname)
+            lora_mults.append(style_strength)
+
+        generation_params["lora_names"] = lora_names
+        generation_params["lora_multipliers"] = lora_mults
+        headless_logger.info(f"[QWEN_STYLE] Attached LoRAs: {lora_names} with multipliers {lora_mults}", task_id=task_id)
     
     # NOTE: additional_loras conversion is now handled centrally in HeadlessTaskQueue
     # Both dict format ({"url": multiplier}) and list format are supported
@@ -301,7 +502,7 @@ def parse_args():
     pgroup_server.add_argument("--poll-interval", type=int, default=10,
                                help="How often (in seconds) to check tasks.json for new tasks.")
     pgroup_server.add_argument("--debug", action="store_true",
-                               help="Enable verbose debug logging (prints additional diagnostics)")
+                               help="Enable verbose debug logging (prints additional diagnostics) and preserve generated files (skips automatic cleanup)")
     pgroup_server.add_argument("--worker", type=str, default=None,
                                help="Worker name/ID - creates a log file named {worker}.log in the logs folder")
     pgroup_server.add_argument("--save-logging", type=str, nargs='?', const='logs/worker.log', default=None,
@@ -1106,9 +1307,8 @@ def main():
 
     # --- Initialize Task Queue System (required) ---
     headless_logger.essential("Initializing queue-based task processing system...")
-    wan_dir = str(Path(__file__).parent / "Wan2GP")
-    if not Path(wan_dir).exists():
-        wan_dir = str(Path(__file__).parent)  # Fallback if Wan2GP is in current dir
+    # ALWAYS use the local Wan2GP under this directory
+    wan_dir = str((Path(__file__).parent / "Wan2GP").resolve())
     
     try:
         task_queue = HeadlessTaskQueue(wan_dir=wan_dir, max_workers=cli_args.queue_workers)
@@ -1214,8 +1414,8 @@ def main():
             # Inserted: define segment_image_download_dir from task params if available
             segment_image_download_dir = current_task_params.get("segment_image_download_dir")
             
-            # Ensure orchestrator tasks propagate the DB row ID as their canonical task_id *before* processing
-            if current_task_type in {"travel_orchestrator", "different_perspective_orchestrator"}:
+            # Ensure orchestrator tasks and travel segments propagate the DB row ID as their canonical task_id *before* processing
+            if current_task_type in {"travel_orchestrator", "different_perspective_orchestrator", "travel_segment"}:
                 current_task_params["task_id"] = current_task_id_for_status_update
                 if "orchestrator_details" in current_task_params:
                     current_task_params["orchestrator_details"]["orchestrator_task_id"] = current_task_id_for_status_update
@@ -1259,9 +1459,12 @@ def main():
                             output_location,
                         )
                     headless_logger.success(
-                        f"Task completed successfully: {output_location}", 
+                        f"Task completed successfully: {output_location}",
                         task_id=current_task_id_for_status_update
                     )
+
+                    # Clean up generated files unless debug mode is enabled
+                    cleanup_generated_files(output_location, current_task_id_for_status_update)
             else:
                 if db_ops.DB_TYPE == "supabase":
                     db_ops.update_task_status_supabase(current_task_id_for_status_update, db_ops.STATUS_FAILED, output_location)

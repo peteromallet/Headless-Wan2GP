@@ -20,16 +20,19 @@ import torchvision.transforms.functional as TF
 import torch.nn.functional as F
 from .distributed.fsdp import shard_model
 from .modules.model import WanModel
+from mmgp.offload import get_cache, clear_caches
 from .modules.t5 import T5EncoderModel
 from .modules.vae import WanVAE
+from .modules.vae2_2 import Wan2_2_VAE
+
 from .modules.clip import CLIPModel
-from .utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
+from shared.utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
                                get_sampling_sigmas, retrieve_timesteps)
-from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
-from wan.modules.posemb_layers import get_rotary_pos_embed
-from .utils.vace_preprocessor import VaceVideoProcessor
-from wan.utils.basic_flowmatch import FlowMatchScheduler
-from wan.utils.utils import get_outpainting_frame_location, resize_lanczos, calculate_new_dimensions
+from shared.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
+from .modules.posemb_layers import get_rotary_pos_embed, get_nd_rotary_pos_embed
+from shared.utils.vace_preprocessor import VaceVideoProcessor
+from shared.utils.basic_flowmatch import FlowMatchScheduler
+from shared.utils.utils import get_outpainting_frame_location, resize_lanczos, calculate_new_dimensions, convert_image_to_tensor
 from .multitalk.multitalk_utils import MomentumBuffer, adaptive_projected_guidance, match_and_blend_colors, match_and_blend_colors_with_mask
 from mmgp import safetensors2
 
@@ -61,6 +64,7 @@ class WanAny2V:
         config,
         checkpoint_dir,
         model_filename = None,
+        submodel_no_list = None,
         model_type = None, 
         model_def = None,
         base_model_type = None,
@@ -71,9 +75,6 @@ class WanAny2V:
         VAE_dtype = torch.float32,
         mixed_precision_transformer = False
     ):
-        print(f"[AUTO_QUANTIZE_LOG] WanAny2V init: quantizeTransformer={quantizeTransformer}, model_type={model_type}")
-        print(f"[AUTO_QUANTIZE_LOG] model_filename: {model_filename}")
-        print(f"[AUTO_QUANTIZE_LOG] dtype: {dtype}, save_quantized: {save_quantized}")
         self.device = torch.device(f"cuda")
         self.config = config
         self.VAE_dtype = VAE_dtype
@@ -88,24 +89,33 @@ class WanAny2V:
             dtype=config.t5_dtype,
             device=torch.device('cpu'),
             checkpoint_path=text_encoder_filename,
-            tokenizer_path=os.path.join(checkpoint_dir, config.t5_tokenizer),
+            tokenizer_path=os.path.join(checkpoint_dir, "umt5-xxl"),
             shard_fn= None)
 
         # base_model_type = "i2v2_2"
-        if hasattr(config, "clip_checkpoint") and not base_model_type in ["i2v_2_2"]:
+        if hasattr(config, "clip_checkpoint") and not base_model_type in ["i2v_2_2", "i2v_2_2_multitalk"]:
             self.clip = CLIPModel(
                 dtype=config.clip_dtype,
                 device=self.device,
                 checkpoint_path=os.path.join(checkpoint_dir , 
                                             config.clip_checkpoint),
-                tokenizer_path=os.path.join(checkpoint_dir ,  config.clip_tokenizer))
+                tokenizer_path=os.path.join(checkpoint_dir , "xlm-roberta-large"))
 
-        self.vae_stride = config.vae_stride
+
+        if base_model_type in ["ti2v_2_2"]:
+            self.vae_stride = (4, 16, 16)
+            vae_checkpoint = "Wan2.2_VAE.safetensors"
+            vae = Wan2_2_VAE
+        else:
+            self.vae_stride = config.vae_stride
+            vae_checkpoint = "Wan2.1_VAE.safetensors"
+            vae = WanVAE
         self.patch_size = config.patch_size 
         
-        self.vae = WanVAE(
-            vae_pth=os.path.join(checkpoint_dir, config.vae_checkpoint), dtype= VAE_dtype,
-            device=self.device)
+        self.vae = vae(
+            vae_pth=os.path.join(checkpoint_dir, vae_checkpoint), dtype= VAE_dtype,
+            device="cpu")
+        self.vae.device = self.device
         
         # config_filename= "configs/t2v_1.3B.json"
         # import json
@@ -117,33 +127,65 @@ class WanAny2V:
         forcedConfigPath = base_config_file if len(model_filename) > 1 else None
         # forcedConfigPath = base_config_file = f"configs/flf2v_720p.json"
         # model_filename[1] = xmodel_filename
+        self.model = self.model2 = None
+        source =  model_def.get("source", None)
+        source2 = model_def.get("source2", None)
+        module_source =  model_def.get("module_source", None)
+        module_source2 =  model_def.get("module_source2", None)
+        if module_source is not None:
+            self.model = offload.fast_load_transformers_model(model_filename[:1] + [module_source], modelClass=WanModel,do_quantize= quantizeTransformer and not save_quantized, writable_tensors= False, defaultConfigPath=base_config_file , forcedConfigPath= forcedConfigPath)
+        if module_source2 is not None:
+            self.model2 = offload.fast_load_transformers_model(model_filename[1:2] + [module_source2], modelClass=WanModel,do_quantize= quantizeTransformer and not save_quantized, writable_tensors= False, defaultConfigPath=base_config_file , forcedConfigPath= forcedConfigPath)
+        if source is not None:
+            self.model = offload.fast_load_transformers_model(source, modelClass=WanModel, writable_tensors= False, forcedConfigPath= base_config_file)
+        if source2 is not None:
+            self.model2 = offload.fast_load_transformers_model(source2, modelClass=WanModel, writable_tensors= False, forcedConfigPath= base_config_file)
 
-        if self.transformer_switch:
-            shared_modules= {}
-            self.model = offload.fast_load_transformers_model(model_filename[:1], modules = model_filename[2:], modelClass=WanModel,do_quantize= quantizeTransformer and not save_quantized, writable_tensors= False, defaultConfigPath=base_config_file , forcedConfigPath= forcedConfigPath,  return_shared_modules= shared_modules)
-            self.model2 = offload.fast_load_transformers_model(model_filename[1:2], modules = shared_modules, modelClass=WanModel,do_quantize= quantizeTransformer and not save_quantized, writable_tensors= False, defaultConfigPath=base_config_file , forcedConfigPath= forcedConfigPath)
-            shared_modules = None
+        if self.model is not None or self.model2 is not None:
+            from wgp import save_model
+            from mmgp.safetensors2 import torch_load_file
         else:
-            self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer and not save_quantized, writable_tensors= False, defaultConfigPath=base_config_file , forcedConfigPath= forcedConfigPath)
-        
-        # self.model = offload.load_model_data(self.model, xmodel_filename )
-        # offload.load_model_data(self.model, "c:/temp/Phantom-Wan-1.3B.pth")
+            if self.transformer_switch:
+                if 0 in submodel_no_list[2:] and 1 in submodel_no_list[2:]:
+                    raise Exception("Shared and non shared modules at the same time across multipe models is not supported")
+                
+                if 0 in submodel_no_list[2:]:
+                    shared_modules= {}
+                    self.model = offload.fast_load_transformers_model(model_filename[:1], modules = model_filename[2:], modelClass=WanModel,do_quantize= quantizeTransformer and not save_quantized, writable_tensors= False, defaultConfigPath=base_config_file , forcedConfigPath= forcedConfigPath,  return_shared_modules= shared_modules)
+                    self.model2 = offload.fast_load_transformers_model(model_filename[1:2], modules = shared_modules, modelClass=WanModel,do_quantize= quantizeTransformer and not save_quantized, writable_tensors= False, defaultConfigPath=base_config_file , forcedConfigPath= forcedConfigPath)
+                    shared_modules = None
+                else:
+                    modules_for_1 =[ file_name for file_name, submodel_no in zip(model_filename[2:],submodel_no_list[2:] ) if submodel_no ==1 ]
+                    modules_for_2 =[ file_name for file_name, submodel_no in zip(model_filename[2:],submodel_no_list[2:] ) if submodel_no ==2 ]
+                    self.model = offload.fast_load_transformers_model(model_filename[:1], modules = modules_for_1, modelClass=WanModel,do_quantize= quantizeTransformer and not save_quantized, writable_tensors= False, defaultConfigPath=base_config_file , forcedConfigPath= forcedConfigPath)
+                    self.model2 = offload.fast_load_transformers_model(model_filename[1:2], modules = modules_for_2, modelClass=WanModel,do_quantize= quantizeTransformer and not save_quantized, writable_tensors= False, defaultConfigPath=base_config_file , forcedConfigPath= forcedConfigPath)
 
-        self.model.lock_layers_dtypes(torch.float32 if mixed_precision_transformer else dtype)
-        offload.change_dtype(self.model, dtype, True)
+            else:
+                self.model = offload.fast_load_transformers_model(model_filename, modelClass=WanModel,do_quantize= quantizeTransformer and not save_quantized, writable_tensors= False, defaultConfigPath=base_config_file , forcedConfigPath= forcedConfigPath)
+        
+
+        if self.model is not None:
+            self.model.lock_layers_dtypes(torch.float32 if mixed_precision_transformer else dtype)
+            offload.change_dtype(self.model, dtype, True)
+            self.model.eval().requires_grad_(False)
         if self.model2 is not None:
             self.model2.lock_layers_dtypes(torch.float32 if mixed_precision_transformer else dtype)
             offload.change_dtype(self.model2, dtype, True)
-
-        # offload.save_model(self.model, "wan2.1_text2video_1.3B_mbf16.safetensors", do_quantize= False, config_file_path=base_config_file, filter_sd=sd)
-        # offload.save_model(self.model, "wan2.2_image2video_14B_low_mbf16.safetensors",  config_file_path=base_config_file)
-        # offload.save_model(self.model, "wan2.2_image2video_14B_low_quanto_mbf16_int8.safetensors", do_quantize=True, config_file_path=base_config_file)
-        self.model.eval().requires_grad_(False)
-        if self.model2 is not None:
             self.model2.eval().requires_grad_(False)
+
+        if module_source is not None:
+            save_model(self.model, model_type, dtype, None, is_module=True, filter=list(torch_load_file(module_source)), module_source_no=1)
+        if module_source2 is not None:
+            save_model(self.model2, model_type, dtype, None, is_module=True, filter=list(torch_load_file(module_source2)), module_source_no=2)
+        if not source is None:
+            save_model(self.model, model_type, dtype, None, submodel_no= 1)
+        if not source2 is None:
+            save_model(self.model2, model_type, dtype, None, submodel_no= 2)
+
         if save_quantized:
             from wgp import save_quantized_model
-            save_quantized_model(self.model, model_type, model_filename[0], dtype, base_config_file)
+            if self.model is not None:
+                save_quantized_model(self.model, model_type, model_filename[0], dtype, base_config_file)
             if self.model2 is not None:
                 save_quantized_model(self.model2, model_type, model_filename[1], dtype, base_config_file, submodel_no=2)
         self.sample_neg_prompt = config.sample_neg_prompt
@@ -235,8 +277,8 @@ class WanAny2V:
     def vace_latent(self, z, m):
         return [torch.cat([zz, mm], dim=0) for zz, mm in zip(z, m)]
 
-    def fit_image_into_canvas(self, ref_img, image_size, canvas_tf_bg, device, fill_max = False, outpainting_dims = None, return_mask = False):
-        from wan.utils.utils import save_image
+    def fit_image_into_canvas(self, ref_img, image_size, canvas_tf_bg, device, full_frame = False, outpainting_dims = None, return_mask = False):
+        from shared.utils.utils import save_image
         ref_width, ref_height = ref_img.size
         if (ref_height, ref_width) == image_size and outpainting_dims  == None:
             ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(1)
@@ -244,18 +286,23 @@ class WanAny2V:
         else:
             if outpainting_dims != None:
                 final_height, final_width = image_size
-                canvas_height, canvas_width, margin_top, margin_left =   get_outpainting_frame_location(final_height, final_width,  outpainting_dims, 8)        
+                canvas_height, canvas_width, margin_top, margin_left =   get_outpainting_frame_location(final_height, final_width,  outpainting_dims, 1)        
             else:
                 canvas_height, canvas_width = image_size
-            scale = min(canvas_height / ref_height, canvas_width / ref_width)
-            new_height = int(ref_height * scale)
-            new_width = int(ref_width * scale)
-            if fill_max  and (canvas_height - new_height) < 16:
+            if full_frame:
                 new_height = canvas_height
-            if fill_max  and (canvas_width - new_width) < 16:
                 new_width = canvas_width
-            top = (canvas_height - new_height) // 2
-            left = (canvas_width - new_width) // 2
+                top = left = 0 
+            else:
+                # if fill_max  and (canvas_height - new_height) < 16:
+                #     new_height = canvas_height
+                # if fill_max  and (canvas_width - new_width) < 16:
+                #     new_width = canvas_width
+                scale = min(canvas_height / ref_height, canvas_width / ref_width)
+                new_height = int(ref_height * scale)
+                new_width = int(ref_width * scale)
+                top = (canvas_height - new_height) // 2
+                left = (canvas_width - new_width) // 2
             ref_img = ref_img.resize((new_width, new_height), resample=Image.Resampling.LANCZOS) 
             ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(1)
             if outpainting_dims != None:
@@ -276,7 +323,7 @@ class WanAny2V:
                 canvas = canvas.to(device)
         return ref_img.to(device), canvas
 
-    def prepare_source(self, src_video, src_mask, src_ref_images, total_frames, image_size,  device, keep_video_guide_frames= [], start_frame = 0,  fit_into_canvas = None, pre_src_video = None, inject_frames = [], outpainting_dims = None, any_background_ref = False):
+    def prepare_source(self, src_video, src_mask, src_ref_images, total_frames, image_size,  device, keep_video_guide_frames= [], pre_src_video = None, inject_frames = [], outpainting_dims = None, any_background_ref = False):
         image_sizes = []
         trim_video_guide = len(keep_video_guide_frames)
         def conv_tensor(t, device):
@@ -377,7 +424,11 @@ class WanAny2V:
         sampling_steps=50,
         guide_scale=5.0,
         guide2_scale = 5.0,
+        guide3_scale = 5.0,
         switch_threshold = 0,
+        switch2_threshold = 0,
+        guide_phases= 1 ,
+        model_switch_phase = 1,
         n_prompt="",
         seed=-1,
         callback = None,
@@ -410,7 +461,11 @@ class WanAny2V:
         color_correction_strength = 1,
         prefix_frames_count = 0,
         image_mode = 0,
-
+        window_no = 0,
+        set_header_text = None,
+        pre_video_frame = None,
+        video_prompt_type= "",
+        original_input_ref_images = [],
         **bbargs
                 ):
         
@@ -420,7 +475,8 @@ class WanAny2V:
             timesteps.append(0.)
             timesteps = [torch.tensor([t], device=self.device) for t in timesteps]
             if self.use_timestep_transform:
-                timesteps = [timestep_transform(t, shift=shift, num_timesteps=self.num_timesteps) for t in timesteps][:-1]    
+                timesteps = [timestep_transform(t, shift=shift, num_timesteps=self.num_timesteps) for t in timesteps][:-1]
+            timesteps = torch.tensor(timesteps)
             sample_scheduler = None                  
         elif sample_solver == 'causvid':
             sample_scheduler = FlowMatchScheduler(num_inference_steps=sampling_steps, shift=shift, sigma_min=0, extra_one_step=True)
@@ -455,6 +511,7 @@ class WanAny2V:
                 sigmas=sampling_sigmas)
         else:
             raise NotImplementedError(f"Unsupported Scheduler {sample_solver}")
+        original_timesteps = timesteps
 
         seed_g = torch.Generator(device=self.device)
         seed_g.manual_seed(seed)
@@ -463,7 +520,6 @@ class WanAny2V:
         color_reference_frame = None
         if self._interrupt:
             return None
-        
         # Text Encoder
         if n_prompt == "":
             n_prompt = self.sample_neg_prompt
@@ -474,6 +530,8 @@ class WanAny2V:
         text_len = self.model.text_len
         context = torch.cat([context, context.new_zeros(text_len -context.size(0), context.size(1)) ]).unsqueeze(0) 
         context_null = torch.cat([context_null, context_null.new_zeros(text_len -context_null.size(0), context_null.size(1)) ]).unsqueeze(0) 
+        if input_video is not None: height, width = input_video.shape[-2:]
+
         # NAG_prompt =  "static, low resolution, blurry"
         # context_NAG = self.text_encoder([NAG_prompt], self.device)[0]
         # context_NAG = context_NAG.to(self.dtype)
@@ -487,123 +545,135 @@ class WanAny2V:
         # if NAG_scale > 1: context = torch.cat([context, context_NAG], dim=0)
         if self._interrupt: return None
 
-        vace = model_type in ["vace_1.3B","vace_14B", "vace_multitalk_14B"]
+        vace = model_type in ["vace_1.3B","vace_14B", "vace_multitalk_14B", "vace_standin_14B"]
         phantom = model_type in ["phantom_1.3B", "phantom_14B"]
         fantasy = model_type in ["fantasy"]
-        multitalk = model_type in ["multitalk", "vace_multitalk_14B"]
+        multitalk = model_type in ["multitalk", "infinitetalk", "vace_multitalk_14B", "i2v_2_2_multitalk"]
+        infinitetalk = model_type in ["infinitetalk"]
+        standin = model_type in ["standin", "vace_standin_14B"]
         recam = model_type in ["recam_1.3B"]
-
+        ti2v = model_type in ["ti2v_2_2"]
+        start_step_no = 0
         ref_images_count = 0
         trim_frames = 0
         extended_overlapped_latents = None
-
+        no_noise_latents_injection = infinitetalk
+        timestep_injection = False
         lat_frames = int((frame_num - 1) // self.vae_stride[0]) + 1
         # image2video 
-        if model_type in ["i2v", "i2v_2_2", "fantasy", "multitalk", "flf2v_720p"]:
+        if model_type in ["i2v", "i2v_2_2", "fun_inp_1.3B", "fun_inp", "fantasy", "multitalk", "infinitetalk", "i2v_2_2_multitalk", "flf2v_720p"]:
             any_end_frame = False
             if image_start is None:
-                _ , preframes_count, height, width = input_video.shape
-                lat_h, lat_w = height // self.vae_stride[1], width // self.vae_stride[2]
-                if hasattr(self, "clip"):
-                    clip_image_size = self.clip.model.image_size
-                    clip_image = resize_lanczos(input_video[:, -1], clip_image_size, clip_image_size)[:, None, :, :]
-                    clip_context = self.clip.visual([clip_image]) if model_type != "flf2v_720p" else self.clip.visual([clip_image , clip_image ])
-                    clip_image = None
-                else:
-                    clip_context = None
-                input_video = input_video.to(device=self.device).to(dtype= self.VAE_dtype)
-                enc =  torch.concat( [input_video, torch.zeros( (3, frame_num-preframes_count, height, width), 
-                                     device=self.device, dtype= self.VAE_dtype)], 
-                                     dim = 1).to(self.device)
-                color_reference_frame = input_video[:, -1:].clone()
-                input_video = None
-            else:
-                preframes_count = 1
-                any_end_frame = image_end is not None 
-                add_frames_for_end_image = any_end_frame and model_type == "i2v"
-                if any_end_frame:
-                    if add_frames_for_end_image:
-                        frame_num +=1
-                        lat_frames = int((frame_num - 2) // self.vae_stride[0] + 2)
-                        trim_frames = 1
-                
-                height, width = image_start.shape[1:]
-
-                lat_h = round(
-                    height // self.vae_stride[1] //
-                    self.patch_size[1] * self.patch_size[1])
-                lat_w = round(
-                    width // self.vae_stride[2] //
-                    self.patch_size[2] * self.patch_size[2])
-                height = lat_h * self.vae_stride[1]
-                width = lat_w * self.vae_stride[2]
-                image_start_frame = image_start.unsqueeze(1).to(self.device)
-                color_reference_frame = image_start_frame.clone()
-                if image_end is not None:
-                    img_end_frame = image_end.unsqueeze(1).to(self.device)
-
-                if hasattr(self, "clip"):                                   
-                    clip_image_size = self.clip.model.image_size
-                    image_start = resize_lanczos(image_start, clip_image_size, clip_image_size)
-                    if image_end is not None: image_end = resize_lanczos(image_end, clip_image_size, clip_image_size)
-                    if model_type == "flf2v_720p":                    
-                        clip_context = self.clip.visual([image_start[:, None, :, :], image_end[:, None, :, :] if image_end is not None else image_start[:, None, :, :]])
+                if infinitetalk:
+                    new_shot = "Q" in video_prompt_type
+                    if input_frames is not None:
+                        image_ref = input_frames[:, 0]
                     else:
-                        clip_context = self.clip.visual([image_start[:, None, :, :]])
+                        if input_ref_images is None:                        
+                            if pre_video_frame is None: raise Exception("Missing Reference Image")
+                            input_ref_images, new_shot = [pre_video_frame], False
+                        new_shot = new_shot and window_no <= len(input_ref_images)
+                        image_ref = convert_image_to_tensor(input_ref_images[ min(window_no, len(input_ref_images))-1 ])
+                    if new_shot or input_video is None:  
+                        input_video = image_ref.unsqueeze(1)
+                    else:
+                        color_correction_strength = 0 #disable color correction as transition frames between shots may have a complete different color level than the colors of the new shot
+                _ , preframes_count, height, width = input_video.shape
+                input_video = input_video.to(device=self.device).to(dtype= self.VAE_dtype)
+                if infinitetalk:
+                    image_start = image_ref.to(input_video)
+                    control_pre_frames_count = 1 
+                    control_video = image_start.unsqueeze(1)
                 else:
-                    clip_context = None
+                    image_start = input_video[:, -1]
+                    control_pre_frames_count = preframes_count
+                    control_video = input_video
 
-                if any_end_frame:
-                    enc= torch.concat([
-                            image_start_frame,
-                            torch.zeros( (3, frame_num-2,  height, width), device=self.device, dtype= self.VAE_dtype),
-                            img_end_frame,
-                    ], dim=1).to(self.device)
+                color_reference_frame = image_start.unsqueeze(1).clone()
+            else:
+                preframes_count = control_pre_frames_count = 1                
+                height, width = image_start.shape[1:]
+                control_video = image_start.unsqueeze(1).to(self.device)
+                color_reference_frame = control_video.clone()
+
+            any_end_frame = image_end is not None 
+            add_frames_for_end_image = any_end_frame and model_type == "i2v"
+            if any_end_frame:
+                color_correction_strength = 0 #disable color correction as transition frames between shots may have a complete different color level than the colors of the new shot
+                if add_frames_for_end_image:
+                    frame_num +=1
+                    lat_frames = int((frame_num - 2) // self.vae_stride[0] + 2)
+                    trim_frames = 1
+
+            lat_h, lat_w = height // self.vae_stride[1], width // self.vae_stride[2]
+
+            if image_end is not None:
+                img_end_frame = image_end.unsqueeze(1).to(self.device)
+
+            if hasattr(self, "clip"):                                   
+                clip_image_size = self.clip.model.image_size
+                image_start = resize_lanczos(image_start, clip_image_size, clip_image_size)
+                image_end = resize_lanczos(image_end, clip_image_size, clip_image_size) if image_end is not None else image_start
+                if model_type == "flf2v_720p":                    
+                    clip_context = self.clip.visual([image_start[:, None, :, :], image_end[:, None, :, :] if image_end is not None else image_start[:, None, :, :]])
                 else:
-                    enc= torch.concat([
-                            image_start_frame,
-                            torch.zeros( (3, frame_num-1, height, width), device=self.device, dtype= self.VAE_dtype)
-                    ], dim=1).to(self.device)
+                    clip_context = self.clip.visual([image_start[:, None, :, :]])
+            else:
+                clip_context = None
 
-                image_start = image_end = image_start_frame = img_end_frame = None
+            if any_end_frame:
+                enc= torch.concat([
+                        control_video,
+                        torch.zeros( (3, frame_num-control_pre_frames_count-1,  height, width), device=self.device, dtype= self.VAE_dtype),
+                        img_end_frame,
+                ], dim=1).to(self.device)
+            else:
+                enc= torch.concat([
+                        control_video,
+                        torch.zeros( (3, frame_num-control_pre_frames_count, height, width), device=self.device, dtype= self.VAE_dtype)
+                ], dim=1).to(self.device)
+
+            image_start = image_end = img_end_frame = image_ref = control_video = None
 
             msk = torch.ones(1, frame_num, lat_h, lat_w, device=self.device)
             if any_end_frame:
-                msk[:, preframes_count: -1] = 0
+                msk[:, control_pre_frames_count: -1] = 0
                 if add_frames_for_end_image:
                     msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:-1], torch.repeat_interleave(msk[:, -1:], repeats=4, dim=1) ], dim=1)
                 else:
                     msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:] ], dim=1)
             else:
-                msk[:, preframes_count:] = 0
+                msk[:, control_pre_frames_count:] = 0
                 msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:] ], dim=1)
             msk = msk.view(1, msk.shape[1] // 4, 4, lat_h, lat_w)
             msk = msk.transpose(1, 2)[0]
 
-
             lat_y = self.vae.encode([enc], VAE_tile_size, any_end_frame= any_end_frame and add_frames_for_end_image)[0]
+            y = torch.concat([msk, lat_y])
             overlapped_latents_frames_num = int(1 + (preframes_count-1) // 4)
-            if overlapped_latents != None:
+            # if overlapped_latents != None:
+            if overlapped_latents_frames_num > 0:
                 # disabled because looks worse
                 if False and overlapped_latents_frames_num > 1: lat_y[:, :, 1:overlapped_latents_frames_num]  = overlapped_latents[:, 1:]
+                if infinitetalk:
+                    lat_y = self.vae.encode([input_video], VAE_tile_size)[0]
                 extended_overlapped_latents = lat_y[:, :overlapped_latents_frames_num].clone().unsqueeze(0)
-            y = torch.concat([msk, lat_y])
-            lat_y = None
+            # if control_pre_frames_count != pre_frames_count:
+
+            lat_y = input_video = None
             kwargs.update({ 'y': y})
             if not clip_context is None:
                 kwargs.update({'clip_fea': clip_context})
 
         # Recam Master
         if recam:
-            # should be be in fact in input_frames since it is control video not a video to be extended
             target_camera = model_mode
-            width = input_video.shape[2]
-            height = input_video.shape[1]
-            input_video = input_video.to(dtype=self.dtype , device=self.device)
-            source_latents = self.vae.encode([input_video])[0] #.to(dtype=self.dtype, device=self.device)
-            del input_video
+            height,width = input_frames.shape[-2:]
+            input_frames = input_frames.to(dtype=self.dtype , device=self.device)
+            source_latents = self.vae.encode([input_frames])[0].unsqueeze(0) #.to(dtype=self.dtype, device=self.device)
+            del input_frames
             # Process target camera (recammaster)
-            from wan.utils.cammmaster_tools import get_camera_embedding
+            from shared.utils.cammmaster_tools import get_camera_embedding
             cam_emb = get_camera_embedding(target_camera)       
             cam_emb = cam_emb.to(dtype=self.dtype, device=self.device)
             kwargs['cam_emb'] = cam_emb
@@ -611,20 +681,22 @@ class WanAny2V:
         # Video 2 Video
         if denoising_strength < 1. and input_frames != None:
             height, width = input_frames.shape[-2:]
-            source_latents = self.vae.encode([input_frames])[0]
+            source_latents = self.vae.encode([input_frames])[0].unsqueeze(0)
             injection_denoising_step = 0
             inject_from_start = False
             if input_frames != None and denoising_strength < 1 :
                 color_reference_frame = input_frames[:, -1:].clone()
-                if overlapped_latents != None:
-                    overlapped_latents_frames_num = overlapped_latents.shape[2]
-                    overlapped_frames_num = (overlapped_latents_frames_num-1) * 4 + 1
+                if prefix_frames_count > 0:
+                    overlapped_frames_num = prefix_frames_count
+                    overlapped_latents_frames_num = (overlapped_latents_frames_num -1 // 4) + 1 
+                    # overlapped_latents_frames_num = overlapped_latents.shape[2]
+                    # overlapped_frames_num = (overlapped_latents_frames_num-1) * 4 + 1
                 else: 
                     overlapped_latents_frames_num = overlapped_frames_num  = 0
                 if len(keep_frames_parsed) == 0  or image_outputs or  (overlapped_frames_num + len(keep_frames_parsed)) == input_frames.shape[1] and all(keep_frames_parsed) : keep_frames_parsed = [] 
-                injection_denoising_step = int(sampling_steps * (1. - denoising_strength) )
+                injection_denoising_step = int( round(sampling_steps * (1. - denoising_strength),4) )
                 latent_keep_frames = []
-                if source_latents.shape[1] < lat_frames or len(keep_frames_parsed) > 0:
+                if source_latents.shape[2] < lat_frames or len(keep_frames_parsed) > 0:
                     inject_from_start = True
                     if len(keep_frames_parsed) >0 :
                         if overlapped_frames_num > 0: keep_frames_parsed = [True] * overlapped_frames_num + keep_frames_parsed
@@ -633,6 +705,7 @@ class WanAny2V:
                             latent_keep_frames.append(all(keep_frames_parsed[i:i+4]))
                 else:
                     timesteps = timesteps[injection_denoising_step:]
+                    start_step_no = injection_denoising_step
                     if hasattr(sample_scheduler, "timesteps"): sample_scheduler.timesteps = timesteps
                     if hasattr(sample_scheduler, "sigmas"): sample_scheduler.sigmas= sample_scheduler.sigmas[injection_denoising_step:]
                     injection_denoising_step = 0
@@ -645,6 +718,14 @@ class WanAny2V:
                 input_ref_images_neg = torch.zeros_like(input_ref_images)
                 ref_images_count = input_ref_images.shape[1] if input_ref_images != None else 0
                 trim_frames = input_ref_images.shape[1]
+
+        if ti2v:
+            if input_video is None:
+                height, width = (height // 32) * 32, (width // 32) * 32 
+            else:
+                height, width = input_video.shape[-2:]
+                source_latents = self.vae.encode([input_video], tile_size = VAE_tile_size)[0].unsqueeze(0)
+                timestep_injection = True
 
         # Vace
         if vace :
@@ -684,8 +765,10 @@ class WanAny2V:
         else:
             target_shape = (self.vae.model.z_dim, lat_frames + ref_images_count, height // self.vae_stride[1], width // self.vae_stride[2])
 
-        if multitalk and audio_proj != None:
-            from wan.multitalk.multitalk import get_target_masks
+        if multitalk:
+            if audio_proj is None:
+                audio_proj = [ torch.zeros( (1, 1, 5, 12, 768 ), dtype=self.dtype, device=self.device), torch.zeros( (1, (frame_num - 1) // 4, 8, 12, 768 ), dtype=self.dtype, device=self.device) ] 
+            from .multitalk.multitalk import get_target_masks
             audio_proj = [audio.to(self.dtype) for audio in audio_proj]
             human_no = len(audio_proj[0])
             token_ref_target_masks = get_target_masks(human_no, lat_h, lat_w, height, width, face_scale = 0.05, bbox = speakers_bboxes).to(self.dtype) if human_no > 1 else None
@@ -708,17 +791,38 @@ class WanAny2V:
 
         kwargs["freqs"] = freqs
 
-        # Steps Skipping
-        cache_type = self.model.enable_cache 
-        if cache_type != None:
-            x_count = 3 if phantom or fantasy or multitalk else 2
-            self.model.previous_residual = [None] * x_count
-            if cache_type == "tea":
-                self.model.compute_teacache_threshold(self.model.cache_start_step, timesteps, self.model.cache_multiplier)
+        #Standin
+        if standin:
+            from preprocessing.face_preprocessor  import FaceProcessor 
+            standin_ref_pos = 1 if "K" in video_prompt_type else 0
+            if len(original_input_ref_images) < standin_ref_pos + 1: 
+                if "I" in video_prompt_type and model_type in ["vace_standin_14B"]:
+                    print("Warning: Missing Standin ref image, make sure 'Inject only People / Objets' is selected or if there is 'Landscape and then People or Objects' there are at least two ref images.")
             else: 
-                self.model.compute_magcache_threshold(self.model.cache_start_step, timesteps, self.model.cache_multiplier)
-                self.model.accumulated_err, self.model.accumulated_steps, self.model.accumulated_ratio  = [0.0] * x_count, [0] * x_count, [1.0] * x_count
-                self.model.one_for_all = x_count > 2
+                standin_ref_pos = -1
+                image_ref = original_input_ref_images[standin_ref_pos]
+                face_processor = FaceProcessor()
+                standin_ref = face_processor.process(image_ref, remove_bg = model_type in ["vace_standin_14B"])
+                face_processor = None
+                gc.collect()
+                torch.cuda.empty_cache()
+                standin_freqs = get_nd_rotary_pos_embed((-1, int(target_shape[-2]/2), int(target_shape[-1]/2) ), (-1, int(target_shape[-2]/2 + standin_ref.height/16), int(target_shape[-1]/2 + standin_ref.width/16) )) 
+                standin_ref = self.vae.encode([ convert_image_to_tensor(standin_ref).unsqueeze(1) ], VAE_tile_size)[0].unsqueeze(0)
+                kwargs.update({ "standin_freqs": standin_freqs, "standin_ref": standin_ref, }) 
+
+
+        # Steps Skipping
+        skip_steps_cache = self.model.cache
+        if skip_steps_cache != None:
+            cache_type = skip_steps_cache.cache_type
+            x_count = 3 if phantom or fantasy or multitalk else 2
+            skip_steps_cache.previous_residual = [None] * x_count
+            if cache_type == "tea":
+                self.model.compute_teacache_threshold(max(skip_steps_cache.start_step, start_step_no), original_timesteps, skip_steps_cache.multiplier)
+            else: 
+                self.model.compute_magcache_threshold(max(skip_steps_cache.start_step, start_step_no), original_timesteps, skip_steps_cache.multiplier)
+                skip_steps_cache.accumulated_err, skip_steps_cache.accumulated_steps, skip_steps_cache.accumulated_ratio  = [0.0] * x_count, [0] * x_count, [1.0] * x_count
+                skip_steps_cache.one_for_all = x_count > 2
 
         if callback != None:
             callback(-1, None, True)
@@ -730,15 +834,30 @@ class WanAny2V:
 
         # init denoising
         updated_num_steps= len(timesteps)
-        if callback != None:
-            from wan.utils.loras_mutipliers import update_loras_slists
-            model_switch_step = updated_num_steps
-            for i, t in enumerate(timesteps):
-                if t <= switch_threshold:
-                    model_switch_step = i
-                    break
-            update_loras_slists(self.model, loras_slists, updated_num_steps, model_switch_step= model_switch_step)
-            callback(-1, None, True, override_num_inference_steps = updated_num_steps)
+
+        denoising_extra = ""
+        from shared.utils.loras_mutipliers import update_loras_slists, get_model_switch_steps
+
+        phase_switch_step, phase_switch_step2, phases_description = get_model_switch_steps(timesteps, updated_num_steps, guide_phases, 0 if self.model2 is None else model_switch_phase, switch_threshold, switch2_threshold )
+        if len(phases_description) > 0:  set_header_text(phases_description)
+        guidance_switch_done =  guidance_switch2_done = False
+        if guide_phases > 1: denoising_extra = f"Phase 1/{guide_phases} High Noise" if self.model2 is not None else f"Phase 1/{guide_phases}"
+        def update_guidance(step_no, t, guide_scale, new_guide_scale, guidance_switch_done, switch_threshold, trans, phase_no, denoising_extra):
+            if guide_phases >= phase_no and not guidance_switch_done and t <= switch_threshold:
+                if model_switch_phase == phase_no-1 and self.model2 is not None: trans = self.model2
+                guide_scale, guidance_switch_done = new_guide_scale, True
+                denoising_extra = f"Phase {phase_no}/{guide_phases} {'Low Noise' if trans == self.model2 else 'High Noise'}" if self.model2 is not None else f"Phase {phase_no}/{guide_phases}"
+                callback(step_no-1, denoising_extra = denoising_extra)
+            return guide_scale, guidance_switch_done, trans, denoising_extra
+        update_loras_slists(self.model, loras_slists, updated_num_steps, phase_switch_step= phase_switch_step, phase_switch_step2= phase_switch_step2)
+        if self.model2 is not None: update_loras_slists(self.model2, loras_slists, updated_num_steps, phase_switch_step= phase_switch_step, phase_switch_step2= phase_switch_step2)
+        callback(-1, None, True, override_num_inference_steps = updated_num_steps, denoising_extra = denoising_extra)
+
+        def clear():
+            clear_caches()
+            gc.collect()
+            torch.cuda.empty_cache()
+            return None
 
         if sample_scheduler != None:
             scheduler_kwargs = {} if isinstance(sample_scheduler, FlowMatchScheduler) else {"generator": seed_g}
@@ -750,45 +869,21 @@ class WanAny2V:
             text_momentumbuffer  = MomentumBuffer(apg_momentum) 
             audio_momentumbuffer = MomentumBuffer(apg_momentum) 
 
-        guidance_switch_done = False
-
-        # [SWITCH_THRESHOLD_LOG] Log switch threshold configuration
-        print(f"[SWITCH_THRESHOLD_LOG] switch_threshold: {switch_threshold}")
-        print(f"[SWITCH_THRESHOLD_LOG] guidance_scale (stage 1): {guide_scale}")
-        print(f"[SWITCH_THRESHOLD_LOG] guidance2_scale (stage 2): {guide2_scale}")
-        print(f"[SWITCH_THRESHOLD_LOG] Has model2: {self.model2 is not None}")
-        print(f"[SWITCH_THRESHOLD_LOG] Total timesteps: {len(timesteps)}")
 
         # denoising
         trans = self.model
-        # Debug: Log timestep schedule and switch_threshold at start
-        print(f"[SWITCH_THRESHOLD_DEBUG] any2video.py starting generation loop:")
-        print(f"[SWITCH_THRESHOLD_DEBUG]   switch_threshold: {switch_threshold} (type: {type(switch_threshold)})")
-        print(f"[SWITCH_THRESHOLD_DEBUG]   timesteps: {timesteps[:5]}...{timesteps[-5:]} (len: {len(timesteps)})")
-        print(f"[SWITCH_THRESHOLD_DEBUG]   guidance_switch_done: {guidance_switch_done}")
-        print(f"[SWITCH_THRESHOLD_DEBUG]   guide_scale: {guide_scale}, guide2_scale: {guide2_scale}")
-        
         for i, t in enumerate(tqdm(timesteps)):
-            # Debug: Log the comparison for first few steps
-            if i < 5:
-                t_val = float(t.item()) if hasattr(t, 'item') else float(t)
-                print(f"[SWITCH_THRESHOLD_DEBUG] Step {i}: timestep {t_val:.3f} <= {switch_threshold}? {t_val <= switch_threshold}")
-            
-            if not guidance_switch_done and t <= switch_threshold:
-                t_val = float(t.item()) if hasattr(t, 'item') else float(t)
-                print(f"[SWITCH_THRESHOLD_LOG] SWITCHING at step {i}/{len(timesteps)}, timestep {t_val:.1f} <= {switch_threshold}")
-                print(f"[SWITCH_THRESHOLD_LOG] Guidance scale: {guide_scale} -> {guide2_scale}")
-                if self.model2 is not None:
-                    print(f"[SWITCH_THRESHOLD_LOG] Model: model1 -> model2")
-                    trans = self.model2
-                else:
-                    print(f"[SWITCH_THRESHOLD_LOG] No model2 available, keeping model1")
-                guide_scale = guide2_scale
-                guidance_switch_done = True
- 
-            offload.set_step_no_for_lora(trans, i)
+            guide_scale, guidance_switch_done, trans, denoising_extra = update_guidance(i, t, guide_scale, guide2_scale, guidance_switch_done, switch_threshold, trans, 2, denoising_extra)
+            guide_scale, guidance_switch2_done, trans, denoising_extra = update_guidance(i, t, guide_scale, guide3_scale, guidance_switch2_done, switch2_threshold, trans, 3, denoising_extra)
+            offload.set_step_no_for_lora(trans, start_step_no + i)
             timestep = torch.stack([t])
-            kwargs.update({"t": timestep, "current_step": i})  
+
+            if timestep_injection:
+                latents[:, :, :source_latents.shape[2]] = source_latents
+                timestep = torch.full((target_shape[-3],), t, dtype=torch.int64, device=latents.device)
+                timestep[:source_latents.shape[2]] = 0
+                        
+            kwargs.update({"t": timestep, "current_step": start_step_no + i})  
             kwargs["slg_layers"] = slg_layers if int(slg_start * sampling_steps) <= i < int(slg_end * sampling_steps) else None
 
             if denoising_strength < 1 and input_frames != None and i <= injection_denoising_step:
@@ -796,29 +891,33 @@ class WanAny2V:
                 noise = torch.randn(batch_size, *target_shape, dtype=torch.float32, device=self.device, generator=seed_g)
                 if inject_from_start:
                     new_latents = latents.clone()
-                    new_latents[:,:, :source_latents.shape[1] ] = noise[:, :, :source_latents.shape[1] ] * sigma + (1 - sigma) * source_latents.unsqueeze(0)
+                    new_latents[:,:, :source_latents.shape[2] ] = noise[:, :, :source_latents.shape[2] ] * sigma + (1 - sigma) * source_latents
                     for latent_no, keep_latent in enumerate(latent_keep_frames):
                         if not keep_latent:
                             new_latents[:, :, latent_no:latent_no+1 ] = latents[:, :, latent_no:latent_no+1]
                     latents = new_latents
                     new_latents = None
                 else:
-                    latents = noise * sigma + (1 - sigma) * source_latents.unsqueeze(0)
+                    latents = noise * sigma + (1 - sigma) * source_latents
                 noise = None
 
             if extended_overlapped_latents != None:
-                latent_noise_factor = t / 1000
-                latents[:, :, :extended_overlapped_latents.shape[2]]   = extended_overlapped_latents  * (1.0 - latent_noise_factor) + torch.randn_like(extended_overlapped_latents ) * latent_noise_factor 
+                if no_noise_latents_injection:
+                    latents[:, :, :extended_overlapped_latents.shape[2]]   = extended_overlapped_latents 
+                else:
+                    latent_noise_factor = t / 1000
+                    latents[:, :, :extended_overlapped_latents.shape[2]]   = extended_overlapped_latents  * (1.0 - latent_noise_factor) + torch.randn_like(extended_overlapped_latents ) * latent_noise_factor 
                 if vace:
                     overlap_noise_factor = overlap_noise / 1000 
                     for zz in z:
                         zz[0:16, ref_images_count:extended_overlapped_latents.shape[2] ]   = extended_overlapped_latents[0, :, ref_images_count:]  * (1.0 - overlap_noise_factor) + torch.randn_like(extended_overlapped_latents[0, :, ref_images_count:] ) * overlap_noise_factor 
 
             if target_camera != None:
-                latent_model_input = torch.cat([latents, source_latents.unsqueeze(0).expand(*expand_shape)], dim=2) # !!!!
+                latent_model_input = torch.cat([latents, source_latents.expand(*expand_shape)], dim=2)
             else:
                 latent_model_input = latents
 
+            any_guidance = guide_scale != 1
             if phantom:
                 gen_args = {
                     "x" : ([ torch.cat([latent_model_input[:,:, :-ref_images_count], input_ref_images.unsqueeze(0).expand(*expand_shape)], dim=2) ] * 2 + 
@@ -832,33 +931,42 @@ class WanAny2V:
                     "audio_scale": [audio_scale, None, None ]
                 }
             elif multitalk and audio_proj != None:
-                gen_args = {
-                    "x" : [latent_model_input, latent_model_input, latent_model_input],
-                    "context" : [context, context_null, context_null],
-                    "multitalk_audio": [audio_proj, audio_proj, [torch.zeros_like(audio_proj[0][-1:]), torch.zeros_like(audio_proj[1][-1:])]],
-                    "multitalk_masks": [token_ref_target_masks, token_ref_target_masks, None]
-                }
+                if guide_scale == 1:
+                    gen_args = {
+                        "x" : [latent_model_input, latent_model_input],
+                        "context" : [context, context],
+                        "multitalk_audio": [audio_proj, [torch.zeros_like(audio_proj[0][-1:]), torch.zeros_like(audio_proj[1][-1:])]],
+                        "multitalk_masks": [token_ref_target_masks, None]
+                    }
+                    any_guidance = audio_cfg_scale != 1
+                else:
+                    gen_args = {
+                        "x" : [latent_model_input, latent_model_input, latent_model_input],
+                        "context" : [context, context_null, context_null],
+                        "multitalk_audio": [audio_proj, audio_proj, [torch.zeros_like(audio_proj[0][-1:]), torch.zeros_like(audio_proj[1][-1:])]],
+                        "multitalk_masks": [token_ref_target_masks, token_ref_target_masks, None]
+                    }
             else:
                 gen_args = {
                     "x" : [latent_model_input, latent_model_input],
                     "context": [context, context_null]
                 }
 
-            if joint_pass and guide_scale > 1:
+            if joint_pass and any_guidance:
                 ret_values = trans( **gen_args , **kwargs)
                 if self._interrupt:
-                    return None               
+                    return clear()               
             else:
-                size = 1 if guide_scale == 1 else len(gen_args["x"])
+                size = len(gen_args["x"]) if any_guidance else 1 
                 ret_values = [None] * size
                 for x_id in range(size):
                     sub_gen_args = {k : [v[x_id]] for k, v in gen_args.items() }
                     ret_values[x_id] = trans( **sub_gen_args, x_id= x_id , **kwargs)[0]
                     if self._interrupt:
-                        return None               
+                        return clear()         
                 sub_gen_args = None
-            if guide_scale == 1:
-                noise_pred = ret_values[0]                
+            if not any_guidance:
+                noise_pred = ret_values[0]       
             elif phantom:
                 guide_scale_img= 5.0
                 guide_scale_text= guide_scale #7.5
@@ -870,19 +978,32 @@ class WanAny2V:
                 noise_pred = noise_pred_uncond + guide_scale * (noise_pred_noaudio - noise_pred_uncond) + audio_cfg_scale * (noise_pred_cond  - noise_pred_noaudio) 
                 noise_pred_noaudio = None
             elif multitalk and audio_proj != None:
-                noise_pred_cond, noise_pred_drop_text, noise_pred_uncond = ret_values
                 if apg_switch != 0:
-                    noise_pred = noise_pred_cond + (guide_scale - 1) * adaptive_projected_guidance(noise_pred_cond - noise_pred_drop_text, 
-                                                                                                        noise_pred_cond, 
-                                                                                                        momentum_buffer=text_momentumbuffer, 
-                                                                                                        norm_threshold=apg_norm_threshold) \
-                            + (audio_cfg_scale - 1) * adaptive_projected_guidance(noise_pred_drop_text - noise_pred_uncond, 
-                                                                                    noise_pred_cond, 
-                                                                                    momentum_buffer=audio_momentumbuffer, 
-                                                                                    norm_threshold=apg_norm_threshold)
+                    if guide_scale == 1:
+                        noise_pred_cond, noise_pred_drop_audio  = ret_values
+                        noise_pred = noise_pred_cond + (audio_cfg_scale - 1)* adaptive_projected_guidance(noise_pred_cond - noise_pred_drop_audio, 
+                                                                                        noise_pred_cond, 
+                                                                                        momentum_buffer=audio_momentumbuffer, 
+                                                                                        norm_threshold=apg_norm_threshold)
+
+                    else:
+                        noise_pred_cond, noise_pred_drop_text, noise_pred_uncond = ret_values
+                        noise_pred = noise_pred_cond + (guide_scale - 1) * adaptive_projected_guidance(noise_pred_cond - noise_pred_drop_text, 
+                                                                                                            noise_pred_cond, 
+                                                                                                            momentum_buffer=text_momentumbuffer, 
+                                                                                                            norm_threshold=apg_norm_threshold) \
+                                + (audio_cfg_scale - 1) * adaptive_projected_guidance(noise_pred_drop_text - noise_pred_uncond, 
+                                                                                        noise_pred_cond, 
+                                                                                        momentum_buffer=audio_momentumbuffer, 
+                                                                                        norm_threshold=apg_norm_threshold)
                 else:
-                    noise_pred = noise_pred_uncond + guide_scale * (noise_pred_cond - noise_pred_drop_text) + audio_cfg_scale * (noise_pred_drop_text - noise_pred_uncond)  
-                    noise_pred_uncond = noise_pred_cond = noise_pred_drop_text =  None
+                    if guide_scale == 1:
+                        noise_pred_cond, noise_pred_drop_audio  = ret_values
+                        noise_pred = noise_pred_drop_audio + audio_cfg_scale* (noise_pred_cond - noise_pred_drop_audio)  
+                    else:
+                        noise_pred_cond, noise_pred_drop_text, noise_pred_uncond = ret_values
+                        noise_pred = noise_pred_uncond + guide_scale * (noise_pred_cond - noise_pred_drop_text) + audio_cfg_scale * (noise_pred_drop_text - noise_pred_uncond)  
+                    noise_pred_uncond = noise_pred_cond = noise_pred_drop_text = noise_pred_drop_audio = None
             else:
                 noise_pred_cond, noise_pred_uncond = ret_values
                 if apg_switch != 0:
@@ -909,8 +1030,8 @@ class WanAny2V:
             
             if sample_solver == "euler":
                 dt = timesteps[i] if i == len(timesteps)-1 else (timesteps[i] - timesteps[i + 1])
-                dt = dt / self.num_timesteps
-                latents = latents - noise_pred * dt[:, None, None, None, None]
+                dt = dt.item() / self.num_timesteps
+                latents = latents - noise_pred * dt
             else:
                 latents = sample_scheduler.step(
                     noise_pred[:, :, :target_shape[1]],
@@ -924,8 +1045,12 @@ class WanAny2V:
                 if trim_frames > 0:  latents_preview=  latents_preview[:, :,:-trim_frames]
                 if image_outputs: latents_preview=  latents_preview[:, :,:1]
                 if len(latents_preview) > 1: latents_preview = latents_preview.transpose(0,2)
-                callback(i, latents_preview[0], False)
+                callback(i, latents_preview[0], False, denoising_extra =denoising_extra )
                 latents_preview = None
+
+        clear()
+        if timestep_injection:
+            latents[:, :, :source_latents.shape[2]] = source_latents
 
         if vace and ref_images_count > 0: latents = latents[:, :, ref_images_count:]
         if trim_frames > 0:  latents=  latents[:, :,:-trim_frames]
@@ -943,7 +1068,7 @@ class WanAny2V:
             videos = torch.cat([video[:,:1] for video in videos], dim=1) if len(videos) > 1 else videos[0][:,:1]
         else:
             videos = videos[0] # return only first video
-        if color_correction_strength > 0 and prefix_frames_count > 0:
+        if color_correction_strength > 0 and (prefix_frames_count > 0 and window_no > 1 or prefix_frames_count > 1 and window_no == 1):
             if vace and False:
                 # videos = match_and_blend_colors_with_mask(videos.unsqueeze(0), input_frames[0].unsqueeze(0), input_masks[0][:1].unsqueeze(0), color_correction_strength,copy_mode= "progressive_blend").squeeze(0)
                 videos = match_and_blend_colors_with_mask(videos.unsqueeze(0), input_frames[0].unsqueeze(0), input_masks[0][:1].unsqueeze(0), color_correction_strength,copy_mode= "reference").squeeze(0)
@@ -963,8 +1088,5 @@ class WanAny2V:
             setattr(target, "vace", module )
         delattr(model, "vace_blocks")
 
-def query_model_def(model_type, model_def):
-    if "URLs2" in model_def:
-        return { "no_steps_skipping":True}
-    else:
-        return None
+
+
