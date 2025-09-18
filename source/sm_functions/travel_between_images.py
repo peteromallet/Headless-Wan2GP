@@ -98,7 +98,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         travel_logger.debug(f"Orchestrator payload: {json.dumps(orchestrator_payload, indent=2, default=str)[:500]}...", task_id=orchestrator_task_id_str)
 
         # IDEMPOTENCY CHECK: Look for existing child tasks before creating new ones
-        print(f"[IDEMPOTENCY] Checking for existing child tasks for orchestrator {orchestrator_task_id_str}")
+        dprint(f"[IDEMPOTENCY] Checking for existing child tasks for orchestrator {orchestrator_task_id_str}")
         existing_child_tasks = db_ops.get_orchestrator_child_tasks(orchestrator_task_id_str)
         existing_segments = existing_child_tasks['segments']
         existing_stitch = existing_child_tasks['stitch']
@@ -106,7 +106,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         expected_segments = orchestrator_payload.get("num_new_segments_to_generate", 0)
         
         if existing_segments or existing_stitch:
-            print(f"[IDEMPOTENCY] Found existing child tasks: {len(existing_segments)} segments, {len(existing_stitch)} stitch tasks")
+            dprint(f"[IDEMPOTENCY] Found existing child tasks: {len(existing_segments)} segments, {len(existing_stitch)} stitch tasks")
             
             # Check if we have the expected number of tasks already
             if len(existing_segments) >= expected_segments and len(existing_stitch) >= 1:
@@ -122,10 +122,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 return generation_success, output_message_for_orchestrator_db
             else:
                 # Partial completion - log and continue with missing tasks
-                print(f"[IDEMPOTENCY] Partial child tasks found: {len(existing_segments)}/{expected_segments} segments, {len(existing_stitch)}/1 stitch. Will continue with orchestration.")
+                dprint(f"[IDEMPOTENCY] Partial child tasks found: {len(existing_segments)}/{expected_segments} segments, {len(existing_stitch)}/1 stitch. Will continue with orchestration.")
                 travel_logger.warning(f"Partial child tasks found, continuing orchestration to create missing tasks", task_id=orchestrator_task_id_str)
         else:
-            print(f"[IDEMPOTENCY] No existing child tasks found. Proceeding with normal orchestration.")
+            dprint(f"[IDEMPOTENCY] No existing child tasks found. Proceeding with normal orchestration.")
 
         run_id = orchestrator_payload.get("run_id", orchestrator_task_id_str)
         base_dir_for_this_run_str = orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
@@ -162,8 +162,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         stitch_already_exists = len(existing_stitch) > 0
         existing_stitch_task_id = existing_stitch[0]['id'] if stitch_already_exists else None
         
-        print(f"[IDEMPOTENCY] Existing segment indices: {sorted(existing_segment_indices)}")
-        print(f"[IDEMPOTENCY] Stitch task exists: {stitch_already_exists} (ID: {existing_stitch_task_id})")
+        dprint(f"[IDEMPOTENCY] Existing segment indices: {sorted(existing_segment_indices)}")
+        dprint(f"[IDEMPOTENCY] Stitch task exists: {stitch_already_exists} (ID: {existing_stitch_task_id})")
 
         # --- Determine image download directory for this orchestrated run ---
         segment_image_download_dir_str : str | None = None
@@ -199,27 +199,27 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         # smaller of the two segments they connect. This prevents errors downstream
         # in guide video creation, generation, and stitching.
         
-        print(f"[FRAME_DEBUG] Orchestrator {orchestrator_task_id_str}: QUANTIZATION ANALYSIS")
-        print(f"[FRAME_DEBUG] Original segment_frames_expanded: {expanded_segment_frames}")
-        print(f"[FRAME_DEBUG] Original frame_overlap: {expanded_frame_overlap}")
+        dprint(f"[FRAME_DEBUG] Orchestrator {orchestrator_task_id_str}: QUANTIZATION ANALYSIS")
+        dprint(f"[FRAME_DEBUG] Original segment_frames_expanded: {expanded_segment_frames}")
+        dprint(f"[FRAME_DEBUG] Original frame_overlap: {expanded_frame_overlap}")
         
         quantized_segment_frames = []
         dprint(f"Orchestrator: Quantizing frame counts. Original segment_frames_expanded: {expanded_segment_frames}")
         for i, frames in enumerate(expanded_segment_frames):
             # Quantize to 4*N+1 format to match model constraints, applied later in worker.py
             new_frames = (frames // 4) * 4 + 1
-            print(f"[FRAME_DEBUG] Segment {i}: {frames} -> {new_frames} (4*N+1 quantization)")
+            dprint(f"[FRAME_DEBUG] Segment {i}: {frames} -> {new_frames} (4*N+1 quantization)")
             if new_frames != frames:
                 dprint(f"Orchestrator: Quantized segment {i} length from {frames} to {new_frames} (4*N+1 format).")
             quantized_segment_frames.append(new_frames)
         
-        print(f"[FRAME_DEBUG] Quantized segment_frames: {quantized_segment_frames}")
+        dprint(f"[FRAME_DEBUG] Quantized segment_frames: {quantized_segment_frames}")
         dprint(f"Orchestrator: Finished quantizing frame counts. New quantized_segment_frames: {quantized_segment_frames}")
         
         quantized_frame_overlap = []
         # There are N-1 overlaps for N segments. The loop must not iterate more times than this.
         num_overlaps_to_process = len(quantized_segment_frames) - 1
-        print(f"[FRAME_DEBUG] Processing {num_overlaps_to_process} overlap values")
+        dprint(f"[FRAME_DEBUG] Processing {num_overlaps_to_process} overlap values")
 
         if num_overlaps_to_process > 0:
             for i in range(num_overlaps_to_process):
@@ -240,16 +240,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 new_overlap = min(new_overlap, max_possible_overlap)
                 if new_overlap < 0: new_overlap = 0
 
-                print(f"[FRAME_DEBUG] Overlap {i} (segments {i}->{i+1}): {original_overlap} -> {new_overlap}")
-                print(f"[FRAME_DEBUG]   Segment lengths: {quantized_segment_frames[i]}, {quantized_segment_frames[i+1]}")
-                print(f"[FRAME_DEBUG]   Max possible overlap: {max_possible_overlap}")
+                dprint(f"[FRAME_DEBUG] Overlap {i} (segments {i}->{i+1}): {original_overlap} -> {new_overlap}")
+                dprint(f"[FRAME_DEBUG]   Segment lengths: {quantized_segment_frames[i]}, {quantized_segment_frames[i+1]}")
+                dprint(f"[FRAME_DEBUG]   Max possible overlap: {max_possible_overlap}")
                 
                 if new_overlap != original_overlap:
                     dprint(f"Orchestrator: Adjusted overlap between segments {i}-{i+1} from {original_overlap} to {new_overlap}.")
                 
                 quantized_frame_overlap.append(new_overlap)
         
-        print(f"[FRAME_DEBUG] Final quantized_frame_overlap: {quantized_frame_overlap}")
+        dprint(f"[FRAME_DEBUG] Final quantized_frame_overlap: {quantized_frame_overlap}")
         
         # Persist quantised results back to orchestrator_payload so all downstream tasks see them
         orchestrator_payload["segment_frames_expanded"] = quantized_segment_frames
@@ -259,11 +259,11 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         total_input_frames = sum(quantized_segment_frames)
         total_overlaps = sum(quantized_frame_overlap)
         expected_final_length = total_input_frames - total_overlaps
-        print(f"[FRAME_DEBUG] EXPECTED FINAL VIDEO:")
-        print(f"[FRAME_DEBUG]   Total input frames: {total_input_frames}")
-        print(f"[FRAME_DEBUG]   Total overlaps: {total_overlaps}")
-        print(f"[FRAME_DEBUG]   Expected final length: {expected_final_length} frames")
-        print(f"[FRAME_DEBUG]   Expected duration: {expected_final_length / orchestrator_payload.get('fps_helpers', 16):.2f}s")
+        dprint(f"[FRAME_DEBUG] EXPECTED FINAL VIDEO:")
+        dprint(f"[FRAME_DEBUG]   Total input frames: {total_input_frames}")
+        dprint(f"[FRAME_DEBUG]   Total overlaps: {total_overlaps}")
+        dprint(f"[FRAME_DEBUG]   Expected final length: {expected_final_length} frames")
+        dprint(f"[FRAME_DEBUG]   Expected duration: {expected_final_length / orchestrator_payload.get('fps_helpers', 16):.2f}s")
         
         # Replace original lists with the new quantized ones for all subsequent logic
         expanded_segment_frames = quantized_segment_frames
@@ -288,7 +288,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             if idx > 0 and not previous_segment_task_id:
                 fallback_prev = existing_segment_task_ids.get(idx - 1)
                 if fallback_prev:
-                    print(f"[DEBUG_DEPENDENCY_CHAIN] Fallback resolved previous DB ID for seg {idx-1} from existing_segment_task_ids: {fallback_prev}")
+                    dprint(f"[DEBUG_DEPENDENCY_CHAIN] Fallback resolved previous DB ID for seg {idx-1} from existing_segment_task_ids: {fallback_prev}")
                     actual_segment_db_id_by_index[idx - 1] = fallback_prev
                     previous_segment_task_id = fallback_prev
                 else:
@@ -298,18 +298,18 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                             if seg.get('params', {}).get('segment_index') == idx - 1:
                                 prev_from_db = seg.get('id')
                                 if prev_from_db:
-                                    print(f"[DEBUG_DEPENDENCY_CHAIN] DB fallback resolved previous DB ID for seg {idx-1}: {prev_from_db}")
+                                    dprint(f"[DEBUG_DEPENDENCY_CHAIN] DB fallback resolved previous DB ID for seg {idx-1}: {prev_from_db}")
                                     actual_segment_db_id_by_index[idx - 1] = prev_from_db
                                     previous_segment_task_id = prev_from_db
                                 break
                     except Exception as e_depdb:
-                        print(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not resolve previous DB ID for seg {idx-1} via DB fallback: {e_depdb}")
+                        dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not resolve previous DB ID for seg {idx-1} via DB fallback: {e_depdb}")
 
             # Skip if this segment already exists
             if idx in existing_segment_indices:
                 existing_db_id = existing_segment_task_ids[idx]
-                print(f"[IDEMPOTENCY] Skipping segment {idx} - already exists with ID {existing_db_id}")
-                print(f"[DEBUG_DEPENDENCY_CHAIN] Using existing DB ID for segment {idx}: {existing_db_id}; next segment will depend on this")
+                dprint(f"[IDEMPOTENCY] Skipping segment {idx} - already exists with ID {existing_db_id}")
+                dprint(f"[DEBUG_DEPENDENCY_CHAIN] Using existing DB ID for segment {idx}: {existing_db_id}; next segment will depend on this")
                 continue
                 
             segments_created += 1
@@ -333,10 +333,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             ]
 
             # [DEEP_DEBUG] Log orchestrator payload values BEFORE creating segment payload
-            print(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: CREATING SEGMENT {idx} PAYLOAD")
-            print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_causvid'): {orchestrator_payload.get('apply_causvid')}")
-            print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('use_lighti2x_lora'): {orchestrator_payload.get('use_lighti2x_lora')}")
-            print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_reward_lora'): {orchestrator_payload.get('apply_reward_lora')}")
+            dprint(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: CREATING SEGMENT {idx} PAYLOAD")
+            dprint(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_causvid'): {orchestrator_payload.get('apply_causvid')}")
+            dprint(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('use_lighti2x_lora'): {orchestrator_payload.get('use_lighti2x_lora')}")
+            dprint(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_reward_lora'): {orchestrator_payload.get('apply_reward_lora')}")
             dprint(f"[DEEP_DEBUG] Orchestrator {orchestrator_task_id_str}: CREATING SEGMENT {idx} PAYLOAD")
             dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('apply_causvid'): {orchestrator_payload.get('apply_causvid')}")
             dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('use_lighti2x_lora'): {orchestrator_payload.get('use_lighti2x_lora')}")
@@ -407,11 +407,11 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 dprint(f"Orchestrator: Added additional_loras to segment {idx} payload: {extracted_params['additional_loras']}")
 
             # [DEEP_DEBUG] Log segment payload values AFTER creation to verify they match
-            print(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: SEGMENT {idx} PAYLOAD CREATED")
-            print(f"[ORCHESTRATOR_DEBUG]   segment_payload['use_causvid_lora']: {segment_payload.get('use_causvid_lora')}")
-            print(f"[ORCHESTRATOR_DEBUG]   segment_payload['use_lighti2x_lora']: {segment_payload.get('use_lighti2x_lora')}")
-            print(f"[ORCHESTRATOR_DEBUG]   segment_payload['apply_reward_lora']: {segment_payload.get('apply_reward_lora')}")
-            print(f"[ORCHESTRATOR_DEBUG]   FULL segment_payload keys: {list(segment_payload.keys())}")
+            dprint(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: SEGMENT {idx} PAYLOAD CREATED")
+            dprint(f"[ORCHESTRATOR_DEBUG]   segment_payload['use_causvid_lora']: {segment_payload.get('use_causvid_lora')}")
+            dprint(f"[ORCHESTRATOR_DEBUG]   segment_payload['use_lighti2x_lora']: {segment_payload.get('use_lighti2x_lora')}")
+            dprint(f"[ORCHESTRATOR_DEBUG]   segment_payload['apply_reward_lora']: {segment_payload.get('apply_reward_lora')}")
+            dprint(f"[ORCHESTRATOR_DEBUG]   FULL segment_payload keys: {list(segment_payload.keys())}")
             
             # [DEEP_DEBUG] Also log what we're about to send to the Edge Function
             # NOTE: task_id will be the actual DB row ID returned by add_task_to_db
@@ -425,7 +425,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             # [DEEP_DEBUG] Segment payload ready for add_task_to_db
             dprint(f"[DEEP_DEBUG] Segment payload keys: {list(segment_payload.keys())}")
 
-            print(f"[DEBUG_DEPENDENCY_CHAIN] Creating new segment {idx}, depends_on (prev idx {idx-1}): {previous_segment_task_id}")
+            dprint(f"[DEBUG_DEPENDENCY_CHAIN] Creating new segment {idx}, depends_on (prev idx {idx-1}): {previous_segment_task_id}")
             actual_db_row_id = db_ops.add_task_to_db(
                 task_payload=segment_payload, 
                 task_type_str="travel_segment",
@@ -433,13 +433,13 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             )
             # Record the actual DB ID so subsequent segments depend on the real DB row ID
             actual_segment_db_id_by_index[idx] = actual_db_row_id
-            print(f"[DEBUG_DEPENDENCY_CHAIN] New segment {idx} created with actual DB ID: {actual_db_row_id}; next segment will depend on this")
+            dprint(f"[DEBUG_DEPENDENCY_CHAIN] New segment {idx} created with actual DB ID: {actual_db_row_id}; next segment will depend on this")
             # Post-insert verification of dependency from DB
             try:
                 dep_saved = db_ops.get_task_dependency(actual_db_row_id)
-                print(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Segment {idx} saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
+                dprint(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Segment {idx} saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
             except Exception as e_ver:
-                print(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for seg {idx} ({actual_db_row_id}): {e_ver}")
+                dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for seg {idx} ({actual_db_row_id}): {e_ver}")
         
         # After loop, enqueue the stitch task (check for idempotency)
         stitch_created = 0
@@ -482,16 +482,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 task_type_str="travel_stitch",
                 dependant_on=previous_segment_task_id
             )
-            print(f"[DEBUG_DEPENDENCY_CHAIN] Stitch task created with actual DB ID: {actual_stitch_db_row_id}")
+            dprint(f"[DEBUG_DEPENDENCY_CHAIN] Stitch task created with actual DB ID: {actual_stitch_db_row_id}")
             # Post-insert verification of dependency from DB
             try:
                 dep_saved = db_ops.get_task_dependency(actual_stitch_db_row_id)
-                print(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Stitch saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
+                dprint(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Stitch saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
             except Exception as e_ver2:
-                print(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for stitch ({actual_stitch_db_row_id}): {e_ver2}")
+                dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for stitch ({actual_stitch_db_row_id}): {e_ver2}")
             stitch_created = 1
         else:
-            print(f"[IDEMPOTENCY] Skipping stitch task creation - already exists with ID {existing_stitch_task_id}")
+            dprint(f"[IDEMPOTENCY] Skipping stitch task creation - already exists with ID {existing_stitch_task_id}")
 
         generation_success = True
         if segments_created > 0 or stitch_created > 0:
@@ -729,13 +729,13 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         # not just the new content. The overlap is handled internally for transition.
         total_frames_for_segment = base_duration
 
-        print(f"[SEGMENT_DEBUG] Segment {segment_idx} (Task {segment_task_id_str}): FRAME ANALYSIS")
-        print(f"[SEGMENT_DEBUG]   base_duration (segment_frames_target): {base_duration}")
-        print(f"[SEGMENT_DEBUG]   frame_overlap_from_previous: {frame_overlap_from_previous}")
-        print(f"[SEGMENT_DEBUG]   total_frames_for_segment: {total_frames_for_segment}")
-        print(f"[SEGMENT_DEBUG]   is_first_segment: {segment_params.get('is_first_segment', False)}")
-        print(f"[SEGMENT_DEBUG]   is_last_segment: {segment_params.get('is_last_segment', False)}")
-        print(f"[SEGMENT_DEBUG]   use_causvid_lora: {full_orchestrator_payload.get('apply_causvid', False)}")
+        dprint(f"[SEGMENT_DEBUG] Segment {segment_idx} (Task {segment_task_id_str}): FRAME ANALYSIS")
+        dprint(f"[SEGMENT_DEBUG]   base_duration (segment_frames_target): {base_duration}")
+        dprint(f"[SEGMENT_DEBUG]   frame_overlap_from_previous: {frame_overlap_from_previous}")
+        dprint(f"[SEGMENT_DEBUG]   total_frames_for_segment: {total_frames_for_segment}")
+        dprint(f"[SEGMENT_DEBUG]   is_first_segment: {segment_params.get('is_first_segment', False)}")
+        dprint(f"[SEGMENT_DEBUG]   is_last_segment: {segment_params.get('is_last_segment', False)}")
+        dprint(f"[SEGMENT_DEBUG]   use_causvid_lora: {full_orchestrator_payload.get('apply_causvid', False)}")
 
         fps_helpers = full_orchestrator_payload.get("fps_helpers", 16)
         fade_in_duration_str = full_orchestrator_payload["fade_in_params_json_str"]
@@ -1149,11 +1149,11 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                 
                 # Analyze final chained output
                 final_debug_info = debug_video_analysis(final_chained_path, f"FINAL_CHAINED_Seg{segment_idx}", segment_task_id_str)
-                print(f"[CHAIN_DEBUG] Segment {segment_idx}: FINAL CHAINED OUTPUT ANALYSIS")
-                print(f"[CHAIN_DEBUG]   Expected frames: {final_frames_for_wgp_generation}")
-                print(f"[CHAIN_DEBUG]   Final frames: {final_debug_info.get('frame_count', 'ERROR')}")
+                dprint(f"[CHAIN_DEBUG] Segment {segment_idx}: FINAL CHAINED OUTPUT ANALYSIS")
+                dprint(f"[CHAIN_DEBUG]   Expected frames: {final_frames_for_wgp_generation}")
+                dprint(f"[CHAIN_DEBUG]   Final frames: {final_debug_info.get('frame_count', 'ERROR')}")
                 if final_debug_info.get('frame_count') != final_frames_for_wgp_generation:
-                    print(f"[CHAIN_DEBUG]   ⚠️  CHAINING CHANGED FRAME COUNT! Expected {final_frames_for_wgp_generation}, got {final_debug_info.get('frame_count')}")
+                    dprint(f"[CHAIN_DEBUG]   ⚠️  CHAINING CHANGED FRAME COUNT! Expected {final_frames_for_wgp_generation}, got {final_debug_info.get('frame_count')}")
             else:
                 # Use raw WGP output if chaining failed
                 final_segment_video_output_path_str = wgp_output_path_or_msg
@@ -1520,7 +1520,6 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         initial_continued_video_path_str = full_orchestrator_payload.get("continue_from_video_resolved_path")
 
         # [OVERLAP DEBUG] Add detailed debug for overlap values
-        print(f"[OVERLAP DEBUG] Stitch: expanded_frame_overlaps from payload: {expanded_frame_overlaps}")
         dprint(f"[OVERLAP DEBUG] Stitch: expanded_frame_overlaps from payload: {expanded_frame_overlaps}")
 
         # Extract upscale parameters
@@ -1580,22 +1579,19 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         # ------------------------------------------------------------------
         # 2b. Resolve each returned video path (local, SQLite-relative, or URL)
         # ------------------------------------------------------------------
-        print(f"[STITCH_DEBUG] Starting path resolution for {len(completed_segment_outputs_from_db)} segments")
-        print(f"[STITCH_DEBUG] Raw DB results: {completed_segment_outputs_from_db}")
-        dprint(f"[DEBUG] Starting path resolution for {len(completed_segment_outputs_from_db)} segments")
+        dprint(f"[STITCH_DEBUG] Starting path resolution for {len(completed_segment_outputs_from_db)} segments")
+        dprint(f"[STITCH_DEBUG] Raw DB results: {completed_segment_outputs_from_db}")
         for seg_idx, video_path_str_from_db in completed_segment_outputs_from_db:
-            print(f"[STITCH_DEBUG] Processing segment {seg_idx} with path: {video_path_str_from_db}")
-            dprint(f"[DEBUG] Processing segment {seg_idx} with path: {video_path_str_from_db}")
+            dprint(f"[STITCH_DEBUG] Processing segment {seg_idx} with path: {video_path_str_from_db}")
             resolved_video_path_for_stitch: Path | None = None
 
             if not video_path_str_from_db:
-                print(f"[STITCH_DEBUG] WARNING: Segment {seg_idx} has empty video_path in DB; skipping.")
-                dprint(f"[WARNING] Stitch: Segment {seg_idx} has empty video_path in DB; skipping.")
+                dprint(f"[STITCH_DEBUG] WARNING: Segment {seg_idx} has empty video_path in DB; skipping.")
                 continue
 
             # Case A: Relative path that starts with files/ (works for both sqlite and supabase when worker has local access)
             if video_path_str_from_db.startswith("files/") or video_path_str_from_db.startswith("public/files/"):
-                print(f"[STITCH_DEBUG] Case A: Relative path detected for segment {seg_idx}")
+                dprint(f"[STITCH_DEBUG] Case A: Relative path detected for segment {seg_idx}")
                 sqlite_db_parent = None
                 if db_ops.SQLITE_DB_PATH:
                     sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
@@ -1696,17 +1692,17 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         dprint(f"[DEBUG] Final segment_video_paths_for_stitch: {segment_video_paths_for_stitch}")
         dprint(f"[DEBUG] Total videos collected: {len(segment_video_paths_for_stitch)}")
         # [CRITICAL DEBUG] Log each video's frame count before stitching
-        print(f"[CRITICAL DEBUG] About to stitch videos:")
+        dprint(f"[CRITICAL DEBUG] About to stitch videos:")
         expected_segment_frames = full_orchestrator_payload["segment_frames_expanded"]
         for idx, video_path in enumerate(segment_video_paths_for_stitch):
             try:
                 frame_count, fps = sm_get_video_frame_count_and_fps(video_path)
                 expected_frames = expected_segment_frames[idx] if idx < len(expected_segment_frames) else "unknown"
-                print(f"[CRITICAL DEBUG] Video {idx}: {video_path} -> {frame_count} frames @ {fps} FPS (expected: {expected_frames})")
+                dprint(f"[CRITICAL DEBUG] Video {idx}: {video_path} -> {frame_count} frames @ {fps} FPS (expected: {expected_frames})")
                 if expected_frames != "unknown" and frame_count != expected_frames:
-                    print(f"[CRITICAL DEBUG] ⚠️  FRAME COUNT MISMATCH! Expected {expected_frames}, got {frame_count}")
+                    dprint(f"[CRITICAL DEBUG] ⚠️  FRAME COUNT MISMATCH! Expected {expected_frames}, got {frame_count}")
             except Exception as e_debug:
-                print(f"[CRITICAL DEBUG] Video {idx}: {video_path} -> ERROR: {e_debug}")
+                dprint(f"[CRITICAL DEBUG] Video {idx}: {video_path} -> ERROR: {e_debug}")
 
         total_videos_for_stitch = (1 if initial_continued_video_path_str and Path(initial_continued_video_path_str).exists() else 0) + num_expected_new_segments
         dprint(f"[DEBUG] Expected total videos: {total_videos_for_stitch}")
@@ -1747,12 +1743,12 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 actual_overlaps_for_stitching = expanded_frame_overlaps[:num_stitch_points]
             
             # --- NEW OVERLAP DEBUG LOGGING ---
-            print(f"[OVERLAP DEBUG] Number of videos: {len(segment_video_paths_for_stitch)} (expected stitch points: {num_stitch_points})")
-            print(f"[OVERLAP DEBUG] actual_overlaps_for_stitching: {actual_overlaps_for_stitching}")
+            dprint(f"[OVERLAP DEBUG] Number of videos: {len(segment_video_paths_for_stitch)} (expected stitch points: {num_stitch_points})")
+            dprint(f"[OVERLAP DEBUG] actual_overlaps_for_stitching: {actual_overlaps_for_stitching}")
             if len(actual_overlaps_for_stitching) != num_stitch_points:
-                print(f"[OVERLAP DEBUG] ⚠️  MISMATCH! We have {len(actual_overlaps_for_stitching)} overlaps for {num_stitch_points} joins")
+                dprint(f"[OVERLAP DEBUG] ⚠️  MISMATCH! We have {len(actual_overlaps_for_stitching)} overlaps for {num_stitch_points} joins")
             for join_idx, ov in enumerate(actual_overlaps_for_stitching):
-                print(f"[OVERLAP DEBUG]   Join {join_idx} (video {join_idx} -> {join_idx+1}): overlap={ov}")
+                dprint(f"[OVERLAP DEBUG]   Join {join_idx} (video {join_idx} -> {join_idx+1}): overlap={ov}")
             # --- END NEW LOGGING ---
             
             any_positive_overlap = any(o > 0 for o in actual_overlaps_for_stitching)
@@ -2052,13 +2048,48 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         # so the stitched video will automatically include them. No additional overlay needed here.
         
         stitch_success = True
-        
+
+        # --- Cleanup Downloaded Segment Files ---
+        cleanup_enabled = (
+            not full_orchestrator_payload.get("skip_cleanup_enabled", False) and
+            not full_orchestrator_payload.get("debug_mode_enabled", False) and
+            not db_ops.debug_mode
+        )
+
+        if cleanup_enabled:
+            files_cleaned = 0
+            total_size_cleaned = 0
+
+            for video_path_str in segment_video_paths_for_stitch:
+                video_path = Path(video_path_str)
+
+                # Skip the initial continued video (not downloaded)
+                if (initial_continued_video_path_str and
+                    str(video_path.resolve()) == str(Path(initial_continued_video_path_str).resolve())):
+                    continue
+
+                # Only delete files in our processing directory (downloaded files)
+                if video_path.exists() and stitch_processing_dir in video_path.parents:
+                    try:
+                        file_size = video_path.stat().st_size
+                        video_path.unlink()
+                        files_cleaned += 1
+                        total_size_cleaned += file_size
+                        dprint(f"Stitch: Cleaned up downloaded segment {video_path.name} ({file_size:,} bytes)")
+                    except Exception as e_cleanup:
+                        dprint(f"Stitch: Failed to clean up {video_path}: {e_cleanup}")
+
+            if files_cleaned > 0:
+                print(f"[STITCH_CLEANUP] Removed {files_cleaned} downloaded files ({total_size_cleaned:,} bytes)")
+        else:
+            print(f"[STITCH_CLEANUP] Skipping cleanup (debug mode or cleanup disabled)")
+
         # Note: The orchestrator will be marked as complete by the Edge Function
         # when it processes the stitch task upload. This ensures atomic completion
         # with the final video upload.
         print(f"[ORCHESTRATOR_COMPLETION_DEBUG] Stitch task complete. Orchestrator {orchestrator_task_id_ref} will be marked complete by Edge Function.")
         dprint(f"Stitch: Task complete. Orchestrator completion will be handled by Edge Function.")
-        
+
         # Return the final video path so the stitch task itself gets uploaded via Edge Function
         return stitch_success, str(final_video_path.resolve())
 

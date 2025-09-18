@@ -1,0 +1,26 @@
+{
+    "model": {
+        "name": "Wan2.2 Vace Fun Cocktail Lightning 14B",
+        "architecture": "vace_14B",
+        "description": "Vace Fun model with Lightning LoRAs for faster generation. Uses HIGH and LOW lightning LoRAs at 1.0 strength for different phases.",
+        "URLs": "vace_fun_14B_2_2",
+        "URLs2": "vace_fun_14B_2_2",
+        "loras": [
+            "https://huggingface.co/DeepBeepMeep/Wan2.2/resolve/main/loras_accelerators/Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_HIGH_fp16.safetensors",
+            "https://huggingface.co/DeepBeepMeep/Wan2.2/resolve/main/loras_accelerators/Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_LOW_fp16.safetensors"
+        ],
+        "loras_multipliers": [
+            "1;0",
+            "0;1"
+        ],
+        "lock_guidance_phases": true,
+        "group": "wan2_2"
+    },
+    "guidance_phases": 2,
+    "num_inference_steps": 6,
+    "guidance_scale": 1,
+    "guidance2_scale": 1,
+    "flow_shift": 5,
+    "switch_threshold": 500,
+    "sample_solver": "dpm++_sde"
+}
