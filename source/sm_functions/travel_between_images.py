@@ -193,6 +193,311 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         # Preserve a copy of the original overlap list in case we need it later
         _orig_frame_overlap = list(expanded_frame_overlap)  # shallow copy
 
+        # --- IDENTICAL PARAMETER DETECTION AND FRAME CONSOLIDATION ---
+        def detect_identical_parameters(orchestrator_payload, num_segments, dprint=None):
+            """
+            Detect if all segments will have identical generation parameters.
+            Returns analysis that enables both model caching and frame optimization.
+            """
+            # Extract parameter arrays
+            expanded_base_prompts = orchestrator_payload["base_prompts_expanded"]
+            expanded_negative_prompts = orchestrator_payload["negative_prompts_expanded"]
+            additional_loras = orchestrator_payload.get("additional_loras", [])
+
+            # Check parameter identity
+            prompts_identical = len(set(expanded_base_prompts)) == 1
+            negative_prompts_identical = len(set(expanded_negative_prompts)) == 1
+
+            # LoRA consistency check
+            lora_flags_consistent = all([
+                orchestrator_payload.get("apply_causvid", False),
+                orchestrator_payload.get("use_lighti2x_lora", False),
+                orchestrator_payload.get("apply_reward_lora", False)
+            ])
+
+            is_identical = prompts_identical and negative_prompts_identical
+
+            if dprint and is_identical:
+                dprint(f"[IDENTICAL_DETECTION] All {num_segments} segments identical - enabling optimizations")
+                dprint(f"  - Unique prompt: '{expanded_base_prompts[0][:50]}...'")
+                dprint(f"  - LoRA count: {len(additional_loras)}")
+
+            return {
+                "is_identical": is_identical,
+                "can_optimize_frames": is_identical,  # Key for frame allocation optimization
+                "can_reuse_model": is_identical,      # Key for model caching
+                "unique_prompt": expanded_base_prompts[0] if prompts_identical else None
+            }
+
+        def validate_consolidation_safety(orchestrator_payload, dprint=None):
+            """
+            Verify that frame consolidation is safe by checking parameter identity.
+            """
+            # Get parameter arrays
+            prompts = orchestrator_payload["base_prompts_expanded"]
+            neg_prompts = orchestrator_payload["negative_prompts_expanded"]
+            additional_loras = orchestrator_payload.get("additional_loras", [])
+
+            # Critical safety checks
+            all_prompts_identical = len(set(prompts)) == 1
+            all_neg_prompts_identical = len(set(neg_prompts)) == 1
+
+            # LoRA consistency (flags should be uniform if prompts are identical)
+            lora_flags = [
+                orchestrator_payload.get("apply_causvid", False),
+                orchestrator_payload.get("use_lighti2x_lora", False),
+                orchestrator_payload.get("apply_reward_lora", False)
+            ]
+
+            is_safe = all_prompts_identical and all_neg_prompts_identical
+
+            if dprint:
+                if is_safe:
+                    dprint(f"[CONSOLIDATION_SAFETY] ✅ Safe to consolidate - all parameters identical")
+                else:
+                    dprint(f"[CONSOLIDATION_SAFETY] ❌ NOT safe to consolidate:")
+                    if not all_prompts_identical:
+                        dprint(f"  - Prompts differ: {len(set(prompts))} unique prompts")
+                    if not all_neg_prompts_identical:
+                        dprint(f"  - Negative prompts differ: {len(set(neg_prompts))} unique")
+
+            return {
+                "is_safe": is_safe,
+                "prompts_identical": all_prompts_identical,
+                "negative_prompts_identical": all_neg_prompts_identical,
+                "can_consolidate": is_safe
+            }
+
+        def optimize_frame_allocation_for_identical_params(orchestrator_payload, max_frames_per_segment=65, dprint=None):
+            """
+            When all parameters are identical, consolidate keyframes into fewer segments.
+
+            Args:
+                orchestrator_payload: Original orchestrator data
+                max_frames_per_segment: Maximum frames per segment (model technical limit)
+                dprint: Debug logging function
+
+            Returns:
+                Updated orchestrator_payload with optimized frame allocation
+            """
+            original_segment_frames = orchestrator_payload["segment_frames_expanded"]
+            original_frame_overlaps = orchestrator_payload["frame_overlap_expanded"]
+            original_base_prompts = orchestrator_payload["base_prompts_expanded"]
+
+            if dprint:
+                dprint(f"[FRAME_CONSOLIDATION] Original allocation: {len(original_segment_frames)} segments")
+                dprint(f"  - Segment frames: {original_segment_frames}")
+                dprint(f"  - Frame overlaps: {original_frame_overlaps}")
+
+            # Calculate keyframe positions based on raw segment durations (no overlaps for consolidated videos)
+            keyframe_positions = [0]  # Start with frame 0
+            cumulative_pos = 0
+
+            for segment_frames in original_segment_frames:
+                cumulative_pos += segment_frames
+                keyframe_positions.append(cumulative_pos)
+
+            if dprint:
+                dprint(f"[FRAME_CONSOLIDATION] Keyframe positions: {keyframe_positions}")
+
+            # Simple consolidation: group keyframes into videos respecting frame limit
+            optimized_segments = []
+            optimized_overlaps = []
+            optimized_prompts = []
+
+            video_start = 0
+            video_keyframes = [0]  # Always include first keyframe
+
+            for i in range(1, len(keyframe_positions)):
+                kf_pos = keyframe_positions[i]
+                video_length_if_included = kf_pos - video_start + 1
+
+                if video_length_if_included <= max_frames_per_segment:
+                    # Keyframe fits in current video
+                    video_keyframes.append(kf_pos)
+                    if dprint:
+                        dprint(f"[CONSOLIDATION_LOGIC] Keyframe {kf_pos} fits in current video (length would be {video_length_if_included})")
+                else:
+                    # Current video is full, finalize it and start new one
+                    final_frame = video_keyframes[-1]
+                    raw_length = final_frame - video_start + 1
+                    quantized_length = ((raw_length - 1) // 4) * 4 + 1
+                    optimized_segments.append(quantized_length)
+                    optimized_prompts.append(original_base_prompts[0])
+
+                    if dprint:
+                        dprint(f"[CONSOLIDATION_LOGIC] Video complete: frames {video_start}-{final_frame} (raw: {raw_length}, quantized: {quantized_length})")
+                        dprint(f"[CONSOLIDATION_LOGIC] Video keyframes: {[kf - video_start for kf in video_keyframes]}")
+
+                    # Add overlap for the next video if there are more keyframes to process
+                    # When we finalize a video because the next keyframe doesn't fit,
+                    # we need overlap for the next video
+                    if i < len(keyframe_positions):  # Still have more keyframes = need next video
+                        # Use original overlap value instead of calculating new one
+                        if isinstance(original_frame_overlaps, list) and original_frame_overlaps:
+                            overlap = original_frame_overlaps[0]  # Use first value from array
+                        elif isinstance(original_frame_overlaps, int):
+                            overlap = original_frame_overlaps  # Use int value directly
+                        else:
+                            overlap = 4  # Default fallback if no overlap specified
+
+                        optimized_overlaps.append(overlap)
+                        if dprint:
+                            dprint(f"[CONSOLIDATION_LOGIC] Added overlap {overlap} frames for next video (from original settings)")
+
+                    # Start new video
+                    video_start = video_keyframes[-1]  # Start from last keyframe of previous video
+                    video_keyframes = [video_start, kf_pos]
+                    if dprint:
+                        dprint(f"[CONSOLIDATION_LOGIC] Starting new video at frame {video_start}")
+
+            # Finalize the last video
+            final_frame = video_keyframes[-1]
+            raw_length = final_frame - video_start + 1
+            quantized_length = ((raw_length - 1) // 4) * 4 + 1
+            optimized_segments.append(quantized_length)
+            optimized_prompts.append(original_base_prompts[0])
+
+            if dprint:
+                dprint(f"[CONSOLIDATION_LOGIC] Final video: frames {video_start}-{final_frame} (raw: {raw_length}, quantized: {quantized_length})")
+                dprint(f"[CONSOLIDATION_LOGIC] Final video keyframes: {[kf - video_start for kf in video_keyframes]}")
+
+            # Update orchestrator payload
+            orchestrator_payload["segment_frames_expanded"] = optimized_segments
+            orchestrator_payload["frame_overlap_expanded"] = optimized_overlaps
+            orchestrator_payload["base_prompts_expanded"] = optimized_prompts
+            orchestrator_payload["negative_prompts_expanded"] = [orchestrator_payload["negative_prompts_expanded"][0]] * len(optimized_segments)
+            orchestrator_payload["num_new_segments_to_generate"] = len(optimized_segments)
+
+            # CRITICAL: Store end anchor image indices for consolidated segments
+            # This tells each consolidated segment which image should be its end anchor
+            consolidated_end_anchors = []
+            original_num_segments = len(original_segment_frames)
+
+            # For consolidated segments, calculate the correct end anchor indices
+            # Each consolidated segment should use the final image of its range
+            # Use the simplified approach: track which images each segment should end with
+            consolidated_end_anchors = []
+
+            # First segment ends with the image at the last keyframe it contains
+            if len(optimized_segments) >= 1:
+                # First segment: determine which keyframes it contains based on consolidation logic
+                # Recreate the consolidation to find the correct end images
+                video_start = 0
+                video_keyframes = [0]  # Always include first keyframe
+                current_image_idx = 0
+
+                for i in range(1, len(keyframe_positions)):
+                    kf_pos = keyframe_positions[i]
+                    video_length_if_included = kf_pos - video_start + 1
+
+                    if video_length_if_included <= max_frames_per_segment:
+                        # Keyframe fits in current video
+                        video_keyframes.append(kf_pos)
+                        current_image_idx = i  # This image index goes in current video
+                    else:
+                        # Finalize current video - end with current_image_idx
+                        consolidated_end_anchors.append(current_image_idx)
+                        dprint(f"[FRAME_CONSOLIDATION] Segment {len(consolidated_end_anchors)-1}: end_anchor_image_index = {current_image_idx}")
+
+                        # Start new video
+                        video_start = video_keyframes[-1]
+                        video_keyframes = [video_start, kf_pos]
+                        current_image_idx = i  # Current keyframe goes in new video
+
+                # Handle the final segment
+                consolidated_end_anchors.append(current_image_idx)
+                dprint(f"[FRAME_CONSOLIDATION] Segment {len(consolidated_end_anchors)-1}: end_anchor_image_index = {current_image_idx}")
+
+            # Store the end anchor mapping for use during segment creation
+            orchestrator_payload["_consolidated_end_anchors"] = consolidated_end_anchors
+
+            # Calculate relative keyframe positions AND image indices for each consolidated segment
+            consolidated_keyframe_segments = []
+            consolidated_keyframe_image_indices = []
+
+            # Recreate the same consolidation logic to properly assign keyframes
+            video_start = 0
+            video_keyframes = [0]  # Always include first keyframe (absolute positions)
+            video_image_indices = [0]  # Track which input images correspond to keyframes
+            current_video_idx = 0
+
+            for i in range(1, len(keyframe_positions)):
+                kf_pos = keyframe_positions[i]
+                video_length_if_included = kf_pos - video_start + 1
+
+                if video_length_if_included <= max_frames_per_segment:
+                    # Keyframe fits in current video
+                    video_keyframes.append(kf_pos)
+                    video_image_indices.append(i)  # Input image index corresponds to keyframe index
+                else:
+                    # Finalize current video and start new one
+                    final_frame = video_keyframes[-1]
+
+                    # Convert absolute keyframe positions to relative positions for this video
+                    # BUT: adjust for quantization - keyframes must fit within quantized segment bounds
+                    raw_length = final_frame - video_start + 1
+                    quantized_length = ((raw_length - 1) // 4) * 4 + 1
+
+                    relative_keyframes = []
+                    for kf_abs_pos in video_keyframes:
+                        relative_pos = kf_abs_pos - video_start
+                        # Ensure final keyframe fits within quantized bounds
+                        if relative_pos >= quantized_length:
+                            relative_pos = quantized_length - 1  # Last frame in quantized video
+                        relative_keyframes.append(relative_pos)
+
+                    consolidated_keyframe_segments.append(relative_keyframes)
+                    consolidated_keyframe_image_indices.append(video_image_indices.copy())
+
+                    if dprint:
+                        dprint(f"[KEYFRAME_ASSIGNMENT] Video {current_video_idx}: absolute start {video_start}, final frame {final_frame}")
+                        dprint(f"[KEYFRAME_ASSIGNMENT] Video {current_video_idx} keyframes: {video_keyframes} → relative: {relative_keyframes}")
+                        dprint(f"[KEYFRAME_ASSIGNMENT] Video {current_video_idx} image indices: {video_image_indices}")
+
+                    # Start new video
+                    current_video_idx += 1
+                    video_start = final_frame  # Start from last keyframe (overlap)
+                    # The overlap keyframe uses the same image as the final keyframe of previous segment
+                    last_image_idx = video_image_indices[-1]
+                    video_keyframes = [final_frame, kf_pos]  # Include overlap and current keyframe
+                    video_image_indices = [last_image_idx, i]  # Include overlap image and current image
+
+            # Handle the last video (make sure it has the correct final keyframes)
+            if len(video_keyframes) > 0:
+                # Convert absolute keyframe positions to relative positions for the final video
+                # Adjust for quantization like the consolidation logic does
+                final_frame = video_keyframes[-1]
+                raw_length = final_frame - video_start + 1
+                quantized_length = ((raw_length - 1) // 4) * 4 + 1
+
+                relative_keyframes = []
+                for kf_abs_pos in video_keyframes:
+                    relative_pos = kf_abs_pos - video_start
+                    # Ensure final keyframe fits within quantized bounds
+                    if relative_pos >= quantized_length:
+                        relative_pos = quantized_length - 1  # Last frame in quantized video
+                    relative_keyframes.append(relative_pos)
+
+                consolidated_keyframe_segments.append(relative_keyframes)
+                consolidated_keyframe_image_indices.append(video_image_indices.copy())
+
+                if dprint:
+                    dprint(f"[KEYFRAME_ASSIGNMENT] Video {current_video_idx}: absolute start {video_start}")
+                    dprint(f"[KEYFRAME_ASSIGNMENT] Video {current_video_idx} keyframes: {video_keyframes} → relative: {relative_keyframes}")
+                    dprint(f"[KEYFRAME_ASSIGNMENT] Video {current_video_idx} image indices: {video_image_indices}")
+
+            # Store relative keyframe positions for guide video creation
+            orchestrator_payload["_consolidated_keyframe_positions"] = consolidated_keyframe_segments
+
+            if dprint:
+                dprint(f"[FRAME_CONSOLIDATION] Optimized to {len(optimized_segments)} segments (was {len(original_segment_frames)})")
+                dprint(f"  - New segment frames: {optimized_segments}")
+                dprint(f"  - New overlaps: {optimized_overlaps}")
+                dprint(f"  - Efficiency: {(len(original_segment_frames) - len(optimized_segments))} fewer segments")
+
+            return orchestrator_payload
+
 
         # --- SM_QUANTIZE_FRAMES_AND_OVERLAPS ---
         # Adjust all segment lengths to match model constraints (4*N+1 format).
@@ -277,6 +582,78 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         # continue-video journeys where we expect `frame_overlap_from_previous` > 0.
         if (not expanded_frame_overlap) and _orig_frame_overlap:
             expanded_frame_overlap = _orig_frame_overlap
+
+        # --- FRAME CONSOLIDATION OPTIMIZATION ---
+        # Store original values for comparison logging
+        original_num_segments = num_segments
+        original_segment_frames = list(expanded_segment_frames)
+        original_frame_overlap = list(expanded_frame_overlap)
+
+        # Check if all prompts and LoRAs are identical to enable frame consolidation
+        identity_analysis = detect_identical_parameters(orchestrator_payload, num_segments, dprint)
+
+        if identity_analysis["can_optimize_frames"]:
+            # Run safety validation before optimization
+            safety_check = validate_consolidation_safety(orchestrator_payload, dprint)
+
+            if safety_check["is_safe"]:
+                dprint(f"[FRAME_CONSOLIDATION] ✅ Triggering optimization for identical parameters")
+                print(f"[FRAME_CONSOLIDATION] ✅ All parameters identical - enabling frame consolidation optimization")
+
+                # Apply frame consolidation optimization
+                orchestrator_payload = optimize_frame_allocation_for_identical_params(
+                    orchestrator_payload,
+                    max_frames_per_segment=81,  # Max 81 frames per video
+                    dprint=dprint
+                )
+
+                # Update variables with optimized values
+                expanded_segment_frames = orchestrator_payload["segment_frames_expanded"]
+                expanded_frame_overlap = orchestrator_payload["frame_overlap_expanded"]
+                expanded_base_prompts = orchestrator_payload["base_prompts_expanded"]
+                expanded_negative_prompts = orchestrator_payload["negative_prompts_expanded"]
+                num_segments = orchestrator_payload["num_new_segments_to_generate"]
+
+                # CRITICAL: Update VACE image references for consolidated segments
+                # When segments are consolidated, we need to reassign all VACE image refs
+                # to the new consolidated segments based on their new indices
+                if vace_refs_instructions_all:
+                    dprint(f"[VACE_REFS_CONSOLIDATION] Updating VACE image refs for {num_segments} consolidated segments")
+                    dprint(f"[VACE_REFS_CONSOLIDATION] Original VACE refs count: {len(vace_refs_instructions_all)}")
+
+                    # For consolidated segments, reassign all VACE refs to the appropriate new segment
+                    # based on the original keyframe positions and new segment boundaries
+                    for ref_idx, ref_instr in enumerate(vace_refs_instructions_all):
+                        original_segment_idx = ref_instr.get("segment_idx_for_naming", 0)
+
+                        # For now, assign all refs to the first (and often only) consolidated segment
+                        # This ensures the consolidated segment gets all the keyframe images
+                        new_segment_idx = 0 if num_segments == 1 else min(original_segment_idx, num_segments - 1)
+
+                        if original_segment_idx != new_segment_idx:
+                            dprint(f"[VACE_REFS_CONSOLIDATION] VACE ref {ref_idx}: segment {original_segment_idx} → {new_segment_idx}")
+                            ref_instr["segment_idx_for_naming"] = new_segment_idx
+
+                    dprint(f"[VACE_REFS_CONSOLIDATION] VACE refs updated for consolidated segments")
+
+                # Summary logging for optimization results
+                segments_saved = original_num_segments - num_segments
+                print(f"[FRAME_CONSOLIDATION] 🚀 OPTIMIZATION RESULTS:")
+                print(f"[FRAME_CONSOLIDATION]   📊 Segments: {original_num_segments} → {num_segments} (saved {segments_saved} segments)")
+                print(f"[FRAME_CONSOLIDATION]   📹 Original allocation: {original_segment_frames}")
+                print(f"[FRAME_CONSOLIDATION]   📹 Optimized allocation: {expanded_segment_frames}")
+                print(f"[FRAME_CONSOLIDATION]   🔗 Original overlaps: {original_frame_overlap}")
+                print(f"[FRAME_CONSOLIDATION]   🔗 Optimized overlaps: {expanded_frame_overlap}")
+                print(f"[FRAME_CONSOLIDATION]   ⚡ Efficiency gain: {segments_saved} fewer GPU model loads")
+
+                dprint(f"[FRAME_CONSOLIDATION] Successfully updated to {num_segments} optimized segments")
+            else:
+                print(f"[FRAME_CONSOLIDATION] ❌ Safety validation failed - parameters not identical enough")
+                dprint(f"[FRAME_CONSOLIDATION] Safety check failed - keeping original allocation")
+        else:
+            print(f"[FRAME_CONSOLIDATION] ℹ️  Parameters not identical - using standard allocation")
+            dprint(f"[FRAME_CONSOLIDATION] Parameters not identical - keeping original allocation")
+        # --- END FRAME CONSOLIDATION OPTIMIZATION ---
 
         # Loop to queue all segment tasks (skip existing ones for idempotency)
         segments_created = 0
@@ -397,6 +774,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "debug_mode_enabled": orchestrator_payload.get("debug_mode_enabled", False),
                 "skip_cleanup_enabled": orchestrator_payload.get("skip_cleanup_enabled", False),
                 "continue_from_video_resolved_path_for_guide": orchestrator_payload.get("continue_from_video_resolved_path") if idx == 0 else None,
+                "consolidated_end_anchor_idx": orchestrator_payload.get("_consolidated_end_anchors", [None] * num_segments)[idx] if orchestrator_payload.get("_consolidated_end_anchors") else None,
+                "consolidated_keyframe_positions": orchestrator_payload.get("_consolidated_keyframe_positions", [None] * num_segments)[idx] if orchestrator_payload.get("_consolidated_end_anchors") else None,
                 "full_orchestrator_payload": orchestrator_payload, # Ensure full payload is passed to segment
             }
             
