@@ -193,12 +193,13 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         # Preserve a copy of the original overlap list in case we need it later
         _orig_frame_overlap = list(expanded_frame_overlap)  # shallow copy
 
+
         # --- SM_QUANTIZE_FRAMES_AND_OVERLAPS ---
         # Adjust all segment lengths to match model constraints (4*N+1 format).
         # Then, adjust overlap values to be even and not exceed the length of the
         # smaller of the two segments they connect. This prevents errors downstream
         # in guide video creation, generation, and stitching.
-        
+
         dprint(f"[FRAME_DEBUG] Orchestrator {orchestrator_task_id_str}: QUANTIZATION ANALYSIS")
         dprint(f"[FRAME_DEBUG] Original segment_frames_expanded: {expanded_segment_frames}")
         dprint(f"[FRAME_DEBUG] Original frame_overlap: {expanded_frame_overlap}")
@@ -476,7 +477,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             
             # Stitch should depend on the last segment's actual DB row ID
             previous_segment_task_id = actual_segment_db_id_by_index.get(num_segments - 1)
-            print(f"[DEBUG_DEPENDENCY_CHAIN] Creating stitch task, depends_on (last seg idx {num_segments-1}): {previous_segment_task_id}")
+            dprint(f"[DEBUG_DEPENDENCY_CHAIN] Creating stitch task, depends_on (last seg idx {num_segments-1}): {previous_segment_task_id}")
             actual_stitch_db_row_id = db_ops.add_task_to_db(
                 task_payload=stitch_payload, 
                 task_type_str="travel_stitch",
