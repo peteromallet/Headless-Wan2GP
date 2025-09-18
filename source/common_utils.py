@@ -85,6 +85,9 @@ def extract_orchestrator_parameters(db_task_params: dict, task_id: str = "unknow
             # Magic edit parameters
             "image_url": "image_url",
             "in_scene": "in_scene",
+            # Qwen image style parameters
+            "style_reference_image": "style_reference_image",
+            "style_reference_strength": "style_reference_strength",
             # Additional common orchestrator parameters
             "video_guide": "video_guide",
             "video_mask": "video_mask",
@@ -139,7 +142,7 @@ def get_lora_dir_from_filename(wgp_mod, model_filename: str) -> str:
         print(f"[WARNING] Could not determine model type from: {model_filename}")
         model_type = "t2v"  # Default fallback - should match t2v.json
         
-    print(f"[DEBUG] LoRA directory lookup: {model_filename} → {model_type}")
+    dprint(f"[DEBUG] LoRA directory lookup: {model_filename} → {model_type}")
     return wgp_mod.get_lora_dir(model_type)
 
 def snap_resolution_to_model_grid(parsed_res: tuple[int, int]) -> tuple[int, int]:
@@ -1874,13 +1877,13 @@ def _apply_special_lora_settings(task_id: str, lora_type: str, lora_basename: st
     print(f"[Task ID: {task_id}] Applying {lora_type} LoRA settings.")
     
     # [STEPS DEBUG] Add detailed debug for steps logic
-    print(f"[STEPS DEBUG] {lora_type}: task_params_dict keys: {list(task_params_dict.keys())}")
+    dprint(f"[STEPS DEBUG] {lora_type}: task_params_dict keys: {list(task_params_dict.keys())}")
     if "steps" in task_params_dict:
-        print(f"[STEPS DEBUG] {lora_type}: Found 'steps' = {task_params_dict['steps']}")
+        dprint(f"[STEPS DEBUG] {lora_type}: Found 'steps' = {task_params_dict['steps']}")
     if "num_inference_steps" in task_params_dict:
-        print(f"[STEPS DEBUG] {lora_type}: Found 'num_inference_steps' = {task_params_dict['num_inference_steps']}")
+        dprint(f"[STEPS DEBUG] {lora_type}: Found 'num_inference_steps' = {task_params_dict['num_inference_steps']}")
     if "video_length" in task_params_dict:
-        print(f"[STEPS DEBUG] {lora_type}: Found 'video_length' = {task_params_dict['video_length']}")
+        dprint(f"[STEPS DEBUG] {lora_type}: Found 'video_length' = {task_params_dict['video_length']}")
     
     # Handle steps logic
     if "steps" in task_params_dict:
@@ -1928,7 +1931,7 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
     # [VACE_FIX] Use model_type_override if provided, otherwise derive from filename
     if model_type_override:
         model_type_key = model_type_override
-        print(f"[DEBUG] build_task_state: using model_type_override='{model_type_key}'")
+        dprint(f"[DEBUG] build_task_state: using model_type_override='{model_type_key}'")
         
         # [VACE_FIX] For VACE models, resolve to their underlying base type for WGP compatibility
         # VACE models should use their base model type (t2v) for configuration, not the composite type
@@ -1947,7 +1950,7 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
         if not model_type_key:
             print(f"[ERROR] Could not determine model type from filename: {model_filename}")
             model_type_key = "t2v"  # Fallback to known good model type
-        print(f"[DEBUG] build_task_state: model_filename='{model_filename}' → model_type='{model_type_key}'")
+        dprint(f"[DEBUG] build_task_state: model_filename='{model_filename}' → model_type='{model_type_key}'")
     ui_defaults = wgp_mod.get_default_settings(model_type_key).copy()
 
     # Override with task_params from JSON - all task parameters take priority over model defaults

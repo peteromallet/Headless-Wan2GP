@@ -447,11 +447,11 @@ def get_oldest_queued_task():
 
 def update_task_status(task_id: str, status: str, output_location: str | None = None):
     """Updates a task's status, dispatching to the correct implementation."""
-    print(f"[UPDATE_TASK_STATUS_DEBUG] Called with:")
-    print(f"[UPDATE_TASK_STATUS_DEBUG]   task_id: '{task_id}'")
-    print(f"[UPDATE_TASK_STATUS_DEBUG]   status: '{status}'")
-    print(f"[UPDATE_TASK_STATUS_DEBUG]   output_location: '{output_location}'")
-    print(f"[UPDATE_TASK_STATUS_DEBUG]   DB_TYPE: '{DB_TYPE}'")
+    dprint(f"[UPDATE_TASK_STATUS_DEBUG] Called with:")
+    dprint(f"[UPDATE_TASK_STATUS_DEBUG]   task_id: '{task_id}'")
+    dprint(f"[UPDATE_TASK_STATUS_DEBUG]   status: '{status}'")
+    dprint(f"[UPDATE_TASK_STATUS_DEBUG]   output_location: '{output_location}'")
+    dprint(f"[UPDATE_TASK_STATUS_DEBUG]   DB_TYPE: '{DB_TYPE}'")
     
     try:
         if DB_TYPE == "supabase":
@@ -522,9 +522,17 @@ def check_task_counts_supabase(run_type: str = "gpu") -> dict | None:
         
         if resp.status_code == 200:
             counts_data = resp.json()
+            # Always log a concise summary so we can observe behavior without enabling debug
+            try:
+                totals = counts_data.get('totals', {})
+                dprint(f"[TASK_COUNTS] totals={totals} run_type={payload.get('run_type')}")
+            except Exception:
+                # Fall back to raw text if JSON structure unexpected
+                dprint(f"[TASK_COUNTS] raw_response={resp.text[:500]}")
             dprint(f"Task-counts result: {counts_data.get('totals', {})}")
             return counts_data
         else:
+            dprint(f"[TASK_COUNTS] error status={resp.status_code} body={resp.text[:500]}")
             dprint(f"Task-counts returned {resp.status_code}: {resp.text}")
             return None
             
@@ -825,12 +833,12 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
                     # Query tasks table for existence of dependant_on
                     resp_exist = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("id").eq("id", dependant_on).single().execute()
                     if not getattr(resp_exist, "data", None):
-                        print(f"[ERROR][DEBUG_DEPENDENCY_CHAIN] dependant_on not found: {dependant_on}. Refusing to create task of type {task_type_str} with broken dependency.")
+                        dprint(f"[ERROR][DEBUG_DEPENDENCY_CHAIN] dependant_on not found: {dependant_on}. Refusing to create task of type {task_type_str} with broken dependency.")
                         raise RuntimeError(f"dependant_on {dependant_on} not found")
                 # If no client, skip hard check (Edge will still reject bad chains during claim)
             except Exception as e_depchk:
                 # Only warn on verification failure (network/transient). If it's truly missing, above raises already.
-                print(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on {dependant_on} existence prior to enqueue: {e_depchk}")
+                dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on {dependant_on} existence prior to enqueue: {e_depchk}")
 
         payload_edge = {
             "task_id": actual_db_row_id,  # Use generated UUID as database row ID

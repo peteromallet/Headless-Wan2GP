@@ -205,9 +205,9 @@ class TravelSegmentProcessor:
                 ctx.dprint(f"Seg {ctx.segment_idx}: Single image journey - NOT marking last frame as inactive, letting model generate freely")
             
             # --- DEBUG LOGGING (restored from original) ---
-            print(f"[MASK_DEBUG] Segment {ctx.segment_idx}: frame_overlap_from_previous={frame_overlap_from_previous}")
-            print(f"[MASK_DEBUG] Segment {ctx.segment_idx}: inactive (masked) frame indices: {sorted(list(inactive_indices))}")
-            print(f"[MASK_DEBUG] Segment {ctx.segment_idx}: active (unmasked) frame indices: {[i for i in range(ctx.total_frames_for_segment) if i not in inactive_indices]}")
+            ctx.dprint(f"[MASK_DEBUG] Segment {ctx.segment_idx}: frame_overlap_from_previous={frame_overlap_from_previous}")
+            ctx.dprint(f"[MASK_DEBUG] Segment {ctx.segment_idx}: inactive (masked) frame indices: {sorted(list(inactive_indices))}")
+            ctx.dprint(f"[MASK_DEBUG] Segment {ctx.segment_idx}: active (unmasked) frame indices: {[i for i in range(ctx.total_frames_for_segment) if i not in inactive_indices]}")
             # --- END DEBUG LOGGING ---
             
             # Create mask video output path

@@ -363,14 +363,16 @@ def _check_lora_exists(lora_filename: str) -> bool:
     """
     import os
     
-    # Standard LoRA directories
+    # Standard LoRA directories (include Qwen-specific dir)
     lora_dirs = [
         "loras",
-        "Wan2GP/loras", 
+        "Wan2GP/loras",
         "loras_i2v",
         "Wan2GP/loras_i2v",
         "loras_hunyuan_i2v",
-        "Wan2GP/loras_hunyuan_i2v"
+        "Wan2GP/loras_hunyuan_i2v",
+        "loras_qwen",
+        "Wan2GP/loras_qwen",
     ]
     
     for lora_dir in lora_dirs:
@@ -395,17 +397,37 @@ def _download_lora_auto(lora_filename: str, lora_type: str, dprint=None) -> bool
     """
     # Known LoRA download URLs
     lora_urls = {
-        "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors": 
-            "https://huggingface.co/DeepBeepMeep/Wan2.1_T2V_14B_lightx2v_cfg_step_distill_lora_rank32/resolve/main/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
+        # LightI2X LoRA (14B). Correct HF location is under the Wan2.1 loras_accelerators folder.
+        "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors":
+            "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
+        # CausVid LoRA (14B)
         "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors":
             "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
+    }
+
+    # Provide fallbacks for known mirrors when primary URL is missing/gated
+    lora_fallback_urls = {
+        "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors": [
+            # Kijai mirror
+            "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
+        ]
     }
     
     if lora_filename in lora_urls:
         try:
             url = lora_urls[lora_filename]
-            downloaded_filename = _download_lora_from_url(url, "auto-download", dprint)
-            return downloaded_filename == lora_filename
+            try:
+                downloaded_filename = _download_lora_from_url(url, "auto-download", dprint)
+                return downloaded_filename == lora_filename
+            except Exception:
+                # Try fallbacks if any
+                for fb_url in lora_fallback_urls.get(lora_filename, []):
+                    try:
+                        downloaded_filename = _download_lora_from_url(fb_url, "auto-download (fallback)", dprint)
+                        return downloaded_filename == lora_filename
+                    except Exception:
+                        continue
+                raise
         except Exception as e:
             if dprint:
                 dprint(f"[LORA_DOWNLOAD] Auto-download failed for {lora_filename}: {e}")
@@ -432,39 +454,63 @@ def _download_lora_from_url(url: str, task_id: str, dprint=None) -> str:
         Exception: If download fails
     """
     import os
+    import shutil
     from urllib.request import urlretrieve
     
     # Extract filename from URL
     local_filename = url.split("/")[-1]
     
-    # Determine LoRA directory based on the filename or model type
-    if "lightx2v" in local_filename.lower() or "causvid" in local_filename.lower():
-        lora_dir = os.path.join("Wan2GP", "loras")  # Standard Wan2GP loras
-    else:
-        lora_dir = "loras"  # Additional LoRAs directory
+    # Determine LoRA directory: prefer the WGP-visible root 'loras'
+    lora_dir = "loras"
     
     local_path = os.path.join(lora_dir, local_filename)
     
     if dprint:
-        dprint(f"[LORA_DOWNLOAD] Task {task_id}: Downloading {local_filename} to {lora_dir}")
+        dprint(f"[LORA_DOWNLOAD] Task {task_id}: Downloading {local_filename} to {lora_dir} from {url}")
     
     # Check if file already exists
     if not os.path.isfile(local_path):
         if url.startswith("https://huggingface.co/") and "/resolve/main/" in url:
             # Use HuggingFace hub for HF URLs
             from huggingface_hub import hf_hub_download
-            
+
             # Parse HuggingFace URL
             url_path = url[len("https://huggingface.co/"):]
             url_parts = url_path.split("/resolve/main/")
             repo_id = url_parts[0]
-            filename = os.path.basename(url_parts[-1])
-            
+            rel_path = url_parts[-1]
+            filename = os.path.basename(rel_path)
+            subfolder = os.path.dirname(rel_path)
+
             # Ensure LoRA directory exists
             os.makedirs(lora_dir, exist_ok=True)
-            
-            # Download using HuggingFace hub
-            hf_hub_download(repo_id=repo_id, filename=filename, local_dir=lora_dir)
+
+            # Download using HuggingFace hub. Some hubs require `subfolder` to locate
+            # the file, but we want the final artifact at `loras/<filename>` because
+            # WGP and `_check_lora_exists` look in the root directory.
+            if len(subfolder) > 0:
+                hf_hub_download(repo_id=repo_id, filename=filename, local_dir=lora_dir, subfolder=subfolder)
+                # If the file landed under a nested path, move it up to lora_dir
+                nested_path = os.path.join(lora_dir, subfolder, filename)
+                if os.path.exists(nested_path) and not os.path.exists(local_path):
+                    try:
+                        os.makedirs(lora_dir, exist_ok=True)
+                        shutil.move(nested_path, local_path)
+                        # Clean up empty subfolder tree if any
+                        try:
+                            # Remove empty dirs going up from the deepest
+                            cur = os.path.join(lora_dir, subfolder)
+                            while os.path.normpath(cur).startswith(os.path.normpath(lora_dir)) and cur != lora_dir:
+                                if not os.listdir(cur):
+                                    os.rmdir(cur)
+                                cur = os.path.dirname(cur)
+                        except Exception:
+                            pass
+                    except Exception:
+                        # If move fails, leave as-is; higher-level checks may still find it
+                        pass
+            else:
+                hf_hub_download(repo_id=repo_id, filename=filename, local_dir=lora_dir)
         else:
             # Use urllib for other URLs
             os.makedirs(lora_dir, exist_ok=True)
@@ -601,15 +647,30 @@ def process_all_loras(params: Dict[str, Any], task_params: Dict[str, Any], model
     if lora_names:
         if dprint:
             dprint(f"[LORA_PROCESS] Task {task_id}: Verifying {len(lora_names)} LoRAs exist: {lora_names}")
-        
+
         for lora_name in lora_names[:]:  # Copy list to avoid modification during iteration
             if not _check_lora_exists(lora_name):
                 if dprint:
                     dprint(f"[LORA_DOWNLOAD] Task {task_id}: LoRA not found, attempting auto-download: {lora_name}")
-                
+
                 download_success = _download_lora_auto(lora_name, "required", dprint)
-                if not download_success and dprint:
-                    dprint(f"[LORA_DOWNLOAD] Task {task_id}: Warning - Could not download required LoRA: {lora_name}")
+                if not download_success:
+                    if dprint:
+                        dprint(f"[LORA_DOWNLOAD] Task {task_id}: Warning - Could not download required LoRA: {lora_name}")
+                        dprint(f"[LORA_PROCESS] Task {task_id}: Dropping missing LoRA '{lora_name}' to avoid generation failure")
+                    # Remove missing LoRA to avoid downstream loader errors
+                    try:
+                        idx = lora_names.index(lora_name)
+                        lora_names.pop(idx)
+                        # Keep multipliers list in sync if already present
+                        lora_multipliers = params.get("lora_multipliers", [])
+                        if isinstance(lora_multipliers, list) and idx < len(lora_multipliers):
+                            lora_multipliers.pop(idx)
+                            params["lora_multipliers"] = lora_multipliers
+                    except Exception:
+                        pass
+        # Store potentially pruned list back
+        params["lora_names"] = lora_names
     
     # Step 5: Ensure multipliers list matches LoRA names list
     lora_names = params.get("lora_names", [])
