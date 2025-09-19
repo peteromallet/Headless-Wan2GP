@@ -1,5 +1,6 @@
 .*
 *.py[cod]
+venv_headless_wan2gp/
 # *.jpg
 *.jpeg
 # *.png
@@ -57,6 +58,7 @@ _test*
 test_outputs/
 test_results_comparison/
 tests/
+tests_output/
 
 # Task database files
 tasks.db-shm

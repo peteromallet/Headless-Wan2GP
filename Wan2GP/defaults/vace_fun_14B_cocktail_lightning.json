@@ -26,5 +26,5 @@
     "guidance2_scale": 1,
     "flow_shift": 5,
     "switch_threshold": 875,
-    "sample_solver": "dpm++_sde"
+    "sample_solver": "euler"
 }

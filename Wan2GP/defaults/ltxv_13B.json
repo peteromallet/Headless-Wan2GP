@@ -13,7 +13,7 @@
 			"https://huggingface.co/DeepBeepMeep/LTX_Video/resolve/main/ltxv-097-ic-lora-depth-control-diffusers.safetensors",
 			"https://huggingface.co/DeepBeepMeep/LTX_Video/resolve/main/ltxv-097-ic-lora-canny-control-diffusers.safetensors"
 		],			
-		"LTXV_config": "ltx_video/configs/ltxv-13b-0.9.8-dev.yaml"
+		"LTXV_config": "models/ltx_video/configs/ltxv-13b-0.9.8-dev.yaml"
 	},
 	"num_inference_steps": 30	
 }
