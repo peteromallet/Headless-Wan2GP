@@ -98,7 +98,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         travel_logger.debug(f"Orchestrator payload: {json.dumps(orchestrator_payload, indent=2, default=str)[:500]}...", task_id=orchestrator_task_id_str)
 
         # IDEMPOTENCY CHECK: Look for existing child tasks before creating new ones
-        print(f"[IDEMPOTENCY] Checking for existing child tasks for orchestrator {orchestrator_task_id_str}")
+        dprint(f"[IDEMPOTENCY] Checking for existing child tasks for orchestrator {orchestrator_task_id_str}")
         existing_child_tasks = db_ops.get_orchestrator_child_tasks(orchestrator_task_id_str)
         existing_segments = existing_child_tasks['segments']
         existing_stitch = existing_child_tasks['stitch']
@@ -106,7 +106,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         expected_segments = orchestrator_payload.get("num_new_segments_to_generate", 0)
         
         if existing_segments or existing_stitch:
-            print(f"[IDEMPOTENCY] Found existing child tasks: {len(existing_segments)} segments, {len(existing_stitch)} stitch tasks")
+            dprint(f"[IDEMPOTENCY] Found existing child tasks: {len(existing_segments)} segments, {len(existing_stitch)} stitch tasks")
             
             # Check if we have the expected number of tasks already
             if len(existing_segments) >= expected_segments and len(existing_stitch) >= 1:
@@ -122,10 +122,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 return generation_success, output_message_for_orchestrator_db
             else:
                 # Partial completion - log and continue with missing tasks
-                print(f"[IDEMPOTENCY] Partial child tasks found: {len(existing_segments)}/{expected_segments} segments, {len(existing_stitch)}/1 stitch. Will continue with orchestration.")
+                dprint(f"[IDEMPOTENCY] Partial child tasks found: {len(existing_segments)}/{expected_segments} segments, {len(existing_stitch)}/1 stitch. Will continue with orchestration.")
                 travel_logger.warning(f"Partial child tasks found, continuing orchestration to create missing tasks", task_id=orchestrator_task_id_str)
         else:
-            print(f"[IDEMPOTENCY] No existing child tasks found. Proceeding with normal orchestration.")
+            dprint(f"[IDEMPOTENCY] No existing child tasks found. Proceeding with normal orchestration.")
 
         run_id = orchestrator_payload.get("run_id", orchestrator_task_id_str)
         base_dir_for_this_run_str = orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
@@ -162,8 +162,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         stitch_already_exists = len(existing_stitch) > 0
         existing_stitch_task_id = existing_stitch[0]['id'] if stitch_already_exists else None
         
-        print(f"[IDEMPOTENCY] Existing segment indices: {sorted(existing_segment_indices)}")
-        print(f"[IDEMPOTENCY] Stitch task exists: {stitch_already_exists} (ID: {existing_stitch_task_id})")
+        dprint(f"[IDEMPOTENCY] Existing segment indices: {sorted(existing_segment_indices)}")
+        dprint(f"[IDEMPOTENCY] Stitch task exists: {stitch_already_exists} (ID: {existing_stitch_task_id})")
 
         # --- Determine image download directory for this orchestrated run ---
         segment_image_download_dir_str : str | None = None
@@ -193,33 +193,339 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         # Preserve a copy of the original overlap list in case we need it later
         _orig_frame_overlap = list(expanded_frame_overlap)  # shallow copy
 
+        # --- IDENTICAL PARAMETER DETECTION AND FRAME CONSOLIDATION ---
+        def detect_identical_parameters(orchestrator_payload, num_segments, dprint=None):
+            """
+            Detect if all segments will have identical generation parameters.
+            Returns analysis that enables both model caching and frame optimization.
+            """
+            # Extract parameter arrays
+            expanded_base_prompts = orchestrator_payload["base_prompts_expanded"]
+            expanded_negative_prompts = orchestrator_payload["negative_prompts_expanded"]
+            additional_loras = orchestrator_payload.get("additional_loras", [])
+
+            # Check parameter identity
+            prompts_identical = len(set(expanded_base_prompts)) == 1
+            negative_prompts_identical = len(set(expanded_negative_prompts)) == 1
+
+            # LoRA consistency check
+            lora_flags_consistent = all([
+                orchestrator_payload.get("apply_causvid", False),
+                orchestrator_payload.get("use_lighti2x_lora", False),
+                orchestrator_payload.get("apply_reward_lora", False)
+            ])
+
+            is_identical = prompts_identical and negative_prompts_identical
+
+            if dprint and is_identical:
+                dprint(f"[IDENTICAL_DETECTION] All {num_segments} segments identical - enabling optimizations")
+                dprint(f"  - Unique prompt: '{expanded_base_prompts[0][:50]}...'")
+                dprint(f"  - LoRA count: {len(additional_loras)}")
+
+            return {
+                "is_identical": is_identical,
+                "can_optimize_frames": is_identical,  # Key for frame allocation optimization
+                "can_reuse_model": is_identical,      # Key for model caching
+                "unique_prompt": expanded_base_prompts[0] if prompts_identical else None
+            }
+
+        def validate_consolidation_safety(orchestrator_payload, dprint=None):
+            """
+            Verify that frame consolidation is safe by checking parameter identity.
+            """
+            # Get parameter arrays
+            prompts = orchestrator_payload["base_prompts_expanded"]
+            neg_prompts = orchestrator_payload["negative_prompts_expanded"]
+            additional_loras = orchestrator_payload.get("additional_loras", [])
+
+            # Critical safety checks
+            all_prompts_identical = len(set(prompts)) == 1
+            all_neg_prompts_identical = len(set(neg_prompts)) == 1
+
+            # LoRA consistency (flags should be uniform if prompts are identical)
+            lora_flags = [
+                orchestrator_payload.get("apply_causvid", False),
+                orchestrator_payload.get("use_lighti2x_lora", False),
+                orchestrator_payload.get("apply_reward_lora", False)
+            ]
+
+            is_safe = all_prompts_identical and all_neg_prompts_identical
+
+            if dprint:
+                if is_safe:
+                    dprint(f"[CONSOLIDATION_SAFETY] ✅ Safe to consolidate - all parameters identical")
+                else:
+                    dprint(f"[CONSOLIDATION_SAFETY] ❌ NOT safe to consolidate:")
+                    if not all_prompts_identical:
+                        dprint(f"  - Prompts differ: {len(set(prompts))} unique prompts")
+                    if not all_neg_prompts_identical:
+                        dprint(f"  - Negative prompts differ: {len(set(neg_prompts))} unique")
+
+            return {
+                "is_safe": is_safe,
+                "prompts_identical": all_prompts_identical,
+                "negative_prompts_identical": all_neg_prompts_identical,
+                "can_consolidate": is_safe
+            }
+
+        def optimize_frame_allocation_for_identical_params(orchestrator_payload, max_frames_per_segment=65, dprint=None):
+            """
+            When all parameters are identical, consolidate keyframes into fewer segments.
+
+            Args:
+                orchestrator_payload: Original orchestrator data
+                max_frames_per_segment: Maximum frames per segment (model technical limit)
+                dprint: Debug logging function
+
+            Returns:
+                Updated orchestrator_payload with optimized frame allocation
+            """
+            original_segment_frames = orchestrator_payload["segment_frames_expanded"]
+            original_frame_overlaps = orchestrator_payload["frame_overlap_expanded"]
+            original_base_prompts = orchestrator_payload["base_prompts_expanded"]
+
+            if dprint:
+                dprint(f"[FRAME_CONSOLIDATION] Original allocation: {len(original_segment_frames)} segments")
+                dprint(f"  - Segment frames: {original_segment_frames}")
+                dprint(f"  - Frame overlaps: {original_frame_overlaps}")
+
+            # Calculate keyframe positions based on raw segment durations (no overlaps for consolidated videos)
+            keyframe_positions = [0]  # Start with frame 0
+            cumulative_pos = 0
+
+            for segment_frames in original_segment_frames:
+                cumulative_pos += segment_frames
+                keyframe_positions.append(cumulative_pos)
+
+            if dprint:
+                dprint(f"[FRAME_CONSOLIDATION] Keyframe positions: {keyframe_positions}")
+
+            # Simple consolidation: group keyframes into videos respecting frame limit
+            optimized_segments = []
+            optimized_overlaps = []
+            optimized_prompts = []
+
+            video_start = 0
+            video_keyframes = [0]  # Always include first keyframe
+
+            for i in range(1, len(keyframe_positions)):
+                kf_pos = keyframe_positions[i]
+                video_length_if_included = kf_pos - video_start + 1
+
+                if video_length_if_included <= max_frames_per_segment:
+                    # Keyframe fits in current video
+                    video_keyframes.append(kf_pos)
+                    if dprint:
+                        dprint(f"[CONSOLIDATION_LOGIC] Keyframe {kf_pos} fits in current video (length would be {video_length_if_included})")
+                else:
+                    # Current video is full, finalize it and start new one
+                    final_frame = video_keyframes[-1]
+                    raw_length = final_frame - video_start + 1
+                    quantized_length = ((raw_length - 1) // 4) * 4 + 1
+                    optimized_segments.append(quantized_length)
+                    optimized_prompts.append(original_base_prompts[0])
+
+                    if dprint:
+                        dprint(f"[CONSOLIDATION_LOGIC] Video complete: frames {video_start}-{final_frame} (raw: {raw_length}, quantized: {quantized_length})")
+                        dprint(f"[CONSOLIDATION_LOGIC] Video keyframes: {[kf - video_start for kf in video_keyframes]}")
+
+                    # Add overlap for the next video if there are more keyframes to process
+                    # When we finalize a video because the next keyframe doesn't fit,
+                    # we need overlap for the next video
+                    if i < len(keyframe_positions):  # Still have more keyframes = need next video
+                        # Use original overlap value instead of calculating new one
+                        if isinstance(original_frame_overlaps, list) and original_frame_overlaps:
+                            overlap = original_frame_overlaps[0]  # Use first value from array
+                        elif isinstance(original_frame_overlaps, int):
+                            overlap = original_frame_overlaps  # Use int value directly
+                        else:
+                            overlap = 4  # Default fallback if no overlap specified
+
+                        optimized_overlaps.append(overlap)
+                        if dprint:
+                            dprint(f"[CONSOLIDATION_LOGIC] Added overlap {overlap} frames for next video (from original settings)")
+
+                    # Start new video
+                    video_start = video_keyframes[-1]  # Start from last keyframe of previous video
+                    video_keyframes = [video_start, kf_pos]
+                    if dprint:
+                        dprint(f"[CONSOLIDATION_LOGIC] Starting new video at frame {video_start}")
+
+            # Finalize the last video
+            final_frame = video_keyframes[-1]
+            raw_length = final_frame - video_start + 1
+            quantized_length = ((raw_length - 1) // 4) * 4 + 1
+            optimized_segments.append(quantized_length)
+            optimized_prompts.append(original_base_prompts[0])
+
+            if dprint:
+                dprint(f"[CONSOLIDATION_LOGIC] Final video: frames {video_start}-{final_frame} (raw: {raw_length}, quantized: {quantized_length})")
+                dprint(f"[CONSOLIDATION_LOGIC] Final video keyframes: {[kf - video_start for kf in video_keyframes]}")
+
+            # Update orchestrator payload
+            orchestrator_payload["segment_frames_expanded"] = optimized_segments
+            orchestrator_payload["frame_overlap_expanded"] = optimized_overlaps
+            orchestrator_payload["base_prompts_expanded"] = optimized_prompts
+            orchestrator_payload["negative_prompts_expanded"] = [orchestrator_payload["negative_prompts_expanded"][0]] * len(optimized_segments)
+            orchestrator_payload["num_new_segments_to_generate"] = len(optimized_segments)
+
+            # CRITICAL: Store end anchor image indices for consolidated segments
+            # This tells each consolidated segment which image should be its end anchor
+            consolidated_end_anchors = []
+            original_num_segments = len(original_segment_frames)
+
+            # For consolidated segments, calculate the correct end anchor indices
+            # Each consolidated segment should use the final image of its range
+            # Use the simplified approach: track which images each segment should end with
+            consolidated_end_anchors = []
+
+            # First segment ends with the image at the last keyframe it contains
+            if len(optimized_segments) >= 1:
+                # First segment: determine which keyframes it contains based on consolidation logic
+                # Recreate the consolidation to find the correct end images
+                video_start = 0
+                video_keyframes = [0]  # Always include first keyframe
+                current_image_idx = 0
+
+                for i in range(1, len(keyframe_positions)):
+                    kf_pos = keyframe_positions[i]
+                    video_length_if_included = kf_pos - video_start + 1
+
+                    if video_length_if_included <= max_frames_per_segment:
+                        # Keyframe fits in current video
+                        video_keyframes.append(kf_pos)
+                        current_image_idx = i  # This image index goes in current video
+                    else:
+                        # Finalize current video - end with current_image_idx
+                        consolidated_end_anchors.append(current_image_idx)
+                        dprint(f"[FRAME_CONSOLIDATION] Segment {len(consolidated_end_anchors)-1}: end_anchor_image_index = {current_image_idx}")
+
+                        # Start new video
+                        video_start = video_keyframes[-1]
+                        video_keyframes = [video_start, kf_pos]
+                        current_image_idx = i  # Current keyframe goes in new video
+
+                # Handle the final segment
+                consolidated_end_anchors.append(current_image_idx)
+                dprint(f"[FRAME_CONSOLIDATION] Segment {len(consolidated_end_anchors)-1}: end_anchor_image_index = {current_image_idx}")
+
+            # Store the end anchor mapping for use during segment creation
+            orchestrator_payload["_consolidated_end_anchors"] = consolidated_end_anchors
+
+            # Calculate relative keyframe positions AND image indices for each consolidated segment
+            consolidated_keyframe_segments = []
+            consolidated_keyframe_image_indices = []
+
+            # Recreate the same consolidation logic to properly assign keyframes
+            video_start = 0
+            video_keyframes = [0]  # Always include first keyframe (absolute positions)
+            video_image_indices = [0]  # Track which input images correspond to keyframes
+            current_video_idx = 0
+
+            for i in range(1, len(keyframe_positions)):
+                kf_pos = keyframe_positions[i]
+                video_length_if_included = kf_pos - video_start + 1
+
+                if video_length_if_included <= max_frames_per_segment:
+                    # Keyframe fits in current video
+                    video_keyframes.append(kf_pos)
+                    video_image_indices.append(i)  # Input image index corresponds to keyframe index
+                else:
+                    # Finalize current video and start new one
+                    final_frame = video_keyframes[-1]
+
+                    # Convert absolute keyframe positions to relative positions for this video
+                    # BUT: adjust for quantization - keyframes must fit within quantized segment bounds
+                    raw_length = final_frame - video_start + 1
+                    quantized_length = ((raw_length - 1) // 4) * 4 + 1
+
+                    relative_keyframes = []
+                    for kf_abs_pos in video_keyframes:
+                        relative_pos = kf_abs_pos - video_start
+                        # Ensure final keyframe fits within quantized bounds
+                        if relative_pos >= quantized_length:
+                            relative_pos = quantized_length - 1  # Last frame in quantized video
+                        relative_keyframes.append(relative_pos)
+
+                    consolidated_keyframe_segments.append(relative_keyframes)
+                    consolidated_keyframe_image_indices.append(video_image_indices.copy())
+
+                    if dprint:
+                        dprint(f"[KEYFRAME_ASSIGNMENT] Video {current_video_idx}: absolute start {video_start}, final frame {final_frame}")
+                        dprint(f"[KEYFRAME_ASSIGNMENT] Video {current_video_idx} keyframes: {video_keyframes} → relative: {relative_keyframes}")
+                        dprint(f"[KEYFRAME_ASSIGNMENT] Video {current_video_idx} image indices: {video_image_indices}")
+
+                    # Start new video
+                    current_video_idx += 1
+                    video_start = final_frame  # Start from last keyframe (overlap)
+                    # The overlap keyframe uses the same image as the final keyframe of previous segment
+                    last_image_idx = video_image_indices[-1]
+                    video_keyframes = [final_frame, kf_pos]  # Include overlap and current keyframe
+                    video_image_indices = [last_image_idx, i]  # Include overlap image and current image
+
+            # Handle the last video (make sure it has the correct final keyframes)
+            if len(video_keyframes) > 0:
+                # Convert absolute keyframe positions to relative positions for the final video
+                # Adjust for quantization like the consolidation logic does
+                final_frame = video_keyframes[-1]
+                raw_length = final_frame - video_start + 1
+                quantized_length = ((raw_length - 1) // 4) * 4 + 1
+
+                relative_keyframes = []
+                for kf_abs_pos in video_keyframes:
+                    relative_pos = kf_abs_pos - video_start
+                    # Ensure final keyframe fits within quantized bounds
+                    if relative_pos >= quantized_length:
+                        relative_pos = quantized_length - 1  # Last frame in quantized video
+                    relative_keyframes.append(relative_pos)
+
+                consolidated_keyframe_segments.append(relative_keyframes)
+                consolidated_keyframe_image_indices.append(video_image_indices.copy())
+
+                if dprint:
+                    dprint(f"[KEYFRAME_ASSIGNMENT] Video {current_video_idx}: absolute start {video_start}")
+                    dprint(f"[KEYFRAME_ASSIGNMENT] Video {current_video_idx} keyframes: {video_keyframes} → relative: {relative_keyframes}")
+                    dprint(f"[KEYFRAME_ASSIGNMENT] Video {current_video_idx} image indices: {video_image_indices}")
+
+            # Store relative keyframe positions for guide video creation
+            orchestrator_payload["_consolidated_keyframe_positions"] = consolidated_keyframe_segments
+
+            if dprint:
+                dprint(f"[FRAME_CONSOLIDATION] Optimized to {len(optimized_segments)} segments (was {len(original_segment_frames)})")
+                dprint(f"  - New segment frames: {optimized_segments}")
+                dprint(f"  - New overlaps: {optimized_overlaps}")
+                dprint(f"  - Efficiency: {(len(original_segment_frames) - len(optimized_segments))} fewer segments")
+
+            return orchestrator_payload
+
+
         # --- SM_QUANTIZE_FRAMES_AND_OVERLAPS ---
         # Adjust all segment lengths to match model constraints (4*N+1 format).
         # Then, adjust overlap values to be even and not exceed the length of the
         # smaller of the two segments they connect. This prevents errors downstream
         # in guide video creation, generation, and stitching.
-        
-        print(f"[FRAME_DEBUG] Orchestrator {orchestrator_task_id_str}: QUANTIZATION ANALYSIS")
-        print(f"[FRAME_DEBUG] Original segment_frames_expanded: {expanded_segment_frames}")
-        print(f"[FRAME_DEBUG] Original frame_overlap: {expanded_frame_overlap}")
+
+        dprint(f"[FRAME_DEBUG] Orchestrator {orchestrator_task_id_str}: QUANTIZATION ANALYSIS")
+        dprint(f"[FRAME_DEBUG] Original segment_frames_expanded: {expanded_segment_frames}")
+        dprint(f"[FRAME_DEBUG] Original frame_overlap: {expanded_frame_overlap}")
         
         quantized_segment_frames = []
         dprint(f"Orchestrator: Quantizing frame counts. Original segment_frames_expanded: {expanded_segment_frames}")
         for i, frames in enumerate(expanded_segment_frames):
             # Quantize to 4*N+1 format to match model constraints, applied later in worker.py
             new_frames = (frames // 4) * 4 + 1
-            print(f"[FRAME_DEBUG] Segment {i}: {frames} -> {new_frames} (4*N+1 quantization)")
+            dprint(f"[FRAME_DEBUG] Segment {i}: {frames} -> {new_frames} (4*N+1 quantization)")
             if new_frames != frames:
                 dprint(f"Orchestrator: Quantized segment {i} length from {frames} to {new_frames} (4*N+1 format).")
             quantized_segment_frames.append(new_frames)
         
-        print(f"[FRAME_DEBUG] Quantized segment_frames: {quantized_segment_frames}")
+        dprint(f"[FRAME_DEBUG] Quantized segment_frames: {quantized_segment_frames}")
         dprint(f"Orchestrator: Finished quantizing frame counts. New quantized_segment_frames: {quantized_segment_frames}")
         
         quantized_frame_overlap = []
         # There are N-1 overlaps for N segments. The loop must not iterate more times than this.
         num_overlaps_to_process = len(quantized_segment_frames) - 1
-        print(f"[FRAME_DEBUG] Processing {num_overlaps_to_process} overlap values")
+        dprint(f"[FRAME_DEBUG] Processing {num_overlaps_to_process} overlap values")
 
         if num_overlaps_to_process > 0:
             for i in range(num_overlaps_to_process):
@@ -240,16 +546,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 new_overlap = min(new_overlap, max_possible_overlap)
                 if new_overlap < 0: new_overlap = 0
 
-                print(f"[FRAME_DEBUG] Overlap {i} (segments {i}->{i+1}): {original_overlap} -> {new_overlap}")
-                print(f"[FRAME_DEBUG]   Segment lengths: {quantized_segment_frames[i]}, {quantized_segment_frames[i+1]}")
-                print(f"[FRAME_DEBUG]   Max possible overlap: {max_possible_overlap}")
+                dprint(f"[FRAME_DEBUG] Overlap {i} (segments {i}->{i+1}): {original_overlap} -> {new_overlap}")
+                dprint(f"[FRAME_DEBUG]   Segment lengths: {quantized_segment_frames[i]}, {quantized_segment_frames[i+1]}")
+                dprint(f"[FRAME_DEBUG]   Max possible overlap: {max_possible_overlap}")
                 
                 if new_overlap != original_overlap:
                     dprint(f"Orchestrator: Adjusted overlap between segments {i}-{i+1} from {original_overlap} to {new_overlap}.")
                 
                 quantized_frame_overlap.append(new_overlap)
         
-        print(f"[FRAME_DEBUG] Final quantized_frame_overlap: {quantized_frame_overlap}")
+        dprint(f"[FRAME_DEBUG] Final quantized_frame_overlap: {quantized_frame_overlap}")
         
         # Persist quantised results back to orchestrator_payload so all downstream tasks see them
         orchestrator_payload["segment_frames_expanded"] = quantized_segment_frames
@@ -259,11 +565,11 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         total_input_frames = sum(quantized_segment_frames)
         total_overlaps = sum(quantized_frame_overlap)
         expected_final_length = total_input_frames - total_overlaps
-        print(f"[FRAME_DEBUG] EXPECTED FINAL VIDEO:")
-        print(f"[FRAME_DEBUG]   Total input frames: {total_input_frames}")
-        print(f"[FRAME_DEBUG]   Total overlaps: {total_overlaps}")
-        print(f"[FRAME_DEBUG]   Expected final length: {expected_final_length} frames")
-        print(f"[FRAME_DEBUG]   Expected duration: {expected_final_length / orchestrator_payload.get('fps_helpers', 16):.2f}s")
+        dprint(f"[FRAME_DEBUG] EXPECTED FINAL VIDEO:")
+        dprint(f"[FRAME_DEBUG]   Total input frames: {total_input_frames}")
+        dprint(f"[FRAME_DEBUG]   Total overlaps: {total_overlaps}")
+        dprint(f"[FRAME_DEBUG]   Expected final length: {expected_final_length} frames")
+        dprint(f"[FRAME_DEBUG]   Expected duration: {expected_final_length / orchestrator_payload.get('fps_helpers', 16):.2f}s")
         
         # Replace original lists with the new quantized ones for all subsequent logic
         expanded_segment_frames = quantized_segment_frames
@@ -277,6 +583,78 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         if (not expanded_frame_overlap) and _orig_frame_overlap:
             expanded_frame_overlap = _orig_frame_overlap
 
+        # --- FRAME CONSOLIDATION OPTIMIZATION ---
+        # Store original values for comparison logging
+        original_num_segments = num_segments
+        original_segment_frames = list(expanded_segment_frames)
+        original_frame_overlap = list(expanded_frame_overlap)
+
+        # Check if all prompts and LoRAs are identical to enable frame consolidation
+        identity_analysis = detect_identical_parameters(orchestrator_payload, num_segments, dprint)
+
+        if identity_analysis["can_optimize_frames"]:
+            # Run safety validation before optimization
+            safety_check = validate_consolidation_safety(orchestrator_payload, dprint)
+
+            if safety_check["is_safe"]:
+                dprint(f"[FRAME_CONSOLIDATION] ✅ Triggering optimization for identical parameters")
+                print(f"[FRAME_CONSOLIDATION] ✅ All parameters identical - enabling frame consolidation optimization")
+
+                # Apply frame consolidation optimization
+                orchestrator_payload = optimize_frame_allocation_for_identical_params(
+                    orchestrator_payload,
+                    max_frames_per_segment=81,  # Max 81 frames per video
+                    dprint=dprint
+                )
+
+                # Update variables with optimized values
+                expanded_segment_frames = orchestrator_payload["segment_frames_expanded"]
+                expanded_frame_overlap = orchestrator_payload["frame_overlap_expanded"]
+                expanded_base_prompts = orchestrator_payload["base_prompts_expanded"]
+                expanded_negative_prompts = orchestrator_payload["negative_prompts_expanded"]
+                num_segments = orchestrator_payload["num_new_segments_to_generate"]
+
+                # CRITICAL: Update VACE image references for consolidated segments
+                # When segments are consolidated, we need to reassign all VACE image refs
+                # to the new consolidated segments based on their new indices
+                if vace_refs_instructions_all:
+                    dprint(f"[VACE_REFS_CONSOLIDATION] Updating VACE image refs for {num_segments} consolidated segments")
+                    dprint(f"[VACE_REFS_CONSOLIDATION] Original VACE refs count: {len(vace_refs_instructions_all)}")
+
+                    # For consolidated segments, reassign all VACE refs to the appropriate new segment
+                    # based on the original keyframe positions and new segment boundaries
+                    for ref_idx, ref_instr in enumerate(vace_refs_instructions_all):
+                        original_segment_idx = ref_instr.get("segment_idx_for_naming", 0)
+
+                        # For now, assign all refs to the first (and often only) consolidated segment
+                        # This ensures the consolidated segment gets all the keyframe images
+                        new_segment_idx = 0 if num_segments == 1 else min(original_segment_idx, num_segments - 1)
+
+                        if original_segment_idx != new_segment_idx:
+                            dprint(f"[VACE_REFS_CONSOLIDATION] VACE ref {ref_idx}: segment {original_segment_idx} → {new_segment_idx}")
+                            ref_instr["segment_idx_for_naming"] = new_segment_idx
+
+                    dprint(f"[VACE_REFS_CONSOLIDATION] VACE refs updated for consolidated segments")
+
+                # Summary logging for optimization results
+                segments_saved = original_num_segments - num_segments
+                print(f"[FRAME_CONSOLIDATION] 🚀 OPTIMIZATION RESULTS:")
+                print(f"[FRAME_CONSOLIDATION]   📊 Segments: {original_num_segments} → {num_segments} (saved {segments_saved} segments)")
+                print(f"[FRAME_CONSOLIDATION]   📹 Original allocation: {original_segment_frames}")
+                print(f"[FRAME_CONSOLIDATION]   📹 Optimized allocation: {expanded_segment_frames}")
+                print(f"[FRAME_CONSOLIDATION]   🔗 Original overlaps: {original_frame_overlap}")
+                print(f"[FRAME_CONSOLIDATION]   🔗 Optimized overlaps: {expanded_frame_overlap}")
+                print(f"[FRAME_CONSOLIDATION]   ⚡ Efficiency gain: {segments_saved} fewer GPU model loads")
+
+                dprint(f"[FRAME_CONSOLIDATION] Successfully updated to {num_segments} optimized segments")
+            else:
+                print(f"[FRAME_CONSOLIDATION] ❌ Safety validation failed - parameters not identical enough")
+                dprint(f"[FRAME_CONSOLIDATION] Safety check failed - keeping original allocation")
+        else:
+            print(f"[FRAME_CONSOLIDATION] ℹ️  Parameters not identical - using standard allocation")
+            dprint(f"[FRAME_CONSOLIDATION] Parameters not identical - keeping original allocation")
+        # --- END FRAME CONSOLIDATION OPTIMIZATION ---
+
         # Loop to queue all segment tasks (skip existing ones for idempotency)
         segments_created = 0
         for idx in range(num_segments):
@@ -288,7 +666,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             if idx > 0 and not previous_segment_task_id:
                 fallback_prev = existing_segment_task_ids.get(idx - 1)
                 if fallback_prev:
-                    print(f"[DEBUG_DEPENDENCY_CHAIN] Fallback resolved previous DB ID for seg {idx-1} from existing_segment_task_ids: {fallback_prev}")
+                    dprint(f"[DEBUG_DEPENDENCY_CHAIN] Fallback resolved previous DB ID for seg {idx-1} from existing_segment_task_ids: {fallback_prev}")
                     actual_segment_db_id_by_index[idx - 1] = fallback_prev
                     previous_segment_task_id = fallback_prev
                 else:
@@ -298,18 +676,18 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                             if seg.get('params', {}).get('segment_index') == idx - 1:
                                 prev_from_db = seg.get('id')
                                 if prev_from_db:
-                                    print(f"[DEBUG_DEPENDENCY_CHAIN] DB fallback resolved previous DB ID for seg {idx-1}: {prev_from_db}")
+                                    dprint(f"[DEBUG_DEPENDENCY_CHAIN] DB fallback resolved previous DB ID for seg {idx-1}: {prev_from_db}")
                                     actual_segment_db_id_by_index[idx - 1] = prev_from_db
                                     previous_segment_task_id = prev_from_db
                                 break
                     except Exception as e_depdb:
-                        print(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not resolve previous DB ID for seg {idx-1} via DB fallback: {e_depdb}")
+                        dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not resolve previous DB ID for seg {idx-1} via DB fallback: {e_depdb}")
 
             # Skip if this segment already exists
             if idx in existing_segment_indices:
                 existing_db_id = existing_segment_task_ids[idx]
-                print(f"[IDEMPOTENCY] Skipping segment {idx} - already exists with ID {existing_db_id}")
-                print(f"[DEBUG_DEPENDENCY_CHAIN] Using existing DB ID for segment {idx}: {existing_db_id}; next segment will depend on this")
+                dprint(f"[IDEMPOTENCY] Skipping segment {idx} - already exists with ID {existing_db_id}")
+                dprint(f"[DEBUG_DEPENDENCY_CHAIN] Using existing DB ID for segment {idx}: {existing_db_id}; next segment will depend on this")
                 continue
                 
             segments_created += 1
@@ -333,10 +711,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             ]
 
             # [DEEP_DEBUG] Log orchestrator payload values BEFORE creating segment payload
-            print(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: CREATING SEGMENT {idx} PAYLOAD")
-            print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_causvid'): {orchestrator_payload.get('apply_causvid')}")
-            print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('use_lighti2x_lora'): {orchestrator_payload.get('use_lighti2x_lora')}")
-            print(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_reward_lora'): {orchestrator_payload.get('apply_reward_lora')}")
+            dprint(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: CREATING SEGMENT {idx} PAYLOAD")
+            dprint(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_causvid'): {orchestrator_payload.get('apply_causvid')}")
+            dprint(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('use_lighti2x_lora'): {orchestrator_payload.get('use_lighti2x_lora')}")
+            dprint(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_reward_lora'): {orchestrator_payload.get('apply_reward_lora')}")
             dprint(f"[DEEP_DEBUG] Orchestrator {orchestrator_task_id_str}: CREATING SEGMENT {idx} PAYLOAD")
             dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('apply_causvid'): {orchestrator_payload.get('apply_causvid')}")
             dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('use_lighti2x_lora'): {orchestrator_payload.get('use_lighti2x_lora')}")
@@ -396,6 +774,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "debug_mode_enabled": orchestrator_payload.get("debug_mode_enabled", False),
                 "skip_cleanup_enabled": orchestrator_payload.get("skip_cleanup_enabled", False),
                 "continue_from_video_resolved_path_for_guide": orchestrator_payload.get("continue_from_video_resolved_path") if idx == 0 else None,
+                "consolidated_end_anchor_idx": orchestrator_payload.get("_consolidated_end_anchors", [None] * num_segments)[idx] if orchestrator_payload.get("_consolidated_end_anchors") else None,
+                "consolidated_keyframe_positions": orchestrator_payload.get("_consolidated_keyframe_positions", [None] * num_segments)[idx] if orchestrator_payload.get("_consolidated_end_anchors") else None,
                 "full_orchestrator_payload": orchestrator_payload, # Ensure full payload is passed to segment
             }
             
@@ -407,11 +787,11 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 dprint(f"Orchestrator: Added additional_loras to segment {idx} payload: {extracted_params['additional_loras']}")
 
             # [DEEP_DEBUG] Log segment payload values AFTER creation to verify they match
-            print(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: SEGMENT {idx} PAYLOAD CREATED")
-            print(f"[ORCHESTRATOR_DEBUG]   segment_payload['use_causvid_lora']: {segment_payload.get('use_causvid_lora')}")
-            print(f"[ORCHESTRATOR_DEBUG]   segment_payload['use_lighti2x_lora']: {segment_payload.get('use_lighti2x_lora')}")
-            print(f"[ORCHESTRATOR_DEBUG]   segment_payload['apply_reward_lora']: {segment_payload.get('apply_reward_lora')}")
-            print(f"[ORCHESTRATOR_DEBUG]   FULL segment_payload keys: {list(segment_payload.keys())}")
+            dprint(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: SEGMENT {idx} PAYLOAD CREATED")
+            dprint(f"[ORCHESTRATOR_DEBUG]   segment_payload['use_causvid_lora']: {segment_payload.get('use_causvid_lora')}")
+            dprint(f"[ORCHESTRATOR_DEBUG]   segment_payload['use_lighti2x_lora']: {segment_payload.get('use_lighti2x_lora')}")
+            dprint(f"[ORCHESTRATOR_DEBUG]   segment_payload['apply_reward_lora']: {segment_payload.get('apply_reward_lora')}")
+            dprint(f"[ORCHESTRATOR_DEBUG]   FULL segment_payload keys: {list(segment_payload.keys())}")
             
             # [DEEP_DEBUG] Also log what we're about to send to the Edge Function
             # NOTE: task_id will be the actual DB row ID returned by add_task_to_db
@@ -425,7 +805,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             # [DEEP_DEBUG] Segment payload ready for add_task_to_db
             dprint(f"[DEEP_DEBUG] Segment payload keys: {list(segment_payload.keys())}")
 
-            print(f"[DEBUG_DEPENDENCY_CHAIN] Creating new segment {idx}, depends_on (prev idx {idx-1}): {previous_segment_task_id}")
+            dprint(f"[DEBUG_DEPENDENCY_CHAIN] Creating new segment {idx}, depends_on (prev idx {idx-1}): {previous_segment_task_id}")
             actual_db_row_id = db_ops.add_task_to_db(
                 task_payload=segment_payload, 
                 task_type_str="travel_segment",
@@ -433,13 +813,13 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             )
             # Record the actual DB ID so subsequent segments depend on the real DB row ID
             actual_segment_db_id_by_index[idx] = actual_db_row_id
-            print(f"[DEBUG_DEPENDENCY_CHAIN] New segment {idx} created with actual DB ID: {actual_db_row_id}; next segment will depend on this")
+            dprint(f"[DEBUG_DEPENDENCY_CHAIN] New segment {idx} created with actual DB ID: {actual_db_row_id}; next segment will depend on this")
             # Post-insert verification of dependency from DB
             try:
                 dep_saved = db_ops.get_task_dependency(actual_db_row_id)
-                print(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Segment {idx} saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
+                dprint(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Segment {idx} saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
             except Exception as e_ver:
-                print(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for seg {idx} ({actual_db_row_id}): {e_ver}")
+                dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for seg {idx} ({actual_db_row_id}): {e_ver}")
         
         # After loop, enqueue the stitch task (check for idempotency)
         stitch_created = 0
@@ -476,22 +856,22 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             
             # Stitch should depend on the last segment's actual DB row ID
             previous_segment_task_id = actual_segment_db_id_by_index.get(num_segments - 1)
-            print(f"[DEBUG_DEPENDENCY_CHAIN] Creating stitch task, depends_on (last seg idx {num_segments-1}): {previous_segment_task_id}")
+            dprint(f"[DEBUG_DEPENDENCY_CHAIN] Creating stitch task, depends_on (last seg idx {num_segments-1}): {previous_segment_task_id}")
             actual_stitch_db_row_id = db_ops.add_task_to_db(
                 task_payload=stitch_payload, 
                 task_type_str="travel_stitch",
                 dependant_on=previous_segment_task_id
             )
-            print(f"[DEBUG_DEPENDENCY_CHAIN] Stitch task created with actual DB ID: {actual_stitch_db_row_id}")
+            dprint(f"[DEBUG_DEPENDENCY_CHAIN] Stitch task created with actual DB ID: {actual_stitch_db_row_id}")
             # Post-insert verification of dependency from DB
             try:
                 dep_saved = db_ops.get_task_dependency(actual_stitch_db_row_id)
-                print(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Stitch saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
+                dprint(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Stitch saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
             except Exception as e_ver2:
-                print(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for stitch ({actual_stitch_db_row_id}): {e_ver2}")
+                dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for stitch ({actual_stitch_db_row_id}): {e_ver2}")
             stitch_created = 1
         else:
-            print(f"[IDEMPOTENCY] Skipping stitch task creation - already exists with ID {existing_stitch_task_id}")
+            dprint(f"[IDEMPOTENCY] Skipping stitch task creation - already exists with ID {existing_stitch_task_id}")
 
         generation_success = True
         if segments_created > 0 or stitch_created > 0:
@@ -729,13 +1109,13 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         # not just the new content. The overlap is handled internally for transition.
         total_frames_for_segment = base_duration
 
-        print(f"[SEGMENT_DEBUG] Segment {segment_idx} (Task {segment_task_id_str}): FRAME ANALYSIS")
-        print(f"[SEGMENT_DEBUG]   base_duration (segment_frames_target): {base_duration}")
-        print(f"[SEGMENT_DEBUG]   frame_overlap_from_previous: {frame_overlap_from_previous}")
-        print(f"[SEGMENT_DEBUG]   total_frames_for_segment: {total_frames_for_segment}")
-        print(f"[SEGMENT_DEBUG]   is_first_segment: {segment_params.get('is_first_segment', False)}")
-        print(f"[SEGMENT_DEBUG]   is_last_segment: {segment_params.get('is_last_segment', False)}")
-        print(f"[SEGMENT_DEBUG]   use_causvid_lora: {full_orchestrator_payload.get('apply_causvid', False)}")
+        dprint(f"[SEGMENT_DEBUG] Segment {segment_idx} (Task {segment_task_id_str}): FRAME ANALYSIS")
+        dprint(f"[SEGMENT_DEBUG]   base_duration (segment_frames_target): {base_duration}")
+        dprint(f"[SEGMENT_DEBUG]   frame_overlap_from_previous: {frame_overlap_from_previous}")
+        dprint(f"[SEGMENT_DEBUG]   total_frames_for_segment: {total_frames_for_segment}")
+        dprint(f"[SEGMENT_DEBUG]   is_first_segment: {segment_params.get('is_first_segment', False)}")
+        dprint(f"[SEGMENT_DEBUG]   is_last_segment: {segment_params.get('is_last_segment', False)}")
+        dprint(f"[SEGMENT_DEBUG]   use_causvid_lora: {full_orchestrator_payload.get('apply_causvid', False)}")
 
         fps_helpers = full_orchestrator_payload.get("fps_helpers", 16)
         fade_in_duration_str = full_orchestrator_payload["fade_in_params_json_str"]
@@ -1149,11 +1529,11 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                 
                 # Analyze final chained output
                 final_debug_info = debug_video_analysis(final_chained_path, f"FINAL_CHAINED_Seg{segment_idx}", segment_task_id_str)
-                print(f"[CHAIN_DEBUG] Segment {segment_idx}: FINAL CHAINED OUTPUT ANALYSIS")
-                print(f"[CHAIN_DEBUG]   Expected frames: {final_frames_for_wgp_generation}")
-                print(f"[CHAIN_DEBUG]   Final frames: {final_debug_info.get('frame_count', 'ERROR')}")
+                dprint(f"[CHAIN_DEBUG] Segment {segment_idx}: FINAL CHAINED OUTPUT ANALYSIS")
+                dprint(f"[CHAIN_DEBUG]   Expected frames: {final_frames_for_wgp_generation}")
+                dprint(f"[CHAIN_DEBUG]   Final frames: {final_debug_info.get('frame_count', 'ERROR')}")
                 if final_debug_info.get('frame_count') != final_frames_for_wgp_generation:
-                    print(f"[CHAIN_DEBUG]   ⚠️  CHAINING CHANGED FRAME COUNT! Expected {final_frames_for_wgp_generation}, got {final_debug_info.get('frame_count')}")
+                    dprint(f"[CHAIN_DEBUG]   ⚠️  CHAINING CHANGED FRAME COUNT! Expected {final_frames_for_wgp_generation}, got {final_debug_info.get('frame_count')}")
             else:
                 # Use raw WGP output if chaining failed
                 final_segment_video_output_path_str = wgp_output_path_or_msg
@@ -1520,7 +1900,6 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         initial_continued_video_path_str = full_orchestrator_payload.get("continue_from_video_resolved_path")
 
         # [OVERLAP DEBUG] Add detailed debug for overlap values
-        print(f"[OVERLAP DEBUG] Stitch: expanded_frame_overlaps from payload: {expanded_frame_overlaps}")
         dprint(f"[OVERLAP DEBUG] Stitch: expanded_frame_overlaps from payload: {expanded_frame_overlaps}")
 
         # Extract upscale parameters
@@ -1580,22 +1959,19 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         # ------------------------------------------------------------------
         # 2b. Resolve each returned video path (local, SQLite-relative, or URL)
         # ------------------------------------------------------------------
-        print(f"[STITCH_DEBUG] Starting path resolution for {len(completed_segment_outputs_from_db)} segments")
-        print(f"[STITCH_DEBUG] Raw DB results: {completed_segment_outputs_from_db}")
-        dprint(f"[DEBUG] Starting path resolution for {len(completed_segment_outputs_from_db)} segments")
+        dprint(f"[STITCH_DEBUG] Starting path resolution for {len(completed_segment_outputs_from_db)} segments")
+        dprint(f"[STITCH_DEBUG] Raw DB results: {completed_segment_outputs_from_db}")
         for seg_idx, video_path_str_from_db in completed_segment_outputs_from_db:
-            print(f"[STITCH_DEBUG] Processing segment {seg_idx} with path: {video_path_str_from_db}")
-            dprint(f"[DEBUG] Processing segment {seg_idx} with path: {video_path_str_from_db}")
+            dprint(f"[STITCH_DEBUG] Processing segment {seg_idx} with path: {video_path_str_from_db}")
             resolved_video_path_for_stitch: Path | None = None
 
             if not video_path_str_from_db:
-                print(f"[STITCH_DEBUG] WARNING: Segment {seg_idx} has empty video_path in DB; skipping.")
-                dprint(f"[WARNING] Stitch: Segment {seg_idx} has empty video_path in DB; skipping.")
+                dprint(f"[STITCH_DEBUG] WARNING: Segment {seg_idx} has empty video_path in DB; skipping.")
                 continue
 
             # Case A: Relative path that starts with files/ (works for both sqlite and supabase when worker has local access)
             if video_path_str_from_db.startswith("files/") or video_path_str_from_db.startswith("public/files/"):
-                print(f"[STITCH_DEBUG] Case A: Relative path detected for segment {seg_idx}")
+                dprint(f"[STITCH_DEBUG] Case A: Relative path detected for segment {seg_idx}")
                 sqlite_db_parent = None
                 if db_ops.SQLITE_DB_PATH:
                     sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
@@ -1696,17 +2072,17 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         dprint(f"[DEBUG] Final segment_video_paths_for_stitch: {segment_video_paths_for_stitch}")
         dprint(f"[DEBUG] Total videos collected: {len(segment_video_paths_for_stitch)}")
         # [CRITICAL DEBUG] Log each video's frame count before stitching
-        print(f"[CRITICAL DEBUG] About to stitch videos:")
+        dprint(f"[CRITICAL DEBUG] About to stitch videos:")
         expected_segment_frames = full_orchestrator_payload["segment_frames_expanded"]
         for idx, video_path in enumerate(segment_video_paths_for_stitch):
             try:
                 frame_count, fps = sm_get_video_frame_count_and_fps(video_path)
                 expected_frames = expected_segment_frames[idx] if idx < len(expected_segment_frames) else "unknown"
-                print(f"[CRITICAL DEBUG] Video {idx}: {video_path} -> {frame_count} frames @ {fps} FPS (expected: {expected_frames})")
+                dprint(f"[CRITICAL DEBUG] Video {idx}: {video_path} -> {frame_count} frames @ {fps} FPS (expected: {expected_frames})")
                 if expected_frames != "unknown" and frame_count != expected_frames:
-                    print(f"[CRITICAL DEBUG] ⚠️  FRAME COUNT MISMATCH! Expected {expected_frames}, got {frame_count}")
+                    dprint(f"[CRITICAL DEBUG] ⚠️  FRAME COUNT MISMATCH! Expected {expected_frames}, got {frame_count}")
             except Exception as e_debug:
-                print(f"[CRITICAL DEBUG] Video {idx}: {video_path} -> ERROR: {e_debug}")
+                dprint(f"[CRITICAL DEBUG] Video {idx}: {video_path} -> ERROR: {e_debug}")
 
         total_videos_for_stitch = (1 if initial_continued_video_path_str and Path(initial_continued_video_path_str).exists() else 0) + num_expected_new_segments
         dprint(f"[DEBUG] Expected total videos: {total_videos_for_stitch}")
@@ -1747,12 +2123,12 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 actual_overlaps_for_stitching = expanded_frame_overlaps[:num_stitch_points]
             
             # --- NEW OVERLAP DEBUG LOGGING ---
-            print(f"[OVERLAP DEBUG] Number of videos: {len(segment_video_paths_for_stitch)} (expected stitch points: {num_stitch_points})")
-            print(f"[OVERLAP DEBUG] actual_overlaps_for_stitching: {actual_overlaps_for_stitching}")
+            dprint(f"[OVERLAP DEBUG] Number of videos: {len(segment_video_paths_for_stitch)} (expected stitch points: {num_stitch_points})")
+            dprint(f"[OVERLAP DEBUG] actual_overlaps_for_stitching: {actual_overlaps_for_stitching}")
             if len(actual_overlaps_for_stitching) != num_stitch_points:
-                print(f"[OVERLAP DEBUG] ⚠️  MISMATCH! We have {len(actual_overlaps_for_stitching)} overlaps for {num_stitch_points} joins")
+                dprint(f"[OVERLAP DEBUG] ⚠️  MISMATCH! We have {len(actual_overlaps_for_stitching)} overlaps for {num_stitch_points} joins")
             for join_idx, ov in enumerate(actual_overlaps_for_stitching):
-                print(f"[OVERLAP DEBUG]   Join {join_idx} (video {join_idx} -> {join_idx+1}): overlap={ov}")
+                dprint(f"[OVERLAP DEBUG]   Join {join_idx} (video {join_idx} -> {join_idx+1}): overlap={ov}")
             # --- END NEW LOGGING ---
             
             any_positive_overlap = any(o > 0 for o in actual_overlaps_for_stitching)
@@ -2052,13 +2428,48 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         # so the stitched video will automatically include them. No additional overlay needed here.
         
         stitch_success = True
-        
+
+        # --- Cleanup Downloaded Segment Files ---
+        cleanup_enabled = (
+            not full_orchestrator_payload.get("skip_cleanup_enabled", False) and
+            not full_orchestrator_payload.get("debug_mode_enabled", False) and
+            not db_ops.debug_mode
+        )
+
+        if cleanup_enabled:
+            files_cleaned = 0
+            total_size_cleaned = 0
+
+            for video_path_str in segment_video_paths_for_stitch:
+                video_path = Path(video_path_str)
+
+                # Skip the initial continued video (not downloaded)
+                if (initial_continued_video_path_str and
+                    str(video_path.resolve()) == str(Path(initial_continued_video_path_str).resolve())):
+                    continue
+
+                # Only delete files in our processing directory (downloaded files)
+                if video_path.exists() and stitch_processing_dir in video_path.parents:
+                    try:
+                        file_size = video_path.stat().st_size
+                        video_path.unlink()
+                        files_cleaned += 1
+                        total_size_cleaned += file_size
+                        dprint(f"Stitch: Cleaned up downloaded segment {video_path.name} ({file_size:,} bytes)")
+                    except Exception as e_cleanup:
+                        dprint(f"Stitch: Failed to clean up {video_path}: {e_cleanup}")
+
+            if files_cleaned > 0:
+                print(f"[STITCH_CLEANUP] Removed {files_cleaned} downloaded files ({total_size_cleaned:,} bytes)")
+        else:
+            print(f"[STITCH_CLEANUP] Skipping cleanup (debug mode or cleanup disabled)")
+
         # Note: The orchestrator will be marked as complete by the Edge Function
         # when it processes the stitch task upload. This ensures atomic completion
         # with the final video upload.
         print(f"[ORCHESTRATOR_COMPLETION_DEBUG] Stitch task complete. Orchestrator {orchestrator_task_id_ref} will be marked complete by Edge Function.")
         dprint(f"Stitch: Task complete. Orchestrator completion will be handled by Edge Function.")
-        
+
         # Return the final video path so the stitch task itself gets uploaded via Edge Function
         return stitch_success, str(final_video_path.resolve())
 

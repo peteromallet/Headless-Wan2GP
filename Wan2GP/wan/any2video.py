@@ -442,6 +442,17 @@ class WanAny2V:
                 sample_scheduler,
                 device=self.device,
                 sigmas=sampling_sigmas)
+        elif sample_solver == 'dpm++_sde':
+            sample_scheduler = FlowDPMSolverMultistepScheduler(
+                num_train_timesteps=self.num_train_timesteps,
+                algorithm_type="sde-dpmsolver++",
+                shift=1,
+                use_dynamic_shifting=False)
+            sampling_sigmas = get_sampling_sigmas(sampling_steps, shift)
+            timesteps, _ = retrieve_timesteps(
+                sample_scheduler,
+                device=self.device,
+                sigmas=sampling_sigmas)
         else:
             raise NotImplementedError(f"Unsupported Scheduler {sample_solver}")
 
