@@ -9,7 +9,7 @@
 			"https://huggingface.co/DeepBeepMeep/LTX_Video/resolve/main/ltxv_0.9.8_13B_distilled_quanto_bf16_int8.safetensors"
 			],
 		"preload_URLs" : "ltxv_13B",		
-		"LTXV_config": "ltx_video/configs/ltxv-13b-0.9.8-distilled.yaml"
+		"LTXV_config": "models/ltx_video/configs/ltxv-13b-0.9.8-distilled.yaml"
 	},
 	"num_inference_steps": 6
 }

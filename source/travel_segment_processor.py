@@ -112,8 +112,13 @@ class TravelSegmentProcessor:
             is_first_segment = ctx.segment_params.get("is_first_segment", ctx.segment_idx == 0)
             is_first_segment_from_scratch = is_first_segment and not ctx.full_orchestrator_payload.get("continue_from_video_resolved_path")
             
-            # Calculate end anchor image index
-            end_anchor_img_path_str_idx = ctx.segment_idx + 1
+            # Calculate end anchor image index - use consolidated end anchor if available
+            consolidated_end_anchor = ctx.segment_params.get("consolidated_end_anchor_idx")
+            if consolidated_end_anchor is not None:
+                end_anchor_img_path_str_idx = consolidated_end_anchor
+                ctx.dprint(f"[CONSOLIDATED_SEGMENT] Using consolidated end anchor index {consolidated_end_anchor} for segment {ctx.segment_idx}")
+            else:
+                end_anchor_img_path_str_idx = ctx.segment_idx + 1
             
             # Create guide video using shared function
             guide_video_path = sm_create_guide_video_for_travel_segment(
@@ -203,7 +208,16 @@ class TravelSegmentProcessor:
                 ctx.dprint(f"Seg {ctx.segment_idx}: Multi-image journey - marking last frame {ctx.total_frames_for_segment - 1} as inactive (target image)")
             else:
                 ctx.dprint(f"Seg {ctx.segment_idx}: Single image journey - NOT marking last frame as inactive, letting model generate freely")
-            
+
+            # 4) Consolidated keyframe positions (frame consolidation optimization)
+            consolidated_keyframe_positions = ctx.segment_params.get("consolidated_keyframe_positions")
+            if consolidated_keyframe_positions:
+                # Mark all keyframe positions as inactive since they should show exact keyframe images
+                for frame_pos in consolidated_keyframe_positions:
+                    if 0 <= frame_pos < ctx.total_frames_for_segment:
+                        inactive_indices.add(frame_pos)
+                ctx.dprint(f"Seg {ctx.segment_idx}: CONSOLIDATED SEGMENT - marking keyframe positions as inactive: {consolidated_keyframe_positions}")
+
             # --- DEBUG LOGGING (restored from original) ---
             ctx.dprint(f"[MASK_DEBUG] Segment {ctx.segment_idx}: frame_overlap_from_previous={frame_overlap_from_previous}")
             ctx.dprint(f"[MASK_DEBUG] Segment {ctx.segment_idx}: inactive (masked) frame indices: {sorted(list(inactive_indices))}")

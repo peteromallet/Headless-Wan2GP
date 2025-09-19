@@ -10,7 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Optional, Union
 import matplotlib
-matplotlib.use('Agg')  # Use non-GUI backend for headless environments 
+matplotlib.use('TkAgg') 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
