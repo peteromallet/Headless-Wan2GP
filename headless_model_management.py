@@ -28,6 +28,14 @@ Usage:
 import os
 import sys
 import time
+
+# Import debug print function from worker
+try:
+    from worker import dprint
+except ImportError:
+    def dprint(msg):
+        if os.environ.get('DEBUG'):
+            print(msg)
 import json
 import threading
 import queue
@@ -46,7 +54,6 @@ def setup_wgp_path(wan_dir: str):
     wan_dir = os.path.abspath(wan_dir)
     if wan_dir not in sys.path:
         sys.path.insert(0, wan_dir)
-    os.chdir(wan_dir)
     return wan_dir
 
 # Task definitions
@@ -104,9 +111,52 @@ class HeadlessTaskQueue:
         # Import wgp after path setup (protect sys.argv to prevent argument conflicts)
         _saved_argv = sys.argv[:]
         sys.argv = ["headless_wgp.py"]
-        import wgp
-        sys.argv = _saved_argv
-        self.wgp = wgp
+        # Headless stubs to avoid optional UI deps (tkinter/matanyone) during import
+        try:
+            import types
+            # Stub tkinter if not available
+            if 'tkinter' not in sys.modules:
+                sys.modules['tkinter'] = types.ModuleType('tkinter')
+            # Stub preprocessing.matanyone.app with minimal interface
+            dummy_pkg = types.ModuleType('preprocessing')
+            dummy_matanyone = types.ModuleType('preprocessing.matanyone')
+            dummy_app = types.ModuleType('preprocessing.matanyone.app')
+            def _noop_handler():
+                class _Dummy:
+                    def __getattr__(self, _):
+                        return None
+                return _Dummy()
+            dummy_app.get_vmc_event_handler = _noop_handler  # type: ignore
+            sys.modules['preprocessing'] = dummy_pkg
+            sys.modules['preprocessing.matanyone'] = dummy_matanyone
+            sys.modules['preprocessing.matanyone.app'] = dummy_app
+        except Exception:
+            pass
+        # Import wgp lazily; allow running without it in smoke mode
+        self.wgp = None
+        try:
+            # Change to WanGP directory before importing to ensure model definitions load correctly
+            _saved_cwd = os.getcwd()
+            os.chdir(self.wan_dir)
+            try:
+                import wgp  # type: ignore
+                self.wgp = wgp
+            finally:
+                # Restore original working directory
+                os.chdir(_saved_cwd)
+        except Exception as e:
+            # If smoke mode is enabled, continue without wgp (orchestrator handles it)
+            if os.environ.get("HEADLESS_WAN2GP_SMOKE", ""):
+                logging.getLogger('HeadlessQueue').warning(
+                    f"WGP not available ({e}); continuing in smoke mode without direct wgp import")
+            else:
+                # Re-raise in real mode where wgp is required
+                raise
+        finally:
+            try:
+                sys.argv = _saved_argv
+            except Exception:
+                pass
         
         # Import our orchestrator
         from headless_wgp import WanOrchestrator
@@ -356,17 +406,32 @@ class HeadlessTaskQueue:
             # 2. Delegate actual generation to orchestrator
             # The orchestrator handles the heavy lifting while we manage the queue
             result_path = self._execute_generation(task, worker_name)
-            
-            # 3. Update task status
+
+            # 3. Validate output and update task status
             processing_time = time.time() - start_time
+            is_success = bool(result_path)
+            try:
+                if is_success:
+                    # If a path was returned, check existence where possible
+                    rp = Path(result_path)
+                    is_success = rp.exists()
+            except Exception:
+                # If any exception while checking, keep prior truthiness
+                pass
+
             with self.queue_lock:
-                task.status = "completed"
-                task.result_path = result_path
                 task.processing_time = processing_time
-                self.stats["tasks_completed"] += 1
-                self.stats["total_generation_time"] += processing_time
-            
-            self.logger.info(f"Task {task.id} completed in {processing_time:.1f}s: {result_path}")
+                if is_success:
+                    task.status = "completed"
+                    task.result_path = result_path
+                    self.stats["tasks_completed"] += 1
+                    self.stats["total_generation_time"] += processing_time
+                    self.logger.info(f"Task {task.id} completed in {processing_time:.1f}s: {result_path}")
+                else:
+                    task.status = "failed"
+                    task.error_message = "No output generated"
+                    self.stats["tasks_failed"] += 1
+                    self.logger.error(f"Task {task.id} failed after {processing_time:.1f}s: No output generated")
             
         except Exception as e:
             # Handle task failure
@@ -426,12 +491,12 @@ class HeadlessTaskQueue:
         generation_params = {k: v for k, v in wgp_params.items() if k not in ("model", "prompt")}
         
         # Log generation parameters for debugging
-        self.logger.info(f"[GENERATION_DEBUG] Task {task.id}: Generation parameters:")
+        dprint(f"[GENERATION_DEBUG] Task {task.id}: Generation parameters:")
         for key, value in generation_params.items():
             if key in ["video_guide", "video_mask", "image_refs"]:
-                self.logger.info(f"[GENERATION_DEBUG]   {key}: {value}")
+                dprint(f"[GENERATION_DEBUG]   {key}: {value}")
             elif key in ["video_length", "resolution", "num_inference_steps"]:
-                self.logger.info(f"[GENERATION_DEBUG]   {key}: {value}")
+                dprint(f"[GENERATION_DEBUG]   {key}: {value}")
         
         # Determine generation type and delegate
         try:
@@ -439,11 +504,11 @@ class HeadlessTaskQueue:
             model_supports_vace = self._model_supports_vace(task.model)
             
             if model_supports_vace:
-                self.logger.info(f"[GENERATION_DEBUG] Task {task.id}: Using VACE generation path")
+                dprint(f"[GENERATION_DEBUG] Task {task.id}: Using VACE generation path")
                 
                 # CRITICAL: VACE models require a video_guide parameter
                 if "video_guide" in generation_params and generation_params["video_guide"]:
-                    self.logger.info(f"[GENERATION_DEBUG] Task {task.id}: Video guide provided: {generation_params['video_guide']}")
+                    dprint(f"[GENERATION_DEBUG] Task {task.id}: Video guide provided: {generation_params['video_guide']}")
                 else:
                     error_msg = f"VACE model '{task.model}' requires a video_guide parameter but none was provided. VACE models cannot perform pure text-to-video generation."
                     self.logger.error(f"[GENERATION_DEBUG] Task {task.id}: {error_msg}")
@@ -455,7 +520,7 @@ class HeadlessTaskQueue:
                     **generation_params
                 )
             elif self.orchestrator._is_flux():
-                self.logger.info(f"[GENERATION_DEBUG] Task {task.id}: Using Flux generation path")
+                dprint(f"[GENERATION_DEBUG] Task {task.id}: Using Flux generation path")
                 
                 # For Flux, map video_length to num_images
                 if "video_length" in generation_params:
@@ -467,7 +532,7 @@ class HeadlessTaskQueue:
                     **generation_params
                 )
             else:
-                self.logger.info(f"[GENERATION_DEBUG] Task {task.id}: Using T2V generation path")
+                dprint(f"[GENERATION_DEBUG] Task {task.id}: Using T2V generation path")
                 
                 # T2V or other models - pass model_type for proper parameter resolution
                 result = self.orchestrator.generate_t2v(
@@ -665,14 +730,20 @@ class HeadlessTaskQueue:
             "seed": "seed",
             "video_guide": "video_guide",
             "video_mask": "video_mask",
-            "video_guide2": "video_guide2",
-            "video_mask2": "video_mask2", 
+            "image_guide": "image_guide",
+            "image_mask": "image_mask",
             "video_prompt_type": "video_prompt_type",
             "control_net_weight": "control_net_weight",
             "control_net_weight2": "control_net_weight2",
             "embedded_guidance_scale": "embedded_guidance_scale",
             "denoise_strength": "denoising_strength",  # Map LightI2X parameter name
             "guidance2_scale": "guidance2_scale",
+            "guidance3_scale": "guidance3_scale",
+            "switch_threshold2": "switch_threshold2",
+            "guidance_phases": "guidance_phases",
+            "model_switch_phase": "model_switch_phase",
+            "image_refs_relative_size": "image_refs_relative_size",
+            "override_profile": "override_profile",
             "sample_solver": "sample_solver",
             "lora_names": "lora_names",
             "lora_multipliers": "lora_multipliers",
@@ -680,25 +751,40 @@ class HeadlessTaskQueue:
         
 
         
+        # Helper: resolve media paths preferring repo root over Wan2GP cwd
+        def _resolve_media_path(val: str) -> Optional[str]:
+            if not val:
+                return None
+            p = Path(val)
+            try:
+                if p.is_absolute():
+                    return str(p.resolve()) if p.exists() else None
+                repo_root = Path(__file__).parent
+                wan_root = Path.cwd()
+                # Prefer repo root for relative paths (one level up from Wan2GP)
+                candidate = repo_root / p
+                if candidate.exists():
+                    return str(candidate.resolve())
+                candidate = wan_root / p
+                if candidate.exists():
+                    return str(candidate.resolve())
+            except Exception:
+                return None
+            return None
+
         # Map parameters with proper defaults
         for our_param, wgp_param in param_mapping.items():
             if our_param in task.parameters:
                 value = task.parameters[our_param]
                 
                 # Special handling for file path parameters
-                if our_param in ["video_guide", "video_mask", "video_guide2", "video_mask2"] and value:
-                    # Ensure path exists and convert to absolute path
-                    try:
-                        path_obj = Path(value)
-                        if path_obj.exists():
-                            wgp_params[wgp_param] = str(path_obj.resolve())
-                            self.logger.info(f"[PARAM_DEBUG] Task {task.id}: {our_param} path validated: {wgp_params[wgp_param]}")
-                        else:
-                            self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: {our_param} path does not exist: {value}")
-                            # Don't include invalid paths
-                            continue
-                    except Exception as e:
-                        self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Error processing {our_param} path '{value}': {e}")
+                if our_param in ["video_guide", "video_mask", "image_guide", "image_mask"] and value:
+                    resolved = _resolve_media_path(str(value))
+                    if resolved:
+                        wgp_params[wgp_param] = resolved
+                        self.logger.info(f"[PARAM_DEBUG] Task {task.id}: {our_param} path resolved: {resolved}")
+                    else:
+                        self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: {our_param} not found at '{value}' (checked repo and Wan2GP); skipping")
                         continue
                 
                 # Special handling for image references
@@ -749,7 +835,7 @@ class HeadlessTaskQueue:
         # Ensure additional_loras is forwarded so LoRA processing can normalize/download them
         if "additional_loras" in task.parameters:
             wgp_params["additional_loras"] = task.parameters["additional_loras"]
-            self.logger.info(f"[LORA_PROCESS] Task {task.id}: Forwarded {len(task.parameters['additional_loras'])} additional LoRAs to processor")
+            dprint(f"[LORA_PROCESS] Task {task.id}: Forwarded {len(task.parameters['additional_loras'])} additional LoRAs to processor")
         
         # Parameter resolution is now handled by WanOrchestrator._resolve_parameters()
         # This provides clean separation: HeadlessTaskQueue manages tasks, WanOrchestrator handles parameters
@@ -768,7 +854,7 @@ class HeadlessTaskQueue:
         from lora_utils import process_all_loras
         
         # Use centralized LoRA processing pipeline
-        self.logger.info(f"[LORA_PROCESS] Task {task.id}: Starting centralized LoRA processing for model {task.model}")
+        dprint(f"[LORA_PROCESS] Task {task.id}: Starting centralized LoRA processing for model {task.model}")
         
         wgp_params = process_all_loras(
             params=wgp_params,
@@ -776,10 +862,10 @@ class HeadlessTaskQueue:
             model_name=task.model,
             orchestrator_payload=task.parameters.get("orchestrator_payload"),
             task_id=task.id,
-            dprint=lambda msg: self.logger.info(f"[LORA_PROCESS] {msg}")
+            dprint=dprint
         )
         
-        self.logger.info(f"[LORA_PROCESS] Task {task.id}: Centralized LoRA processing complete")
+        dprint(f"[LORA_PROCESS] Task {task.id}: Centralized LoRA processing complete")
 
         
         return wgp_params

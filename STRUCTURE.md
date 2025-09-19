@@ -334,6 +334,8 @@ Task-specific wrappers around the bulky upstream logic. These are imported by `w
 
 **Git Submodule** pointing to the upstream [deepbeepmeep/Wan2GP](https://github.com/deepbeepmeep/Wan2GP) repository. This contains the video-generation engine (`wgp.py`) together with model checkpoints, inference helpers, preprocessing code, and assorted assets.
 
+Updated to upstream commit 9fa267087b2dfdba651fd173325537f031edf91d on 2025-09-12T20:39:26+00:00.
+
 `wgp.py` is capable of the following AI processes:
 *   Wan2.1 text2video (1.3B & 14B): Standard text-to-video generation.
 *   Wan2.1 image2video (480p & 720p, 14B): Standard image-to-video generation.
