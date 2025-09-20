@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Test vace_fun_14B_cocktail_lightning model with parameter variations in new order:
-1. Flow shift (3-5, every 1)
+1. Flow shift (3-8, every 1)
 2. HIGH lightning LoRA at 1.0 strength
 3. CFG guidance (1.0-1.5, every 0.25)
 4. Switch threshold (600-900, every 100)
 5. LoRA strength (2.0-3.0, every 0.5)
-6. Reward LoRA strength (0.3-0.5, every 0.1)
+6. Reward LoRA strength (1.0-0.25, every 0.25)
 """
 
 import json
@@ -24,11 +24,16 @@ from source.common_utils import generate_unique_task_id
 from headless_wgp import WanOrchestrator
 
 
-def generate_test_configurations():
-    """Generate all test configurations with parameter variations."""
+def generate_test_configurations(video_numbers=[1, 2], test_phases=['flow_shift', 'high_lightning', 'cfg_guidance', 'switch_threshold', 'lora_strength', 'reward_lora_strength']):
+    """Generate all test configurations with parameter variations.
 
-    # Define video configurations with specific videos, masks, and resolutions
-    video_configs = [
+    Args:
+        video_numbers: List of video numbers to test with (1, 2, or both)
+        test_phases: List of test phases to include
+    """
+
+    # Define all video configurations
+    all_video_configs = [
         {
             "video": "samples/video1.mp4",
             "mask": "samples/mask1.mp4",
@@ -42,6 +47,9 @@ def generate_test_configurations():
             "video_number": 2
         }
     ]
+
+    # Filter video configurations based on requested video numbers
+    video_configs = [config for config in all_video_configs if config["video_number"] in video_numbers]
 
     base_config = {
         "model": "vace_fun_14B_cocktail_lightning",
@@ -61,7 +69,7 @@ def generate_test_configurations():
             "negative_prompt": "blurry, low quality, distorted, static, overexposed",
             "control_net_weight": 1.0,
             "control_net_weight2": 1.0,
-            "sample_solver": "euler"  # Updated to use euler as default
+            "sample_solver": "unipc"  # Updated to use unipc as default
         }
     }
 
@@ -69,44 +77,46 @@ def generate_test_configurations():
     test_id = 1
     base_switch_threshold = 875  # Use the default from the model config
 
-    # Phase 1: Test flow_shift variations (3-5, every 1)
-    print("Generating Phase 1: Flow shift variations...")
+    # Phase 1: Test flow_shift variations (3-8, every 1)
+    if 'flow_shift' in test_phases:
+        print("Generating Phase 1: Flow shift variations...")
 
-    for flow_shift in range(3, 6):  # 3, 4, 5
-        # Create test for each video configuration
-        for video_config in base_config["video_configs"]:
-            # Set prompt based on video number
-            prompt = "zooming out timelapse of a plant growing as the sun fades and the moon moves across the sky and becomes the sun, timlapsiagro" if video_config["video_number"] == 1 else "he turns around and runs to the other painting"
+        for flow_shift in range(3, 9):  # 3, 4, 5, 6, 7, 8
+            # Create test for each video configuration
+            for video_config in base_config["video_configs"]:
+                # Set prompt based on video number
+                prompt = "zooming out timelapse of a plant growing as the sun fades and the moon moves across the sky and becomes the sun, timlapsiagro" if video_config["video_number"] == 1 else "he turns around and runs to the other painting"
 
-            config = {
-                **base_config,
-                "test_id": test_id,
-                "phase": "flow_shift",
-                "video": video_config["video"],
-                "mask": video_config["mask"],
-                "video_number": video_config["video_number"],
-                "prompt": prompt,
-                "variation": f"flow_shift_{flow_shift}_video{video_config['video_number']}",
-                "description": f"Flow shift: {flow_shift} (video{video_config['video_number']})",
-                "params": {
-                    **base_config["base_params"],
-                    "resolution": video_config["resolution"],
-                    "switch_threshold": base_switch_threshold,
-                    "flow_shift": flow_shift,
-                    # Add bloom LoRA for video1
-                    **({
-                        "activated_loras": ["Wan2GP/loras/bloom.safetensors"],
-                        "loras_multipliers": "1.3"
-                    } if video_config["video_number"] == 1 else {})
+                config = {
+                    **base_config,
+                    "test_id": test_id,
+                    "phase": "flow_shift",
+                    "video": video_config["video"],
+                    "mask": video_config["mask"],
+                    "video_number": video_config["video_number"],
+                    "prompt": prompt,
+                    "variation": f"flow_shift_{flow_shift}_video{video_config['video_number']}",
+                    "description": f"Flow shift: {flow_shift} (video{video_config['video_number']})",
+                    "params": {
+                        **base_config["base_params"],
+                        "resolution": video_config["resolution"],
+                        "switch_threshold": base_switch_threshold,
+                        "flow_shift": flow_shift,
+                        # Add bloom LoRA for video1
+                        **({
+                            "activated_loras": ["Wan2GP/loras/bloom.safetensors"],
+                            "loras_multipliers": "1.3"
+                        } if video_config["video_number"] == 1 else {})
+                    }
                 }
-            }
-            test_configs.append(config)
-            test_id += 1
+                test_configs.append(config)
+                test_id += 1
 
     # Phase 2: Test with HIGH lightning LoRA at 1.0 strength
-    print("Generating Phase 2: HIGH lightning LoRA test...")
-    # Create test for each video configuration
-    for video_config in base_config["video_configs"]:
+    if 'high_lightning' in test_phases:
+        print("Generating Phase 2: HIGH lightning LoRA test...")
+        # Create test for each video configuration
+        for video_config in base_config["video_configs"]:
         # Set prompt based on video number
         prompt = "zooming out timelapse of a plant growing as the sun fades and the moon moves across the sky and becomes the sun, timlapsiagro" if video_config["video_number"] == 1 else "he turns around and runs to the other painting"
 
@@ -138,7 +148,8 @@ def generate_test_configurations():
         test_id += 1
 
     # Phase 3: Test CFG guidance variations (1.0-1.5, every 0.25)
-    print("Generating Phase 3: CFG guidance variations...")
+    if 'cfg_guidance' in test_phases:
+        print("Generating Phase 3: CFG guidance variations...")
 
     # Generate guidance values: 1.0, 1.25, 1.5
     guidance_values = [round(1.0 + (i * 0.25), 2) for i in range(3)]  # [1.0, 1.25, 1.5]
@@ -176,7 +187,8 @@ def generate_test_configurations():
             test_id += 1
 
     # Phase 4: Test switch threshold variations (600-900, every 100)
-    print("Generating Phase 4: Switch threshold variations...")
+    if 'switch_threshold' in test_phases:
+        print("Generating Phase 4: Switch threshold variations...")
     for switch_threshold in range(600, 1000, 100):  # 600, 700, 800, 900
         # Create test for each video configuration
         for video_config in base_config["video_configs"]:
@@ -208,7 +220,8 @@ def generate_test_configurations():
             test_id += 1
 
     # Phase 5: Test first LoRA strength variations (2.0-3.0, every 0.5)
-    print("Generating Phase 5: First LoRA strength variations...")
+    if 'lora_strength' in test_phases:
+        print("Generating Phase 5: First LoRA strength variations...")
 
     # Generate strength values: 2.0, 2.5, 3.0
     strength_values = [round(2.0 + (i * 0.5), 1) for i in range(3)]  # [2.0, 2.5, 3.0]
@@ -245,11 +258,12 @@ def generate_test_configurations():
             test_configs.append(config)
             test_id += 1
 
-    # Phase 6: Test reward LoRA strength variations (0.3-0.5, every 0.1)
-    print("Generating Phase 6: Reward LoRA strength variations...")
+    # Phase 6: Test reward LoRA strength variations (1.0-0.25, every 0.25)
+    if 'reward_lora_strength' in test_phases:
+        print("Generating Phase 6: Reward LoRA strength variations...")
 
-    # Generate strength values: 0.3, 0.4, 0.5
-    reward_strength_values = [round(0.3 + (i * 0.1), 1) for i in range(3)]  # [0.3, 0.4, 0.5]
+        # Generate strength values: 1.0, 0.75, 0.5, 0.25
+        reward_strength_values = [round(1.0 - (i * 0.25), 2) for i in range(4)]  # [1.0, 0.75, 0.5, 0.25]
 
     for reward_strength in reward_strength_values:
         # Create test for each video configuration
@@ -284,25 +298,48 @@ def generate_test_configurations():
             test_id += 1
 
     print(f"Generated {len(test_configs)} test configurations:")
-    print(f"  - Phase 1 (Flow shift): 6 tests (3 parameters × 2 videos)")
-    print(f"  - Phase 2 (HIGH lightning): 2 tests (1 parameter × 2 videos)")
-    print(f"  - Phase 3 (CFG guidance): 6 tests (3 parameters × 2 videos)")
-    print(f"  - Phase 4 (Switch threshold): 8 tests (4 parameters × 2 videos)")
-    print(f"  - Phase 5 (LoRA strength): 6 tests (3 parameters × 2 videos)")
-    print(f"  - Phase 6 (Reward LoRA strength): 6 tests (3 parameters × 2 videos)")
-    print(f"  - Total: {len(test_configs)} tests using both video1.mp4 and video2.mp4")
+
+    # Count tests per phase
+    phase_counts = {}
+    for config in test_configs:
+        phase = config['phase']
+        phase_counts[phase] = phase_counts.get(phase, 0) + 1
+
+    # Display counts for included phases
+    if 'flow_shift' in test_phases and 'flow_shift' in phase_counts:
+        print(f"  - Phase 1 (Flow shift): {phase_counts['flow_shift']} tests ({len(range(3, 9))} parameters × {len(video_configs)} videos)")
+    if 'high_lightning' in test_phases and 'high_lightning' in phase_counts:
+        print(f"  - Phase 2 (HIGH lightning): {phase_counts['high_lightning']} tests (1 parameter × {len(video_configs)} videos)")
+    if 'cfg_guidance' in test_phases and 'cfg_guidance' in phase_counts:
+        print(f"  - Phase 3 (CFG guidance): {phase_counts['cfg_guidance']} tests (3 parameters × {len(video_configs)} videos)")
+    if 'switch_threshold' in test_phases and 'switch_threshold' in phase_counts:
+        print(f"  - Phase 4 (Switch threshold): {phase_counts['switch_threshold']} tests (4 parameters × {len(video_configs)} videos)")
+    if 'lora_strength' in test_phases and 'lora_strength' in phase_counts:
+        print(f"  - Phase 5 (LoRA strength): {phase_counts['lora_strength']} tests (3 parameters × {len(video_configs)} videos)")
+    if 'reward_lora_strength' in test_phases and 'reward_lora_strength' in phase_counts:
+        print(f"  - Phase 6 (Reward LoRA strength): {phase_counts['reward_lora_strength']} tests (4 parameters × {len(video_configs)} videos)")
+
+    if len(video_configs) == 1:
+        print(f"  - Total: {len(test_configs)} tests using video{video_configs[0]['video_number']}.mp4 only")
+    else:
+        print(f"  - Total: {len(test_configs)} tests using both video1.mp4 and video2.mp4")
 
     return test_configs
 
 
-def run_vace_lightning_tests(base_output_dir: str = "tests_output"):
-    """Run all vace_fun_14B_cocktail_lightning parameter tests."""
+def run_vace_lightning_tests(base_output_dir: str = "tests_output", video_numbers=[1, 2], test_phases=['flow_shift', 'high_lightning', 'cfg_guidance', 'switch_threshold', 'lora_strength', 'reward_lora_strength']):
+    """Run all vace_fun_14B_cocktail_lightning parameter tests.
+
+    Args:
+        base_output_dir: Output directory for test results
+        video_numbers: List of video numbers to test with (1, 2, or both)
+    """
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     test_run_id = f"vace_lightning_{timestamp}"
 
     # Generate test configurations
-    test_configs = generate_test_configurations()
+    test_configs = generate_test_configurations(video_numbers, test_phases)
 
     # Validate input files exist
     video1_path = Path("samples/video1.mp4").absolute()
@@ -475,14 +512,19 @@ def run_vace_lightning_tests(base_output_dir: str = "tests_output"):
     return results, test_run_id, output_dir
 
 
-def run_quick_test(base_output_dir: str = "tests_output"):
-    """Run one random test for each video configuration (quick test mode)."""
+def run_quick_test(base_output_dir: str = "tests_output", video_numbers=[1, 2]):
+    """Run one random test for each video configuration (quick test mode).
+
+    Args:
+        base_output_dir: Output directory for test results
+        video_numbers: List of video numbers to test with (1, 2, or both)
+    """
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     test_run_id = f"vace_lightning_quicktest_{timestamp}"
 
     # Generate all test configurations
-    all_test_configs = generate_test_configurations()
+    all_test_configs = generate_test_configurations(video_numbers)
 
     # Group tests by video number
     video1_tests = [config for config in all_test_configs if config["video_number"] == 1]
@@ -762,17 +804,26 @@ def main():
                        help="Output directory for test results")
     parser.add_argument("--test", action="store_true",
                        help="Run one random test for each video (quick test mode)")
+    parser.add_argument("--videos", type=int, nargs='+', default=[1, 2], choices=[1, 2],
+                       help="Video numbers to test with (1, 2, or both). Default: [1, 2]")
+    parser.add_argument("--tests", nargs='+',
+                       choices=['flow_shift', 'high_lightning', 'cfg_guidance', 'switch_threshold', 'lora_strength', 'reward_lora_strength'],
+                       default=['flow_shift', 'high_lightning', 'cfg_guidance', 'switch_threshold', 'lora_strength', 'reward_lora_strength'],
+                       help="Test phases to run. Default: all phases")
 
     args = parser.parse_args()
 
     try:
         if args.test:
             results, test_run_id, output_dir = run_quick_test(
-                base_output_dir=args.output_dir
+                base_output_dir=args.output_dir,
+                video_numbers=args.videos
             )
         else:
             results, test_run_id, output_dir = run_vace_lightning_tests(
-                base_output_dir=args.output_dir
+                base_output_dir=args.output_dir,
+                video_numbers=args.videos,
+                test_phases=args.tests
             )
 
         if not output_dir:
