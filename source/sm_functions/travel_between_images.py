@@ -2172,18 +2172,78 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                     raise ValueError(f"Stitch: One or more segment videos are not stable or missing: indices {unstable_indices}")
 
                 print(f"[CRITICAL DEBUG] All segment videos are stable. Proceeding with frame extraction...")
-                all_segment_frames_lists = [sm_extract_frames_from_video(p, dprint_func=dprint) for p in segment_video_paths_for_stitch]
-                
-                # [CRITICAL DEBUG] Log frame extraction results
-                print(f"[CRITICAL DEBUG] Frame extraction results:")
-                for idx, frame_list in enumerate(all_segment_frames_lists):
-                    if frame_list is not None:
-                        print(f"[CRITICAL DEBUG] Segment {idx}: {len(frame_list)} frames extracted")
-                    else:
-                        print(f"[CRITICAL DEBUG] Segment {idx}: FAILED to extract frames")
-                
-                if not all(f_list is not None and len(f_list)>0 for f_list in all_segment_frames_lists):
-                    raise ValueError("Stitch: Frame extraction failed for one or more segments during cross-fade prep.")
+
+                # Retry frame extraction with backoff and re-download for corrupted videos
+                max_extraction_attempts = 3
+                all_segment_frames_lists = None
+
+                for attempt in range(max_extraction_attempts):
+                    print(f"[CRITICAL DEBUG] Frame extraction attempt {attempt + 1}/{max_extraction_attempts}")
+                    all_segment_frames_lists = [sm_extract_frames_from_video(p, dprint_func=dprint) for p in segment_video_paths_for_stitch]
+
+                    # [CRITICAL DEBUG] Log frame extraction results
+                    print(f"[CRITICAL DEBUG] Frame extraction results (attempt {attempt + 1}):")
+                    failed_segments = []
+                    for idx, frame_list in enumerate(all_segment_frames_lists):
+                        if frame_list is not None and len(frame_list) > 0:
+                            print(f"[CRITICAL DEBUG] Segment {idx}: {len(frame_list)} frames extracted")
+                        else:
+                            print(f"[CRITICAL DEBUG] Segment {idx}: FAILED to extract frames")
+                            failed_segments.append(idx)
+
+                    # Check if all extractions succeeded
+                    if all(f_list is not None and len(f_list) > 0 for f_list in all_segment_frames_lists):
+                        print(f"[CRITICAL DEBUG] All frame extractions successful on attempt {attempt + 1}")
+                        break
+
+                    # If not the last attempt, try to re-download corrupted videos before retry
+                    if attempt < max_extraction_attempts - 1 and failed_segments:
+                        wait_time = 3 + (attempt * 2)  # Progressive backoff: 3s, 5s, 7s
+                        print(f"[CRITICAL DEBUG] Frame extraction failed for segments {failed_segments}. Attempting re-download and retry in {wait_time} seconds...")
+
+                        # Try to re-download failed segments (only for remote URLs)
+                        redownload_attempted = False
+                        for failed_idx in failed_segments:
+                            if failed_idx < len(completed_segment_outputs_from_db):
+                                seg_output = completed_segment_outputs_from_db[failed_idx]
+                                video_path_str_from_db = seg_output.get("video_file_path", "")
+
+                                # Check if it's a remote URL that can be re-downloaded
+                                if video_path_str_from_db.startswith("http"):
+                                    try:
+                                        failed_video_path = Path(segment_video_paths_for_stitch[failed_idx])
+                                        print(f"[CRITICAL DEBUG] Re-downloading corrupted segment {failed_idx} from {video_path_str_from_db}")
+
+                                        # Delete corrupted file
+                                        if failed_video_path.exists():
+                                            failed_video_path.unlink()
+                                            print(f"[CRITICAL DEBUG] Deleted corrupted file: {failed_video_path}")
+
+                                        # Re-download
+                                        sm_download_file(video_path_str_from_db, stitch_processing_dir, failed_video_path.name)
+
+                                        # Wait for stability
+                                        if sm_wait_for_file_stable(failed_video_path, checks=5, interval=1.0, dprint=dprint):
+                                            print(f"[CRITICAL DEBUG] Re-downloaded segment {failed_idx} successfully")
+                                            redownload_attempted = True
+                                        else:
+                                            print(f"[CRITICAL DEBUG] Re-downloaded segment {failed_idx} not stable")
+
+                                    except Exception as e_redownload:
+                                        print(f"[CRITICAL DEBUG] Re-download failed for segment {failed_idx}: {e_redownload}")
+                                else:
+                                    print(f"[CRITICAL DEBUG] Segment {failed_idx} is not a remote URL, cannot re-download: {video_path_str_from_db}")
+
+                        if redownload_attempted:
+                            print(f"[CRITICAL DEBUG] Re-download completed. Waiting {wait_time} seconds before next extraction attempt...")
+                        else:
+                            print(f"[CRITICAL DEBUG] No re-downloads attempted. Waiting {wait_time} seconds before next extraction attempt...")
+
+                        time.sleep(wait_time)
+                else:
+                    # All attempts failed
+                    failed_segments = [i for i, f_list in enumerate(all_segment_frames_lists) if not (f_list is not None and len(f_list) > 0)]
+                    raise ValueError(f"Stitch: Frame extraction failed for segments {failed_segments} after {max_extraction_attempts} attempts (including re-download attempts) during cross-fade prep.")
                 
                 final_stitched_frames = []
                 
