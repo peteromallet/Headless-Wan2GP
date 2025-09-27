@@ -739,6 +739,7 @@ class HeadlessTaskQueue:
             "denoise_strength": "denoising_strength",  # Map LightI2X parameter name
             "guidance2_scale": "guidance2_scale",
             "guidance3_scale": "guidance3_scale",
+            "switch_threshold": "switch_threshold",
             "switch_threshold2": "switch_threshold2",
             "guidance_phases": "guidance_phases",
             "model_switch_phase": "model_switch_phase",

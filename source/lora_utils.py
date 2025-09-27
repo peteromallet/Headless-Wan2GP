@@ -402,7 +402,13 @@ def _download_lora_auto(lora_filename: str, lora_type: str, dprint=None) -> bool
             "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
         # CausVid LoRA (14B)
         "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors":
-            "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors"
+            "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
+        # Fractal Concept LoRA
+        "246838-wan22_14B-high-fractal_concept-e459.safetensors":
+            "https://huggingface.co/Cseti/wan2.2-14B-Kinestasis_concept-lora-v1/resolve/main/246838-wan22_14B-high-fractal_concept-e459.safetensors",
+        # Banostasis Concept LoRA
+        "246839-wan22_14B-high-banostasis_concept-e459.safetensors":
+            "https://huggingface.co/Cseti/wan2.2-14B-Kinestasis_concept-lora-v1/resolve/main/246839-wan22_14B-high-banostasis_concept-e459.safetensors"
     }
 
     # Provide fallbacks for known mirrors when primary URL is missing/gated
