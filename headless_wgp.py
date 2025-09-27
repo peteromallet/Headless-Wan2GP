@@ -299,7 +299,8 @@ class WanOrchestrator:
             self._test_vace_module = lambda model_name: ("vace" in (model_name or ""))
         self.current_model = None
         self.offloadobj = None  # Store WGP's offload object
-        
+        self.passthrough_mode = False  # Flag for explicit passthrough mode
+
         orchestrator_logger.success(f"WanOrchestrator initialized with WGP at {wan_root}")
 
         # Final notice for smoke mode
@@ -636,9 +637,10 @@ class WanOrchestrator:
             
             if model_defaults:
                 generation_logger.debug(f"Before applying model config - resolved_params: {resolved_params}")
+
                 for param, value in model_defaults.items():
-                    # Skip UI-specific parameters that shouldn't affect generation
-                    if param not in ["prompt", "activated_loras", "loras_multipliers"]:
+                    # JSON passthrough mode: Allow activated_loras and loras_multipliers to pass directly
+                    if param not in ["prompt"]:
                         old_value = resolved_params.get(param, "NOT_SET")
                         resolved_params[param] = value
                         generation_logger.debug(f"Applied {param}: {old_value} → {value}")
@@ -781,11 +783,19 @@ class WanOrchestrator:
         
         # Add any additional kwargs
         task_explicit_params.update(kwargs)
-        
-        # Resolve final parameters with proper precedence
-        resolved_params = self._resolve_parameters(effective_model_type, task_explicit_params)
-        
-        generation_logger.info(f"[PARAM_RESOLUTION] Final parameters for '{effective_model_type}': num_inference_steps={resolved_params.get('num_inference_steps')}, guidance_scale={resolved_params.get('guidance_scale')}")
+
+        # Initialize LoRA variables (needed for both modes)
+        activated_loras = []
+        loras_multipliers_str = ""
+
+        # Resolve final parameters with proper precedence (skip in passthrough mode)
+        if self.passthrough_mode:
+            # In passthrough mode, use task parameters directly without any resolution
+            resolved_params = task_explicit_params.copy()
+            generation_logger.info(f"[PASSTHROUGH] Using task parameters directly without resolution: {len(resolved_params)} params")
+        else:
+            resolved_params = self._resolve_parameters(effective_model_type, task_explicit_params)
+            generation_logger.info(f"[PARAM_RESOLUTION] Final parameters for '{effective_model_type}': num_inference_steps={resolved_params.get('num_inference_steps')}, guidance_scale={resolved_params.get('guidance_scale')}")
 
         # Determine model types for generation
         base_model_type = self._get_base_model_type(self.current_model)
@@ -822,6 +832,8 @@ class WanOrchestrator:
         final_batch_size = resolved_params.get("batch_size", 1)
         final_guidance_scale = resolved_params.get("guidance_scale", 7.5)
         final_embedded_guidance = resolved_params.get("embedded_guidance_scale", 3.0)
+
+        # JSON parameters pass through directly to WGP - no processing needed
         
         # Configure model-specific parameters
         if is_flux:
@@ -851,100 +863,157 @@ class WanOrchestrator:
             control_net_weight = 0.0
             control_net_weight2 = 0.0
 
-        # Prepare LoRA parameters first (needed for wgp_params)
-        # Filter out LoRAs that are not present on disk to avoid hard failures in offline setups.
-        activated_loras = []
-        filtered_multipliers: List[float] = []
-        if lora_names:
-            try:
-                import wgp as _w
-                from pathlib import Path as _P
-                default_dir = _P(_w.get_lora_dir(self.current_model))
-                # Common alternate directory used by tests for Qwen LoRAs
-                alt_dir = default_dir.parent / "loras_qwen"
-                cand_dirs = [default_dir]
-                if alt_dir not in cand_dirs:
-                    cand_dirs.append(alt_dir)
-                # Also include a plain "loras" at Wan root in case get_lora_dir changes working dir
-                wan_root_loras = _P(self.wan_root) / "loras"
-                if wan_root_loras not in cand_dirs:
-                    cand_dirs.append(wan_root_loras)
-                # And include the dedicated Qwen LoRA directory at Wan root used by tests
-                wan_root_loras_qwen = _P(self.wan_root) / "loras_qwen"
-                if wan_root_loras_qwen not in cand_dirs:
-                    cand_dirs.append(wan_root_loras_qwen)
+        # Check if we're in JSON passthrough mode - don't process anything, just pass the JSON
+        # This happens when --passthrough flag is used or when we have a full model definition
+        is_passthrough_mode = self.passthrough_mode
 
-                def _exists_any(name: str) -> bool:
-                    try:
-                        npath = _P(name)
-                        # Absolute path provided
-                        if npath.is_absolute() and npath.exists():
-                            return True
-                        # Relative to Wan root
-                        if (_P(self.wan_root) / npath).exists():
-                            return True
-                        # Join with candidate dirs (full name and basename)
-                        for d in cand_dirs:
-                            if (d / npath).exists() or (d / npath.name).exists():
-                                return True
-                    except Exception:
-                        pass
-                    return False
+        if is_passthrough_mode:
+            # Complete passthrough mode: bypass ALL parameter processing
+            generation_logger.info("Using JSON passthrough mode - ALL parameters pass through directly from JSON")
 
-                def _resolve_first(name: str) -> str:
-                    """Return absolute path to the first matching file among candidates."""
-                    npath = _P(name)
-                    try:
-                        if npath.is_absolute() and npath.exists():
-                            return str(npath.resolve())
-                    except Exception:
-                        pass
-                    # Relative to Wan root
-                    try:
-                        p = (_P(self.wan_root) / npath)
-                        if p.exists():
-                            return str(p.resolve())
-                    except Exception:
-                        pass
-                    # Search candidate dirs
-                    for d in cand_dirs:
-                        for candidate in (d / npath, d / npath.name):
-                            try:
-                                if candidate.exists():
-                                    return str(candidate.resolve())
-                            except Exception:
-                                pass
-                    # Fallback to original name
-                    return name
-
-                for idx, name in enumerate(lora_names):
-                    if _exists_any(name):
-                        # Use absolute path so WGP join does not override it
-                        resolved = _resolve_first(name)
-                        activated_loras.append(resolved)
-                        if lora_multipliers and idx < len(lora_multipliers):
-                            filtered_multipliers.append(lora_multipliers[idx])
-                    else:
-                        generation_logger.warning(
-                            f"LoRA not found on disk and will be skipped: '{name}'."
-                        )
-                if lora_names and not activated_loras:
-                    generation_logger.info(
-                        "No requested LoRAs were found in known directories; proceeding without LoRAs."
-                    )
-            except Exception as _e:
-                # On any error, fall back to original list to avoid accidental removal
-                generation_logger.warning(f"LoRA filtering failed; using provided list as-is: {_e}")
-                activated_loras = lora_names.copy()
-                filtered_multipliers = (lora_multipliers or []).copy()
-        # WGP expects loras_multipliers as string, not list
-        if filtered_multipliers:
-            # Convert list of floats to space-separated string
-            loras_multipliers_str = " ".join(str(m) for m in filtered_multipliers)
-        elif lora_multipliers:
-            loras_multipliers_str = " ".join(str(m) for m in lora_multipliers)
+            # Don't set LoRA parameters - let WGP extract them from model JSON via get_transformer_loras()
+            # WGP will call get_transformer_loras(model_type) to get LoRAs from the temp model file
         else:
-            loras_multipliers_str = ""
+            # Normal mode: process LoRAs from loras/loras_multipliers_list
+            # Filter out LoRAs that are not present on disk to avoid hard failures in offline setups.
+            filtered_multipliers: List[float] = []
+            if lora_names:
+                try:
+                    import wgp as _w
+                    from pathlib import Path as _P
+                    default_dir = _P(_w.get_lora_dir(self.current_model))
+                    # Common alternate directory used by tests for Qwen LoRAs
+                    alt_dir = default_dir.parent / "loras_qwen"
+                    cand_dirs = [default_dir]
+                    if alt_dir not in cand_dirs:
+                        cand_dirs.append(alt_dir)
+                    # Also include a plain "loras" at Wan root in case get_lora_dir changes working dir
+                    wan_root_loras = _P(self.wan_root) / "loras"
+                    if wan_root_loras not in cand_dirs:
+                        cand_dirs.append(wan_root_loras)
+                    # And include the dedicated Qwen LoRA directory at Wan root used by tests
+                    wan_root_loras_qwen = _P(self.wan_root) / "loras_qwen"
+                    if wan_root_loras_qwen not in cand_dirs:
+                        cand_dirs.append(wan_root_loras_qwen)
+
+                    def _exists_any(name: str) -> bool:
+                        try:
+                            npath = _P(name)
+                            # Absolute path provided
+                            if npath.is_absolute() and npath.exists():
+                                return True
+                            # Relative to Wan root
+                            if (_P(self.wan_root) / npath).exists():
+                                return True
+                            # Join with candidate dirs (full name and basename)
+                            for d in cand_dirs:
+                                if (d / npath).exists() or (d / npath.name).exists():
+                                    return True
+                        except Exception:
+                            pass
+                        return False
+
+                    def _resolve_first(name: str) -> str:
+                        """Return absolute path to the first matching file among candidates."""
+                        npath = _P(name)
+                        try:
+                            if npath.is_absolute() and npath.exists():
+                                return str(npath.resolve())
+                        except Exception:
+                            pass
+                        # Relative to Wan root
+                        try:
+                            p = (_P(self.wan_root) / npath)
+                            if p.exists():
+                                return str(p.resolve())
+                        except Exception:
+                            pass
+                        # Search candidate dirs
+                        for d in cand_dirs:
+                            for candidate in (d / npath, d / npath.name):
+                                try:
+                                    if candidate.exists():
+                                        return str(candidate.resolve())
+                                except Exception:
+                                    pass
+                        # Fallback to original name
+                        return name
+
+                    for idx, name in enumerate(lora_names):
+                        if _exists_any(name):
+                            # Use absolute path so WGP join does not override it
+                            resolved = _resolve_first(name)
+                            activated_loras.append(resolved)
+                            if lora_multipliers and idx < len(lora_multipliers):
+                                filtered_multipliers.append(lora_multipliers[idx])
+                        else:
+                            # Try to download from model config URL before skipping
+                            try:
+                                # Get the LoRA URLs from the model config
+                                model_loras = task.parameters.get("model", {}).get("loras", [])
+                                lora_url = None
+                                if idx < len(model_loras):
+                                    lora_url = model_loras[idx]
+
+                                if lora_url and lora_url.startswith("http"):
+                                    generation_logger.info(
+                                        f"LoRA not found locally, attempting download from URL: '{name}' from {lora_url}"
+                                    )
+
+                                    # Use wget to download the file
+                                    import subprocess
+                                    import os
+
+                                    # Ensure loras directory exists
+                                    loras_dir = "loras"
+                                    os.makedirs(loras_dir, exist_ok=True)
+
+                                    # Download file
+                                    local_path = os.path.join(loras_dir, name)
+                                    result = subprocess.run(
+                                        ["wget", "-O", local_path, lora_url],
+                                        capture_output=True,
+                                        text=True
+                                    )
+
+                                    if result.returncode == 0 and _exists_any(name):
+                                        resolved = _resolve_first(name)
+                                        activated_loras.append(resolved)
+                                        if lora_multipliers and idx < len(lora_multipliers):
+                                            filtered_multipliers.append(lora_multipliers[idx])
+                                        generation_logger.info(
+                                            f"Successfully downloaded and activated LoRA: '{name}'"
+                                        )
+                                    else:
+                                        generation_logger.warning(
+                                            f"Failed to download LoRA from {lora_url}: {result.stderr}"
+                                        )
+                                else:
+                                    generation_logger.warning(
+                                        f"LoRA not found and no valid URL provided for download: '{name}'"
+                                    )
+
+                            except Exception as e:
+                                generation_logger.warning(
+                                    f"LoRA not found and download failed with error: '{name}' - {e}"
+                                )
+                    if lora_names and not activated_loras:
+                        generation_logger.info(
+                            "No requested LoRAs were found in known directories; proceeding without LoRAs."
+                        )
+                except Exception as _e:
+                    # On any error, fall back to original list to avoid accidental removal
+                    generation_logger.warning(f"LoRA filtering failed; using provided list as-is: {_e}")
+                    activated_loras = lora_names.copy()
+                    filtered_multipliers = (lora_multipliers or []).copy()
+            # WGP expects loras_multipliers as string, not list
+            if filtered_multipliers:
+                # Convert list of floats to space-separated string
+                loras_multipliers_str = " ".join(str(m) for m in filtered_multipliers)
+            elif lora_multipliers:
+                loras_multipliers_str = " ".join(str(m) for m in lora_multipliers)
+            else:
+                loras_multipliers_str = ""
 
         # Create minimal task and callback objects (needed for wgp_params)
         task = {"id": 1, "params": {}, "repeats": 1}
@@ -969,61 +1038,178 @@ class WanOrchestrator:
             elif cmd == "preview":
                 print("🖼️  Preview updated")
 
-        # Build parameter dictionary from resolved parameters
-        # Supply defaults for required WGP args that may be unused depending on phases/model
-        guidance3_scale_value = resolved_params.get(
-            "guidance3_scale",
-            resolved_params.get("guidance2_scale", actual_guidance),
-        )
-        switch_threshold2_value = resolved_params.get("switch_threshold2", 0)
-        guidance_phases_value = resolved_params.get("guidance_phases", 1)
-        model_switch_phase_value = resolved_params.get("model_switch_phase", 1)
-        image_refs_relative_size_value = resolved_params.get("image_refs_relative_size", 50)
-        override_profile_value = resolved_params.get("override_profile", -1)
+        if is_passthrough_mode:
+            # COMPLETE PASSTHROUGH MODE: Pass ALL parameters from JSON with required defaults
+            wgp_params = {
+                # Core parameters (fixed, not overridable)
+                'task': task,
+                'send_cmd': send_cmd,
+                'state': self.state,
+                'model_type': self.current_model,
+                'image_mode': image_mode,
 
-        wgp_params = {
-            # Core parameters (fixed, not overridable)
-            'task': task,
-            'send_cmd': send_cmd,
-            'state': self.state,
-            'model_type': self.current_model,
-            'prompt': resolved_params.get("prompt", prompt),
-            'negative_prompt': resolved_params.get("negative_prompt", ""),
-            'resolution': resolved_params.get("resolution", "1280x720"),
-            'video_length': actual_video_length,
-            'batch_size': actual_batch_size,
-            'seed': resolved_params.get("seed", 42),
-            'force_fps': "auto",
-            'image_mode': image_mode,
-            
-            # VACE control parameters (only pass supported fields upstream)
-            'video_guide': video_guide,
-            'video_mask': video_mask,
-            'video_guide2': None,
-            'video_mask2': None,
-            'video_prompt_type': video_prompt_type,
-            'control_net_weight': control_net_weight,
-            'control_net_weight2': control_net_weight2,
-            'denoising_strength': 1.0,
-            
-            # LoRA parameters
-            'activated_loras': activated_loras,
-            'loras_multipliers': loras_multipliers_str,
-            
-            # Overridable parameters from resolved configuration
-            'num_inference_steps': resolved_params.get("num_inference_steps", 25),
-            'guidance_scale': actual_guidance,
-            'guidance2_scale': resolved_params.get("guidance2_scale", actual_guidance),
-            'guidance3_scale': guidance3_scale_value,
-            'switch_threshold': resolved_params.get("switch_threshold", 500),
-            'switch_threshold2': switch_threshold2_value,
-            'guidance_phases': guidance_phases_value,
-            'model_switch_phase': model_switch_phase_value,
-            'embedded_guidance_scale': final_embedded_guidance if is_flux else 0.0,
-            'flow_shift': resolved_params.get("flow_shift", 7.0),
-            'sample_solver': resolved_params.get("sample_solver", "euler"),
-            
-            # Standard defaults for other parameters
+                # Required parameters with defaults
+                'prompt': resolved_params.get('prompt', ''),
+                'negative_prompt': resolved_params.get('negative_prompt', ''),
+                'resolution': resolved_params.get('resolution', '1280x720'),
+                'video_length': resolved_params.get('video_length', 81),
+                'batch_size': resolved_params.get('batch_size', 1),
+                'seed': resolved_params.get('seed', 42),
+                'force_fps': 'auto',
+
+                # VACE control parameters
+                'video_guide': video_guide,
+                'video_mask': video_mask,
+                'video_guide2': None,
+                'video_mask2': None,
+                'video_prompt_type': video_prompt_type or 'VM',
+                'control_net_weight': control_net_weight or 1.0,
+                'control_net_weight2': control_net_weight2 or 1.0,
+                'denoising_strength': 1.0,
+
+                # LoRA parameters
+                'activated_loras': [],
+                'loras_multipliers': '',
+
+                # Audio parameters
+                'audio_guidance_scale': 1.0,
+                'embedded_guidance_scale': resolved_params.get('embedded_guidance_scale', 0.0),
+                'repeat_generation': 1,
+                'multi_prompts_gen_type': 0,
+                'multi_images_gen_type': 0,
+                'skip_steps_cache_type': '',
+                'skip_steps_multiplier': 1.0,
+                'skip_steps_start_step_perc': 0.0,
+
+                # Image parameters
+                'image_prompt_type': 'disabled',
+                'image_start': None,
+                'image_end': None,
+                'model_mode': 0,
+                'video_source': None,
+                'keep_frames_video_source': '',
+                'image_refs': None,
+                'frames_positions': '',
+                'image_guide': None,
+                'keep_frames_video_guide': '',
+                'video_guide_outpainting': '0 0 0 0',
+                'image_mask': None,
+                'mask_expand': 0,
+
+                # Audio parameters
+                'audio_guide': None,
+                'audio_guide2': None,
+                'audio_source': None,
+                'audio_prompt_type': '',
+                'speakers_locations': '',
+
+                # Sliding window parameters
+                'sliding_window_size': 129,
+                'sliding_window_overlap': 0,
+                'sliding_window_color_correction_strength': 0.0,
+                'sliding_window_overlap_noise': 0.1,
+                'sliding_window_discard_last_frames': 0,
+                'image_refs_relative_size': 50,
+
+                # Post-processing parameters
+                'remove_background_images_ref': 0,
+                'temporal_upsampling': '',
+                'spatial_upsampling': '',
+                'film_grain_intensity': 0.0,
+                'film_grain_saturation': 0.0,
+                'MMAudio_setting': 0,
+                'MMAudio_prompt': '',
+                'MMAudio_neg_prompt': '',
+
+                # Advanced parameters
+                'RIFLEx_setting': 0,
+                'NAG_scale': 0.0,
+                'NAG_tau': 1.0,
+                'NAG_alpha': 0.0,
+                'slg_switch': 0,
+                'slg_layers': '',
+                'slg_start_perc': 0.0,
+                'slg_end_perc': 100.0,
+                'apg_switch': 0,
+                'cfg_star_switch': 0,
+                'cfg_zero_step': 0,
+                'prompt_enhancer': 0,
+                'min_frames_if_references': 9,
+                'override_profile': -1,
+
+                # Mode and filename
+                'mode': 'generate',
+                'model_filename': '',
+            }
+
+            # Override with ALL parameters from JSON (this preserves your exact JSON values)
+            for param_key, param_value in resolved_params.items():
+                if param_key not in ['task', 'send_cmd', 'state', 'model_type']:  # Don't override core system params
+                    wgp_params[param_key] = param_value
+                    if param_key == 'guidance2_scale':
+                        generation_logger.info(f"[PASSTHROUGH_DEBUG] Setting {param_key} = {param_value} from JSON")
+
+            # Debug: Check final guidance2_scale value before WGP call
+            generation_logger.info(f"[PASSTHROUGH_DEBUG] Final wgp_params guidance2_scale = {wgp_params.get('guidance2_scale', 'NOT_SET')}")
+
+        else:
+            # Build parameter dictionary from resolved parameters
+            # Supply defaults for required WGP args that may be unused depending on phases/model
+            guidance3_scale_value = resolved_params.get(
+                "guidance3_scale",
+                resolved_params.get("guidance2_scale", actual_guidance),
+            )
+            switch_threshold2_value = resolved_params.get("switch_threshold2", 0)
+            guidance_phases_value = resolved_params.get("guidance_phases", 1)
+            model_switch_phase_value = resolved_params.get("model_switch_phase", 1)
+            image_refs_relative_size_value = resolved_params.get("image_refs_relative_size", 50)
+            override_profile_value = resolved_params.get("override_profile", -1)
+
+            wgp_params = {
+                # Core parameters (fixed, not overridable)
+                'task': task,
+                'send_cmd': send_cmd,
+                'state': self.state,
+                'model_type': self.current_model,
+                'prompt': resolved_params.get("prompt", prompt),
+                'negative_prompt': resolved_params.get("negative_prompt", ""),
+                'resolution': resolved_params.get("resolution", "1280x720"),
+                'video_length': actual_video_length,
+                'batch_size': actual_batch_size,
+                'seed': resolved_params.get("seed", 42),
+                'force_fps': "auto",
+                'image_mode': image_mode,
+
+                # VACE control parameters (only pass supported fields upstream)
+                'video_guide': video_guide,
+                'video_mask': video_mask,
+                'video_guide2': None,
+                'video_mask2': None,
+                'video_prompt_type': video_prompt_type,
+                'control_net_weight': control_net_weight,
+                'control_net_weight2': control_net_weight2,
+                'denoising_strength': 1.0,
+
+                # LoRA parameters in normal mode
+                'activated_loras': activated_loras,
+                'loras_multipliers': loras_multipliers_str,
+
+                # Overridable parameters from resolved configuration
+                'num_inference_steps': resolved_params.get("num_inference_steps", 25),
+                'guidance_scale': actual_guidance,
+                'guidance2_scale': resolved_params.get("guidance2_scale", actual_guidance),
+                'guidance3_scale': guidance3_scale_value,
+                'switch_threshold': resolved_params.get("switch_threshold", 500),
+                'switch_threshold2': switch_threshold2_value,
+                'guidance_phases': guidance_phases_value,
+                'model_switch_phase': model_switch_phase_value,
+                'embedded_guidance_scale': final_embedded_guidance if is_flux else 0.0,
+                'flow_shift': resolved_params.get("flow_shift", 7.0),
+                'sample_solver': resolved_params.get("sample_solver", "euler"),
+            }
+
+            # Standard defaults for other parameters - extend the dictionary
+            wgp_params.update({
             'audio_guidance_scale': 1.0,
             'repeat_generation': 1,
             'multi_prompts_gen_type': 0,
@@ -1093,7 +1279,7 @@ class WanOrchestrator:
             # Mode and filename
             'mode': "generate",
             'model_filename': "",
-        }
+        })
         
 
 
@@ -1135,7 +1321,10 @@ class WanOrchestrator:
             generation_logger.info(f"[CausVidDebugTrace]   model_type: {self.current_model}")
             generation_logger.info(f"[CausVidDebugTrace]   num_inference_steps: {num_inference_steps}")
             generation_logger.info(f"[CausVidDebugTrace]   guidance_scale: {actual_guidance}")
-            generation_logger.info(f"[CausVidDebugTrace]   guidance2_scale: {actual_guidance}")
+            if is_passthrough_mode:
+                generation_logger.info(f"[CausVidDebugTrace]   guidance2_scale: {wgp_params.get('guidance2_scale', 'NOT_SET')} (passthrough)")
+            else:
+                generation_logger.info(f"[CausVidDebugTrace]   guidance2_scale: {wgp_params.get('guidance2_scale', 'NOT_SET')} (normal)")
             generation_logger.info(f"[CausVidDebugTrace]   activated_loras: {activated_loras}")
             generation_logger.info(f"[CausVidDebugTrace]   loras_multipliers_str: {loras_multipliers_str}")
             
@@ -1207,6 +1396,17 @@ class WanOrchestrator:
                 except Exception as _e:
                     # On any error, fall back to original params
                     _filtered_params = wgp_params
+
+                # COMPREHENSIVE LOGGING: Show all final parameters being sent to WGP
+                generation_logger.info("=" * 80)
+                generation_logger.info("FINAL PARAMETERS BEING SENT TO WGP generate_video():")
+                generation_logger.info("=" * 80)
+                for key, value in sorted(_filtered_params.items()):
+                    if key in ['guidance_scale', 'guidance2_scale', 'guidance3_scale', 'num_inference_steps', 'switch_threshold', 'switch_threshold2']:
+                        generation_logger.info(f"[FINAL_PARAMS] {key}: {value} ⭐")  # Star important guidance params
+                    else:
+                        generation_logger.info(f"[FINAL_PARAMS] {key}: {value}")
+                generation_logger.info("=" * 80)
 
                 result = self._generate_video(**_filtered_params)
             

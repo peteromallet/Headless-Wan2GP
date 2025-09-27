@@ -63,3 +63,25 @@ tests_output/
 # Task database files
 tasks.db-shm
 tasks.db-wal
+
+# Testing tools and experiments
+testing_tools/testing/
+testing_tools/*.json
+testing_tools/*.md
+testing_tools/*.log
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+*.egg-info/
+.tox/
+
+# Additional common patterns
+*.tmp
+*.temp
+.pytest_cache/
+.coverage
+htmlcov/
+node_modules/

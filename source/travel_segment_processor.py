@@ -70,7 +70,7 @@ class TravelSegmentProcessor:
         model_name = self.ctx.model_name.lower()
         
         # Standard VACE model detection logic
-        vace_indicators = ["vace", "controlnet", "cocktail"]
+        vace_indicators = ["vace", "controlnet", "cocktail", "lightning"]
         is_vace = any(indicator in model_name for indicator in vace_indicators)
         
         self.ctx.dprint(f"[VACE_DEBUG] Seg {self.ctx.segment_idx}: Model '{self.ctx.model_name}' -> is_vace_model = {is_vace}")
