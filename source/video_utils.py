@@ -134,39 +134,73 @@ def cross_fade_overlap_frames(
 
 def extract_frames_from_video(video_path: str | Path, start_frame: int = 0, num_frames: int = None, *, dprint_func=print) -> list[np.ndarray]:
     """
-    Extracts frames from a video file as numpy arrays.
-    
+    Extracts frames from a video file as numpy arrays with retry logic for recently encoded videos.
+
     Args:
         video_path: Path to the video file
         start_frame: Starting frame index (0-based)
         num_frames: Number of frames to extract (None = all remaining frames)
         dprint_func: The function to use for printing debug messages
-    
+
     Returns:
         List of frames as BGR numpy arrays
     """
     frames = []
-    cap = cv2.VideoCapture(str(video_path))
-    
-    if not cap.isOpened():
-        dprint_func(f"Error: Could not open video {video_path}")
-        return frames
-    
-    total_frames_video = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    
-    cap.set(cv2.CAP_PROP_POS_FRAMES, float(start_frame))
-    
-    frames_to_read = num_frames if num_frames is not None else (total_frames_video - start_frame)
-    frames_to_read = min(frames_to_read, total_frames_video - start_frame)
-    
-    for i in range(frames_to_read):
-        ret, frame = cap.read()
-        if not ret:
-            dprint_func(f"Warning: Could not read frame {start_frame + i} from {video_path}")
-            break
-        frames.append(frame)
-    
-    cap.release()
+    max_attempts = 3
+
+    for attempt in range(max_attempts):
+        cap = cv2.VideoCapture(str(video_path))
+
+        if not cap.isOpened():
+            if attempt < max_attempts - 1:
+                dprint_func(f"Attempt {attempt + 1}: Could not open video {video_path}, retrying in 2 seconds...")
+                time.sleep(2.0)
+                continue
+            else:
+                dprint_func(f"Error: Could not open video {video_path} after {max_attempts} attempts")
+                return frames
+
+        total_frames_video = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        # Check for valid frame count (recently encoded videos might report 0 initially)
+        if total_frames_video <= 0:
+            cap.release()
+            if attempt < max_attempts - 1:
+                dprint_func(f"Attempt {attempt + 1}: Video {video_path} reports {total_frames_video} frames, retrying in 2 seconds...")
+                time.sleep(2.0)
+                continue
+            else:
+                dprint_func(f"Error: Video {video_path} has invalid frame count {total_frames_video} after {max_attempts} attempts")
+                return frames
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, float(start_frame))
+
+        frames_to_read = num_frames if num_frames is not None else (total_frames_video - start_frame)
+        frames_to_read = min(frames_to_read, total_frames_video - start_frame)
+
+        frames_extracted = 0
+        for i in range(frames_to_read):
+            ret, frame = cap.read()
+            if not ret:
+                dprint_func(f"Warning: Could not read frame {start_frame + i} from {video_path}")
+                break
+            frames.append(frame)
+            frames_extracted += 1
+
+        cap.release()
+
+        # If we successfully extracted frames, return them
+        if frames_extracted > 0:
+            dprint_func(f"Successfully extracted {frames_extracted} frames from {video_path} on attempt {attempt + 1}")
+            return frames
+
+        # If no frames extracted and we have more attempts, retry
+        if attempt < max_attempts - 1:
+            dprint_func(f"Attempt {attempt + 1}: No frames extracted from {video_path}, retrying in 2 seconds...")
+            frames = []  # Reset frames list for next attempt
+            time.sleep(2.0)
+
+    dprint_func(f"Error: Failed to extract any frames from {video_path} after {max_attempts} attempts")
     return frames
 
 def create_video_from_frames_list(

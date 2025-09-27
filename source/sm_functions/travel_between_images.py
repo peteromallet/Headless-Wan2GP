@@ -2148,6 +2148,30 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 print(f"[STITCH_ANALYSIS]   Expected stitch points: {num_stitch_points}")
                 
                 dprint(f"Stitch: Using cross-fade due to overlap values: {actual_overlaps_for_stitching}. Output to: {path_for_raw_stitched_video}")
+
+                # Wait for all segment videos to be stable before extracting frames
+                print(f"[CRITICAL DEBUG] Waiting for {len(segment_video_paths_for_stitch)} segment videos to be stable before frame extraction...")
+                stable_paths = []
+                for idx, video_path in enumerate(segment_video_paths_for_stitch):
+                    dprint(f"Stitch: Checking file stability for segment {idx}: {video_path}")
+                    if not Path(video_path).exists():
+                        print(f"[CRITICAL DEBUG] Segment {idx} video file does not exist: {video_path}")
+                        stable_paths.append(False)
+                        continue
+
+                    file_stable = sm_wait_for_file_stable(video_path, checks=5, interval=1.0, dprint=dprint)
+                    if file_stable:
+                        print(f"[CRITICAL DEBUG] Segment {idx} video file is stable: {video_path}")
+                        stable_paths.append(True)
+                    else:
+                        print(f"[CRITICAL DEBUG] Segment {idx} video file is NOT stable after waiting: {video_path}")
+                        stable_paths.append(False)
+
+                if not all(stable_paths):
+                    unstable_indices = [i for i, stable in enumerate(stable_paths) if not stable]
+                    raise ValueError(f"Stitch: One or more segment videos are not stable or missing: indices {unstable_indices}")
+
+                print(f"[CRITICAL DEBUG] All segment videos are stable. Proceeding with frame extraction...")
                 all_segment_frames_lists = [sm_extract_frames_from_video(p, dprint_func=dprint) for p in segment_video_paths_for_stitch]
                 
                 # [CRITICAL DEBUG] Log frame extraction results

@@ -93,6 +93,7 @@ def extract_orchestrator_parameters(db_task_params: dict, task_id: str = "unknow
             "video_mask": "video_mask",
             "video_prompt_type": "video_prompt_type",
             "control_net_weight": "control_net_weight",
+            "amount_of_motion": "amount_of_motion",
         }
         
         extracted_count = 0

@@ -310,25 +310,63 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         # Ensure model is Qwen Image Edit
         model = "qwen_image_edit_20B"
 
-        # Prefix the prompt for clearer instruction to the edit model
-        try:
-            if isinstance(prompt, str) and prompt.strip():
-                _pfx = "make an image in this style of"
-                if not prompt.strip().lower().startswith(_pfx):
-                    prompt = f"{_pfx} {prompt.strip()}"
-        except Exception:
-            # Fail-safe: don't block task creation if prompt manipulation fails
-            pass
+        # Build the prompt with style and subject modifications
+        original_prompt = prompt
+        modified_prompt = original_prompt
 
-        # Map style reference image (URL or local path) to image_guide
-        style_ref_url = db_task_params.get("style_reference_image")
-        if style_ref_url:
+        # Get style and subject parameters
+        style_strength = db_task_params.get("style_reference_strength", 0.0)
+        subject_strength = db_task_params.get("subject_strength", 0.0)
+        subject_description = db_task_params.get("subject_description", "")
+        in_this_scene = db_task_params.get("in_this_scene", False)
+
+        try:
+            style_strength = float(style_strength) if style_strength is not None else 0.0
+        except Exception:
+            style_strength = 0.0
+
+        try:
+            subject_strength = float(subject_strength) if subject_strength is not None else 0.0
+        except Exception:
+            subject_strength = 0.0
+
+        # Build prompt modifications
+        prompt_parts = []
+        has_style_prefix = False
+
+        # Add style prefix if style_strength > 0
+        if style_strength > 0.0:
+            prompt_parts.append("In the style of this image,")
+            has_style_prefix = True
+
+        # Add subject prefix if subject_strength > 0
+        if subject_strength > 0.0 and subject_description:
+            # Use lowercase 'make' if style prefix is already present
+            make_word = "make" if has_style_prefix else "Make"
+            if in_this_scene:
+                prompt_parts.append(f"{make_word} an image of this {subject_description} in this scene:")
+            else:
+                prompt_parts.append(f"{make_word} an image of this {subject_description}:")
+
+        # Combine prompt parts with original prompt
+        if prompt_parts:
+            modified_prompt = " ".join(prompt_parts) + " " + original_prompt
+            headless_logger.info(f"[QWEN_STYLE] Modified prompt from '{original_prompt}' to '{modified_prompt}'", task_id=task_id)
+
+        # Use the modified prompt
+        prompt = modified_prompt
+
+        # Map reference image (style or subject) to image_guide
+        # Use style_reference_image first, fallback to subject_reference_image
+        reference_image = db_task_params.get("style_reference_image") or db_task_params.get("subject_reference_image")
+        if reference_image:
             try:
                 downloads_dir = Path("outputs/style_refs")
-                local_ref_path = sm_download_image_if_url(style_ref_url, downloads_dir, task_id_for_logging=task_id, debug_mode=debug_mode, descriptive_name="style_ref")
+                local_ref_path = sm_download_image_if_url(reference_image, downloads_dir, task_id_for_logging=task_id, debug_mode=debug_mode, descriptive_name="reference_image")
                 generation_params["image_guide"] = str(local_ref_path)
+                headless_logger.info(f"[QWEN_STYLE] Using reference image: {reference_image}", task_id=task_id)
             except Exception as e:
-                dprint(f"[QWEN_STYLE] Failed to process style_reference_image: {e}")
+                dprint(f"[QWEN_STYLE] Failed to process reference image: {e}")
 
         # Default settings tuned for Qwen style transfer
         generation_params.setdefault("video_prompt_type", "KI")
@@ -410,12 +448,6 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             dprint(f"[QWEN_STYLE] InStyle LoRA already present at {instyle_target}")
 
         # Build LoRA lists
-        style_strength = db_task_params.get("style_reference_strength")
-        try:
-            style_strength = float(style_strength) if style_strength is not None else 1.3
-        except Exception:
-            style_strength = 1.3
-
         lora_names = generation_params.get("lora_names", []) or []
         lora_mults = generation_params.get("lora_multipliers", []) or []
         if not isinstance(lora_names, list):
@@ -423,18 +455,64 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         if not isinstance(lora_mults, list):
             lora_mults = [lora_mults]
 
-        # Attach Lightning first at 1.0 if available
+        # Attach Lightning LoRA first at 1.0 if available
         if selected_lightning and (qwen_lora_dir / selected_lightning).exists() and selected_lightning not in lora_names:
             lora_names.append(selected_lightning)
             lora_mults.append(1.0)
-        # Attach InStyle next at style_strength
-        if instyle_fname not in lora_names:
-            lora_names.append(instyle_fname)
-            lora_mults.append(style_strength)
+            headless_logger.info(f"[QWEN_STYLE] Added Lightning LoRA: {selected_lightning} with strength 1.0", task_id=task_id)
+
+        # Add style transfer LoRA if style_strength > 0
+        if style_strength > 0.0:
+            # Use InStyle LoRA for style transfer
+            if instyle_fname not in lora_names:
+                lora_names.append(instyle_fname)
+                lora_mults.append(style_strength)
+                headless_logger.info(f"[QWEN_STYLE] Added style transfer LoRA: {instyle_fname} with strength {style_strength}", task_id=task_id)
+
+        # Add subject LoRA if subject_strength > 0
+        if subject_strength > 0.0:
+            # Download and add subject LoRA
+            subject_lora_fname = "in_subject_qwen_edit_2_000006750.safetensors"
+            subject_lora_target = qwen_lora_dir / subject_lora_fname
+
+            if not subject_lora_target.exists():
+                try:
+                    from huggingface_hub import hf_hub_download  # type: ignore
+                    subject_repo = "peteromallet/mystery_models"
+                    dprint(f"[QWEN_STYLE] Fetching {subject_lora_fname} from {subject_repo} into {qwen_lora_dir}")
+                    dl_path = hf_hub_download(repo_id=subject_repo, filename=subject_lora_fname, revision="main", local_dir=str(qwen_lora_dir))
+                    try:
+                        from pathlib import Path as _P
+                        _p = _P(dl_path)
+                        if _p.exists() and _p.resolve() != subject_lora_target.resolve():
+                            _p.replace(subject_lora_target)
+                    except Exception:
+                        pass
+                except Exception as e:
+                    dprint(f"[QWEN_STYLE] Subject LoRA download failed: {e}")
+            else:
+                dprint(f"[QWEN_STYLE] Subject LoRA already present at {subject_lora_target}")
+
+            # Add subject LoRA to the list
+            if subject_lora_fname not in lora_names:
+                lora_names.append(subject_lora_fname)
+                lora_mults.append(subject_strength)
+                headless_logger.info(f"[QWEN_STYLE] Added subject LoRA: {subject_lora_fname} with strength {subject_strength}", task_id=task_id)
+
+        # Add any additional LoRAs from params
+        additional_loras = db_task_params.get("loras", [])
+        if additional_loras:
+            for lora in additional_loras:
+                if isinstance(lora, dict) and "path" in lora and "scale" in lora:
+                    lora_filename = Path(lora["path"]).name
+                    if lora_filename not in lora_names:
+                        lora_names.append(lora_filename)
+                        lora_mults.append(float(lora["scale"]))
+            headless_logger.info(f"[QWEN_STYLE] Added {len(additional_loras)} additional LoRAs", task_id=task_id)
 
         generation_params["lora_names"] = lora_names
         generation_params["lora_multipliers"] = lora_mults
-        headless_logger.info(f"[QWEN_STYLE] Attached LoRAs: {lora_names} with multipliers {lora_mults}", task_id=task_id)
+        headless_logger.info(f"[QWEN_STYLE] Final LoRA configuration: {lora_names} with multipliers {lora_mults}", task_id=task_id)
     
     # NOTE: additional_loras conversion is now handled centrally in HeadlessTaskQueue
     # Both dict format ({"url": multiplier}) and list format are supported
@@ -469,6 +547,71 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         generation_params["lora_names"] = ["CausVid", "DetailEnhancerV1"]
         generation_params["lora_multipliers"] = [1.0, 0.2]  # DetailEnhancer at reduced strength
         headless_logger.debug(f"Auto-enabled Wan 2.2 acceleration LoRAs (no parameter overrides)", task_id=task_id)
+
+    # Auto-add/update Lightning LoRA based on amount_of_motion parameter
+    amount_of_motion = db_task_params.get("amount_of_motion", 0.0)
+    try:
+        amount_of_motion = float(amount_of_motion) if amount_of_motion is not None else 0.0
+    except (ValueError, TypeError):
+        amount_of_motion = 0.0
+
+    if amount_of_motion > 0.0 and ("2_2" in model or "cocktail_2_2" in model):
+        # Calculate inverse strength for first phase (1.0 - amount_of_motion, clamped to 0.0-1.0)
+        first_phase_strength = max(0.0, min(1.0, 1.0 - amount_of_motion))
+        lightning_strength = f"{first_phase_strength:.2f};1.0;0"
+
+        lightning_lora_name = "Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_HIGH_fp16.safetensors"
+
+        # Get current LoRA lists or initialize
+        current_lora_names = generation_params.get("lora_names", [])
+        current_lora_mults = generation_params.get("lora_multipliers", [])
+
+        # Ensure lists
+        if not isinstance(current_lora_names, list):
+            current_lora_names = [current_lora_names] if current_lora_names else []
+        if not isinstance(current_lora_mults, list):
+            current_lora_mults = [current_lora_mults] if current_lora_mults else []
+
+        # Make copies to avoid modifying references
+        current_lora_names = list(current_lora_names)
+        current_lora_mults = list(current_lora_mults)
+
+        # Check if Lightning LoRA already exists and update/add it
+        lightning_index = -1
+        for i, lora_name in enumerate(current_lora_names):
+            if "Lightning" in str(lora_name) or "lightning" in str(lora_name).lower():
+                lightning_index = i
+                break
+
+        if lightning_index >= 0:
+            # Update existing Lightning LoRA
+            current_lora_names[lightning_index] = lightning_lora_name
+            if lightning_index < len(current_lora_mults):
+                current_lora_mults[lightning_index] = lightning_strength
+            else:
+                current_lora_mults.append(lightning_strength)
+            headless_logger.debug(f"Updated Lightning LoRA strength to {lightning_strength} based on amount_of_motion={amount_of_motion}", task_id=task_id)
+        else:
+            # Add new Lightning LoRA
+            current_lora_names.append(lightning_lora_name)
+            current_lora_mults.append(lightning_strength)
+            headless_logger.debug(f"Added Lightning LoRA with strength {lightning_strength} based on amount_of_motion={amount_of_motion}", task_id=task_id)
+
+        # Ensure multipliers list matches names list length
+        while len(current_lora_mults) < len(current_lora_names):
+            current_lora_mults.append("1.0")
+
+        generation_params["lora_names"] = current_lora_names
+        generation_params["lora_multipliers"] = current_lora_mults
+
+        # Add to additional_loras for download handling
+        if "additional_loras" not in generation_params:
+            generation_params["additional_loras"] = {}
+
+        lightning_url = "https://huggingface.co/DeepBeepMeep/Wan2.2/resolve/main/loras_accelerators/Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_HIGH_fp16.safetensors"
+        generation_params["additional_loras"][lightning_url] = first_phase_strength
+
+        headless_logger.info(f"Lightning LoRA configured: strength={lightning_strength}, amount_of_motion={amount_of_motion}", task_id=task_id)
     
     # Determine task priority (orchestrator tasks get higher priority)
     priority = db_task_params.get("priority", 0)
@@ -692,6 +835,68 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         if additional_loras:
             generation_params["additional_loras"] = additional_loras
             dprint(f"[QUEUE_PARAMS] Added {len(additional_loras)} additional LoRAs from orchestrator payload")
+
+        # Auto-add Lightning LoRA based on amount_of_motion from orchestrator
+        amount_of_motion = full_orchestrator_payload.get("amount_of_motion", 0.0)
+        try:
+            amount_of_motion = float(amount_of_motion) if amount_of_motion is not None else 0.0
+        except (ValueError, TypeError):
+            amount_of_motion = 0.0
+
+        if amount_of_motion > 0.0 and ("2_2" in model_name or "lightning" in model_name.lower()):
+            first_phase_strength = max(0.0, min(1.0, 1.0 - amount_of_motion))
+            lightning_strength = f"{first_phase_strength:.2f};1.0;0"
+
+            lightning_lora_name = "Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_HIGH_fp16.safetensors"
+
+            # Get or initialize LoRA lists
+            current_lora_names = generation_params.get("lora_names", [])
+            current_lora_mults = generation_params.get("lora_multipliers", [])
+
+            if not isinstance(current_lora_names, list):
+                current_lora_names = [current_lora_names] if current_lora_names else []
+            if not isinstance(current_lora_mults, list):
+                current_lora_mults = [current_lora_mults] if current_lora_mults else []
+
+            current_lora_names = list(current_lora_names)
+            current_lora_mults = list(current_lora_mults)
+
+            # Check if Lightning LoRA already exists and update/add it
+            lightning_index = -1
+            for i, lora_name in enumerate(current_lora_names):
+                if "Lightning" in str(lora_name) or "lightning" in str(lora_name).lower():
+                    lightning_index = i
+                    break
+
+            if lightning_index >= 0:
+                # Update existing Lightning LoRA
+                current_lora_names[lightning_index] = lightning_lora_name
+                if lightning_index < len(current_lora_mults):
+                    current_lora_mults[lightning_index] = lightning_strength
+                else:
+                    current_lora_mults.append(lightning_strength)
+                dprint(f"[LIGHTNING_LORA] Travel segment {task_id}: Updated Lightning LoRA strength to {lightning_strength} based on amount_of_motion={amount_of_motion}")
+            else:
+                # Add new Lightning LoRA
+                current_lora_names.append(lightning_lora_name)
+                current_lora_mults.append(lightning_strength)
+                dprint(f"[LIGHTNING_LORA] Travel segment {task_id}: Added Lightning LoRA with strength {lightning_strength} based on amount_of_motion={amount_of_motion}")
+
+            # Ensure multipliers list matches names list length
+            while len(current_lora_mults) < len(current_lora_names):
+                current_lora_mults.append("1.0")
+
+            generation_params["lora_names"] = current_lora_names
+            generation_params["lora_multipliers"] = current_lora_mults
+
+            # Add to additional_loras for download handling
+            if "additional_loras" not in generation_params:
+                generation_params["additional_loras"] = {}
+
+            lightning_url = "https://huggingface.co/DeepBeepMeep/Wan2.2/resolve/main/loras_accelerators/Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_HIGH_fp16.safetensors"
+            generation_params["additional_loras"][lightning_url] = first_phase_strength
+
+            headless_logger.info(f"Travel segment Lightning LoRA configured: strength={lightning_strength}, amount_of_motion={amount_of_motion}", task_id=task_id)
         
         # Only add explicit parameters if they're provided (let model preset handle defaults)
         # Check both 'steps' and 'num_inference_steps' from orchestrator payload
