@@ -1,0 +1,33 @@
+{
+  "model": {
+    "name": "Wan2.2 Vace Fun Cocktail Lightning 14B (3-Phase) 2-2-2 Steps - Baseline (Lightning Only)",
+    "architecture": "vace_14B",
+    "description": "3-phase baseline model with only Lightning HIGH Phase 2 + Lightning LOW Phase 3 - 2-2-2 steps, standard CFG, model switch at phase 2",
+    "URLs": "vace_fun_14B_2_2",
+    "URLs2": "vace_fun_14B_2_2",
+    "loras": [
+      "https://huggingface.co/DeepBeepMeep/Wan2.2/resolve/main/loras_accelerators/Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_HIGH_fp16.safetensors",
+      "https://huggingface.co/DeepBeepMeep/Wan2.2/resolve/main/loras_accelerators/Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_LOW_fp16.safetensors"
+    ],
+    "loras_multipliers": [
+      "0;1.0;0",
+      "0;0;1"
+    ],
+    "lock_guidance_phases": true,
+    "group": "wan2_2"
+  },
+  "video_length": 81,
+  "guidance_phases": 3,
+  "num_inference_steps": 6,
+  "guidance_scale": 3,
+  "guidance2_scale": 1,
+  "guidance3_scale": 1,
+  "flow_shift": 5,
+  "switch_threshold": 601,
+  "switch_threshold2": 201,
+  "model_switch_phase": 2,
+  "seed": 12345,
+  "sample_solver": "euler",
+  "video_prompt_type": "VM",
+  "negative_prompt": "fading, breaking, shot cuts, jumpcuts, blurry, noise, distorted"
+}
