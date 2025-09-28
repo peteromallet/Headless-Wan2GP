@@ -1307,65 +1307,59 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
 # Heartbeat System
 # -----------------------------------------------------------------------------
 
-def send_worker_heartbeat(worker_id: str, dprint_func=print):
-    """Send heartbeat for this worker to keep it alive in the system."""
+def send_worker_heartbeat(worker_id: str) -> bool:
+    """Send heartbeat with proper error handling."""
+
+    if db_ops.DB_TYPE != "supabase" or not db_ops.SUPABASE_CLIENT:
+        headless_logger.debug(f"[HEARTBEAT] SQLite mode - no heartbeat needed")
+        return True
+
+    # Method 1: Try RPC function
     try:
-        if db_ops.DB_TYPE == "supabase" and db_ops.SUPABASE_CLIENT:
-            # Call the func_update_worker_heartbeat Supabase Edge Function
-            try:
-                response = db_ops.SUPABASE_CLIENT.functions.invoke(
-                    "func_update_worker_heartbeat",
-                    {"worker_id": worker_id}
-                )
-                if response.status_code == 200:
-                    dprint_func(f"[HEARTBEAT] ✅ Sent for worker {worker_id}")
-                    return True
-                else:
-                    dprint_func(f"[HEARTBEAT] ❌ Failed for worker {worker_id}: HTTP {response.status_code}")
-                    return False
-            except Exception as e_edge:
-                # Fallback to direct database update if edge function fails
-                dprint_func(f"[HEARTBEAT] Edge function failed, trying direct DB: {e_edge}")
+        response = db_ops.SUPABASE_CLIENT.rpc(
+            'func_update_worker_heartbeat',
+            {'worker_id_param': worker_id}
+        )
+        headless_logger.debug(f"[HEARTBEAT] ✅ RPC success for {worker_id}")
+        return True
+    except Exception as e:
+        headless_logger.warning(f"[HEARTBEAT] RPC failed for {worker_id}: {e}")
 
-                current_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
-                response = db_ops.SUPABASE_CLIENT.table("workers").upsert({
-                    "worker_id": worker_id,
-                    "last_heartbeat": current_time,
-                    "status": "active"
-                }).execute()
+    # Method 2: Fallback to direct table update
+    try:
+        current_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        response = db_ops.SUPABASE_CLIENT.table("workers").update({
+            "last_heartbeat": current_time,
+            "status": "active"
+        }).eq("id", worker_id).execute()
 
-                if response.data:
-                    dprint_func(f"[HEARTBEAT] ✅ Direct DB update for worker {worker_id}")
-                    return True
-                else:
-                    dprint_func(f"[HEARTBEAT] ❌ Direct DB failed for worker {worker_id}")
-                    return False
-        else:
-            # For SQLite, we could update a local workers table, but it's less critical
-            dprint_func(f"[HEARTBEAT] SQLite mode - no heartbeat needed")
+        if response.data:
+            headless_logger.debug(f"[HEARTBEAT] ✅ Direct DB success for {worker_id}")
             return True
+        else:
+            headless_logger.error(f"[HEARTBEAT] Worker {worker_id} not found in database")
+            return False
 
     except Exception as e:
-        dprint_func(f"[HEARTBEAT] ❌ Exception for worker {worker_id}: {e}")
+        headless_logger.error(f"[HEARTBEAT] ❌ All methods failed for {worker_id}: {e}")
         return False
 
 
 def heartbeat_worker_thread(worker_id: str, stop_event: threading.Event, interval: int = 20):
-    """Background thread that sends periodic heartbeats."""
-    def dprint(msg):
-        # Use print directly to avoid circular imports with headless_logger
-        if debug_mode:
-            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}")
+    """Background thread that sends heartbeats every 20 seconds."""
 
-    dprint(f"[HEARTBEAT THREAD] Started for worker {worker_id} (interval: {interval}s)")
+    headless_logger.essential(f"✅ Starting heartbeat thread for worker: {worker_id}")
 
     while not stop_event.wait(interval):
         try:
-            send_worker_heartbeat(worker_id, dprint)
+            if send_worker_heartbeat(worker_id):
+                headless_logger.debug(f"✅ [HEARTBEAT] ✅ Sent for worker {worker_id}")
+            else:
+                headless_logger.error(f"❌ [HEARTBEAT] Failed for worker {worker_id}")
         except Exception as e:
-            dprint(f"[HEARTBEAT THREAD] Exception: {e}")
+            headless_logger.error(f"[HEARTBEAT THREAD] Exception: {e}")
 
-    dprint(f"[HEARTBEAT THREAD] Stopped for worker {worker_id}")
+    headless_logger.essential(f"🛑 Heartbeat thread stopped for worker: {worker_id}")
 
 
 # -----------------------------------------------------------------------------
