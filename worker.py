@@ -30,6 +30,7 @@ import json
 import time
 import datetime
 import traceback
+import threading
 
 from pathlib import Path
 from dotenv import load_dotenv
@@ -1303,6 +1304,71 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
 
 
 # -----------------------------------------------------------------------------
+# Heartbeat System
+# -----------------------------------------------------------------------------
+
+def send_worker_heartbeat(worker_id: str, dprint_func=print):
+    """Send heartbeat for this worker to keep it alive in the system."""
+    try:
+        if db_ops.DB_TYPE == "supabase" and db_ops.SUPABASE_CLIENT:
+            # Call the func_update_worker_heartbeat Supabase Edge Function
+            try:
+                response = db_ops.SUPABASE_CLIENT.functions.invoke(
+                    "func_update_worker_heartbeat",
+                    {"worker_id": worker_id}
+                )
+                if response.status_code == 200:
+                    dprint_func(f"[HEARTBEAT] ✅ Sent for worker {worker_id}")
+                    return True
+                else:
+                    dprint_func(f"[HEARTBEAT] ❌ Failed for worker {worker_id}: HTTP {response.status_code}")
+                    return False
+            except Exception as e_edge:
+                # Fallback to direct database update if edge function fails
+                dprint_func(f"[HEARTBEAT] Edge function failed, trying direct DB: {e_edge}")
+
+                current_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                response = db_ops.SUPABASE_CLIENT.table("workers").upsert({
+                    "worker_id": worker_id,
+                    "last_heartbeat": current_time,
+                    "status": "active"
+                }).execute()
+
+                if response.data:
+                    dprint_func(f"[HEARTBEAT] ✅ Direct DB update for worker {worker_id}")
+                    return True
+                else:
+                    dprint_func(f"[HEARTBEAT] ❌ Direct DB failed for worker {worker_id}")
+                    return False
+        else:
+            # For SQLite, we could update a local workers table, but it's less critical
+            dprint_func(f"[HEARTBEAT] SQLite mode - no heartbeat needed")
+            return True
+
+    except Exception as e:
+        dprint_func(f"[HEARTBEAT] ❌ Exception for worker {worker_id}: {e}")
+        return False
+
+
+def heartbeat_worker_thread(worker_id: str, stop_event: threading.Event, interval: int = 20):
+    """Background thread that sends periodic heartbeats."""
+    def dprint(msg):
+        # Use print directly to avoid circular imports with headless_logger
+        if debug_mode:
+            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}")
+
+    dprint(f"[HEARTBEAT THREAD] Started for worker {worker_id} (interval: {interval}s)")
+
+    while not stop_event.wait(interval):
+        try:
+            send_worker_heartbeat(worker_id, dprint)
+        except Exception as e:
+            dprint(f"[HEARTBEAT THREAD] Exception: {e}")
+
+    dprint(f"[HEARTBEAT THREAD] Stopped for worker {worker_id}")
+
+
+# -----------------------------------------------------------------------------
 # Main server loop
 # -----------------------------------------------------------------------------
 
@@ -1312,6 +1378,11 @@ def main():
 
     # Parse CLI arguments first to determine debug mode
     cli_args = parse_args()
+
+    # Global heartbeat control
+    global heartbeat_thread, heartbeat_stop_event
+    heartbeat_thread = None
+    heartbeat_stop_event = threading.Event()
     
     # Set up logging early based on debug flag
     global debug_mode
@@ -1495,6 +1566,21 @@ def main():
         print(f"Monitoring SQLite database: {db_ops.SQLITE_DB_PATH}")
     print(f"Outputs will be saved under: {main_output_dir}")
     print(f"Polling interval: {cli_args.poll_interval} seconds.")
+
+    # Start heartbeat thread if worker ID is provided
+    if cli_args.worker and db_ops.DB_TYPE == "supabase":
+        print(f"Starting heartbeat thread for worker: {cli_args.worker}")
+        heartbeat_thread = threading.Thread(
+            target=heartbeat_worker_thread,
+            args=(cli_args.worker, heartbeat_stop_event, 20),
+            daemon=True
+        )
+        heartbeat_thread.start()
+        print(f"✅ Heartbeat thread started (20-second intervals)")
+    elif cli_args.worker:
+        print(f"⚠️  Worker ID provided but SQLite mode - heartbeat not needed")
+    else:
+        print(f"⚠️  No worker ID provided - heartbeat disabled")
 
     # Initialize database
     # Supabase table/schema assumed to exist; skip initialization RPC
@@ -1685,6 +1771,17 @@ def main():
     except KeyboardInterrupt:
         headless_logger.essential("Server shutting down gracefully...")
     finally:
+        # Stop heartbeat thread
+        if cli_args.worker and db_ops.DB_TYPE == "supabase":
+            print("Stopping heartbeat thread...")
+            heartbeat_stop_event.set()
+            if heartbeat_thread and heartbeat_thread.is_alive():
+                heartbeat_thread.join(timeout=5.0)
+                if heartbeat_thread.is_alive():
+                    print("⚠️  Heartbeat thread did not stop cleanly")
+                else:
+                    print("✅ Heartbeat thread stopped")
+
         # Shutdown task queue first (if it was initialized)
         if task_queue is not None:
             try:
