@@ -2176,24 +2176,39 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 # Retry frame extraction with backoff and re-download for corrupted videos
                 max_extraction_attempts = 3
                 all_segment_frames_lists = None
+                retry_log = []  # Track all retry attempts for detailed error reporting
 
                 for attempt in range(max_extraction_attempts):
                     print(f"[CRITICAL DEBUG] Frame extraction attempt {attempt + 1}/{max_extraction_attempts}")
+                    attempt_start_time = time.time()
                     all_segment_frames_lists = [sm_extract_frames_from_video(p, dprint_func=dprint) for p in segment_video_paths_for_stitch]
 
                     # [CRITICAL DEBUG] Log frame extraction results
                     print(f"[CRITICAL DEBUG] Frame extraction results (attempt {attempt + 1}):")
                     failed_segments = []
+                    successful_segments = []
                     for idx, frame_list in enumerate(all_segment_frames_lists):
                         if frame_list is not None and len(frame_list) > 0:
                             print(f"[CRITICAL DEBUG] Segment {idx}: {len(frame_list)} frames extracted")
+                            successful_segments.append(idx)
                         else:
                             print(f"[CRITICAL DEBUG] Segment {idx}: FAILED to extract frames")
                             failed_segments.append(idx)
 
+                    # Log this attempt
+                    attempt_duration = time.time() - attempt_start_time
+                    attempt_info = {
+                        "attempt": attempt + 1,
+                        "duration_seconds": round(attempt_duration, 2),
+                        "successful_segments": successful_segments,
+                        "failed_segments": failed_segments,
+                        "redownloads": []
+                    }
+
                     # Check if all extractions succeeded
                     if all(f_list is not None and len(f_list) > 0 for f_list in all_segment_frames_lists):
                         print(f"[CRITICAL DEBUG] All frame extractions successful on attempt {attempt + 1}")
+                        retry_log.append(attempt_info)
                         break
 
                     # If not the last attempt, try to re-download corrupted videos before retry
@@ -2214,6 +2229,8 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                                         failed_video_path = Path(segment_video_paths_for_stitch[failed_idx])
                                         print(f"[CRITICAL DEBUG] Re-downloading corrupted segment {failed_idx} from {video_path_str_from_db}")
 
+                                        redownload_start = time.time()
+
                                         # Delete corrupted file
                                         if failed_video_path.exists():
                                             failed_video_path.unlink()
@@ -2225,14 +2242,44 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                                         # Wait for stability
                                         if sm_wait_for_file_stable(failed_video_path, checks=5, interval=1.0, dprint=dprint):
                                             print(f"[CRITICAL DEBUG] Re-downloaded segment {failed_idx} successfully")
+                                            redownload_duration = time.time() - redownload_start
+                                            attempt_info["redownloads"].append({
+                                                "segment_idx": failed_idx,
+                                                "source_url": video_path_str_from_db,
+                                                "duration_seconds": round(redownload_duration, 2),
+                                                "success": True
+                                            })
                                             redownload_attempted = True
                                         else:
                                             print(f"[CRITICAL DEBUG] Re-downloaded segment {failed_idx} not stable")
+                                            redownload_duration = time.time() - redownload_start
+                                            attempt_info["redownloads"].append({
+                                                "segment_idx": failed_idx,
+                                                "source_url": video_path_str_from_db,
+                                                "duration_seconds": round(redownload_duration, 2),
+                                                "success": False,
+                                                "error": "File not stable after download"
+                                            })
 
                                     except Exception as e_redownload:
                                         print(f"[CRITICAL DEBUG] Re-download failed for segment {failed_idx}: {e_redownload}")
+                                        redownload_duration = time.time() - redownload_start
+                                        attempt_info["redownloads"].append({
+                                            "segment_idx": failed_idx,
+                                            "source_url": video_path_str_from_db,
+                                            "duration_seconds": round(redownload_duration, 2),
+                                            "success": False,
+                                            "error": str(e_redownload)
+                                        })
                                 else:
                                     print(f"[CRITICAL DEBUG] Segment {failed_idx} is not a remote URL, cannot re-download: {video_path_str_from_db}")
+                                    attempt_info["redownloads"].append({
+                                        "segment_idx": failed_idx,
+                                        "source_url": video_path_str_from_db,
+                                        "duration_seconds": 0,
+                                        "success": False,
+                                        "error": "Not a remote URL - cannot re-download"
+                                    })
 
                         if redownload_attempted:
                             print(f"[CRITICAL DEBUG] Re-download completed. Waiting {wait_time} seconds before next extraction attempt...")
@@ -2240,10 +2287,64 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                             print(f"[CRITICAL DEBUG] No re-downloads attempted. Waiting {wait_time} seconds before next extraction attempt...")
 
                         time.sleep(wait_time)
+
+                    # Log this attempt (whether successful or failed)
+                    retry_log.append(attempt_info)
                 else:
-                    # All attempts failed
+                    # All attempts failed - generate detailed error report
                     failed_segments = [i for i, f_list in enumerate(all_segment_frames_lists) if not (f_list is not None and len(f_list) > 0)]
-                    raise ValueError(f"Stitch: Frame extraction failed for segments {failed_segments} after {max_extraction_attempts} attempts (including re-download attempts) during cross-fade prep.")
+
+                    # Build detailed error message
+                    error_details = []
+                    error_details.append(f"Frame extraction failed for segments {failed_segments} after {max_extraction_attempts} attempts")
+                    error_details.append(f"Total segments in stitch: {len(segment_video_paths_for_stitch)}")
+
+                    # Add per-segment analysis
+                    for idx, video_path in enumerate(segment_video_paths_for_stitch):
+                        video_path_obj = Path(video_path)
+                        status = "✅ SUCCESS" if idx not in failed_segments else "❌ FAILED"
+
+                        if video_path_obj.exists():
+                            try:
+                                file_size = video_path_obj.stat().st_size
+                                # Try to get basic video info
+                                import cv2
+                                cap = cv2.VideoCapture(str(video_path))
+                                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if cap.isOpened() else -1
+                                fps = cap.get(cv2.CAP_PROP_FPS) if cap.isOpened() else -1
+                                cap.release()
+
+                                error_details.append(f"  Segment {idx} [{status}]: {video_path_obj.name} ({file_size:,} bytes, {frame_count} frames, {fps:.1f} fps)")
+                            except Exception:
+                                file_size = video_path_obj.stat().st_size if video_path_obj.exists() else 0
+                                error_details.append(f"  Segment {idx} [{status}]: {video_path_obj.name} ({file_size:,} bytes, properties unreadable)")
+                        else:
+                            error_details.append(f"  Segment {idx} [{status}]: {video_path} (FILE MISSING)")
+
+                    # Add source information if available
+                    if 'completed_segment_outputs_from_db' in locals():
+                        error_details.append("Source URLs:")
+                        for idx in failed_segments:
+                            if idx < len(completed_segment_outputs_from_db):
+                                seg_output = completed_segment_outputs_from_db[idx]
+                                source_url = seg_output.get("video_file_path", "Unknown")
+                                error_details.append(f"  Failed segment {idx} source: {source_url}")
+
+                    # Add retry history
+                    if retry_log:
+                        error_details.append("Retry History:")
+                        for log_entry in retry_log:
+                            attempt_summary = f"  Attempt {log_entry['attempt']}: {log_entry['duration_seconds']}s, Success:{len(log_entry['successful_segments'])}, Failed:{len(log_entry['failed_segments'])}"
+                            if log_entry['redownloads']:
+                                redownload_summary = []
+                                for rd in log_entry['redownloads']:
+                                    status = "✅" if rd['success'] else "❌"
+                                    redownload_summary.append(f"Seg{rd['segment_idx']}({status}{rd['duration_seconds']}s)")
+                                attempt_summary += f", Redownloads:[{','.join(redownload_summary)}]"
+                            error_details.append(attempt_summary)
+
+                    detailed_error = "Stitch: Cross-fade frame extraction failed. " + " | ".join(error_details)
+                    raise ValueError(detailed_error)
                 
                 final_stitched_frames = []
                 
