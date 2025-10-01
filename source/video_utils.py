@@ -654,11 +654,17 @@ def create_guide_video_for_travel_segment(
     segment_params: dict,
     single_image_journey: bool = False,
     predefined_output_path: Path | None = None,
+    structure_video_path: str | None = None,
+    structure_video_treatment: str = "adjust",
+    structure_video_motion_strength: float = 1.0,
     *,
     dprint=print
 ) -> Path | None:
     """Creates the guide video for a travel segment with all fading and adjustments."""
     try:
+        # Initialize guidance tracker for structure video feature
+        from .structure_video_guidance import GuidanceTracker, apply_structure_motion_with_tracking
+        guidance_tracker = GuidanceTracker(total_frames_for_segment)
         # Use predefined path if provided (for UUID-based naming), otherwise generate unique path
         if predefined_output_path:
             actual_guide_video_path = predefined_output_path
@@ -703,6 +709,8 @@ def create_guide_video_for_travel_segment(
                         keyframe_np = sm_image_to_frame(img_path, parsed_res_wh, task_id_for_logging=task_id_for_logging, image_download_dir=segment_image_download_dir, debug_mode=debug_mode)
                         if keyframe_np is not None:
                             frames_for_guide_list[frame_pos] = keyframe_np.copy()
+                            # Mark keyframe as guided
+                            guidance_tracker.mark_single_frame(frame_pos)
                             dprint(f"Task {task_id_for_logging}: Placed image {img_idx} at frame {frame_pos}")
             else:
                 # Subsequent consolidated segment: handle overlap + place end anchor
@@ -719,6 +727,8 @@ def create_guide_video_for_travel_segment(
                             for overlap_idx, overlap_frame in enumerate(overlap_frames):
                                 if overlap_idx < total_frames_for_segment:
                                     frames_for_guide_list[overlap_idx] = overlap_frame.copy()
+                                    # Mark as guided for structure video tracking
+                                    guidance_tracker.mark_single_frame(overlap_idx)
                                     dprint(f"Task {task_id_for_logging}: Placed overlap frame {overlap_idx} from previous video")
                     except Exception as e:
                         dprint(f"Task {task_id_for_logging}: WARNING - Could not extract overlap frames: {e}")
@@ -746,9 +756,30 @@ def create_guide_video_for_travel_segment(
                             keyframe_np = sm_image_to_frame(img_path, parsed_res_wh, task_id_for_logging=task_id_for_logging, image_download_dir=segment_image_download_dir, debug_mode=debug_mode)
                             if keyframe_np is not None:
                                 frames_for_guide_list[frame_pos] = keyframe_np.copy()
+                                # Mark keyframe as guided
+                                guidance_tracker.mark_single_frame(frame_pos)
                                 dprint(f"Task {task_id_for_logging}: Placed image {image_idx} at consolidated keyframe position {frame_pos}")
 
                     dprint(f"Task {task_id_for_logging}: Placed {len(consolidated_keyframe_positions)} keyframes for consolidated segment (end anchor: image {end_anchor_image_index})")
+
+            # Apply structure motion to unguidanced frames before creating video
+            if structure_video_path:
+                dprint(f"[GUIDANCE_TRACK] Pre-structure guidance summary:")
+                dprint(guidance_tracker.debug_summary())
+                
+                frames_for_guide_list = apply_structure_motion_with_tracking(
+                    frames_for_guide_list=frames_for_guide_list,
+                    guidance_tracker=guidance_tracker,
+                    structure_video_path=structure_video_path,
+                    structure_video_treatment=structure_video_treatment,
+                    parsed_res_wh=parsed_res_wh,
+                    fps_helpers=fps_helpers,
+                    motion_strength=structure_video_motion_strength,
+                    dprint=dprint
+                )
+                
+                dprint(f"[GUIDANCE_TRACK] Post-structure guidance summary:")
+                dprint(guidance_tracker.debug_summary())
 
             return create_video_from_frames_list(frames_for_guide_list, predefined_output_path or output_target_dir / guide_video_base_name, fps_helpers, parsed_res_wh)
 
@@ -774,7 +805,10 @@ def create_guide_video_for_travel_segment(
             start_anchor_img_path_str = input_images_resolved_for_guide[0]
             start_anchor_frame_np = sm_image_to_frame(start_anchor_img_path_str, parsed_res_wh, task_id_for_logging=task_id_for_logging, image_download_dir=segment_image_download_dir, debug_mode=debug_mode)
             if start_anchor_frame_np is None: raise ValueError(f"Failed to load start anchor: {start_anchor_img_path_str}")
-            if frames_for_guide_list: frames_for_guide_list[0] = start_anchor_frame_np.copy()
+            if frames_for_guide_list:
+                frames_for_guide_list[0] = start_anchor_frame_np.copy()
+                # Mark first frame as guided
+                guidance_tracker.mark_single_frame(0)
 
             if single_image_journey:
                 dprint(f"Task {task_id_for_logging}: Guide video for single image journey. Only first frame is set, all other frames remain gray/masked.")
@@ -791,6 +825,8 @@ def create_guide_video_for_travel_segment(
                         alpha_lin = 1.0 - ((k_fo + 1) / float(num_start_fade_steps))
                         e_alpha = fo_low + (fo_high - fo_low) * easing_fn_out(alpha_lin)
                         frames_for_guide_list[idx_in_guide] = cv2.addWeighted(frames_for_guide_list[idx_in_guide].astype(np.float32), 1.0 - e_alpha, start_anchor_frame_np.astype(np.float32), e_alpha, 0).astype(np.uint8)
+                        # Mark fade frames as guided
+                        guidance_tracker.mark_single_frame(idx_in_guide)
                 
                 min_idx_end_fade = 1
                 max_idx_end_fade = total_frames_for_segment - num_end_anchor_duplicates - 1
@@ -806,9 +842,14 @@ def create_guide_video_for_travel_segment(
                         e_alpha = fi_low + (fi_high - fi_low) * easing_fn_in(alpha_lin)
                         base_f = frames_for_guide_list[idx_in_guide]
                         frames_for_guide_list[idx_in_guide] = cv2.addWeighted(base_f.astype(np.float32), 1.0 - e_alpha, end_anchor_frame_np.astype(np.float32), e_alpha, 0).astype(np.uint8)
+                        # Mark fade frames as guided
+                        guidance_tracker.mark_single_frame(idx_in_guide)
                 elif fi_factor > 0 and avail_frames_end_fade > 0:
                     for k_fill in range(min_idx_end_fade, max_idx_end_fade + 1):
-                        if k_fill < total_frames_for_segment: frames_for_guide_list[k_fill] = end_anchor_frame_np.copy()
+                        if k_fill < total_frames_for_segment:
+                            frames_for_guide_list[k_fill] = end_anchor_frame_np.copy()
+                            # Mark filled frames as guided
+                            guidance_tracker.mark_single_frame(k_fill)
 
         elif path_to_previous_segment_video_output_for_guide: # Continued or Subsequent
             dprint(f"GuideBuilder (Seg {segment_idx_for_logging}): Subsequent segment logic started.")
@@ -899,6 +940,8 @@ def create_guide_video_for_travel_segment(
                     frame_fp = cv2.resize(frame_fp, parsed_res_wh, interpolation=cv2.INTER_AREA)
                     dprint(f"GuideBuilder: Resized frame {k} from {original_shape} to {frame_fp.shape}")
                 frames_for_guide_list[k] = frame_fp.copy()
+                # Mark overlap frames as guided
+                guidance_tracker.mark_single_frame(k)
                 frames_read_for_overlap += 1
             
             dprint(f"GuideBuilder: Frames copied into guide list: {frames_read_for_overlap}")
@@ -944,18 +987,47 @@ def create_guide_video_for_travel_segment(
                         if idx < min_idx_efs: continue
                         alpha_l=(k_fi_s+1)/float(num_efs_steps);e_alpha=fi_low+(fi_high-fi_low)*easing_fn_in_s(alpha_l);e_alpha=np.clip(e_alpha,0,1)
                         base_f=frames_for_guide_list[idx];frames_for_guide_list[idx]=cv2.addWeighted(base_f.astype(np.float32),1-e_alpha,end_anchor_frame_np.astype(np.float32),e_alpha,0).astype(np.uint8)
+                        # Mark fade frames as guided
+                        guidance_tracker.mark_single_frame(idx)
                 elif fi_factor > 0 and avail_f_efs > 0:
                     for k_fill in range(min_idx_efs, max_idx_efs + 1):
-                        if k_fill < total_frames_for_segment: frames_for_guide_list[k_fill] = end_anchor_frame_np.copy()
+                        if k_fill < total_frames_for_segment:
+                            frames_for_guide_list[k_fill] = end_anchor_frame_np.copy()
+                            # Mark filled frames as guided
+                            guidance_tracker.mark_single_frame(k_fill)
         
         if not single_image_journey and total_frames_for_segment > 0 and end_anchor_frame_np is not None:
             for k_dup in range(min(num_end_anchor_duplicates, total_frames_for_segment)):
                 idx_s = total_frames_for_segment - 1 - k_dup
-                if idx_s >= 0: frames_for_guide_list[idx_s] = end_anchor_frame_np.copy()
+                if idx_s >= 0:
+                    frames_for_guide_list[idx_s] = end_anchor_frame_np.copy()
+                    # Mark end anchor duplicates as guided
+                    guidance_tracker.mark_single_frame(idx_s)
                 else: break
 
         if is_first_segment_from_scratch and total_frames_for_segment > 0 and start_anchor_frame_np is not None:
             frames_for_guide_list[0] = start_anchor_frame_np.copy()
+            # Already marked above, but ensure it's marked
+            guidance_tracker.mark_single_frame(0)
+
+        # Apply structure motion to unguidanced frames before creating video
+        if structure_video_path:
+            dprint(f"[GUIDANCE_TRACK] Pre-structure guidance summary:")
+            dprint(guidance_tracker.debug_summary())
+            
+            frames_for_guide_list = apply_structure_motion_with_tracking(
+                frames_for_guide_list=frames_for_guide_list,
+                guidance_tracker=guidance_tracker,
+                structure_video_path=structure_video_path,
+                structure_video_treatment=structure_video_treatment,
+                parsed_res_wh=parsed_res_wh,
+                fps_helpers=fps_helpers,
+                motion_strength=structure_video_motion_strength,
+                dprint=dprint
+            )
+            
+            dprint(f"[GUIDANCE_TRACK] Post-structure guidance summary:")
+            dprint(guidance_tracker.debug_summary())
 
         if frames_for_guide_list:
             guide_video_file_path = create_video_from_frames_list(frames_for_guide_list, actual_guide_video_path, fps_helpers, parsed_res_wh)
