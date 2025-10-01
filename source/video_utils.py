@@ -663,7 +663,7 @@ def create_guide_video_for_travel_segment(
     """Creates the guide video for a travel segment with all fading and adjustments."""
     try:
         # Initialize guidance tracker for structure video feature
-        from .structure_video_guidance import GuidanceTracker, apply_structure_motion_with_tracking
+        from source.structure_video_guidance import GuidanceTracker, apply_structure_motion_with_tracking
         guidance_tracker = GuidanceTracker(total_frames_for_segment)
         # Use predefined path if provided (for UUID-based naming), otherwise generate unique path
         if predefined_output_path:
