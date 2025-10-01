@@ -120,6 +120,21 @@ class TravelSegmentProcessor:
             else:
                 end_anchor_img_path_str_idx = ctx.segment_idx + 1
             
+            # Extract structure video parameters from segment params or orchestrator payload
+            structure_video_path = ctx.segment_params.get("structure_video_path") or ctx.full_orchestrator_payload.get("structure_video_path")
+            structure_video_treatment = ctx.segment_params.get("structure_video_treatment", ctx.full_orchestrator_payload.get("structure_video_treatment", "adjust"))
+            structure_video_motion_strength = ctx.segment_params.get("structure_video_motion_strength", ctx.full_orchestrator_payload.get("structure_video_motion_strength", 1.0))
+            
+            # Download structure video if it's a URL (defensive fallback if orchestrator didn't download)
+            if structure_video_path:
+                from ..common_utils import download_video_if_url
+                structure_video_path = download_video_if_url(
+                    structure_video_path,
+                    download_target_dir=ctx.segment_processing_dir,
+                    task_id_for_logging=ctx.task_id,
+                    descriptive_name=f"structure_video_seg{ctx.segment_idx}"
+                )
+            
             # Create guide video using shared function
             guide_video_path = sm_create_guide_video_for_travel_segment(
                 segment_idx_for_logging=ctx.segment_idx,
@@ -138,6 +153,9 @@ class TravelSegmentProcessor:
                 segment_params=ctx.segment_params,
                 single_image_journey=False,  # Travel segments are not single image journeys
                 predefined_output_path=guide_video_final_path,
+                structure_video_path=structure_video_path,
+                structure_video_treatment=structure_video_treatment,
+                structure_video_motion_strength=structure_video_motion_strength,
                 dprint=ctx.dprint
             )
             

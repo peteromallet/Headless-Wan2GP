@@ -1623,32 +1623,49 @@ def _get_unique_target_path(target_dir: Path, base_name: str, extension: str) ->
     filename = f"{base_name}_{timestamp_short}_{unique_suffix}{extension}"
     return target_dir / filename
 
-def download_image_if_url(image_url_or_path: str, download_target_dir: Path | str | None, task_id_for_logging: str | None = "generic_task", debug_mode: bool = False, descriptive_name: str | None = None) -> str:
+def _download_file_if_url(
+    file_url_or_path: str,
+    download_target_dir: Path | str | None,
+    task_id_for_logging: str | None = "generic_task",
+    descriptive_name: str | None = None,
+    default_extension: str = ".jpg",
+    default_stem: str = "file",
+    file_type_label: str = "file",
+    timeout: int = 300
+) -> str:
     """
-    Checks if the given string is an HTTP/HTTPS URL. If so, and if download_target_dir is provided,
-    downloads the image to a unique path within download_target_dir.
-    Returns the local file path string if downloaded, otherwise returns the original string.
+    Generic function to download a file from URL if needed.
+    
+    Args:
+        file_url_or_path: URL or local path
+        download_target_dir: Directory to save downloaded file
+        task_id_for_logging: Task ID for logging
+        descriptive_name: Optional descriptive name for the file
+        default_extension: Default file extension if none detected
+        default_stem: Default stem for filename if none detected
+        file_type_label: Label for logging (e.g., "image", "video")
+        timeout: Request timeout in seconds
+        
+    Returns:
+        Local file path string if downloaded, otherwise returns the original string
     """
-    if not image_url_or_path:
-        return image_url_or_path
+    if not file_url_or_path:
+        return file_url_or_path
 
-    parsed_url = urlparse(image_url_or_path)
+    parsed_url = urlparse(file_url_or_path)
     if parsed_url.scheme in ['http', 'https'] and download_target_dir:
-        # Always download URLs when download_target_dir is provided
-        # Debug mode only affects logging verbosity and file retention
-            
         target_dir_path = Path(download_target_dir)
         try:
             target_dir_path.mkdir(parents=True, exist_ok=True)
-            dprint(f"Task {task_id_for_logging}: Downloading image from URL: {image_url_or_path} to {target_dir_path.resolve()}")
+            dprint(f"Task {task_id_for_logging}: Downloading {file_type_label} from URL: {file_url_or_path} to {target_dir_path.resolve()}")
             
             # Use a session for potential keep-alive and connection pooling
             with requests.Session() as s:
-                response = s.get(image_url_or_path, stream=True, timeout=300) # 5 min timeout
-                response.raise_for_status() # Raises HTTPError for bad responses (4XX or 5XX)
+                response = s.get(file_url_or_path, stream=True, timeout=timeout)
+                response.raise_for_status()
 
             original_filename = Path(parsed_url.path).name
-            original_suffix = Path(original_filename).suffix if Path(original_filename).suffix else ".jpg" # Default to .jpg if no suffix
+            original_suffix = Path(original_filename).suffix if Path(original_filename).suffix else default_extension
             if not original_suffix.startswith('.'):
                 original_suffix = '.' + original_suffix
             
@@ -1657,42 +1674,69 @@ def download_image_if_url(image_url_or_path: str, download_target_dir: Path | st
                 base_name_for_download = descriptive_name[:50]  # Limit length
             else:
                 # Improved default naming
-                cleaned_stem = Path(original_filename).stem[:30] if Path(original_filename).stem else "image"
+                cleaned_stem = Path(original_filename).stem[:30] if Path(original_filename).stem else default_stem
                 base_name_for_download = f"input_{cleaned_stem}"
             
             # _get_unique_target_path expects a Path object for target_dir
-            local_image_path = _get_unique_target_path(target_dir_path, base_name_for_download, original_suffix)
+            local_file_path = _get_unique_target_path(target_dir_path, base_name_for_download, original_suffix)
             
-            with open(local_image_path, 'wb') as f:
-                # Re-fetch without stream=True if response was already consumed by raise_for_status check,
-                # or ensure streaming works correctly if the initial response object can be re-used.
-                # For simplicity, re-requesting after status check if necessary, or ensure stream is not prematurely closed.
-                # A simple way for non-huge files and to avoid stream issues with one-off downloads:
-                if response.raw.closed: # If stream was closed by raise_for_status or other means
-                    with requests.Session() as s_final:
-                        final_response = s_final.get(image_url_or_path, stream=False, timeout=300) # Not streaming for direct content write
-                        final_response.raise_for_status()
-                        f.write(final_response.content)
-                else: # Stream is still open
-                    for chunk in response.iter_content(chunk_size=8192):
+            with open(local_file_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
                         f.write(chunk)
             
-            dprint(f"Task {task_id_for_logging}: Image downloaded successfully to {local_image_path.resolve()}")
-            return str(local_image_path.resolve())
-
-        except requests.exceptions.RequestException as e_req:
-            dprint(f"Task {task_id_for_logging}: Error downloading image {image_url_or_path}: {e_req}. Returning original path.")
-            return image_url_or_path
-        except IOError as e_io:
-            dprint(f"Task {task_id_for_logging}: IO error saving image from {image_url_or_path}: {e_io}. Returning original path.")
-            return image_url_or_path
-        except Exception as e_gen:
-            dprint(f"Task {task_id_for_logging}: General error processing image URL {image_url_or_path}: {e_gen}. Returning original path.")
-            return image_url_or_path
+            dprint(f"Task {task_id_for_logging}: Successfully downloaded {file_type_label} to {local_file_path}")
+            return str(local_file_path)
+            
+        except requests.exceptions.RequestException as e:
+            dprint(f"Task {task_id_for_logging}: ERROR downloading {file_type_label} from {file_url_or_path}: {e}")
+            return file_url_or_path  # Return original URL on failure
+        except Exception as e_dl:
+            dprint(f"Task {task_id_for_logging}: ERROR saving {file_type_label} to {target_dir_path}: {e_dl}")
+            traceback.print_exc()
+            return file_url_or_path  # Return original URL on failure
     else:
-        # Not an HTTP/HTTPS URL or no download directory specified
-        dprint(f"Task {task_id_for_logging}: Not downloading image (not URL or no target dir): {image_url_or_path}")
-        return image_url_or_path
+        # Not a URL, or no download directory provided
+        return file_url_or_path
+
+
+def download_video_if_url(video_url_or_path: str, download_target_dir: Path | str | None, task_id_for_logging: str | None = "generic_task", descriptive_name: str | None = None) -> str:
+    """
+    Checks if the given string is an HTTP/HTTPS URL. If so, and if download_target_dir is provided,
+    downloads the video to a unique path within download_target_dir.
+    Returns the local file path string if downloaded, otherwise returns the original string.
+    """
+    return _download_file_if_url(
+        video_url_or_path,
+        download_target_dir,
+        task_id_for_logging,
+        descriptive_name,
+        default_extension=".mp4",
+        default_stem="structure_video",
+        file_type_label="video",
+        timeout=600  # 10 min timeout for larger videos
+    )
+
+
+def download_image_if_url(image_url_or_path: str, download_target_dir: Path | str | None, task_id_for_logging: str | None = "generic_task", debug_mode: bool = False, descriptive_name: str | None = None) -> str:
+    """
+    Checks if the given string is an HTTP/HTTPS URL. If so, and if download_target_dir is provided,
+    downloads the image to a unique path within download_target_dir.
+    Returns the local file path string if downloaded, otherwise returns the original string.
+    
+    Note: debug_mode parameter is kept for backwards compatibility but not currently used.
+    """
+    # Use the generic download function
+    return _download_file_if_url(
+        image_url_or_path,
+        download_target_dir,
+        task_id_for_logging,
+        descriptive_name,
+        default_extension=".jpg",
+        default_stem="image",
+        file_type_label="image",
+        timeout=300  # 5 min timeout for images
+    )
 
 def image_to_frame(image_path_str: str | Path, target_resolution_wh: tuple[int, int] | None = None, task_id_for_logging: str | None = "generic_task", image_download_dir: Path | str | None = None, debug_mode: bool = False) -> np.ndarray | None:
     """

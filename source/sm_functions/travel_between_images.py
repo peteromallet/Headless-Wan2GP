@@ -655,6 +655,33 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             dprint(f"[FRAME_CONSOLIDATION] Parameters not identical - keeping original allocation")
         # --- END FRAME CONSOLIDATION OPTIMIZATION ---
 
+        # Extract and validate structure video parameters
+        structure_video_path = orchestrator_payload.get("structure_video_path")
+        structure_video_treatment = orchestrator_payload.get("structure_video_treatment", "adjust")
+        structure_video_motion_strength = orchestrator_payload.get("structure_video_motion_strength", 1.0)
+        
+        if structure_video_path:
+            # Download if URL
+            from ..common_utils import download_video_if_url
+            structure_video_path = download_video_if_url(
+                structure_video_path,
+                download_target_dir=current_run_output_dir,
+                task_id_for_logging=orchestrator_task_id_str,
+                descriptive_name="structure_video"
+            )
+            
+            # Validate structure video exists (after potential download)
+            if not Path(structure_video_path).exists():
+                raise ValueError(f"Structure video not found: {structure_video_path}")
+            
+            # Validate treatment mode
+            if structure_video_treatment not in ["adjust", "clip"]:
+                raise ValueError(f"Invalid structure_video_treatment: {structure_video_treatment}. Must be 'adjust' or 'clip'")
+            
+            dprint(f"[STRUCTURE_VIDEO] Using: {structure_video_path}")
+            dprint(f"[STRUCTURE_VIDEO] Treatment: {structure_video_treatment}")
+            dprint(f"[STRUCTURE_VIDEO] Motion strength: {structure_video_motion_strength}")
+
         # Loop to queue all segment tasks (skip existing ones for idempotency)
         segments_created = 0
         for idx in range(num_segments):
@@ -777,6 +804,11 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "consolidated_end_anchor_idx": orchestrator_payload.get("_consolidated_end_anchors", [None] * num_segments)[idx] if orchestrator_payload.get("_consolidated_end_anchors") else None,
                 "consolidated_keyframe_positions": orchestrator_payload.get("_consolidated_keyframe_positions", [None] * num_segments)[idx] if orchestrator_payload.get("_consolidated_end_anchors") else None,
                 "full_orchestrator_payload": orchestrator_payload, # Ensure full payload is passed to segment
+                
+                # Structure video guidance parameters
+                "structure_video_path": structure_video_path,
+                "structure_video_treatment": structure_video_treatment,
+                "structure_video_motion_strength": structure_video_motion_strength,
             }
             
             # Add extracted parameters at top level for queue processing
