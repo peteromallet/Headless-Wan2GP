@@ -208,8 +208,20 @@ class HeadlessTaskQueue:
         
         try:
             self.logger.info("[LAZY_INIT] Initializing WanOrchestrator (first use)...")
-            self.logger.info("[LAZY_INIT] This will import wgp and trigger CUDA initialization")
+            self.logger.info("[LAZY_INIT] Warming up CUDA before importing wgp...")
             
+            # Warm up CUDA before importing wgp (upstream T5EncoderModel has torch.cuda.current_device() 
+            # as a default arg, which is evaluated at module import time)
+            import torch
+            if torch.cuda.is_available():
+                self.logger.info(f"[LAZY_INIT] CUDA is available: {torch.cuda.get_device_name(0)}")
+                # Initialize CUDA by accessing a device
+                _ = torch.cuda.current_device()
+                self.logger.info(f"[LAZY_INIT] CUDA initialized on device {torch.cuda.current_device()}")
+            else:
+                self.logger.warning("[LAZY_INIT] ⚠️  No CUDA device available! Model loading may fail.")
+            
+            self.logger.info("[LAZY_INIT] Importing WanOrchestrator (this imports wgp and model modules)...")
             from headless_wgp import WanOrchestrator
             self.orchestrator = WanOrchestrator(self.wan_dir)
             
