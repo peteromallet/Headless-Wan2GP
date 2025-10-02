@@ -657,6 +657,7 @@ def create_guide_video_for_travel_segment(
     structure_video_path: str | None = None,
     structure_video_treatment: str = "adjust",
     structure_video_motion_strength: float = 1.0,
+    structure_motion_video_url: str | None = None,
     *,
     dprint=print
 ) -> Path | None:
@@ -775,6 +776,8 @@ def create_guide_video_for_travel_segment(
                     parsed_res_wh=parsed_res_wh,
                     fps_helpers=fps_helpers,
                     motion_strength=structure_video_motion_strength,
+                    structure_motion_video_url=structure_motion_video_url,
+                    segment_processing_dir=output_target_dir,
                     dprint=dprint
                 )
                 
@@ -1023,6 +1026,8 @@ def create_guide_video_for_travel_segment(
                 parsed_res_wh=parsed_res_wh,
                 fps_helpers=fps_helpers,
                 motion_strength=structure_video_motion_strength,
+                structure_motion_video_url=structure_motion_video_url,
+                segment_processing_dir=output_target_dir,
                 dprint=dprint
             )
             

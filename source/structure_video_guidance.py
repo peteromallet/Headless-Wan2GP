@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple, Optional, Callable
 import traceback
+import torch
 
 
 @dataclass
@@ -113,6 +114,7 @@ def load_structure_video_frames(
     target_frame_count: int,
     target_fps: int,
     target_resolution: Tuple[int, int],
+    crop_to_fit: bool = True,
     dprint: Callable = print
 ) -> List[np.ndarray]:
     """
@@ -123,6 +125,7 @@ def load_structure_video_frames(
         target_frame_count: Number of frames to load (note: loads target_frame_count+1 to get enough flows)
         target_fps: Target FPS for resampling
         target_resolution: (width, height) tuple
+        crop_to_fit: If True, center-crop to match target aspect ratio before resizing
         dprint: Debug print function
         
     Returns:
@@ -157,6 +160,7 @@ def load_structure_video_frames(
     
     # Process frames to target resolution (WGP pattern from line 3826-3830)
     w, h = target_resolution
+    target_aspect = w / h
     processed_frames = []
     
     for i, frame in enumerate(frames):
@@ -170,8 +174,30 @@ def load_structure_video_frames(
         if frame_np.dtype != np.uint8:
             frame_np = np.clip(frame_np, 0, 255).astype(np.uint8)
         
-        # Resize to target resolution using PIL (WGP pattern line 3830)
+        # Convert to PIL for processing (WGP pattern line 3830)
         frame_pil = Image.fromarray(frame_np)
+        
+        # Center crop to match target aspect ratio if requested
+        if crop_to_fit:
+            src_w, src_h = frame_pil.size
+            src_aspect = src_w / src_h
+            
+            if abs(src_aspect - target_aspect) > 0.01:  # Different aspect ratios
+                if src_aspect > target_aspect:
+                    # Source is wider - crop width
+                    new_w = int(src_h * target_aspect)
+                    left = (src_w - new_w) // 2
+                    frame_pil = frame_pil.crop((left, 0, left + new_w, src_h))
+                else:
+                    # Source is taller - crop height
+                    new_h = int(src_w / target_aspect)
+                    top = (src_h - new_h) // 2
+                    frame_pil = frame_pil.crop((0, top, src_w, top + new_h))
+                
+                if i == 0:
+                    dprint(f"[STRUCTURE_VIDEO] Center-cropped from {src_w}x{src_h} to {frame_pil.size[0]}x{frame_pil.size[1]}")
+        
+        # Resize to target resolution
         frame_resized = frame_pil.resize((w, h), resample=Image.Resampling.LANCZOS)
         frame_resized_np = np.array(frame_resized)
         
@@ -390,11 +416,13 @@ def apply_optical_flow_warp(
 def apply_structure_motion_with_tracking(
     frames_for_guide_list: List[np.ndarray],
     guidance_tracker: GuidanceTracker,
-    structure_video_path: str,
+    structure_video_path: str | None,
     structure_video_treatment: str,
     parsed_res_wh: Tuple[int, int],
     fps_helpers: int,
     motion_strength: float = 1.0,
+    structure_motion_video_url: str | None = None,
+    segment_processing_dir: Path | None = None,
     dprint: Callable = print
 ) -> List[np.ndarray]:
     """
@@ -404,14 +432,22 @@ def apply_structure_motion_with_tracking(
     In "clip" mode, only frames that actually receive warps are marked - frames left
     unchanged when flows run out remain unguidanced.
     
+    Two modes of operation:
+    1. Pre-warped video (FASTER): If structure_motion_video_url is provided, downloads
+       and extracts pre-computed motion frames directly (no GPU warping needed).
+    2. Legacy path: If only structure_video_path is provided, extracts flows and
+       applies warping per-segment (slower, more GPU work).
+    
     Args:
         frames_for_guide_list: Current guide frames
         guidance_tracker: Tracks which frames have guidance (MUTATED by this function)
-        structure_video_path: Path to structure video
-        structure_video_treatment: "adjust" or "clip"
+        structure_video_path: Path to structure video (legacy path, optional if URL provided)
+        structure_video_treatment: "adjust" or "clip" (ignored for pre-warped video)
         parsed_res_wh: Target resolution (width, height)
         fps_helpers: Target FPS
         motion_strength: Motion strength multiplier (0.0=no motion, 1.0=full, >1.0=amplified)
+        structure_motion_video_url: URL/path to pre-warped motion video (faster path)
+        segment_processing_dir: Directory for downloads (required if using URL)
         dprint: Debug print function
         
     Returns:
@@ -429,6 +465,57 @@ def apply_structure_motion_with_tracking(
     
     dprint(f"[STRUCTURE_VIDEO] Processing {total_unguidanced} unguidanced frames across {len(unguidanced_ranges)} ranges")
     
+    # ===== PRE-WARPED VIDEO PATH (FASTER) =====
+    if structure_motion_video_url:
+        dprint(f"[STRUCTURE_VIDEO] Using pre-warped motion video (fast path)")
+        
+        if not segment_processing_dir:
+            raise ValueError("segment_processing_dir required when using structure_motion_video_url")
+        
+        try:
+            # Download and extract all motion frames we need
+            motion_frames = download_and_extract_motion_frames(
+                structure_motion_video_url=structure_motion_video_url,
+                frame_start=0,
+                frame_count=total_unguidanced,
+                download_dir=segment_processing_dir,
+                dprint=dprint
+            )
+            
+            # Drop motion frames directly into unguidanced ranges
+            updated_frames = frames_for_guide_list.copy()
+            motion_frame_idx = 0
+            frames_filled = 0
+            
+            for range_start, range_end in unguidanced_ranges:
+                dprint(f"[STRUCTURE_VIDEO] Filling range {range_start}-{range_end}")
+                
+                for frame_idx in range(range_start, range_end + 1):
+                    if motion_frame_idx < len(motion_frames):
+                        updated_frames[frame_idx] = motion_frames[motion_frame_idx]
+                        guidance_tracker.mark_single_frame(frame_idx)
+                        motion_frame_idx += 1
+                        frames_filled += 1
+                    else:
+                        dprint(f"[STRUCTURE_VIDEO] Warning: Ran out of motion frames at frame {frame_idx}")
+                        break
+            
+            dprint(f"[STRUCTURE_VIDEO] Filled {frames_filled} frames with pre-warped motion")
+            return updated_frames
+            
+        except Exception as e:
+            dprint(f"[ERROR] Pre-warped video path failed: {e}")
+            traceback.print_exc()
+            # Fall back to returning unchanged frames
+            return frames_for_guide_list
+    
+    # ===== LEGACY PATH: Extract flows and apply warping per-segment =====
+    if not structure_video_path:
+        dprint(f"[ERROR] Neither structure_motion_video_url nor structure_video_path provided")
+        return frames_for_guide_list
+    
+    dprint(f"[STRUCTURE_VIDEO] Using legacy path: extracting flows and warping per-segment")
+    
     try:
         # --- Step 1: Load structure video frames ---
         # Need N+1 frames to generate N optical flows
@@ -437,6 +524,7 @@ def apply_structure_motion_with_tracking(
             target_frame_count=total_unguidanced,  # Function adds +1 internally
             target_fps=fps_helpers,
             target_resolution=parsed_res_wh,
+            crop_to_fit=True,  # Apply center cropping
             dprint=dprint
         )
         
@@ -539,4 +627,243 @@ def apply_structure_motion_with_tracking(
         traceback.print_exc()
         # Return original frames unchanged
         return frames_for_guide_list
+
+
+def create_structure_motion_video(
+    structure_video_path: str,
+    max_frames_needed: int,
+    target_resolution: Tuple[int, int],
+    target_fps: int,
+    motion_strength: float,
+    output_path: Path,
+    dprint: Callable = print
+) -> Path:
+    """
+    Create a video of pre-warped frames showing structure motion evolution.
+    
+    This is the orchestrator-level function that:
+    1. Extracts optical flows from the structure video
+    2. Starts with a neutral gray frame
+    3. Progressively applies flows: gray → warp1 → warp2 → warp3...
+    4. Encodes the result as an H.264 video
+    
+    The resulting video can be downloaded by segments and used directly without
+    needing to perform warping computations.
+    
+    Args:
+        structure_video_path: Path to the source structure video
+        max_frames_needed: Number of frames to generate (based on longest unguidanced gap)
+        target_resolution: (width, height) for output frames
+        target_fps: FPS for the output video
+        motion_strength: Strength multiplier for optical flow (0.0 = no motion, 1.0 = full)
+        output_path: Where to save the output video
+        dprint: Debug print function
+        
+    Returns:
+        Path to the created video file
+        
+    Raises:
+        ValueError: If structure video cannot be loaded or processed
+    """
+    dprint(f"[STRUCTURE_MOTION_VIDEO] Creating pre-warped motion video...")
+    dprint(f"  Source: {structure_video_path}")
+    dprint(f"  Frames: {max_frames_needed}")
+    dprint(f"  Resolution: {target_resolution[0]}x{target_resolution[1]}")
+    dprint(f"  Motion strength: {motion_strength}")
+    
+    try:
+        # Step 1: Load structure video frames
+        dprint(f"[STRUCTURE_MOTION_VIDEO] Loading structure video frames...")
+        structure_frames = load_structure_video_frames(
+            structure_video_path,
+            target_frame_count=max_frames_needed,
+            target_fps=target_fps,
+            target_resolution=target_resolution,
+            crop_to_fit=True,  # Apply center cropping
+            dprint=dprint
+        )
+        
+        # Step 2: Extract optical flows
+        dprint(f"[STRUCTURE_MOTION_VIDEO] Extracting optical flows...")
+        flow_fields, _ = extract_optical_flow_from_frames(structure_frames, dprint=dprint)
+        
+        if not flow_fields:
+            raise ValueError("No optical flows extracted from structure video")
+        
+        dprint(f"[STRUCTURE_MOTION_VIDEO] Extracted {len(flow_fields)} flow fields")
+        
+        # Step 3: Generate motion-applied frames starting from gray
+        dprint(f"[STRUCTURE_MOTION_VIDEO] Generating motion-applied frames...")
+        
+        w, h = target_resolution
+        gray_frame = np.full((h, w, 3), 128, dtype=np.uint8)  # Neutral starting point
+        
+        motion_frames = [gray_frame]  # Start with gray
+        current_frame = gray_frame
+        
+        for i, flow in enumerate(flow_fields):
+            # Apply flow to current frame with motion strength
+            warped_frame = apply_optical_flow_warp(
+                source_frame=current_frame,
+                flow=flow,
+                target_resolution=target_resolution,
+                motion_strength=motion_strength
+            )
+            
+            motion_frames.append(warped_frame)
+            current_frame = warped_frame  # Chain forward for progressive evolution
+            
+            if (i + 1) % 50 == 0:
+                dprint(f"[STRUCTURE_MOTION_VIDEO] Generated {i+1}/{len(flow_fields)} frames")
+        
+        dprint(f"[STRUCTURE_MOTION_VIDEO] Generated {len(motion_frames)} motion frames")
+        
+        # Step 4: Encode as video
+        dprint(f"[STRUCTURE_MOTION_VIDEO] Encoding video to {output_path}")
+        
+        # Import video creation utilities
+        wan_dir = Path(__file__).parent.parent / "Wan2GP"
+        if str(wan_dir) not in sys.path:
+            sys.path.insert(0, str(wan_dir))
+        
+        from shared.utils.video_utils import save_video
+        
+        # Convert to torch tensor format expected by save_video
+        # save_video expects [T, H, W, C] in range [0, 255]
+        video_tensor = np.stack(motion_frames, axis=0)  # [T, H, W, C]
+        
+        # Ensure output directory exists
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Save video using WGP's video utilities
+        save_video(
+            video_tensor,
+            str(output_path),
+            fps=target_fps,
+            codec='h264_nvenc' if torch.cuda.is_available() else 'libx264',  # Use GPU encoder if available
+            quality=None,  # Use default quality
+            preset='fast'  # Fast encoding
+        )
+        
+        # Verify output exists
+        if not output_path.exists():
+            raise ValueError(f"Failed to create video at {output_path}")
+        
+        file_size_mb = output_path.stat().st_size / (1024 * 1024)
+        dprint(f"[STRUCTURE_MOTION_VIDEO] Created video: {output_path.name} ({file_size_mb:.2f} MB)")
+        
+        return output_path
+        
+    except Exception as e:
+        dprint(f"[ERROR] Failed to create structure motion video: {e}")
+        traceback.print_exc()
+        raise
+
+
+def download_and_extract_motion_frames(
+    structure_motion_video_url: str,
+    frame_start: int,
+    frame_count: int,
+    download_dir: Path,
+    dprint: Callable = print
+) -> List[np.ndarray]:
+    """
+    Download pre-warped structure motion video and extract needed frames.
+    
+    This is the segment-level function that downloads the orchestrator's
+    pre-computed motion video and extracts only the frames this segment needs.
+    
+    Args:
+        structure_motion_video_url: URL or path to the pre-warped motion video
+        frame_start: Starting frame index to extract
+        frame_count: Number of frames to extract
+        download_dir: Directory to download video to
+        dprint: Debug print function
+        
+    Returns:
+        List of numpy arrays [H, W, C] uint8 RGB
+        
+    Raises:
+        ValueError: If video cannot be downloaded or frames extracted
+    """
+    import requests
+    from urllib.parse import urlparse
+    
+    dprint(f"[STRUCTURE_MOTION] Extracting frames from pre-warped video")
+    dprint(f"  URL/Path: {structure_motion_video_url}")
+    dprint(f"  Frame range: {frame_start} to {frame_start + frame_count - 1}")
+    
+    try:
+        # Determine if this is a URL or local path
+        parsed = urlparse(structure_motion_video_url)
+        is_url = parsed.scheme in ['http', 'https']
+        
+        if is_url:
+            # Download the video
+            dprint(f"[STRUCTURE_MOTION] Downloading video...")
+            
+            download_dir.mkdir(parents=True, exist_ok=True)
+            local_video_path = download_dir / "structure_motion.mp4"
+            
+            response = requests.get(structure_motion_video_url, timeout=120)
+            response.raise_for_status()
+            
+            with open(local_video_path, 'wb') as f:
+                f.write(response.content)
+            
+            file_size_mb = len(response.content) / (1024 * 1024)
+            dprint(f"[STRUCTURE_MOTION] Downloaded {file_size_mb:.2f} MB to {local_video_path.name}")
+        else:
+            # Use local path
+            local_video_path = Path(structure_motion_video_url)
+            if not local_video_path.exists():
+                raise ValueError(f"Structure motion video not found: {local_video_path}")
+            dprint(f"[STRUCTURE_MOTION] Using local video: {local_video_path}")
+        
+        # Extract frames using decord
+        dprint(f"[STRUCTURE_MOTION] Extracting frames...")
+        
+        # Add Wan2GP to path
+        wan_dir = Path(__file__).parent.parent / "Wan2GP"
+        if str(wan_dir) not in sys.path:
+            sys.path.insert(0, str(wan_dir))
+        
+        import decord
+        decord.bridge.set_bridge('torch')
+        
+        vr = decord.VideoReader(str(local_video_path))
+        total_frames = len(vr)
+        
+        # Validate frame range
+        if frame_start >= total_frames:
+            raise ValueError(f"frame_start {frame_start} >= total frames {total_frames}")
+        
+        # Adjust frame_count if it would exceed video length
+        actual_frame_count = min(frame_count, total_frames - frame_start)
+        if actual_frame_count < frame_count:
+            dprint(f"[STRUCTURE_MOTION] Warning: Only {actual_frame_count} frames available (requested {frame_count})")
+        
+        # Extract frames
+        frame_indices = list(range(frame_start, frame_start + actual_frame_count))
+        frames_tensor = vr.get_batch(frame_indices)  # Returns torch tensor [T, H, W, C]
+        
+        # Convert to list of numpy arrays
+        frames_list = []
+        for i in range(len(frames_tensor)):
+            frame_np = frames_tensor[i].cpu().numpy()
+            
+            # Ensure uint8
+            if frame_np.dtype != np.uint8:
+                frame_np = np.clip(frame_np, 0, 255).astype(np.uint8)
+            
+            frames_list.append(frame_np)
+        
+        dprint(f"[STRUCTURE_MOTION] Extracted {len(frames_list)} frames")
+        
+        return frames_list
+        
+    except Exception as e:
+        dprint(f"[ERROR] Failed to extract motion frames: {e}")
+        traceback.print_exc()
+        raise
 
