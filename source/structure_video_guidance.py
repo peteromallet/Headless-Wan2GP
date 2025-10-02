@@ -109,6 +109,37 @@ class GuidanceTracker:
         return "\n".join(summary)
 
 
+def _resample_frame_indices(video_fps: float, video_frames_count: int, max_target_frames_count: int, target_fps: float, start_target_frame: int) -> List[int]:
+    """
+    Calculate which frame indices to extract for FPS conversion.
+    Ported from Wan2GP/shared/utils/utils.py to avoid importing wgp.py
+    """
+    import math
+    
+    video_frame_duration = 1 / video_fps
+    target_frame_duration = 1 / target_fps
+    
+    target_time = start_target_frame * target_frame_duration
+    frame_no = math.ceil(target_time / video_frame_duration)
+    cur_time = frame_no * video_frame_duration
+    frame_ids = []
+    
+    while True:
+        if max_target_frames_count != 0 and len(frame_ids) >= max_target_frames_count:
+            break
+        diff = round((target_time - cur_time) / video_frame_duration, 5)
+        add_frames_count = math.ceil(diff)
+        frame_no += add_frames_count
+        if frame_no >= video_frames_count:
+            break
+        frame_ids.append(frame_no)
+        cur_time += add_frames_count * video_frame_duration
+        target_time += target_frame_duration
+    
+    frame_ids = frame_ids[:max_target_frames_count]
+    return frame_ids
+
+
 def load_structure_video_frames(
     structure_video_path: str,
     target_frame_count: int,
@@ -131,32 +162,40 @@ def load_structure_video_frames(
     Returns:
         List of numpy uint8 arrays [H, W, C] in RGB format
     """
-    # Add Wan2GP to path if not already
-    wan_dir = Path(__file__).parent.parent / "Wan2GP"
-    if str(wan_dir) not in sys.path:
-        sys.path.insert(0, str(wan_dir))
-    
-    from Wan2GP.wgp import get_resampled_video
     import cv2
     from PIL import Image
+    
+    # Use decord directly instead of importing from wgp.py to avoid argparse conflicts
+    try:
+        import decord
+        decord.bridge.set_bridge('torch')
+    except ImportError:
+        raise ImportError("decord is required for video processing. Install with: pip install decord")
     
     # Load N+1 frames to ensure we get N flows (RAFT produces N-1 flows for N frames)
     frames_to_load = target_frame_count + 1
     
-    # Load with torch bridge (returns decord tensors on GPU)
-    # WGP pattern from line 3543
-    frames = get_resampled_video(
-        structure_video_path,
-        start_frame=0,
-        max_frames=frames_to_load,
+    # Load video and resample frames (avoiding wgp.py import)
+    reader = decord.VideoReader(structure_video_path)
+    video_fps = round(reader.get_avg_fps())
+    video_frame_count = len(reader)
+    
+    # Calculate which frames to extract for FPS conversion
+    frame_indices = _resample_frame_indices(
+        video_fps=video_fps,
+        video_frames_count=video_frame_count,
+        max_target_frames_count=frames_to_load,
         target_fps=target_fps,
-        bridge='torch'  # Returns torch tensors
+        start_target_frame=0
     )
     
-    if not frames or len(frames) == 0:
-        raise ValueError(f"No frames loaded from structure video: {structure_video_path}")
+    if not frame_indices:
+        raise ValueError(f"No frames could be extracted from structure video: {structure_video_path}")
     
-    dprint(f"[STRUCTURE_VIDEO] Loaded {len(frames)} frames from {structure_video_path}")
+    # Extract frames using decord
+    frames = reader.get_batch(frame_indices)  # Returns torch tensors [T, H, W, C]
+    
+    dprint(f"[STRUCTURE_VIDEO] Loaded {len(frames)} frames from {structure_video_path} (original FPS: {video_fps}, target FPS: {target_fps})")
     
     # Process frames to target resolution (WGP pattern from line 3826-3830)
     w, h = target_resolution
