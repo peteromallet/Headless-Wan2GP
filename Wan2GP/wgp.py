@@ -1748,12 +1748,13 @@ def get_lora_dir(model_type):
 attention_modes_installed = get_attention_modes()
 attention_modes_supported = get_supported_attention_modes()
 
-# Only parse args if running as main script, not when imported as module
-# This prevents errors when wgp is imported by headless worker with different CLI args
-if __name__ == "__main__" or "worker.py" not in sys.argv[0]:
+# Only parse args if running as main script or if parsing succeeds
+# When imported by headless worker, argparse may fail due to worker-specific CLI args
+try:
     args = _parse_args()
-else:
-    # When imported by worker, create minimal args object with safe defaults
+except SystemExit:
+    # If parsing fails (e.g., when imported by worker with unrecognized args),
+    # create minimal args object with safe defaults
     import argparse
     args = argparse.Namespace(
         gpu="",
