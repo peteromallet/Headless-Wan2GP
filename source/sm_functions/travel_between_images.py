@@ -681,15 +681,41 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             dprint(f"[STRUCTURE_VIDEO] Using: {structure_video_path}")
             dprint(f"[STRUCTURE_VIDEO] Treatment: {structure_video_treatment}")
             dprint(f"[STRUCTURE_VIDEO] Motion strength: {structure_video_motion_strength}")
-            
+
+            # Calculate TOTAL flow frames needed across ALL segments
+            # Flow visualizations are created for ALL frames INCLUDING anchors (even though anchors
+            # will be replaced by keyframes), but EXCLUDING overlap frames (reused from previous segment)
+            #
+            # Example: 3 segments × 61 frames, 8 frame overlap
+            # Segment 0: 61 flows (frames 0-60, including both anchor frames)
+            # Segment 1: 53 flows (frames 8-60, excluding 8 overlap frames)
+            # Segment 2: 53 flows (frames 8-60, excluding 8 overlap frames)
+            # Total: 61 + 53 + 53 = 167 flows
+
+            total_flow_frames = 0
+            segment_flow_offsets = []  # Track where each segment's flows start
+
+            for idx in range(num_segments):
+                segment_total_frames = expanded_segment_frames[idx]
+
+                if idx == 0 and not orchestrator_payload.get("continue_from_video_resolved_path"):
+                    # First segment: all frames (including both anchor frames)
+                    flows_needed = segment_total_frames
+                else:
+                    # Subsequent segments: exclude overlap frames (they reuse previous segment's flows)
+                    overlap = expanded_frame_overlap[idx - 1] if idx > 0 else 0
+                    flows_needed = segment_total_frames - overlap
+
+                segment_flow_offsets.append(total_flow_frames)
+                total_flow_frames += max(0, flows_needed)
+                dprint(f"[STRUCTURE_VIDEO] Segment {idx}: {flows_needed} flow frames needed, offset {segment_flow_offsets[-1]}")
+
+            dprint(f"[STRUCTURE_VIDEO] Total flow frames across all segments: {total_flow_frames}")
+
             # Create and upload pre-warped motion video for segments to download
             dprint(f"[STRUCTURE_VIDEO] Creating pre-warped motion video...")
             try:
                 from source.structure_video_guidance import create_structure_motion_video
-                
-                # Calculate max frames needed (worst case: longest segment)
-                max_frames_needed = max(expanded_segment_frames)
-                dprint(f"[STRUCTURE_VIDEO] Max frames per segment: {max_frames_needed}")
                 
                 # Get resolution and FPS from orchestrator payload
                 target_resolution_raw = orchestrator_payload["parsed_resolution_wh"]
@@ -705,26 +731,32 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     target_resolution = target_resolution_raw
                 
                 # Create pre-warped video
+                # Generate unique filename to avoid race conditions and enable idempotency
+                timestamp_short = datetime.now().strftime("%H%M%S")
+                unique_suffix = uuid.uuid4().hex[:6]
+                structure_motion_filename = f"structure_motion_{timestamp_short}_{unique_suffix}.mp4"
+
                 structure_motion_video_path = create_structure_motion_video(
                     structure_video_path=structure_video_path,
-                    max_frames_needed=max_frames_needed,
+                    max_frames_needed=total_flow_frames,
                     target_resolution=target_resolution,
                     target_fps=target_fps,
                     motion_strength=structure_video_motion_strength,
-                    output_path=current_run_output_dir / "structure_motion.mp4",
+                    output_path=current_run_output_dir / structure_motion_filename,
+                    treatment=structure_video_treatment,
                     dprint=dprint
                 )
                 
-                # Upload to Supabase
-                dprint(f"[STRUCTURE_VIDEO] Uploading pre-warped motion video...")
+                # Store path for segments (edge function will handle upload)
+                dprint(f"[STRUCTURE_VIDEO] Pre-warped motion video ready for segments...")
                 structure_motion_video_url = upload_and_get_final_output_location(
-                    local_path=str(structure_motion_video_path),
-                    task_id=orchestrator_task_id_str,
-                    project_id=orchestrator_project_id,
-                    is_final_output=False
+                    local_file_path=structure_motion_video_path,
+                    supabase_object_name=structure_motion_filename,  # Unused but required for signature
+                    initial_db_location=str(structure_motion_video_path),
+                    dprint=dprint
                 )
-                
-                dprint(f"[STRUCTURE_VIDEO] Pre-warped motion video uploaded: {structure_motion_video_url}")
+
+                dprint(f"[STRUCTURE_VIDEO] Pre-warped motion video path: {structure_motion_video_url}")
                 
                 # Store URL in orchestrator payload for segments to use
                 orchestrator_payload["structure_motion_video_url"] = structure_motion_video_url
@@ -864,6 +896,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "structure_video_treatment": structure_video_treatment,
                 "structure_video_motion_strength": structure_video_motion_strength,
                 "structure_motion_video_url": orchestrator_payload.get("structure_motion_video_url"),  # Pre-warped video URL
+                "structure_motion_frame_offset": segment_flow_offsets[idx] if 'segment_flow_offsets' in locals() else 0,  # Starting frame in structure_motion video
             }
             
             # Add extracted parameters at top level for queue processing
@@ -1429,8 +1462,15 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             wan_dir = Path(__file__).parent.parent.parent / "Wan2GP"
             if str(wan_dir) not in sys.path:
                 sys.path.insert(0, str(wan_dir))
-            
-            import wgp
+
+            # Protect sys.argv before importing wgp
+            _saved_argv = sys.argv[:]
+            try:
+                sys.argv = ["travel_between_images.py"]
+                import wgp
+            finally:
+                sys.argv = _saved_argv
+
             model_defaults_from_config = wgp.get_default_settings(model_name)
             dprint(f"[MODEL_CONFIG_DEBUG] Segment {segment_idx}: Loaded model defaults for '{model_name}': {model_defaults_from_config}")
         except Exception as e:

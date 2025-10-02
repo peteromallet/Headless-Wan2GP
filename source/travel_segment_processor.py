@@ -125,6 +125,7 @@ class TravelSegmentProcessor:
             structure_video_treatment = ctx.segment_params.get("structure_video_treatment", ctx.full_orchestrator_payload.get("structure_video_treatment", "adjust"))
             structure_video_motion_strength = ctx.segment_params.get("structure_video_motion_strength", ctx.full_orchestrator_payload.get("structure_video_motion_strength", 1.0))
             structure_motion_video_url = ctx.segment_params.get("structure_motion_video_url") or ctx.full_orchestrator_payload.get("structure_motion_video_url")
+            structure_motion_frame_offset = ctx.segment_params.get("structure_motion_frame_offset", 0)
             
             # Download structure video if it's a URL (defensive fallback if orchestrator didn't download)
             # Note: If structure_motion_video_url is provided, this is not strictly needed as segments will use the pre-warped video
@@ -159,6 +160,7 @@ class TravelSegmentProcessor:
                 structure_video_treatment=structure_video_treatment,
                 structure_video_motion_strength=structure_video_motion_strength,
                 structure_motion_video_url=structure_motion_video_url,
+                structure_motion_frame_offset=structure_motion_frame_offset,
                 dprint=ctx.dprint
             )
             

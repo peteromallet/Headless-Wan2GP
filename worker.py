@@ -1548,7 +1548,7 @@ def main():
     # --- End --migrate-only handler ---
 
 
-    main_output_dir = Path(cli_args.main_output_dir)
+    main_output_dir = Path(cli_args.main_output_dir).resolve()  # Resolve to absolute path BEFORE chdir
     main_output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"WanGP Headless Server Started.")

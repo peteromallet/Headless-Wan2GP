@@ -209,22 +209,90 @@ class HeadlessTaskQueue:
         try:
             self.logger.info("[LAZY_INIT] Initializing WanOrchestrator (first use)...")
             self.logger.info("[LAZY_INIT] Warming up CUDA before importing wgp...")
-            
-            # Warm up CUDA before importing wgp (upstream T5EncoderModel has torch.cuda.current_device() 
+
+            # Warm up CUDA before importing wgp (upstream T5EncoderModel has torch.cuda.current_device()
             # as a default arg, which is evaluated at module import time)
             import torch
+
+            # Detailed CUDA diagnostics
+            self.logger.info("[CUDA_DEBUG] ========== CUDA DIAGNOSTICS ==========")
+            self.logger.info(f"[CUDA_DEBUG] torch.cuda.is_available(): {torch.cuda.is_available()}")
+
             if torch.cuda.is_available():
-                self.logger.info(f"[LAZY_INIT] CUDA is available: {torch.cuda.get_device_name(0)}")
-                # Initialize CUDA by accessing a device
-                _ = torch.cuda.current_device()
-                self.logger.info(f"[LAZY_INIT] CUDA initialized on device {torch.cuda.current_device()}")
+                try:
+                    device_count = torch.cuda.device_count()
+                    self.logger.info(f"[CUDA_DEBUG] Device count: {device_count}")
+
+                    for i in range(device_count):
+                        self.logger.info(f"[CUDA_DEBUG] Device {i}: {torch.cuda.get_device_name(i)}")
+                        self.logger.info(f"[CUDA_DEBUG]   - Properties: {torch.cuda.get_device_properties(i)}")
+
+                    # Try to get CUDA version info
+                    try:
+                        self.logger.info(f"[CUDA_DEBUG] CUDA version (torch): {torch.version.cuda}")
+                    except:
+                        pass
+
+                    # Try to initialize current device
+                    try:
+                        current_dev = torch.cuda.current_device()
+                        self.logger.info(f"[CUDA_DEBUG] Current device: {current_dev}")
+
+                        # Try a simple tensor operation
+                        test_tensor = torch.tensor([1.0], device='cuda')
+                        self.logger.info(f"[CUDA_DEBUG] ✅ Successfully created tensor on CUDA: {test_tensor.device}")
+
+                    except Exception as e:
+                        self.logger.error(f"[CUDA_DEBUG] ❌ Failed to initialize current device: {e}")
+                        raise
+
+                except Exception as e:
+                    self.logger.error(f"[CUDA_DEBUG] ❌ Error during CUDA diagnostics: {e}", exc_info=True)
+                    raise
+
             else:
-                self.logger.warning("[LAZY_INIT] ⚠️  No CUDA device available! Model loading may fail.")
-            
+                self.logger.warning("[CUDA_DEBUG] ⚠️  torch.cuda.is_available() returned False")
+                self.logger.warning("[CUDA_DEBUG] Checking why CUDA is not available...")
+
+                # Check if CUDA was built with torch
+                self.logger.info(f"[CUDA_DEBUG] torch.version.cuda: {torch.version.cuda}")
+                self.logger.info(f"[CUDA_DEBUG] torch.backends.cudnn.version(): {torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else 'N/A'}")
+
+                # Try to import pynvml for driver info
+                try:
+                    import pynvml
+                    pynvml.nvmlInit()
+                    driver_version = pynvml.nvmlSystemGetDriverVersion()
+                    self.logger.info(f"[CUDA_DEBUG] NVIDIA driver version: {driver_version}")
+                    device_count = pynvml.nvmlDeviceGetCount()
+                    self.logger.info(f"[CUDA_DEBUG] NVML device count: {device_count}")
+                    for i in range(device_count):
+                        handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                        name = pynvml.nvmlDeviceGetName(handle)
+                        self.logger.info(f"[CUDA_DEBUG] NVML Device {i}: {name}")
+                except Exception as e:
+                    self.logger.warning(f"[CUDA_DEBUG] Could not get NVML info: {e}")
+
+            self.logger.info("[CUDA_DEBUG] ===========================================")
+
             self.logger.info("[LAZY_INIT] Importing WanOrchestrator (this imports wgp and model modules)...")
-            from headless_wgp import WanOrchestrator
-            self.orchestrator = WanOrchestrator(self.wan_dir)
-            
+            # Protect sys.argv and working directory before importing headless_wgp which imports wgp
+            # wgp.py will try to parse sys.argv and will fail if it contains Supabase/database arguments
+            # wgp.py also uses relative paths for model loading and needs to run from Wan2GP directory
+            # CRITICAL: wgp.py loads models at MODULE-LEVEL (line 2260), so we MUST chdir BEFORE import
+            _saved_argv_for_import = sys.argv[:]
+            _saved_cwd = os.getcwd()
+            try:
+                sys.argv = ["headless_model_management.py"]  # Clean argv for wgp import
+                os.chdir(self.wan_dir)  # Change to Wan2GP - stay here for all WGP operations
+                self.logger.info(f"[LAZY_INIT] Changed directory to {self.wan_dir} (will remain here for WGP operations)")
+                from headless_wgp import WanOrchestrator
+                self.orchestrator = WanOrchestrator(self.wan_dir)
+            finally:
+                sys.argv = _saved_argv_for_import  # Restore original arguments
+                # NOTE: We do NOT restore the working directory - WGP expects to stay in Wan2GP/
+                # This ensures model downloads, file operations, etc. use correct paths
+
             self.logger.info("[LAZY_INIT] ✅ WanOrchestrator initialized successfully")
             
             # Now that orchestrator exists, complete wgp integration
@@ -821,11 +889,18 @@ class HeadlessTaskQueue:
                 return None
             return None
 
+        # Database/infrastructure parameters that should never be passed to WanGP
+        db_param_blacklist = {"db_type", "supabase_url", "supabase_anon_key", "supabase_access_token", "sqlite_db_path"}
+
         # Map parameters with proper defaults
         for our_param, wgp_param in param_mapping.items():
+            # Skip database parameters
+            if our_param in db_param_blacklist:
+                continue
+
             if our_param in task.parameters:
                 value = task.parameters[our_param]
-                
+
                 # Special handling for file path parameters
                 if our_param in ["video_guide", "video_mask", "image_guide", "image_mask"] and value:
                     resolved = _resolve_media_path(str(value))
@@ -889,30 +964,50 @@ class HeadlessTaskQueue:
         # Parameter resolution is now handled by WanOrchestrator._resolve_parameters()
         # This provides clean separation: HeadlessTaskQueue manages tasks, WanOrchestrator handles parameters
         self.logger.info(f"[TASK_CONVERSION] Converting task {task.id} for model '{task.model}' - parameter resolution delegated to orchestrator")
-        
+
+        # Filter out database/infrastructure parameters that should not be passed to WanGP
+        db_params_to_remove = ["db_type", "supabase_url", "supabase_anon_key", "supabase_access_token", "sqlite_db_path"]
+        for param in db_params_to_remove:
+            if param in wgp_params:
+                self.logger.debug(f"[PARAM_FILTER] Removing infrastructure parameter '{param}' from WanGP params")
+                wgp_params.pop(param)
+
         # Apply sampler-specific CFG settings if available
         sample_solver = task.parameters.get("sample_solver", wgp_params.get("sample_solver", ""))
         if sample_solver:
             self._apply_sampler_cfg_preset(task.model, sample_solver, wgp_params)
         
         # Complete LoRA processing pipeline using centralized utilities
+        # CRITICAL: lora_utils imports wgp, so we must change to Wan2GP directory first
         import sys
         source_dir = Path(__file__).parent / "source"
         if str(source_dir) not in sys.path:
             sys.path.insert(0, str(source_dir))
         from lora_utils import process_all_loras
-        
+
         # Use centralized LoRA processing pipeline
         dprint(f"[LORA_PROCESS] Task {task.id}: Starting centralized LoRA processing for model {task.model}")
-        
-        wgp_params = process_all_loras(
-            params=wgp_params,
-            task_params=task.parameters,
-            model_name=task.model,
-            orchestrator_payload=task.parameters.get("orchestrator_payload"),
-            task_id=task.id,
-            dprint=dprint
-        )
+
+        # Ensure we're in Wan2GP directory (may not be if orchestrator hasn't initialized yet)
+        _saved_cwd_for_lora = os.getcwd()
+        if _saved_cwd_for_lora != self.wan_dir:
+            os.chdir(self.wan_dir)
+            dprint(f"[LORA_PROCESS] Changed to {self.wan_dir} for LoRA processing")
+
+        try:
+            wgp_params = process_all_loras(
+                params=wgp_params,
+                task_params=task.parameters,
+                model_name=task.model,
+                orchestrator_payload=task.parameters.get("orchestrator_payload"),
+                task_id=task.id,
+                dprint=dprint
+            )
+        finally:
+            # Only restore if we changed it
+            if _saved_cwd_for_lora != self.wan_dir:
+                os.chdir(_saved_cwd_for_lora)
+                dprint(f"[LORA_PROCESS] Restored to {_saved_cwd_for_lora}")
         
         dprint(f"[LORA_PROCESS] Task {task.id}: Centralized LoRA processing complete")
 
@@ -923,7 +1018,14 @@ class HeadlessTaskQueue:
         """Apply sampler-specific CFG and flow_shift settings from model configuration."""
         try:
             # Import WGP to get model definition
-            import wgp
+            # Protect sys.argv in case wgp hasn't been imported yet
+            _saved_argv = sys.argv[:]
+            try:
+                sys.argv = ["headless_model_management.py"]
+                import wgp
+            finally:
+                sys.argv = _saved_argv
+
             model_def = wgp.get_model_def(model_key)
             
             # Check if model has sampler-specific presets

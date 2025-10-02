@@ -31,8 +31,24 @@ def detect_loras_in_model_config(model_name: str, dprint=None) -> Tuple[bool, bo
         wan_dir = Path(__file__).parent.parent / "Wan2GP"
         if str(wan_dir) not in sys.path:
             sys.path.insert(0, str(wan_dir))
-        
-        import wgp
+
+        # Protect sys.argv before importing wgp to prevent argparse errors
+        # wgp.py uses argparse and will fail if sys.argv contains database arguments
+        _saved_argv = sys.argv[:]
+        if dprint:
+            dprint(f"[LORA_UTILS_DEBUG] About to import wgp, sys.argv before protection: {sys.argv}")
+        try:
+            sys.argv = ["lora_utils.py"]
+            if dprint:
+                dprint(f"[LORA_UTILS_DEBUG] sys.argv during import: {sys.argv}")
+            import wgp
+            if dprint:
+                dprint(f"[LORA_UTILS_DEBUG] wgp imported successfully")
+        finally:
+            sys.argv = _saved_argv
+            if dprint:
+                dprint(f"[LORA_UTILS_DEBUG] sys.argv restored to: {sys.argv}")
+
         model_def = wgp.get_model_def(model_name)
         
         if model_def and "model" in model_def and "loras" in model_def["model"]:

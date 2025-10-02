@@ -145,57 +145,88 @@ def load_structure_video_frames(
     target_frame_count: int,
     target_fps: int,
     target_resolution: Tuple[int, int],
+    treatment: str = "adjust",
     crop_to_fit: bool = True,
     dprint: Callable = print
 ) -> List[np.ndarray]:
     """
-    Load structure video frames following wgp.py patterns.
-    
+    Load structure video frames with treatment mode.
+
     Args:
         structure_video_path: Path to structure video
         target_frame_count: Number of frames to load (note: loads target_frame_count+1 to get enough flows)
-        target_fps: Target FPS for resampling
+        target_fps: Target FPS (used for clip mode temporal sampling)
         target_resolution: (width, height) tuple
+        treatment: "adjust" (stretch/compress entire video) or "clip" (temporal sample)
         crop_to_fit: If True, center-crop to match target aspect ratio before resizing
         dprint: Debug print function
-        
+
     Returns:
         List of numpy uint8 arrays [H, W, C] in RGB format
     """
     import cv2
     from PIL import Image
-    
+
     # Use decord directly instead of importing from wgp.py to avoid argparse conflicts
     try:
         import decord
         decord.bridge.set_bridge('torch')
     except ImportError:
         raise ImportError("decord is required for video processing. Install with: pip install decord")
-    
+
     # Load N+1 frames to ensure we get N flows (RAFT produces N-1 flows for N frames)
     frames_to_load = target_frame_count + 1
-    
-    # Load video and resample frames (avoiding wgp.py import)
+
+    # Load video
     reader = decord.VideoReader(structure_video_path)
     video_fps = round(reader.get_avg_fps())
     video_frame_count = len(reader)
-    
-    # Calculate which frames to extract for FPS conversion
-    frame_indices = _resample_frame_indices(
-        video_fps=video_fps,
-        video_frames_count=video_frame_count,
-        max_target_frames_count=frames_to_load,
-        target_fps=target_fps,
-        start_target_frame=0
-    )
-    
+
+    dprint(f"[STRUCTURE_VIDEO] Loading frames from structure video:")
+    dprint(f"  Video: {video_frame_count} frames @ {video_fps}fps")
+    dprint(f"  Needed: {frames_to_load} frames")
+    dprint(f"  Treatment: {treatment}")
+
+    # Calculate frame indices based on treatment mode
+    if treatment == "adjust":
+        # ADJUST MODE: Stretch/compress entire video to match needed frame count
+        # Linearly interpolate frame indices across the entire video
+        if video_frame_count >= frames_to_load:
+            # Compress: Sample evenly across video
+            frame_indices = [int(i * (video_frame_count - 1) / (frames_to_load - 1)) for i in range(frames_to_load)]
+            dprint(f"  Adjust mode: Compressing {video_frame_count} frames → {frames_to_load} (dropping {video_frame_count - frames_to_load})")
+        else:
+            # Stretch: Repeat frames to reach target count
+            # Use linear interpolation indices (will repeat frames)
+            frame_indices = [int(i * (video_frame_count - 1) / (frames_to_load - 1)) for i in range(frames_to_load)]
+            duplicates = frames_to_load - len(set(frame_indices))
+            dprint(f"  Adjust mode: Stretching {video_frame_count} frames → {frames_to_load} (duplicating {duplicates})")
+    else:
+        # CLIP MODE: Temporal sampling based on FPS
+        frame_indices = _resample_frame_indices(
+            video_fps=video_fps,
+            video_frames_count=video_frame_count,
+            max_target_frames_count=frames_to_load,
+            target_fps=target_fps,
+            start_target_frame=0
+        )
+
+        # If video is too short, loop back to start
+        if len(frame_indices) < frames_to_load:
+            dprint(f"  Clip mode: Video too short ({len(frame_indices)} < {frames_to_load}), looping frames")
+            while len(frame_indices) < frames_to_load:
+                remaining = frames_to_load - len(frame_indices)
+                frame_indices.extend(frame_indices[:remaining])
+
+        dprint(f"  Clip mode: Temporal sampling extracted {len(frame_indices)} frames")
+
     if not frame_indices:
         raise ValueError(f"No frames could be extracted from structure video: {structure_video_path}")
-    
+
     # Extract frames using decord
     frames = reader.get_batch(frame_indices)  # Returns torch tensors [T, H, W, C]
-    
-    dprint(f"[STRUCTURE_VIDEO] Loaded {len(frames)} frames from {structure_video_path} (original FPS: {video_fps}, target FPS: {target_fps})")
+
+    dprint(f"[STRUCTURE_VIDEO] Loaded {len(frames)} frames")
     
     # Process frames to target resolution (WGP pattern from line 3826-3830)
     w, h = target_resolution
@@ -480,6 +511,7 @@ def apply_structure_motion_with_tracking(
     motion_strength: float = 1.0,
     structure_motion_video_url: str | None = None,
     segment_processing_dir: Path | None = None,
+    structure_motion_frame_offset: int = 0,
     dprint: Callable = print
 ) -> List[np.ndarray]:
     """
@@ -524,29 +556,34 @@ def apply_structure_motion_with_tracking(
     
     # ===== PRE-WARPED VIDEO PATH (FASTER) =====
     if structure_motion_video_url:
+        dprint(f"[STRUCTURE_VIDEO] ========== FAST PATH ACTIVATED ==========")
         dprint(f"[STRUCTURE_VIDEO] Using pre-warped motion video (fast path)")
-        
+        dprint(f"[STRUCTURE_VIDEO] URL/Path: {structure_motion_video_url}")
+
         if not segment_processing_dir:
             raise ValueError("segment_processing_dir required when using structure_motion_video_url")
-        
+
         try:
-            # Download and extract all motion frames we need
+            # Download and extract THIS segment's portion of motion frames
+            dprint(f"[STRUCTURE_VIDEO] Extracting frames starting at offset {structure_motion_frame_offset}")
             motion_frames = download_and_extract_motion_frames(
                 structure_motion_video_url=structure_motion_video_url,
-                frame_start=0,
+                frame_start=structure_motion_frame_offset,
                 frame_count=total_unguidanced,
                 download_dir=segment_processing_dir,
                 dprint=dprint
             )
-            
+
+            dprint(f"[STRUCTURE_VIDEO] Successfully extracted {len(motion_frames)} motion frames")
+
             # Drop motion frames directly into unguidanced ranges
             updated_frames = frames_for_guide_list.copy()
             motion_frame_idx = 0
             frames_filled = 0
-            
+
             for range_start, range_end in unguidanced_ranges:
                 dprint(f"[STRUCTURE_VIDEO] Filling range {range_start}-{range_end}")
-                
+
                 for frame_idx in range(range_start, range_end + 1):
                     if motion_frame_idx < len(motion_frames):
                         updated_frames[frame_idx] = motion_frames[motion_frame_idx]
@@ -556,15 +593,22 @@ def apply_structure_motion_with_tracking(
                     else:
                         dprint(f"[STRUCTURE_VIDEO] Warning: Ran out of motion frames at frame {frame_idx}")
                         break
-            
-            dprint(f"[STRUCTURE_VIDEO] Filled {frames_filled} frames with pre-warped motion")
+
+            dprint(f"[STRUCTURE_VIDEO] ✓ FAST PATH SUCCESS: Filled {frames_filled} frames with flow visualizations")
+            dprint(f"[STRUCTURE_VIDEO] ==========================================")
             return updated_frames
-            
+
         except Exception as e:
-            dprint(f"[ERROR] Pre-warped video path failed: {e}")
+            dprint(f"[ERROR] ✗ FAST PATH FAILED: {e}")
+            dprint(f"[ERROR] Falling back to legacy path (will warp RGB frames)")
             traceback.print_exc()
-            # Fall back to returning unchanged frames
-            return frames_for_guide_list
+            # Fall back to legacy path
+            dprint(f"[STRUCTURE_VIDEO] Continuing with legacy warping path...")
+    else:
+        dprint(f"[STRUCTURE_VIDEO] ========== FAST PATH SKIPPED ==========")
+        dprint(f"[STRUCTURE_VIDEO] structure_motion_video_url is None or empty")
+        dprint(f"[STRUCTURE_VIDEO] Reason: Orchestrator didn't provide pre-computed flow video")
+        dprint(f"[STRUCTURE_VIDEO] =========================================")
     
     # ===== LEGACY PATH: Extract flows and apply warping per-segment =====
     if not structure_video_path:
@@ -693,87 +737,74 @@ def create_structure_motion_video(
     target_fps: int,
     motion_strength: float,
     output_path: Path,
+    treatment: str = "adjust",
     dprint: Callable = print
 ) -> Path:
     """
-    Create a video of pre-warped frames showing structure motion evolution.
-    
+    Create a video of flow visualizations from the structure video.
+
     This is the orchestrator-level function that:
     1. Extracts optical flows from the structure video
-    2. Starts with a neutral gray frame
-    3. Progressively applies flows: gray → warp1 → warp2 → warp3...
-    4. Encodes the result as an H.264 video
-    
-    The resulting video can be downloaded by segments and used directly without
-    needing to perform warping computations.
-    
+    2. Generates colorful flow visualizations (rainbow images showing motion)
+    3. Encodes them as an H.264 video
+
+    The resulting video contains flow visualizations that segments can use as
+    VACE guide videos for motion conditioning, matching the format used by
+    FlowVisAnnotator in wgp.py.
+
     Args:
         structure_video_path: Path to the source structure video
-        max_frames_needed: Number of frames to generate (based on longest unguidanced gap)
+        max_frames_needed: Number of frames to generate (total unguidanced frames)
         target_resolution: (width, height) for output frames
         target_fps: FPS for the output video
-        motion_strength: Strength multiplier for optical flow (0.0 = no motion, 1.0 = full)
+        motion_strength: Unused (kept for compatibility)
         output_path: Where to save the output video
+        treatment: "adjust" (stretch/compress entire video) or "clip" (temporal sample)
         dprint: Debug print function
-        
+
     Returns:
         Path to the created video file
-        
+
     Raises:
         ValueError: If structure video cannot be loaded or processed
     """
-    dprint(f"[STRUCTURE_MOTION_VIDEO] Creating pre-warped motion video...")
+    dprint(f"[STRUCTURE_MOTION_VIDEO] Creating flow visualization video...")
     dprint(f"  Source: {structure_video_path}")
     dprint(f"  Frames: {max_frames_needed}")
     dprint(f"  Resolution: {target_resolution[0]}x{target_resolution[1]}")
-    dprint(f"  Motion strength: {motion_strength}")
-    
+    dprint(f"  Treatment: {treatment}")
+
     try:
-        # Step 1: Load structure video frames
+        # Step 1: Load structure video frames with treatment mode
         dprint(f"[STRUCTURE_MOTION_VIDEO] Loading structure video frames...")
         structure_frames = load_structure_video_frames(
             structure_video_path,
             target_frame_count=max_frames_needed,
             target_fps=target_fps,
             target_resolution=target_resolution,
+            treatment=treatment,
             crop_to_fit=True,  # Apply center cropping
             dprint=dprint
         )
-        
-        # Step 2: Extract optical flows
-        dprint(f"[STRUCTURE_MOTION_VIDEO] Extracting optical flows...")
-        flow_fields, _ = extract_optical_flow_from_frames(structure_frames, dprint=dprint)
-        
-        if not flow_fields:
-            raise ValueError("No optical flows extracted from structure video")
-        
-        dprint(f"[STRUCTURE_MOTION_VIDEO] Extracted {len(flow_fields)} flow fields")
-        
-        # Step 3: Generate motion-applied frames starting from gray
-        dprint(f"[STRUCTURE_MOTION_VIDEO] Generating motion-applied frames...")
-        
-        w, h = target_resolution
-        gray_frame = np.full((h, w, 3), 128, dtype=np.uint8)  # Neutral starting point
-        
-        motion_frames = [gray_frame]  # Start with gray
-        current_frame = gray_frame
-        
-        for i, flow in enumerate(flow_fields):
-            # Apply flow to current frame with motion strength
-            warped_frame = apply_optical_flow_warp(
-                source_frame=current_frame,
-                flow=flow,
-                target_resolution=target_resolution,
-                motion_strength=motion_strength
-            )
-            
-            motion_frames.append(warped_frame)
-            current_frame = warped_frame  # Chain forward for progressive evolution
-            
-            if (i + 1) % 50 == 0:
-                dprint(f"[STRUCTURE_MOTION_VIDEO] Generated {i+1}/{len(flow_fields)} frames")
-        
-        dprint(f"[STRUCTURE_MOTION_VIDEO] Generated {len(motion_frames)} motion frames")
+
+        # Step 2: Extract optical flow visualizations
+        dprint(f"[STRUCTURE_MOTION_VIDEO] Extracting optical flow visualizations...")
+        flow_fields, flow_vis = extract_optical_flow_from_frames(structure_frames, dprint=dprint)
+
+        if not flow_vis:
+            raise ValueError("No optical flow visualizations extracted from structure video")
+
+        dprint(f"[STRUCTURE_MOTION_VIDEO] Extracted {len(flow_vis)} flow visualizations")
+
+        # Step 3: Duplicate first flow visualization to match frame count
+        # This matches FlowVisAnnotator behavior: for N frames, return N visualizations
+        # by duplicating the first one (flow_vis has N-1 items for N frames)
+        dprint(f"[STRUCTURE_MOTION_VIDEO] Preparing flow visualization frames...")
+
+        # Duplicate first visualization (matching FlowVisAnnotator pattern)
+        motion_frames = [flow_vis[0]] + flow_vis
+
+        dprint(f"[STRUCTURE_MOTION_VIDEO] Prepared {len(motion_frames)} flow visualization frames")
         
         # Step 4: Encode as video
         dprint(f"[STRUCTURE_MOTION_VIDEO] Encoding video to {output_path}")
