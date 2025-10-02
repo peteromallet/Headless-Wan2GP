@@ -681,6 +681,51 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             dprint(f"[STRUCTURE_VIDEO] Using: {structure_video_path}")
             dprint(f"[STRUCTURE_VIDEO] Treatment: {structure_video_treatment}")
             dprint(f"[STRUCTURE_VIDEO] Motion strength: {structure_video_motion_strength}")
+            
+            # Create and upload pre-warped motion video for segments to download
+            dprint(f"[STRUCTURE_VIDEO] Creating pre-warped motion video...")
+            try:
+                from source.structure_video_guidance import create_structure_motion_video
+                
+                # Calculate max frames needed (worst case: longest segment)
+                max_frames_needed = max(expanded_segment_frames)
+                dprint(f"[STRUCTURE_VIDEO] Max frames per segment: {max_frames_needed}")
+                
+                # Get resolution and FPS from orchestrator payload
+                target_resolution = orchestrator_payload["parsed_resolution_wh"]
+                target_fps = orchestrator_payload.get("fps_helpers", 16)
+                
+                # Create pre-warped video
+                structure_motion_video_path = create_structure_motion_video(
+                    structure_video_path=structure_video_path,
+                    max_frames_needed=max_frames_needed,
+                    target_resolution=target_resolution,
+                    target_fps=target_fps,
+                    motion_strength=structure_video_motion_strength,
+                    output_path=current_run_output_dir / "structure_motion.mp4",
+                    dprint=dprint
+                )
+                
+                # Upload to Supabase
+                dprint(f"[STRUCTURE_VIDEO] Uploading pre-warped motion video...")
+                structure_motion_video_url = upload_and_get_final_output_location(
+                    local_path=str(structure_motion_video_path),
+                    task_id=orchestrator_task_id_str,
+                    project_id=orchestrator_project_id,
+                    is_final_output=False
+                )
+                
+                dprint(f"[STRUCTURE_VIDEO] Pre-warped motion video uploaded: {structure_motion_video_url}")
+                
+                # Store URL in orchestrator payload for segments to use
+                orchestrator_payload["structure_motion_video_url"] = structure_motion_video_url
+                
+            except Exception as e:
+                dprint(f"[ERROR] Failed to create pre-warped motion video: {e}")
+                import traceback
+                traceback.print_exc()
+                dprint(f"[WARNING] Segments will fall back to legacy per-segment flow extraction")
+                orchestrator_payload["structure_motion_video_url"] = None
 
         # Loop to queue all segment tasks (skip existing ones for idempotency)
         segments_created = 0
@@ -809,6 +854,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "structure_video_path": structure_video_path,
                 "structure_video_treatment": structure_video_treatment,
                 "structure_video_motion_strength": structure_video_motion_strength,
+                "structure_motion_video_url": orchestrator_payload.get("structure_motion_video_url"),  # Pre-warped video URL
             }
             
             # Add extracted parameters at top level for queue processing
