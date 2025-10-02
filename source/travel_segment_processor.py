@@ -129,7 +129,7 @@ class TravelSegmentProcessor:
             # Download structure video if it's a URL (defensive fallback if orchestrator didn't download)
             # Note: If structure_motion_video_url is provided, this is not strictly needed as segments will use the pre-warped video
             if structure_video_path:
-                from ..common_utils import download_video_if_url
+                from source.common_utils import download_video_if_url
                 structure_video_path = download_video_if_url(
                     structure_video_path,
                     download_target_dir=ctx.segment_processing_dir,

@@ -692,8 +692,17 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 dprint(f"[STRUCTURE_VIDEO] Max frames per segment: {max_frames_needed}")
                 
                 # Get resolution and FPS from orchestrator payload
-                target_resolution = orchestrator_payload["parsed_resolution_wh"]
+                target_resolution_raw = orchestrator_payload["parsed_resolution_wh"]
                 target_fps = orchestrator_payload.get("fps_helpers", 16)
+                
+                # Parse resolution if it's a string (e.g., "768x576" -> (768, 576))
+                if isinstance(target_resolution_raw, str):
+                    parsed_res = sm_parse_resolution(target_resolution_raw)
+                    if parsed_res is None:
+                        raise ValueError(f"Invalid resolution format: {target_resolution_raw}")
+                    target_resolution = snap_resolution_to_model_grid(parsed_res)
+                else:
+                    target_resolution = target_resolution_raw
                 
                 # Create pre-warped video
                 structure_motion_video_path = create_structure_motion_video(
