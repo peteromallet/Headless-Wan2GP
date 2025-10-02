@@ -241,8 +241,26 @@ def extract_optical_flow_from_frames(
     from Wan2GP.preprocessing.flow import FlowAnnotator
     
     # Initialize annotator (WGP pattern line 3643-3648)
+    flow_model_path = wan_dir / 'ckpts' / 'flow' / 'raft-things.pth'
+    
+    # Ensure RAFT model is downloaded
+    if not flow_model_path.exists():
+        dprint(f"[OPTICAL_FLOW] RAFT model not found, downloading from Hugging Face...")
+        try:
+            from huggingface_hub import hf_hub_download
+            flow_model_path.parent.mkdir(parents=True, exist_ok=True)
+            hf_hub_download(
+                repo_id="DeepBeepMeep/Wan2.1",
+                filename="raft-things.pth",
+                local_dir=str(wan_dir / 'ckpts'),
+                subfolder="flow"
+            )
+            dprint(f"[OPTICAL_FLOW] RAFT model downloaded successfully")
+        except Exception as e:
+            raise RuntimeError(f"Failed to download RAFT model: {e}. Please manually download from https://huggingface.co/DeepBeepMeep/Wan2.1/tree/main/flow")
+    
     flow_cfg = {
-        'PRETRAINED_MODEL': str(wan_dir / 'ckpts' / 'flow' / 'raft-things.pth')
+        'PRETRAINED_MODEL': str(flow_model_path)
     }
     flow_annotator = FlowAnnotator(flow_cfg)
     
