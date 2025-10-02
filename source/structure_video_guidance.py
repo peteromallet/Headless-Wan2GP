@@ -793,13 +793,14 @@ def create_structure_motion_video(
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Save video using WGP's video utilities
+        # Note: save_video expects numpy array or torch tensor
         save_video(
             video_tensor,
-            str(output_path),
+            save_file=str(output_path),
             fps=target_fps,
-            codec='h264_nvenc' if torch.cuda.is_available() else 'libx264',  # Use GPU encoder if available
-            quality=None,  # Use default quality
-            preset='fast'  # Fast encoding
+            codec_type='libx264_8',  # Use libx264 with 8-bit encoding
+            normalize=False,  # Already in [0, 255] uint8 range
+            value_range=(0, 255)  # Specify value range for uint8 data
         )
         
         # Verify output exists
