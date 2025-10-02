@@ -1747,22 +1747,7 @@ def get_lora_dir(model_type):
 
 attention_modes_installed = get_attention_modes()
 attention_modes_supported = get_supported_attention_modes()
-
-# Only parse args if running as main script or if parsing succeeds
-# When imported by headless worker, argparse may fail due to worker-specific CLI args
-try:
-    args = _parse_args()
-except SystemExit:
-    # If parsing fails (e.g., when imported by worker with unrecognized args),
-    # create minimal args object with safe defaults
-    import argparse
-    args = argparse.Namespace(
-        gpu="",
-        profile="0", 
-        verbose="0",
-        flow_reverse=True,
-        check_loras=0
-    )
+args = _parse_args()
 
 # Debug print function that respects DEBUG environment variable
 def dprint(msg):
