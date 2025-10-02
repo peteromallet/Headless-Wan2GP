@@ -143,9 +143,12 @@ class HeadlessTaskQueue:
         except Exception:
             pass
         
-        # Import our orchestrator
-        from headless_wgp import WanOrchestrator
-        self.orchestrator = WanOrchestrator(wan_dir)
+        # Defer orchestrator initialization to avoid CUDA init during queue setup
+        # Orchestrator imports wgp, which triggers deep imports that call torch.cuda
+        # We'll initialize it lazily when first needed
+        self.orchestrator = None
+        self._orchestrator_init_attempted = False
+        logging.getLogger('HeadlessQueue').info(f"HeadlessTaskQueue created (orchestrator will initialize on first use)")
         
         # Task management
         self.task_queue = queue.PriorityQueue()
@@ -187,13 +190,52 @@ class HeadlessTaskQueue:
         )
         self.logger = logging.getLogger('HeadlessQueue')
     
+    def _ensure_orchestrator(self):
+        """
+        Lazily initialize orchestrator on first use to avoid CUDA init during queue setup.
+        
+        The orchestrator imports wgp, which triggers deep module imports (models/wan/modules/t5.py)
+        that call torch.cuda.current_device() at class definition time. We defer this until
+        the first task is actually processed, when CUDA is guaranteed to be ready.
+        """
+        if self.orchestrator is not None:
+            return  # Already initialized
+        
+        if self._orchestrator_init_attempted:
+            raise RuntimeError("Orchestrator initialization failed previously")
+        
+        self._orchestrator_init_attempted = True
+        
+        try:
+            self.logger.info("[LAZY_INIT] Initializing WanOrchestrator (first use)...")
+            self.logger.info("[LAZY_INIT] This will import wgp and trigger CUDA initialization")
+            
+            from headless_wgp import WanOrchestrator
+            self.orchestrator = WanOrchestrator(self.wan_dir)
+            
+            self.logger.info("[LAZY_INIT] ✅ WanOrchestrator initialized successfully")
+            
+            # Now that orchestrator exists, complete wgp integration
+            self._init_wgp_integration()
+            
+        except Exception as e:
+            self.logger.error(f"[LAZY_INIT] ❌ Failed to initialize WanOrchestrator: {e}")
+            self.logger.error("[LAZY_INIT] Traceback:", exc_info=True)
+            raise
+    
     def _init_wgp_integration(self):
         """
         Initialize integration with wgp.py's existing systems.
         
         This reuses wgp.py's state management, queue handling, and model persistence
         rather than reimplementing it.
+        
+        Called after orchestrator is lazily initialized.
         """
+        if self.orchestrator is None:
+            self.logger.warning("Skipping wgp integration - orchestrator not initialized yet")
+            return
+        
         # TODO: Integrate with wgp.py's existing queue system
         # Key integration points:
         
@@ -440,6 +482,9 @@ class HeadlessTaskQueue:
         This leverages the orchestrator's model loading while tracking
         the change in our queue system.
         """
+        # Ensure orchestrator is initialized before switching models
+        self._ensure_orchestrator()
+        
         if model_key == self.current_model:
             return
         
@@ -467,6 +512,9 @@ class HeadlessTaskQueue:
         and integration with our queue system. Enhanced to support video guides,
         masks, image references, and other advanced features.
         """
+        # Ensure orchestrator is initialized before generation
+        self._ensure_orchestrator()
+        
         self.logger.info(f"{worker_name} executing generation for task {task.id} (model: {task.model})")
         
         # Convert task parameters to WanOrchestrator format
@@ -545,6 +593,9 @@ class HeadlessTaskQueue:
         """
         Check if a model supports VACE features (video guides, masks, etc.).
         """
+        # Ensure orchestrator is initialized before checking model support
+        self._ensure_orchestrator()
+        
         try:
             # Use orchestrator's VACE detection with model key
             if hasattr(self.orchestrator, 'is_model_vace'):
