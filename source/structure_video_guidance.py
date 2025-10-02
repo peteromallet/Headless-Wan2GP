@@ -783,7 +783,7 @@ def create_structure_motion_video(
         if str(wan_dir) not in sys.path:
             sys.path.insert(0, str(wan_dir))
         
-        from shared.utils.video_utils import save_video
+        from shared.utils.audio_video import save_video
         
         # Convert to torch tensor format expected by save_video
         # save_video expects [T, H, W, C] in range [0, 255]
