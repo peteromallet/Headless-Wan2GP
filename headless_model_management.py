@@ -132,31 +132,16 @@ class HeadlessTaskQueue:
             sys.modules['preprocessing.matanyone.app'] = dummy_app
         except Exception:
             pass
-        # Import wgp lazily; allow running without it in smoke mode
+        # Don't import wgp during initialization to avoid CUDA/argparse conflicts
+        # wgp will be imported lazily when needed (e.g., in _apply_sampler_cfg_preset)
+        # This allows the queue to initialize even if CUDA isn't ready yet
         self.wgp = None
+        
+        # Restore sys.argv immediately (no wgp import, so no need for protection)
         try:
-            # Change to WanGP directory before importing to ensure model definitions load correctly
-            _saved_cwd = os.getcwd()
-            os.chdir(self.wan_dir)
-            try:
-                import wgp  # type: ignore
-                self.wgp = wgp
-            finally:
-                # Restore original working directory
-                os.chdir(_saved_cwd)
-        except Exception as e:
-            # If smoke mode is enabled, continue without wgp (orchestrator handles it)
-            if os.environ.get("HEADLESS_WAN2GP_SMOKE", ""):
-                logging.getLogger('HeadlessQueue').warning(
-                    f"WGP not available ({e}); continuing in smoke mode without direct wgp import")
-            else:
-                # Re-raise in real mode where wgp is required
-                raise
-        finally:
-            try:
-                sys.argv = _saved_argv
-            except Exception:
-                pass
+            sys.argv = _saved_argv
+        except Exception:
+            pass
         
         # Import our orchestrator
         from headless_wgp import WanOrchestrator
