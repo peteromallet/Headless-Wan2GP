@@ -1,11 +1,14 @@
 import os
+import sys
+print(f"[WGP_IMPORT_DEBUG] ===== wgp.py module loading started =====")
+print(f"[WGP_IMPORT_DEBUG] Current working directory: {os.getcwd()}")
+print(f"[WGP_IMPORT_DEBUG] sys.argv: {sys.argv}")
 os.environ["GRADIO_LANG"] = "en"
 # # os.environ.pop("TORCH_LOGS", None)  # make sure no env var is suppressing/overriding
 # os.environ["TORCH_LOGS"]= "recompiles"
 import torch._logging as tlog
-# tlog.set_logs(recompiles=True, guards=True, graph_breaks=True)    
+# tlog.set_logs(recompiles=True, guards=True, graph_breaks=True)
 import time
-import sys
 import threading
 import argparse
 from mmgp import offload, safetensors2, profile_type 
@@ -2257,7 +2260,16 @@ def init_model_def(model_type, model_def):
     return default_model_def
 
 
-models_def_paths =  glob.glob( os.path.join("defaults", "*.json") ) + glob.glob( os.path.join("finetunes", "*.json") ) 
+print(f"[WGP_MODEL_LOAD_DEBUG] Current working directory: {os.getcwd()}")
+print(f"[WGP_MODEL_LOAD_DEBUG] sys.argv at model load time: {sys.argv}")
+models_def_paths =  glob.glob( os.path.join("defaults", "*.json") ) + glob.glob( os.path.join("finetunes", "*.json") )
+print(f"[WGP_MODEL_LOAD_DEBUG] Found {len(models_def_paths)} model definition files")
+if len(models_def_paths) == 0:
+    print(f"[WGP_MODEL_LOAD_DEBUG] ERROR: No models found! Checking defaults directory...")
+    print(f"[WGP_MODEL_LOAD_DEBUG]   defaults exists: {os.path.exists('defaults')}")
+    print(f"[WGP_MODEL_LOAD_DEBUG]   finetunes exists: {os.path.exists('finetunes')}")
+    if os.path.exists('defaults'):
+        print(f"[WGP_MODEL_LOAD_DEBUG]   defaults contents: {os.listdir('defaults')[:5]}")
 models_def_paths.sort()
 for file_path in models_def_paths:
     model_type = os.path.basename(file_path)[:-5]

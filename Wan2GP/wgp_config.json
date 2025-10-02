@@ -31,7 +31,7 @@
     "video_output_codec": null,
     "image_output_codec": null,
     "audio_output_codec": null,
-    "last_model_type": "vace_fun_14B_cocktail_2_2",
+    "last_model_type": "t2v",
     "last_model_per_family": {},
     "last_advanced_choice": false,
     "last_resolution_choice": null,
