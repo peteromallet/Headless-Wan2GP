@@ -123,12 +123,20 @@ class TravelSegmentProcessor:
             # Extract structure video parameters from segment params or orchestrator payload
             structure_video_path = ctx.segment_params.get("structure_video_path") or ctx.full_orchestrator_payload.get("structure_video_path")
             structure_video_treatment = ctx.segment_params.get("structure_video_treatment", ctx.full_orchestrator_payload.get("structure_video_treatment", "adjust"))
+            structure_type = ctx.segment_params.get("structure_type", ctx.full_orchestrator_payload.get("structure_type", "flow"))
             structure_video_motion_strength = ctx.segment_params.get("structure_video_motion_strength", ctx.full_orchestrator_payload.get("structure_video_motion_strength", 1.0))
-            structure_motion_video_url = ctx.segment_params.get("structure_motion_video_url") or ctx.full_orchestrator_payload.get("structure_motion_video_url")
-            structure_motion_frame_offset = ctx.segment_params.get("structure_motion_frame_offset", 0)
+            structure_canny_intensity = ctx.segment_params.get("structure_canny_intensity", ctx.full_orchestrator_payload.get("structure_canny_intensity", 1.0))
+            structure_depth_contrast = ctx.segment_params.get("structure_depth_contrast", ctx.full_orchestrator_payload.get("structure_depth_contrast", 1.0))
+            # Support both old (motion) and new (guidance) naming for backward compatibility
+            structure_guidance_video_url = (ctx.segment_params.get("structure_guidance_video_url") or 
+                                           ctx.full_orchestrator_payload.get("structure_guidance_video_url") or
+                                           ctx.segment_params.get("structure_motion_video_url") or 
+                                           ctx.full_orchestrator_payload.get("structure_motion_video_url"))
+            structure_guidance_frame_offset = ctx.segment_params.get("structure_guidance_frame_offset", 
+                                                                     ctx.segment_params.get("structure_motion_frame_offset", 0))
             
             # Download structure video if it's a URL (defensive fallback if orchestrator didn't download)
-            # Note: If structure_motion_video_url is provided, this is not strictly needed as segments will use the pre-warped video
+            # Note: If structure_guidance_video_url is provided, this is not strictly needed as segments will use the pre-warped video
             if structure_video_path:
                 from source.common_utils import download_video_if_url
                 structure_video_path = download_video_if_url(
@@ -137,6 +145,10 @@ class TravelSegmentProcessor:
                     task_id_for_logging=ctx.task_id,
                     descriptive_name=f"structure_video_seg{ctx.segment_idx}"
                 )
+            
+            # Log which structure type is being used
+            if structure_video_path or structure_guidance_video_url:
+                ctx.dprint(f"[STRUCTURE_VIDEO] Segment {ctx.segment_idx} using structure type: {structure_type}")
             
             # Create guide video using shared function
             guide_video_path = sm_create_guide_video_for_travel_segment(
@@ -158,9 +170,12 @@ class TravelSegmentProcessor:
                 predefined_output_path=guide_video_final_path,
                 structure_video_path=structure_video_path,
                 structure_video_treatment=structure_video_treatment,
+                structure_type=structure_type,
                 structure_video_motion_strength=structure_video_motion_strength,
-                structure_motion_video_url=structure_motion_video_url,
-                structure_motion_frame_offset=structure_motion_frame_offset,
+                structure_canny_intensity=structure_canny_intensity,
+                structure_depth_contrast=structure_depth_contrast,
+                structure_guidance_video_url=structure_guidance_video_url,
+                structure_guidance_frame_offset=structure_guidance_frame_offset,
                 dprint=ctx.dprint
             )
             
