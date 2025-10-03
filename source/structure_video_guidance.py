@@ -1,15 +1,20 @@
 """
 Structure Video Guidance Module
 
-This module provides functionality to extract motion patterns from a structure video
+This module provides functionality to extract structure patterns from a reference video
 and apply them to unguidanced frames in travel guide videos.
 
 Key Components:
 - GuidanceTracker: Logically tracks which frames have guidance
 - Video loading: Using WGP.py patterns for consistency
-- Optical flow extraction: Using RAFT via FlowAnnotator
+- Multi-type preprocessing: Optical flow, canny edges, or depth maps
 - Flow adjustment: "adjust" (interpolate) vs "clip" (use as-is) semantics
 - Motion application: Progressive warping with configurable strength
+
+Supported Preprocessing Types:
+- "flow" (default): Optical flow visualization using RAFT
+- "canny": Canny edge detection for structural features
+- "depth": Depth map estimation using Depth Anything V2
 """
 
 import sys
@@ -508,22 +513,28 @@ def apply_structure_motion_with_tracking(
     structure_video_treatment: str,
     parsed_res_wh: Tuple[int, int],
     fps_helpers: int,
+    structure_type: str = "flow",
     motion_strength: float = 1.0,
-    structure_motion_video_url: str | None = None,
+    canny_intensity: float = 1.0,
+    depth_contrast: float = 1.0,
+    structure_guidance_video_url: str | None = None,
     segment_processing_dir: Path | None = None,
+    structure_guidance_frame_offset: int = 0,
+    # Legacy parameters for backward compatibility
+    structure_motion_video_url: str | None = None,
     structure_motion_frame_offset: int = 0,
     dprint: Callable = print
 ) -> List[np.ndarray]:
     """
-    Apply structure motion to unguidanced frames.
+    Apply structure guidance to unguidanced frames.
     
     IMPORTANT: This function marks frames as guided on the tracker as it warps them.
     In "clip" mode, only frames that actually receive warps are marked - frames left
     unchanged when flows run out remain unguidanced.
     
     Two modes of operation:
-    1. Pre-warped video (FASTER): If structure_motion_video_url is provided, downloads
-       and extracts pre-computed motion frames directly (no GPU warping needed).
+    1. Pre-warped video (FASTER): If structure_guidance_video_url is provided, downloads
+       and extracts pre-computed guidance frames directly (no GPU warping needed).
     2. Legacy path: If only structure_video_path is provided, extracts flows and
        applies warping per-segment (slower, more GPU work).
     
@@ -532,16 +543,26 @@ def apply_structure_motion_with_tracking(
         guidance_tracker: Tracks which frames have guidance (MUTATED by this function)
         structure_video_path: Path to structure video (legacy path, optional if URL provided)
         structure_video_treatment: "adjust" or "clip" (ignored for pre-warped video)
+        structure_type: Type of preprocessing ("flow", "canny", or "depth")
         parsed_res_wh: Target resolution (width, height)
         fps_helpers: Target FPS
-        motion_strength: Motion strength multiplier (0.0=no motion, 1.0=full, >1.0=amplified)
-        structure_motion_video_url: URL/path to pre-warped motion video (faster path)
+        motion_strength: Motion strength multiplier for flow (0.0=no motion, 1.0=full, >1.0=amplified)
+        canny_intensity: Edge intensity multiplier for canny
+        depth_contrast: Depth contrast adjustment for depth
+        structure_guidance_video_url: URL/path to pre-warped guidance video (faster path)
         segment_processing_dir: Directory for downloads (required if using URL)
+        structure_guidance_frame_offset: Starting frame offset in the guidance video
         dprint: Debug print function
         
     Returns:
-        Updated frames list with structure motion applied
+        Updated frames list with structure guidance applied
     """
+    # Backward compatibility: merge old and new parameter names
+    if structure_guidance_video_url is None and structure_motion_video_url is not None:
+        structure_guidance_video_url = structure_motion_video_url
+    if structure_guidance_frame_offset == 0 and structure_motion_frame_offset != 0:
+        structure_guidance_frame_offset = structure_motion_frame_offset
+    
     # Get unguidanced ranges from tracker (not pixel inspection!)
     unguidanced_ranges = guidance_tracker.get_unguidanced_ranges()
     
@@ -555,64 +576,65 @@ def apply_structure_motion_with_tracking(
     dprint(f"[STRUCTURE_VIDEO] Processing {total_unguidanced} unguidanced frames across {len(unguidanced_ranges)} ranges")
     
     # ===== PRE-WARPED VIDEO PATH (FASTER) =====
-    if structure_motion_video_url:
+    if structure_guidance_video_url:
         dprint(f"[STRUCTURE_VIDEO] ========== FAST PATH ACTIVATED ==========")
-        dprint(f"[STRUCTURE_VIDEO] Using pre-warped motion video (fast path)")
-        dprint(f"[STRUCTURE_VIDEO] URL/Path: {structure_motion_video_url}")
+        dprint(f"[STRUCTURE_VIDEO] Using pre-warped guidance video (fast path)")
+        dprint(f"[STRUCTURE_VIDEO] Type: {structure_type}")
+        dprint(f"[STRUCTURE_VIDEO] URL/Path: {structure_guidance_video_url}")
 
         if not segment_processing_dir:
-            raise ValueError("segment_processing_dir required when using structure_motion_video_url")
+            raise ValueError("segment_processing_dir required when using structure_guidance_video_url")
 
         try:
-            # Download and extract THIS segment's portion of motion frames
-            dprint(f"[STRUCTURE_VIDEO] Extracting frames starting at offset {structure_motion_frame_offset}")
-            motion_frames = download_and_extract_motion_frames(
-                structure_motion_video_url=structure_motion_video_url,
-                frame_start=structure_motion_frame_offset,
+            # Download and extract THIS segment's portion of guidance frames
+            dprint(f"[STRUCTURE_VIDEO] Extracting frames starting at offset {structure_guidance_frame_offset}")
+            guidance_frames = download_and_extract_motion_frames(
+                structure_motion_video_url=structure_guidance_video_url,  # Function still uses old param name internally
+                frame_start=structure_guidance_frame_offset,
                 frame_count=total_unguidanced,
                 download_dir=segment_processing_dir,
                 dprint=dprint
             )
 
-            dprint(f"[STRUCTURE_VIDEO] Successfully extracted {len(motion_frames)} motion frames")
+            dprint(f"[STRUCTURE_VIDEO] Successfully extracted {len(guidance_frames)} guidance frames")
 
-            # Drop motion frames directly into unguidanced ranges
+            # Drop guidance frames directly into unguidanced ranges
             updated_frames = frames_for_guide_list.copy()
-            motion_frame_idx = 0
+            guidance_frame_idx = 0
             frames_filled = 0
 
             for range_start, range_end in unguidanced_ranges:
                 dprint(f"[STRUCTURE_VIDEO] Filling range {range_start}-{range_end}")
 
                 for frame_idx in range(range_start, range_end + 1):
-                    if motion_frame_idx < len(motion_frames):
-                        updated_frames[frame_idx] = motion_frames[motion_frame_idx]
+                    if guidance_frame_idx < len(guidance_frames):
+                        updated_frames[frame_idx] = guidance_frames[guidance_frame_idx]
                         guidance_tracker.mark_single_frame(frame_idx)
-                        motion_frame_idx += 1
+                        guidance_frame_idx += 1
                         frames_filled += 1
                     else:
-                        dprint(f"[STRUCTURE_VIDEO] Warning: Ran out of motion frames at frame {frame_idx}")
+                        dprint(f"[STRUCTURE_VIDEO] Warning: Ran out of guidance frames at frame {frame_idx}")
                         break
 
-            dprint(f"[STRUCTURE_VIDEO] ✓ FAST PATH SUCCESS: Filled {frames_filled} frames with flow visualizations")
+            dprint(f"[STRUCTURE_VIDEO] ✓ FAST PATH SUCCESS: Filled {frames_filled} frames with {structure_type} visualizations")
             dprint(f"[STRUCTURE_VIDEO] ==========================================")
             return updated_frames
 
         except Exception as e:
             dprint(f"[ERROR] ✗ FAST PATH FAILED: {e}")
-            dprint(f"[ERROR] Falling back to legacy path (will warp RGB frames)")
+            dprint(f"[ERROR] Falling back to legacy path (will process structure video per-segment)")
             traceback.print_exc()
             # Fall back to legacy path
-            dprint(f"[STRUCTURE_VIDEO] Continuing with legacy warping path...")
+            dprint(f"[STRUCTURE_VIDEO] Continuing with legacy processing path...")
     else:
         dprint(f"[STRUCTURE_VIDEO] ========== FAST PATH SKIPPED ==========")
-        dprint(f"[STRUCTURE_VIDEO] structure_motion_video_url is None or empty")
-        dprint(f"[STRUCTURE_VIDEO] Reason: Orchestrator didn't provide pre-computed flow video")
+        dprint(f"[STRUCTURE_VIDEO] structure_guidance_video_url is None or empty")
+        dprint(f"[STRUCTURE_VIDEO] Reason: Orchestrator didn't provide pre-computed guidance video")
         dprint(f"[STRUCTURE_VIDEO] =========================================")
     
     # ===== LEGACY PATH: Extract flows and apply warping per-segment =====
     if not structure_video_path:
-        dprint(f"[ERROR] Neither structure_motion_video_url nor structure_video_path provided")
+        dprint(f"[ERROR] Neither structure_guidance_video_url nor structure_video_path provided")
         return frames_for_guide_list
     
     dprint(f"[STRUCTURE_VIDEO] Using legacy path: extracting flows and warping per-segment")
@@ -730,6 +752,164 @@ def apply_structure_motion_with_tracking(
         return frames_for_guide_list
 
 
+def get_structure_preprocessor(
+    structure_type: str,
+    motion_strength: float = 1.0,
+    canny_intensity: float = 1.0,
+    depth_contrast: float = 1.0,
+    dprint: Callable = print
+):
+    """
+    Get preprocessor function for structure video guidance.
+    
+    We import and instantiate the preprocessor ourselves, then run it
+    on the structure video frames to generate RGB visualizations.
+    
+    Args:
+        structure_type: Type of preprocessing ("flow", "canny", or "depth")
+        motion_strength: Only affects flow - scales flow vector magnitude
+        canny_intensity: Only affects canny - scales edge boldness
+        depth_contrast: Only affects depth - adjusts depth map contrast
+        dprint: Debug print function
+    
+    Returns:
+        Function that takes a list of frames (np.ndarray)
+        and returns a list of processed frames (RGB visualizations).
+    """
+    if structure_type == "flow":
+        # Add Wan2GP to path for imports
+        wan_dir = Path(__file__).parent.parent / "Wan2GP"
+        if str(wan_dir) not in sys.path:
+            sys.path.insert(0, str(wan_dir))
+        
+        from preprocessing.flow import FlowVisAnnotator
+        cfg = {"PRETRAINED_MODEL": "ckpts/flow/raft-things.pth"}
+        annotator = FlowVisAnnotator(cfg)
+        # FlowVisAnnotator.forward() returns (flow_fields, flow_visualizations)
+        # We only need the visualizations (RGB images)
+        # Note: motion_strength is applied during frame warping in apply_structure_motion_with_tracking, not here
+        return lambda frames: annotator.forward(frames)[1]  # [1] = visualizations
+    
+    elif structure_type == "canny":
+        wan_dir = Path(__file__).parent.parent / "Wan2GP"
+        if str(wan_dir) not in sys.path:
+            sys.path.insert(0, str(wan_dir))
+        
+        from preprocessing.canny import CannyVideoAnnotator
+        cfg = {"PRETRAINED_MODEL": "ckpts/scribble/netG_A_latest.pth"}
+        annotator = CannyVideoAnnotator(cfg)
+        
+        def process_canny(frames):
+            # Get base canny edges
+            edge_frames = annotator.forward(frames)
+            
+            # Apply intensity adjustment if not 1.0
+            if abs(canny_intensity - 1.0) > 1e-6:
+                adjusted_frames = []
+                for frame in edge_frames:
+                    # Scale pixel values by intensity factor
+                    adjusted = (frame.astype(np.float32) * canny_intensity).clip(0, 255).astype(np.uint8)
+                    adjusted_frames.append(adjusted)
+                dprint(f"[STRUCTURE_PREPROCESS] Applied canny intensity: {canny_intensity}")
+                return adjusted_frames
+            return edge_frames
+        
+        return process_canny
+    
+    elif structure_type == "depth":
+        wan_dir = Path(__file__).parent.parent / "Wan2GP"
+        if str(wan_dir) not in sys.path:
+            sys.path.insert(0, str(wan_dir))
+        
+        from preprocessing.depth_anything_v2.depth import DepthV2VideoAnnotator
+        variant = "vitl"  # Could be configurable
+        cfg = {
+            "PRETRAINED_MODEL": f"ckpts/depth/depth_anything_v2_{variant}.pth",
+            "MODEL_VARIANT": variant
+        }
+        annotator = DepthV2VideoAnnotator(cfg)
+        
+        def process_depth(frames):
+            # Get base depth maps
+            depth_frames = annotator.forward(frames)
+            
+            # Apply contrast adjustment if not 1.0
+            if abs(depth_contrast - 1.0) > 1e-6:
+                adjusted_frames = []
+                for frame in depth_frames:
+                    # Convert to float, normalize, apply contrast, denormalize
+                    frame_float = frame.astype(np.float32) / 255.0
+                    # Apply contrast around midpoint (0.5)
+                    adjusted = ((frame_float - 0.5) * depth_contrast + 0.5).clip(0, 1)
+                    adjusted = (adjusted * 255).astype(np.uint8)
+                    adjusted_frames.append(adjusted)
+                dprint(f"[STRUCTURE_PREPROCESS] Applied depth contrast: {depth_contrast}")
+                return adjusted_frames
+            return depth_frames
+        
+        return process_depth
+    
+    else:
+        raise ValueError(f"Unsupported structure_type: {structure_type}. Must be 'flow', 'canny', or 'depth'")
+
+
+def process_structure_frames(
+    frames: List[np.ndarray],
+    structure_type: str,
+    motion_strength: float,
+    canny_intensity: float,
+    depth_contrast: float,
+    dprint: Callable
+) -> List[np.ndarray]:
+    """
+    Process frames with chosen preprocessor, ensuring consistent output count.
+    
+    Handles the N-1 problem for optical flow (which returns N-1 flows for N frames).
+    
+    Args:
+        frames: List of input frames to preprocess
+        structure_type: Type of preprocessing ("flow", "canny", or "depth")
+        motion_strength: Strength parameter for flow
+        canny_intensity: Intensity parameter for canny
+        depth_contrast: Contrast parameter for depth
+        dprint: Debug print function
+        
+    Returns:
+        List of RGB visualization frames (length = len(frames))
+    """
+    dprint(f"[STRUCTURE_PREPROCESS] Processing {len(frames)} frames with '{structure_type}' preprocessor...")
+    
+    preprocessor = get_structure_preprocessor(
+        structure_type,
+        motion_strength,
+        canny_intensity,
+        depth_contrast,
+        dprint
+    )
+    
+    import time
+    start_time = time.time()
+    processed_frames = preprocessor(frames)
+    duration = time.time() - start_time
+    
+    dprint(f"[STRUCTURE_PREPROCESS] Preprocessing completed in {duration:.2f}s")
+    
+    # Handle N-1 case for optical flow
+    if structure_type == "flow" and len(processed_frames) == len(frames) - 1:
+        # Duplicate last flow frame to match input count
+        processed_frames.append(processed_frames[-1].copy())
+        dprint(f"[STRUCTURE_PREPROCESS] Duplicated last flow frame ({len(frames)-1} → {len(frames)} frames)")
+    
+    # Validate output count
+    if len(processed_frames) != len(frames):
+        raise ValueError(
+            f"Preprocessor '{structure_type}' returned {len(processed_frames)} frames "
+            f"for {len(frames)} input frames. Expected {len(frames)} output frames."
+        )
+    
+    return processed_frames
+
+
 def create_structure_motion_video(
     structure_video_path: str,
     max_frames_needed: int,
@@ -845,6 +1025,140 @@ def create_structure_motion_video(
         
     except Exception as e:
         dprint(f"[ERROR] Failed to create structure motion video: {e}")
+        traceback.print_exc()
+        raise
+
+
+def create_structure_guidance_video(
+    structure_video_path: str,
+    max_frames_needed: int,
+    target_resolution: Tuple[int, int],
+    target_fps: int,
+    output_path: Path,
+    structure_type: str = "flow",
+    motion_strength: float = 1.0,
+    canny_intensity: float = 1.0,
+    depth_contrast: float = 1.0,
+    treatment: str = "adjust",
+    dprint: Callable = print
+) -> Path:
+    """
+    Create a video of preprocessed structure visualizations from the structure video.
+
+    This is the NEW orchestrator-level function that:
+    1. Loads and preprocesses frames from the structure video
+    2. Applies the chosen preprocessor (flow, canny, or depth)
+    3. Encodes them as an H.264 video
+
+    The resulting video contains structure visualizations that segments can use as
+    VACE guide videos for structural conditioning.
+
+    Args:
+        structure_video_path: Path to the source structure video
+        max_frames_needed: Number of frames to generate (total unguidanced frames)
+        target_resolution: (width, height) for output frames
+        target_fps: FPS for the output video
+        output_path: Where to save the output video
+        structure_type: Type of preprocessing ("flow", "canny", or "depth"). Default: "flow"
+        motion_strength: Flow strength multiplier (only used for flow)
+        canny_intensity: Edge intensity multiplier (only used for canny)
+        depth_contrast: Depth contrast adjustment (only used for depth)
+        treatment: "adjust" (stretch/compress entire video) or "clip" (temporal sample)
+        dprint: Debug print function
+
+    Returns:
+        Path to the created video file
+
+    Raises:
+        ValueError: If structure video cannot be loaded or processed
+    """
+    dprint(f"[STRUCTURE_GUIDANCE_VIDEO] Creating {structure_type} visualization video...")
+    dprint(f"  Source: {structure_video_path}")
+    dprint(f"  Type: {structure_type}")
+    dprint(f"  Frames: {max_frames_needed}")
+    dprint(f"  Resolution: {target_resolution[0]}x{target_resolution[1]}")
+    dprint(f"  Treatment: {treatment}")
+    
+    # Log active strength parameter
+    if structure_type == "flow" and abs(motion_strength - 1.0) > 1e-6:
+        dprint(f"  Motion strength: {motion_strength}")
+    elif structure_type == "canny" and abs(canny_intensity - 1.0) > 1e-6:
+        dprint(f"  Canny intensity: {canny_intensity}")
+    elif structure_type == "depth" and abs(depth_contrast - 1.0) > 1e-6:
+        dprint(f"  Depth contrast: {depth_contrast}")
+
+    try:
+        # Step 1: Load structure video frames with treatment mode
+        dprint(f"[STRUCTURE_GUIDANCE_VIDEO] Loading structure video frames...")
+        structure_frames = load_structure_video_frames(
+            structure_video_path,
+            target_frame_count=max_frames_needed,
+            target_fps=target_fps,
+            target_resolution=target_resolution,
+            treatment=treatment,
+            crop_to_fit=True,  # Apply center cropping
+            dprint=dprint
+        )
+
+        # Step 2: Process frames with chosen preprocessor
+        dprint(f"[STRUCTURE_GUIDANCE_VIDEO] Processing with '{structure_type}' preprocessor...")
+        processed_frames = process_structure_frames(
+            structure_frames,
+            structure_type,
+            motion_strength,
+            canny_intensity,
+            depth_contrast,
+            dprint
+        )
+
+        if not processed_frames:
+            raise ValueError(f"No {structure_type} visualizations extracted from structure video")
+
+        dprint(f"[STRUCTURE_GUIDANCE_VIDEO] Processed {len(processed_frames)} frames")
+        
+        # Step 3: Encode as video
+        dprint(f"[STRUCTURE_GUIDANCE_VIDEO] Encoding video to {output_path}")
+        
+        # Import video creation utilities
+        wan_dir = Path(__file__).parent.parent / "Wan2GP"
+        if str(wan_dir) not in sys.path:
+            sys.path.insert(0, str(wan_dir))
+        
+        from shared.utils.audio_video import save_video
+        
+        # Convert to numpy array format expected by save_video
+        # save_video expects [T, H, W, C] in range [0, 255]
+        video_tensor = np.stack(processed_frames, axis=0)  # [T, H, W, C]
+        
+        # Ensure output directory exists
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Save video using WGP's video utilities
+        save_video(
+            video_tensor,
+            save_file=str(output_path),
+            fps=target_fps,
+            codec_type='libx264_8',  # Use libx264 with 8-bit encoding
+            normalize=False,  # Already in [0, 255] uint8 range
+            value_range=(0, 255)  # Specify value range for uint8 data
+        )
+        
+        # Verify output exists
+        if not output_path.exists():
+            raise ValueError(f"Failed to create video at {output_path}")
+        
+        file_size_mb = output_path.stat().st_size / (1024 * 1024)
+        dprint(f"[STRUCTURE_GUIDANCE_VIDEO] Created video: {output_path.name} ({file_size_mb:.2f} MB)")
+        
+        # Clean up GPU memory
+        dprint(f"[STRUCTURE_GUIDANCE_VIDEO] Cleaning up GPU memory...")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        return output_path
+        
+    except Exception as e:
+        dprint(f"[ERROR] Failed to create structure guidance video: {e}")
         traceback.print_exc()
         raise
 

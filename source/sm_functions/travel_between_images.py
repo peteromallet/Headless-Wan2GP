@@ -658,7 +658,12 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         # Extract and validate structure video parameters
         structure_video_path = orchestrator_payload.get("structure_video_path")
         structure_video_treatment = orchestrator_payload.get("structure_video_treatment", "adjust")
-        structure_video_motion_strength = orchestrator_payload.get("structure_video_motion_strength", 1.0)
+        structure_type = orchestrator_payload.get("structure_type", "flow")  # Default to flow
+        
+        # Extract strength parameters for each type
+        motion_strength = orchestrator_payload.get("structure_video_motion_strength", 1.0)
+        canny_intensity = orchestrator_payload.get("structure_canny_intensity", 1.0)
+        depth_contrast = orchestrator_payload.get("structure_depth_contrast", 1.0)
         
         if structure_video_path:
             # Download if URL
@@ -678,9 +683,38 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             if structure_video_treatment not in ["adjust", "clip"]:
                 raise ValueError(f"Invalid structure_video_treatment: {structure_video_treatment}. Must be 'adjust' or 'clip'")
             
+            # Validate structure_type
+            if structure_type not in ["flow", "canny", "depth"]:
+                raise ValueError(f"Invalid structure_type: {structure_type}. Must be 'flow', 'canny', or 'depth'")
+            
+            # Warn about unused strength parameters
+            if structure_type == "flow":
+                if abs(canny_intensity - 1.0) > 1e-6:
+                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_canny_intensity={canny_intensity} ignored (structure_type is 'flow')")
+                if abs(depth_contrast - 1.0) > 1e-6:
+                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_depth_contrast={depth_contrast} ignored (structure_type is 'flow')")
+            elif structure_type == "canny":
+                if abs(motion_strength - 1.0) > 1e-6:
+                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_video_motion_strength={motion_strength} ignored (structure_type is 'canny')")
+                if abs(depth_contrast - 1.0) > 1e-6:
+                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_depth_contrast={depth_contrast} ignored (structure_type is 'canny')")
+            elif structure_type == "depth":
+                if abs(motion_strength - 1.0) > 1e-6:
+                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_video_motion_strength={motion_strength} ignored (structure_type is 'depth')")
+                if abs(canny_intensity - 1.0) > 1e-6:
+                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_canny_intensity={canny_intensity} ignored (structure_type is 'depth')")
+            
             dprint(f"[STRUCTURE_VIDEO] Using: {structure_video_path}")
+            dprint(f"[STRUCTURE_VIDEO] Type: {structure_type}")
             dprint(f"[STRUCTURE_VIDEO] Treatment: {structure_video_treatment}")
-            dprint(f"[STRUCTURE_VIDEO] Motion strength: {structure_video_motion_strength}")
+            
+            # Log active strength parameter
+            if structure_type == "flow":
+                dprint(f"[STRUCTURE_VIDEO] Motion strength: {motion_strength}")
+            elif structure_type == "canny":
+                dprint(f"[STRUCTURE_VIDEO] Canny intensity: {canny_intensity}")
+            elif structure_type == "depth":
+                dprint(f"[STRUCTURE_VIDEO] Depth contrast: {depth_contrast}")
 
             # Calculate TOTAL flow frames needed across ALL segments
             # Flow visualizations are created for ALL frames INCLUDING anchors (even though anchors
@@ -712,10 +746,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
             dprint(f"[STRUCTURE_VIDEO] Total flow frames across all segments: {total_flow_frames}")
 
-            # Create and upload pre-warped motion video for segments to download
-            dprint(f"[STRUCTURE_VIDEO] Creating pre-warped motion video...")
+            # Create and upload pre-warped guidance video for segments to download
+            dprint(f"[STRUCTURE_VIDEO] Creating pre-warped guidance video...")
             try:
-                from source.structure_video_guidance import create_structure_motion_video
+                from source.structure_video_guidance import create_structure_guidance_video
                 
                 # Get resolution and FPS from orchestrator payload
                 target_resolution_raw = orchestrator_payload["parsed_resolution_wh"]
@@ -734,39 +768,44 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 # Generate unique filename to avoid race conditions and enable idempotency
                 timestamp_short = datetime.now().strftime("%H%M%S")
                 unique_suffix = uuid.uuid4().hex[:6]
-                structure_motion_filename = f"structure_motion_{timestamp_short}_{unique_suffix}.mp4"
+                structure_guidance_filename = f"structure_{structure_type}_{timestamp_short}_{unique_suffix}.mp4"
 
-                structure_motion_video_path = create_structure_motion_video(
+                structure_guidance_video_path = create_structure_guidance_video(
                     structure_video_path=structure_video_path,
                     max_frames_needed=total_flow_frames,
                     target_resolution=target_resolution,
                     target_fps=target_fps,
-                    motion_strength=structure_video_motion_strength,
-                    output_path=current_run_output_dir / structure_motion_filename,
+                    output_path=current_run_output_dir / structure_guidance_filename,
+                    structure_type=structure_type,
+                    motion_strength=motion_strength,
+                    canny_intensity=canny_intensity,
+                    depth_contrast=depth_contrast,
                     treatment=structure_video_treatment,
                     dprint=dprint
                 )
                 
                 # Store path for segments (edge function will handle upload)
-                dprint(f"[STRUCTURE_VIDEO] Pre-warped motion video ready for segments...")
-                structure_motion_video_url = upload_and_get_final_output_location(
-                    local_file_path=structure_motion_video_path,
-                    supabase_object_name=structure_motion_filename,  # Unused but required for signature
-                    initial_db_location=str(structure_motion_video_path),
+                dprint(f"[STRUCTURE_VIDEO] Pre-warped guidance video ready for segments...")
+                structure_guidance_video_url = upload_and_get_final_output_location(
+                    local_file_path=structure_guidance_video_path,
+                    supabase_object_name=structure_guidance_filename,  # Unused but required for signature
+                    initial_db_location=str(structure_guidance_video_path),
                     dprint=dprint
                 )
 
-                dprint(f"[STRUCTURE_VIDEO] Pre-warped motion video path: {structure_motion_video_url}")
+                dprint(f"[STRUCTURE_VIDEO] Pre-warped guidance video path: {structure_guidance_video_url}")
                 
-                # Store URL in orchestrator payload for segments to use
-                orchestrator_payload["structure_motion_video_url"] = structure_motion_video_url
+                # Store URL and type in orchestrator payload for segments to use
+                orchestrator_payload["structure_guidance_video_url"] = structure_guidance_video_url
+                orchestrator_payload["structure_type"] = structure_type
                 
             except Exception as e:
-                dprint(f"[ERROR] Failed to create pre-warped motion video: {e}")
+                dprint(f"[ERROR] Failed to create pre-warped guidance video: {e}")
                 import traceback
                 traceback.print_exc()
                 dprint(f"[WARNING] Segments will fall back to legacy per-segment flow extraction")
-                orchestrator_payload["structure_motion_video_url"] = None
+                orchestrator_payload["structure_guidance_video_url"] = None
+                orchestrator_payload["structure_type"] = structure_type  # Still pass the type
 
         # Loop to queue all segment tasks (skip existing ones for idempotency)
         segments_created = 0
@@ -894,9 +933,12 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 # Structure video guidance parameters
                 "structure_video_path": structure_video_path,
                 "structure_video_treatment": structure_video_treatment,
-                "structure_video_motion_strength": structure_video_motion_strength,
-                "structure_motion_video_url": orchestrator_payload.get("structure_motion_video_url"),  # Pre-warped video URL
-                "structure_motion_frame_offset": segment_flow_offsets[idx] if 'segment_flow_offsets' in locals() else 0,  # Starting frame in structure_motion video
+                "structure_type": orchestrator_payload.get("structure_type", "flow"),  # Default to flow
+                "structure_video_motion_strength": motion_strength if 'motion_strength' in locals() else orchestrator_payload.get("structure_video_motion_strength", 1.0),
+                "structure_canny_intensity": canny_intensity if 'canny_intensity' in locals() else orchestrator_payload.get("structure_canny_intensity", 1.0),
+                "structure_depth_contrast": depth_contrast if 'depth_contrast' in locals() else orchestrator_payload.get("structure_depth_contrast", 1.0),
+                "structure_guidance_video_url": orchestrator_payload.get("structure_guidance_video_url"),  # Pre-warped video URL
+                "structure_guidance_frame_offset": segment_flow_offsets[idx] if 'segment_flow_offsets' in locals() else 0,  # Starting frame in structure_guidance video
             }
             
             # Add extracted parameters at top level for queue processing

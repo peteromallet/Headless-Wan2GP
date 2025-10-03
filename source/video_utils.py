@@ -656,7 +656,13 @@ def create_guide_video_for_travel_segment(
     predefined_output_path: Path | None = None,
     structure_video_path: str | None = None,
     structure_video_treatment: str = "adjust",
+    structure_type: str = "flow",
     structure_video_motion_strength: float = 1.0,
+    structure_canny_intensity: float = 1.0,
+    structure_depth_contrast: float = 1.0,
+    structure_guidance_video_url: str | None = None,
+    structure_guidance_frame_offset: int = 0,
+    # Legacy parameters for backward compatibility
     structure_motion_video_url: str | None = None,
     structure_motion_frame_offset: int = 0,
     *,
@@ -664,6 +670,12 @@ def create_guide_video_for_travel_segment(
 ) -> Path | None:
     """Creates the guide video for a travel segment with all fading and adjustments."""
     try:
+        # Backward compatibility: merge old and new parameter names
+        if structure_guidance_video_url is None and structure_motion_video_url is not None:
+            structure_guidance_video_url = structure_motion_video_url
+        if structure_guidance_frame_offset == 0 and structure_motion_frame_offset != 0:
+            structure_guidance_frame_offset = structure_motion_frame_offset
+        
         # Initialize guidance tracker for structure video feature
         from source.structure_video_guidance import GuidanceTracker, apply_structure_motion_with_tracking
         guidance_tracker = GuidanceTracker(total_frames_for_segment)
@@ -764,8 +776,8 @@ def create_guide_video_for_travel_segment(
 
                     dprint(f"Task {task_id_for_logging}: Placed {len(consolidated_keyframe_positions)} keyframes for consolidated segment (end anchor: image {end_anchor_image_index})")
 
-            # Apply structure motion to unguidanced frames before creating video
-            if structure_video_path:
+            # Apply structure guidance to unguidanced frames before creating video
+            if structure_video_path or structure_guidance_video_url:
                 dprint(f"[GUIDANCE_TRACK] Pre-structure guidance summary:")
                 dprint(guidance_tracker.debug_summary())
                 
@@ -774,12 +786,15 @@ def create_guide_video_for_travel_segment(
                     guidance_tracker=guidance_tracker,
                     structure_video_path=structure_video_path,
                     structure_video_treatment=structure_video_treatment,
+                    structure_type=structure_type,
                     parsed_res_wh=parsed_res_wh,
                     fps_helpers=fps_helpers,
                     motion_strength=structure_video_motion_strength,
-                    structure_motion_video_url=structure_motion_video_url,
+                    canny_intensity=structure_canny_intensity,
+                    depth_contrast=structure_depth_contrast,
+                    structure_guidance_video_url=structure_guidance_video_url,
                     segment_processing_dir=output_target_dir,
-                    structure_motion_frame_offset=structure_motion_frame_offset,
+                    structure_guidance_frame_offset=structure_guidance_frame_offset,
                     dprint=dprint
                 )
                 
@@ -1015,8 +1030,8 @@ def create_guide_video_for_travel_segment(
             # Already marked above, but ensure it's marked
             guidance_tracker.mark_single_frame(0)
 
-        # Apply structure motion to unguidanced frames before creating video
-        if structure_video_path:
+        # Apply structure guidance to unguidanced frames before creating video
+        if structure_video_path or structure_guidance_video_url:
             dprint(f"[GUIDANCE_TRACK] Pre-structure guidance summary:")
             dprint(guidance_tracker.debug_summary())
             
@@ -1025,12 +1040,15 @@ def create_guide_video_for_travel_segment(
                 guidance_tracker=guidance_tracker,
                 structure_video_path=structure_video_path,
                 structure_video_treatment=structure_video_treatment,
+                structure_type=structure_type,
                 parsed_res_wh=parsed_res_wh,
                 fps_helpers=fps_helpers,
                 motion_strength=structure_video_motion_strength,
-                structure_motion_video_url=structure_motion_video_url,
+                canny_intensity=structure_canny_intensity,
+                depth_contrast=structure_depth_contrast,
+                structure_guidance_video_url=structure_guidance_video_url,
                 segment_processing_dir=output_target_dir,
-                structure_motion_frame_offset=structure_motion_frame_offset,
+                structure_guidance_frame_offset=structure_guidance_frame_offset,
                 dprint=dprint
             )
             
