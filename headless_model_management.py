@@ -655,14 +655,16 @@ class HeadlessTaskQueue:
                 )
             
             self.logger.info(f"{worker_name} generation completed for task {task.id}: {result}")
-            
+
             # Post-process single frame videos to PNG for single_image tasks
-            if self._is_single_image_task(task):
+            # BUT: Skip PNG conversion for travel segments (they must remain as videos for stitching)
+            is_travel_segment = task.id.startswith("travel_seg_")
+            if self._is_single_image_task(task) and not is_travel_segment:
                 png_result = self._convert_single_frame_video_to_png(task, result, worker_name)
                 if png_result:
                     self.logger.info(f"{worker_name} converted single frame video to PNG: {png_result}")
                     return png_result
-            
+
             return result
             
         except Exception as e:
