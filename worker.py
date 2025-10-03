@@ -550,16 +550,18 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         headless_logger.debug(f"Auto-enabled Wan 2.2 acceleration LoRAs (no parameter overrides)", task_id=task_id)
 
     # Auto-add/update Lightning LoRA based on amount_of_motion parameter
-    amount_of_motion = db_task_params.get("amount_of_motion", 0.0)
-    try:
-        amount_of_motion = float(amount_of_motion) if amount_of_motion is not None else 0.0
-    except (ValueError, TypeError):
-        amount_of_motion = 0.0
+    amount_of_motion = db_task_params.get("amount_of_motion", None)
 
-    if amount_of_motion > 0.0 and ("2_2" in model or "cocktail_2_2" in model):
+    if amount_of_motion is not None and ("2_2" in model or "cocktail_2_2" in model):
+        try:
+            amount_of_motion = float(amount_of_motion)
+        except (ValueError, TypeError):
+            amount_of_motion = None
+
+    if amount_of_motion is not None and ("2_2" in model or "cocktail_2_2" in model):
         # Calculate inverse strength for first phase (1.0 - amount_of_motion, clamped to 0.0-1.0)
         first_phase_strength = max(0.0, min(1.0, 1.0 - amount_of_motion))
-        lightning_strength = f"{first_phase_strength:.2f};1.0;0"
+        lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
 
         lightning_lora_name = "Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_HIGH_fp16.safetensors"
 
@@ -838,15 +840,17 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             dprint(f"[QUEUE_PARAMS] Added {len(additional_loras)} additional LoRAs from orchestrator payload")
 
         # Auto-add Lightning LoRA based on amount_of_motion from orchestrator
-        amount_of_motion = full_orchestrator_payload.get("amount_of_motion", 0.0)
-        try:
-            amount_of_motion = float(amount_of_motion) if amount_of_motion is not None else 0.0
-        except (ValueError, TypeError):
-            amount_of_motion = 0.0
+        amount_of_motion = full_orchestrator_payload.get("amount_of_motion", None)
 
-        if amount_of_motion > 0.0 and ("2_2" in model_name or "lightning" in model_name.lower()):
+        if amount_of_motion is not None and ("2_2" in model_name or "lightning" in model_name.lower()):
+            try:
+                amount_of_motion = float(amount_of_motion)
+            except (ValueError, TypeError):
+                amount_of_motion = None
+
+        if amount_of_motion is not None and ("2_2" in model_name or "lightning" in model_name.lower()):
             first_phase_strength = max(0.0, min(1.0, 1.0 - amount_of_motion))
-            lightning_strength = f"{first_phase_strength:.2f};1.0;0"
+            lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
 
             lightning_lora_name = "Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_HIGH_fp16.safetensors"
 
