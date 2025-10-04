@@ -2,7 +2,7 @@
   "model": {
     "name": "Wan2.2 Vace Fun Cocktail Lightning 14B (3-Phase) 2-2-2 Steps - Baseline (Lightning Only)",
     "architecture": "vace_14B",
-    "description": "3-phase baseline model with only Lightning HIGH Phase 2 + Lightning LOW Phase 3 - 2-2-2 steps, standard CFG, model switch at phase 2",
+    "description": "3-phase baseline model with Lightning HIGH Phase 1 + Lightning HIGH Phase 2 + Lightning LOW Phase 3 - 2-2-2 steps, standard CFG, model switch at phase 3",
     "URLs": "vace_fun_14B_2_2",
     "URLs2": "vace_fun_14B_2_2",
     "loras": [
@@ -23,8 +23,8 @@
   "guidance2_scale": 1,
   "guidance3_scale": 1,
   "flow_shift": 5,
-  "switch_threshold": 601,
-  "switch_threshold2": 201,
+  "switch_threshold": 883,
+  "switch_threshold2": 558,
   "model_switch_phase": 2,
   "seed": 12345,
   "sample_solver": "euler",

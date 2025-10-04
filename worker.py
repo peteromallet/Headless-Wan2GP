@@ -559,11 +559,10 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             amount_of_motion = None
 
     if amount_of_motion is not None and ("2_2" in model or "cocktail_2_2" in model):
-        # Calculate inverse strength for first phase (1.0 - amount_of_motion, clamped to 0.0-1.0)
-        first_phase_strength = max(0.0, min(1.0, 1.0 - amount_of_motion))
-        lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
+        # Calculate strength: input 0.0→0.5, input 1.0→1.0 (linear scaling from 0.5 to 1.0)
+        first_phase_strength = 0.5 + (amount_of_motion * 0.5)
 
-        lightning_lora_name = "Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_HIGH_fp16.safetensors"
+        lightning_lora_name = "high_noise_model.safetensors"
 
         # Get current LoRA lists or initialize
         current_lora_names = generation_params.get("lora_names", [])
@@ -587,15 +586,23 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
                 break
 
         if lightning_index >= 0:
-            # Update existing Lightning LoRA
+            # Update existing Lightning LoRA - preserve phases 2 and 3 if they exist
             current_lora_names[lightning_index] = lightning_lora_name
             if lightning_index < len(current_lora_mults):
+                existing_mult = str(current_lora_mults[lightning_index])
+                existing_phases = existing_mult.split(";")
+                # Keep existing phase 2 and 3 values, or default to 0.0
+                phase2 = existing_phases[1] if len(existing_phases) > 1 else "0.0"
+                phase3 = existing_phases[2] if len(existing_phases) > 2 else "0.0"
+                lightning_strength = f"{first_phase_strength:.2f};{phase2};{phase3}"
                 current_lora_mults[lightning_index] = lightning_strength
             else:
+                lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
                 current_lora_mults.append(lightning_strength)
             headless_logger.debug(f"Updated Lightning LoRA strength to {lightning_strength} based on amount_of_motion={amount_of_motion}", task_id=task_id)
         else:
-            # Add new Lightning LoRA
+            # Add new Lightning LoRA with default phase 2/3 values
+            lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
             current_lora_names.append(lightning_lora_name)
             current_lora_mults.append(lightning_strength)
             headless_logger.debug(f"Added Lightning LoRA with strength {lightning_strength} based on amount_of_motion={amount_of_motion}", task_id=task_id)
@@ -611,7 +618,7 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         if "additional_loras" not in generation_params:
             generation_params["additional_loras"] = {}
 
-        lightning_url = "https://huggingface.co/DeepBeepMeep/Wan2.2/resolve/main/loras_accelerators/Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_HIGH_fp16.safetensors"
+        lightning_url = "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-T2V-A14B-4steps-lora-250928/high_noise_model.safetensors"
         generation_params["additional_loras"][lightning_url] = first_phase_strength
 
         headless_logger.info(f"Lightning LoRA configured: strength={lightning_strength}, amount_of_motion={amount_of_motion}", task_id=task_id)
@@ -849,10 +856,10 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 amount_of_motion = None
 
         if amount_of_motion is not None and ("2_2" in model_name or "lightning" in model_name.lower()):
-            first_phase_strength = max(0.0, min(1.0, 1.0 - amount_of_motion))
-            lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
+            # Calculate strength: input 0.0→0.5, input 1.0→1.0 (linear scaling from 0.5 to 1.0)
+            first_phase_strength = 0.5 + (amount_of_motion * 0.5)
 
-            lightning_lora_name = "Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_HIGH_fp16.safetensors"
+            lightning_lora_name = "high_noise_model.safetensors"
 
             # Get or initialize LoRA lists
             current_lora_names = generation_params.get("lora_names", [])
@@ -874,15 +881,23 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                     break
 
             if lightning_index >= 0:
-                # Update existing Lightning LoRA
+                # Update existing Lightning LoRA - preserve phases 2 and 3 if they exist
                 current_lora_names[lightning_index] = lightning_lora_name
                 if lightning_index < len(current_lora_mults):
+                    existing_mult = str(current_lora_mults[lightning_index])
+                    existing_phases = existing_mult.split(";")
+                    # Keep existing phase 2 and 3 values, or default to 0.0
+                    phase2 = existing_phases[1] if len(existing_phases) > 1 else "0.0"
+                    phase3 = existing_phases[2] if len(existing_phases) > 2 else "0.0"
+                    lightning_strength = f"{first_phase_strength:.2f};{phase2};{phase3}"
                     current_lora_mults[lightning_index] = lightning_strength
                 else:
+                    lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
                     current_lora_mults.append(lightning_strength)
                 dprint(f"[LIGHTNING_LORA] Travel segment {task_id}: Updated Lightning LoRA strength to {lightning_strength} based on amount_of_motion={amount_of_motion}")
             else:
-                # Add new Lightning LoRA
+                # Add new Lightning LoRA with default phase 2/3 values
+                lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
                 current_lora_names.append(lightning_lora_name)
                 current_lora_mults.append(lightning_strength)
                 dprint(f"[LIGHTNING_LORA] Travel segment {task_id}: Added Lightning LoRA with strength {lightning_strength} based on amount_of_motion={amount_of_motion}")
@@ -898,7 +913,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             if "additional_loras" not in generation_params:
                 generation_params["additional_loras"] = {}
 
-            lightning_url = "https://huggingface.co/DeepBeepMeep/Wan2.2/resolve/main/loras_accelerators/Wan2.2-Lightning_T2V-v1.1-A14B-4steps-lora_HIGH_fp16.safetensors"
+            lightning_url = "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-T2V-A14B-4steps-lora-250928/high_noise_model.safetensors"
             generation_params["additional_loras"][lightning_url] = first_phase_strength
 
             headless_logger.info(f"Travel segment Lightning LoRA configured: strength={lightning_strength}, amount_of_motion={amount_of_motion}", task_id=task_id)

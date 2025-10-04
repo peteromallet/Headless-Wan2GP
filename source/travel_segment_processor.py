@@ -123,7 +123,11 @@ class TravelSegmentProcessor:
             # Extract structure video parameters from segment params or orchestrator payload
             structure_video_path = ctx.segment_params.get("structure_video_path") or ctx.full_orchestrator_payload.get("structure_video_path")
             structure_video_treatment = ctx.segment_params.get("structure_video_treatment", ctx.full_orchestrator_payload.get("structure_video_treatment", "adjust"))
-            structure_type = ctx.segment_params.get("structure_type", ctx.full_orchestrator_payload.get("structure_type", "flow"))
+            # Check both structure_video_type and structure_type for backward compatibility
+            structure_type = (ctx.segment_params.get("structure_video_type") or
+                            ctx.segment_params.get("structure_type") or
+                            ctx.full_orchestrator_payload.get("structure_video_type") or
+                            ctx.full_orchestrator_payload.get("structure_type", "flow"))
             structure_video_motion_strength = ctx.segment_params.get("structure_video_motion_strength", ctx.full_orchestrator_payload.get("structure_video_motion_strength", 1.0))
             structure_canny_intensity = ctx.segment_params.get("structure_canny_intensity", ctx.full_orchestrator_payload.get("structure_canny_intensity", 1.0))
             structure_depth_contrast = ctx.segment_params.get("structure_depth_contrast", ctx.full_orchestrator_payload.get("structure_depth_contrast", 1.0))

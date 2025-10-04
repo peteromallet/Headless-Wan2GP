@@ -215,9 +215,11 @@ class WanOrchestrator:
                 
                 # Initialize WGP global state (normally done by UI)
                 import wgp
+                # Set absolute output path to avoid issues when working directory changes
+                absolute_outputs_path = os.path.abspath(os.path.join(os.path.dirname(self.wan_root), 'outputs'))
                 for attr, default in {
                     'wan_model': None, 'offloadobj': None, 'reload_needed': True,
-                    'transformer_type': None, 'server_config': {}
+                    'transformer_type': None, 'server_config': {'save_path': absolute_outputs_path}
                 }.items():
                     if not hasattr(wgp, attr):
                         setattr(wgp, attr, default)
@@ -1334,6 +1336,39 @@ class WanOrchestrator:
             original_loras = self.state.get("loras", [])
             if activated_loras and len(activated_loras) > 0:
                 generation_logger.info(f"[CausVidDebugTrace] WanOrchestrator: Pre-populating WGP state with {len(activated_loras)} LoRAs")
+                generation_logger.info(f"[LORA_APPLICATION_TRACE] ═══════════════════════════════════════════════════════")
+                generation_logger.info(f"[LORA_APPLICATION_TRACE] COMPLETE LoRA APPLICATION BREAKDOWN:")
+                generation_logger.info(f"[LORA_APPLICATION_TRACE] ═══════════════════════════════════════════════════════")
+
+                # Parse multipliers string to show per-LoRA breakdown
+                multiplier_list = loras_multipliers_str.split() if loras_multipliers_str else []
+
+                for idx, lora_path in enumerate(activated_loras):
+                    # Extract filename from path (handles both Unix and Windows paths)
+                    lora_filename = str(lora_path).split('/')[-1].split('\\')[-1]
+                    mult_str = multiplier_list[idx] if idx < len(multiplier_list) else "1.0"
+                    phases = mult_str.split(";")
+
+                    generation_logger.info(f"[LORA_APPLICATION_TRACE]")
+                    generation_logger.info(f"[LORA_APPLICATION_TRACE] LoRA #{idx+1}: {lora_filename}")
+                    generation_logger.info(f"[LORA_APPLICATION_TRACE]   Full path: {lora_path}")
+                    generation_logger.info(f"[LORA_APPLICATION_TRACE]   Multiplier string: {mult_str}")
+                    generation_logger.info(f"[LORA_APPLICATION_TRACE]   Phase breakdown:")
+
+                    if len(phases) == 1:
+                        generation_logger.info(f"[LORA_APPLICATION_TRACE]     - All phases: {phases[0]} (constant strength)")
+                    else:
+                        generation_logger.info(f"[LORA_APPLICATION_TRACE]     - Phase 1 (steps 0-1): {phases[0] if len(phases) > 0 else '1.0'}")
+                        generation_logger.info(f"[LORA_APPLICATION_TRACE]     - Phase 2 (steps 2-3): {phases[1] if len(phases) > 1 else '1.0'}")
+                        generation_logger.info(f"[LORA_APPLICATION_TRACE]     - Phase 3 (steps 4-5): {phases[2] if len(phases) > 2 else '1.0'}")
+
+                generation_logger.info(f"[LORA_APPLICATION_TRACE]")
+                generation_logger.info(f"[LORA_APPLICATION_TRACE] SUMMARY:")
+                generation_logger.info(f"[LORA_APPLICATION_TRACE]   Total LoRAs: {len(activated_loras)}")
+                generation_logger.info(f"[LORA_APPLICATION_TRACE]   Model config LoRAs: {len(activated_loras) - 1 if lora_names and len(lora_names) > 0 else len(activated_loras)}")
+                generation_logger.info(f"[LORA_APPLICATION_TRACE]   amount_of_motion LoRA: {'Yes' if lora_names and len(lora_names) > 0 else 'No'}")
+                generation_logger.info(f"[LORA_APPLICATION_TRACE] ═══════════════════════════════════════════════════════")
+
                 self.state["loras"] = activated_loras.copy()  # Populate UI state for WGP compatibility
                 generation_logger.debug(f"[CausVidDebugTrace] WanOrchestrator: state['loras'] = {self.state['loras']}")
             
