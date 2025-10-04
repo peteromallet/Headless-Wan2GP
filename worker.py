@@ -1333,18 +1333,7 @@ def send_worker_heartbeat(worker_id: str) -> bool:
         headless_logger.debug(f"[HEARTBEAT] SQLite mode - no heartbeat needed")
         return True
 
-    # Method 1: Try RPC function
-    try:
-        response = db_ops.SUPABASE_CLIENT.rpc(
-            'func_update_worker_heartbeat',
-            {'worker_id_param': worker_id}
-        )
-        headless_logger.debug(f"[HEARTBEAT] ✅ RPC success for {worker_id}")
-        return True
-    except Exception as e:
-        headless_logger.warning(f"[HEARTBEAT] RPC failed for {worker_id}: {e}")
-
-    # Method 2: Fallback to direct table update
+    # Direct table update - reliable and simple
     try:
         current_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
         response = db_ops.SUPABASE_CLIENT.table("workers").update({
@@ -1353,32 +1342,40 @@ def send_worker_heartbeat(worker_id: str) -> bool:
         }).eq("id", worker_id).execute()
 
         if response.data:
-            headless_logger.debug(f"[HEARTBEAT] ✅ Direct DB success for {worker_id}")
+            headless_logger.debug(f"[HEARTBEAT] ✅ Sent for worker {worker_id}")
             return True
         else:
-            headless_logger.error(f"[HEARTBEAT] Worker {worker_id} not found in database")
+            headless_logger.error(f"[HEARTBEAT] Worker {worker_id} not found in database - check workers table")
             return False
 
     except Exception as e:
-        headless_logger.error(f"[HEARTBEAT] ❌ All methods failed for {worker_id}: {e}")
+        headless_logger.error(f"[HEARTBEAT] ❌ Failed for {worker_id}: {e}")
+        headless_logger.error(f"[HEARTBEAT] Exception details: {traceback.format_exc()}")
         return False
 
 
 def heartbeat_worker_thread(worker_id: str, stop_event: threading.Event, interval: int = 20):
-    """Background thread that sends heartbeats every 20 seconds."""
+    """Background thread that sends heartbeats every interval seconds."""
 
-    headless_logger.essential(f"✅ Starting heartbeat thread for worker: {worker_id}")
+    headless_logger.essential(f"✅ Starting heartbeat thread for worker: {worker_id} (interval: {interval}s)")
+    
+    # Track heartbeat count for periodic status logging
+    heartbeat_count = 0
 
     while not stop_event.wait(interval):
         try:
             if send_worker_heartbeat(worker_id):
-                headless_logger.debug(f"✅ [HEARTBEAT] ✅ Sent for worker {worker_id}")
+                heartbeat_count += 1
+                # Log status every 5 minutes (15 heartbeats at 20s intervals) to avoid spam
+                if heartbeat_count % 15 == 1:  # Log first, then every 15th
+                    headless_logger.essential(f"✅ [HEARTBEAT] Worker {worker_id} active ({heartbeat_count} heartbeats sent)")
             else:
-                headless_logger.error(f"❌ [HEARTBEAT] Failed for worker {worker_id}")
+                headless_logger.error(f"❌ [HEARTBEAT] Failed for worker {worker_id} (attempt #{heartbeat_count + 1})")
         except Exception as e:
             headless_logger.error(f"[HEARTBEAT THREAD] Exception: {e}")
+            headless_logger.error(f"[HEARTBEAT THREAD] Traceback: {traceback.format_exc()}")
 
-    headless_logger.essential(f"🛑 Heartbeat thread stopped for worker: {worker_id}")
+    headless_logger.essential(f"🛑 Heartbeat thread stopped for worker: {worker_id} (sent {heartbeat_count} heartbeats)")
 
 
 # -----------------------------------------------------------------------------
