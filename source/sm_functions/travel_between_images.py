@@ -362,6 +362,18 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 dprint(f"[CONSOLIDATION_LOGIC] Final video: frames {video_start}-{final_frame} (raw: {raw_length}, quantized: {quantized_length})")
                 dprint(f"[CONSOLIDATION_LOGIC] Final video keyframes: {[kf - video_start for kf in video_keyframes]}")
 
+            # SANITY CHECK: Consolidation should NEVER increase segment count
+            original_num_segments = len(original_segment_frames)
+            new_num_segments = len(optimized_segments)
+
+            if new_num_segments > original_num_segments:
+                # This should never happen - consolidation split segments instead of combining them!
+                if dprint:
+                    dprint(f"[CONSOLIDATION_ERROR] ❌ Consolidation increased segments from {original_num_segments} to {new_num_segments} - ABORTING optimization")
+                print(f"[FRAME_CONSOLIDATION] ❌ ERROR: Consolidation would increase segments ({original_num_segments} → {new_num_segments}) - keeping original allocation")
+                # Return early without modifying the payload
+                return orchestrator_payload
+
             # Update orchestrator payload
             orchestrator_payload["segment_frames_expanded"] = optimized_segments
             orchestrator_payload["frame_overlap_expanded"] = optimized_overlaps
@@ -593,63 +605,69 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         identity_analysis = detect_identical_parameters(orchestrator_payload, num_segments, dprint)
 
         if identity_analysis["can_optimize_frames"]:
-            # Run safety validation before optimization
-            safety_check = validate_consolidation_safety(orchestrator_payload, dprint)
-
-            if safety_check["is_safe"]:
-                dprint(f"[FRAME_CONSOLIDATION] ✅ Triggering optimization for identical parameters")
-                print(f"[FRAME_CONSOLIDATION] ✅ All parameters identical - enabling frame consolidation optimization")
-
-                # Apply frame consolidation optimization
-                orchestrator_payload = optimize_frame_allocation_for_identical_params(
-                    orchestrator_payload,
-                    max_frames_per_segment=81,  # Max 81 frames per video
-                    dprint=dprint
-                )
-
-                # Update variables with optimized values
-                expanded_segment_frames = orchestrator_payload["segment_frames_expanded"]
-                expanded_frame_overlap = orchestrator_payload["frame_overlap_expanded"]
-                expanded_base_prompts = orchestrator_payload["base_prompts_expanded"]
-                expanded_negative_prompts = orchestrator_payload["negative_prompts_expanded"]
-                num_segments = orchestrator_payload["num_new_segments_to_generate"]
-
-                # CRITICAL: Update VACE image references for consolidated segments
-                # When segments are consolidated, we need to reassign all VACE image refs
-                # to the new consolidated segments based on their new indices
-                if vace_refs_instructions_all:
-                    dprint(f"[VACE_REFS_CONSOLIDATION] Updating VACE image refs for {num_segments} consolidated segments")
-                    dprint(f"[VACE_REFS_CONSOLIDATION] Original VACE refs count: {len(vace_refs_instructions_all)}")
-
-                    # For consolidated segments, reassign all VACE refs to the appropriate new segment
-                    # based on the original keyframe positions and new segment boundaries
-                    for ref_idx, ref_instr in enumerate(vace_refs_instructions_all):
-                        original_segment_idx = ref_instr.get("segment_idx_for_naming", 0)
-
-                        # For now, assign all refs to the first (and often only) consolidated segment
-                        # This ensures the consolidated segment gets all the keyframe images
-                        new_segment_idx = 0 if num_segments == 1 else min(original_segment_idx, num_segments - 1)
-
-                        if original_segment_idx != new_segment_idx:
-                            dprint(f"[VACE_REFS_CONSOLIDATION] VACE ref {ref_idx}: segment {original_segment_idx} → {new_segment_idx}")
-                            ref_instr["segment_idx_for_naming"] = new_segment_idx
-
-                    dprint(f"[VACE_REFS_CONSOLIDATION] VACE refs updated for consolidated segments")
-
-                # Summary logging for optimization results
-                segments_saved = original_num_segments - num_segments
-                print(f"[FRAME_CONSOLIDATION] 🚀 OPTIMIZATION RESULTS:")
-                print(f"[FRAME_CONSOLIDATION]   📊 Segments: {original_num_segments} → {num_segments} (saved {segments_saved} segments)")
-                print(f"[FRAME_CONSOLIDATION]   📹 Original allocation: {original_segment_frames}")
-                print(f"[FRAME_CONSOLIDATION]   📹 Optimized allocation: {expanded_segment_frames}")
-                print(f"[FRAME_CONSOLIDATION]   🔗 Original overlaps: {original_frame_overlap}")
-                print(f"[FRAME_CONSOLIDATION]   🔗 Optimized overlaps: {expanded_frame_overlap}")
-                print(f"[FRAME_CONSOLIDATION]   ⚡ Efficiency gain: {segments_saved} fewer GPU model loads")
-
-                dprint(f"[FRAME_CONSOLIDATION] Successfully updated to {num_segments} optimized segments")
+            # Only run consolidation if there are multiple segments to consolidate
+            num_segments = len(orchestrator_payload["segment_frames_expanded"])
+            if num_segments <= 1:
+                dprint(f"[FRAME_CONSOLIDATION] ⏭️  Skipping optimization - only {num_segments} segment(s), nothing to consolidate")
+                print(f"[FRAME_CONSOLIDATION] ⏭️  Only {num_segments} segment(s) - no consolidation needed")
             else:
-                print(f"[FRAME_CONSOLIDATION] ❌ Safety validation failed - parameters not identical enough")
-                dprint(f"[FRAME_CONSOLIDATION] Safety check failed - keeping original allocation")
+                # Run safety validation before optimization
+                safety_check = validate_consolidation_safety(orchestrator_payload, dprint)
+
+                if safety_check["is_safe"]:
+                    dprint(f"[FRAME_CONSOLIDATION] ✅ Triggering optimization for identical parameters")
+                    print(f"[FRAME_CONSOLIDATION] ✅ All parameters identical - enabling frame consolidation optimization")
+
+                    # Apply frame consolidation optimization
+                    orchestrator_payload = optimize_frame_allocation_for_identical_params(
+                        orchestrator_payload,
+                        max_frames_per_segment=81,  # Max 81 frames per video
+                        dprint=dprint
+                    )
+
+                    # Update variables with optimized values
+                    expanded_segment_frames = orchestrator_payload["segment_frames_expanded"]
+                    expanded_frame_overlap = orchestrator_payload["frame_overlap_expanded"]
+                    expanded_base_prompts = orchestrator_payload["base_prompts_expanded"]
+                    expanded_negative_prompts = orchestrator_payload["negative_prompts_expanded"]
+                    num_segments = orchestrator_payload["num_new_segments_to_generate"]
+
+                    # CRITICAL: Update VACE image references for consolidated segments
+                    # When segments are consolidated, we need to reassign all VACE image refs
+                    # to the new consolidated segments based on their new indices
+                    if vace_refs_instructions_all:
+                        dprint(f"[VACE_REFS_CONSOLIDATION] Updating VACE image refs for {num_segments} consolidated segments")
+                        dprint(f"[VACE_REFS_CONSOLIDATION] Original VACE refs count: {len(vace_refs_instructions_all)}")
+
+                        # For consolidated segments, reassign all VACE refs to the appropriate new segment
+                        # based on the original keyframe positions and new segment boundaries
+                        for ref_idx, ref_instr in enumerate(vace_refs_instructions_all):
+                            original_segment_idx = ref_instr.get("segment_idx_for_naming", 0)
+
+                            # For now, assign all refs to the first (and often only) consolidated segment
+                            # This ensures the consolidated segment gets all the keyframe images
+                            new_segment_idx = 0 if num_segments == 1 else min(original_segment_idx, num_segments - 1)
+
+                            if original_segment_idx != new_segment_idx:
+                                dprint(f"[VACE_REFS_CONSOLIDATION] VACE ref {ref_idx}: segment {original_segment_idx} → {new_segment_idx}")
+                                ref_instr["segment_idx_for_naming"] = new_segment_idx
+
+                        dprint(f"[VACE_REFS_CONSOLIDATION] VACE refs updated for consolidated segments")
+
+                    # Summary logging for optimization results
+                    segments_saved = original_num_segments - num_segments
+                    print(f"[FRAME_CONSOLIDATION] 🚀 OPTIMIZATION RESULTS:")
+                    print(f"[FRAME_CONSOLIDATION]   📊 Segments: {original_num_segments} → {num_segments} (saved {segments_saved} segments)")
+                    print(f"[FRAME_CONSOLIDATION]   📹 Original allocation: {original_segment_frames}")
+                    print(f"[FRAME_CONSOLIDATION]   📹 Optimized allocation: {expanded_segment_frames}")
+                    print(f"[FRAME_CONSOLIDATION]   🔗 Original overlaps: {original_frame_overlap}")
+                    print(f"[FRAME_CONSOLIDATION]   🔗 Optimized overlaps: {expanded_frame_overlap}")
+                    print(f"[FRAME_CONSOLIDATION]   ⚡ Efficiency gain: {segments_saved} fewer GPU model loads")
+
+                    dprint(f"[FRAME_CONSOLIDATION] Successfully updated to {num_segments} optimized segments")
+                else:
+                    print(f"[FRAME_CONSOLIDATION] ❌ Safety validation failed - parameters not identical enough")
+                    dprint(f"[FRAME_CONSOLIDATION] Safety check failed - keeping original allocation")
         else:
             print(f"[FRAME_CONSOLIDATION] ℹ️  Parameters not identical - using standard allocation")
             dprint(f"[FRAME_CONSOLIDATION] Parameters not identical - keeping original allocation")
@@ -658,8 +676,11 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         # Extract and validate structure video parameters
         structure_video_path = orchestrator_payload.get("structure_video_path")
         structure_video_treatment = orchestrator_payload.get("structure_video_treatment", "adjust")
-        structure_type = orchestrator_payload.get("structure_type", "flow")  # Default to flow
-        
+        structure_type = orchestrator_payload.get("structure_video_type", orchestrator_payload.get("structure_type", "flow"))  # Check both keys
+        dprint(f"[STRUCTURE_VIDEO_DEBUG] Extracted structure_type: {structure_type}")
+        dprint(f"[STRUCTURE_VIDEO_DEBUG] structure_video_type in payload: {orchestrator_payload.get('structure_video_type')}")
+        dprint(f"[STRUCTURE_VIDEO_DEBUG] structure_type in payload: {orchestrator_payload.get('structure_type')}")
+
         # Extract strength parameters for each type
         motion_strength = orchestrator_payload.get("structure_video_motion_strength", 1.0)
         canny_intensity = orchestrator_payload.get("structure_canny_intensity", 1.0)
@@ -1546,7 +1567,9 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         # Add model config defaults to wgp_payload so they're available in parameter precedence chain
         # Note: HeadlessTaskQueue will properly handle task parameter overrides
         if model_defaults_from_config:
-            for param in ["guidance_scale", "flow_shift", "num_inference_steps", "switch_threshold"]:
+            for param in ["guidance_scale", "guidance2_scale", "guidance3_scale", "guidance_phases",
+                         "flow_shift", "num_inference_steps", "switch_threshold", "switch_threshold2",
+                         "model_switch_phase", "sample_solver", "video_prompt_type"]:
                 if param in model_defaults_from_config:
                     wgp_payload[param] = model_defaults_from_config[param]
                     dprint(f"[MODEL_CONFIG_DEBUG] Segment {segment_idx}: Added {param}={model_defaults_from_config[param]} to wgp_payload from model config")

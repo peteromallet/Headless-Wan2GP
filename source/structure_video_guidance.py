@@ -199,13 +199,14 @@ def load_structure_video_frames(
         if video_frame_count >= frames_to_load:
             # Compress: Sample evenly across video
             frame_indices = [int(i * (video_frame_count - 1) / (frames_to_load - 1)) for i in range(frames_to_load)]
-            dprint(f"  Adjust mode: Compressing {video_frame_count} frames → {frames_to_load} (dropping {video_frame_count - frames_to_load})")
+            dropped = video_frame_count - frames_to_load
+            dprint(f"  Adjust mode: Your input video has {video_frame_count} frames so we'll drop {dropped} frames to compress your guide video to the {frames_to_load} frames your input images cover.")
         else:
             # Stretch: Repeat frames to reach target count
             # Use linear interpolation indices (will repeat frames)
             frame_indices = [int(i * (video_frame_count - 1) / (frames_to_load - 1)) for i in range(frames_to_load)]
             duplicates = frames_to_load - len(set(frame_indices))
-            dprint(f"  Adjust mode: Stretching {video_frame_count} frames → {frames_to_load} (duplicating {duplicates})")
+            dprint(f"  Adjust mode: Your input video has {video_frame_count} frames so we'll duplicate {duplicates} frames to stretch your guide video to the {frames_to_load} frames your input images cover.")
     else:
         # CLIP MODE: Temporal sampling based on FPS
         frame_indices = _resample_frame_indices(
@@ -218,10 +219,13 @@ def load_structure_video_frames(
 
         # If video is too short, loop back to start
         if len(frame_indices) < frames_to_load:
-            dprint(f"  Clip mode: Video too short ({len(frame_indices)} < {frames_to_load}), looping frames")
+            dprint(f"  Clip mode: Video too short ({len(frame_indices)} frames < {frames_to_load} needed), looping back to start to fill remaining frames")
             while len(frame_indices) < frames_to_load:
                 remaining = frames_to_load - len(frame_indices)
                 frame_indices.extend(frame_indices[:remaining])
+        elif video_frame_count > frames_to_load:
+            ignored = video_frame_count - frames_to_load
+            dprint(f"  Clip mode: Your video will guide {frames_to_load} frames of your timeline. The last {ignored} frames of your video (frames {frames_to_load + 1}-{video_frame_count}) will be ignored.")
 
         dprint(f"  Clip mode: Temporal sampling extracted {len(frame_indices)} frames")
 
@@ -761,42 +765,79 @@ def get_structure_preprocessor(
 ):
     """
     Get preprocessor function for structure video guidance.
-    
+
     We import and instantiate the preprocessor ourselves, then run it
     on the structure video frames to generate RGB visualizations.
-    
+
     Args:
         structure_type: Type of preprocessing ("flow", "canny", or "depth")
         motion_strength: Only affects flow - scales flow vector magnitude
         canny_intensity: Only affects canny - scales edge boldness
         depth_contrast: Only affects depth - adjusts depth map contrast
         dprint: Debug print function
-    
+
     Returns:
         Function that takes a list of frames (np.ndarray)
         and returns a list of processed frames (RGB visualizations).
     """
+    dprint(f"[PREPROCESSOR_DEBUG] Initializing preprocessor with structure_type='{structure_type}'")
+
     if structure_type == "flow":
         # Add Wan2GP to path for imports
         wan_dir = Path(__file__).parent.parent / "Wan2GP"
         if str(wan_dir) not in sys.path:
             sys.path.insert(0, str(wan_dir))
-        
-        from preprocessing.flow import FlowVisAnnotator
-        cfg = {"PRETRAINED_MODEL": "ckpts/flow/raft-things.pth"}
+
+        from Wan2GP.preprocessing.flow import FlowVisAnnotator
+
+        # Ensure RAFT model is downloaded
+        flow_model_path = wan_dir / "ckpts" / "flow" / "raft-things.pth"
+        if not flow_model_path.exists():
+            dprint(f"[FLOW] RAFT model not found, downloading from Hugging Face...")
+            try:
+                from huggingface_hub import hf_hub_download
+                flow_model_path.parent.mkdir(parents=True, exist_ok=True)
+                hf_hub_download(
+                    repo_id="DeepBeepMeep/Wan2.1",
+                    filename="raft-things.pth",
+                    local_dir=str(wan_dir / 'ckpts'),
+                    subfolder="flow"
+                )
+                dprint(f"[FLOW] RAFT model downloaded successfully")
+            except Exception as e:
+                raise RuntimeError(f"Failed to download RAFT model: {e}. Please manually download from https://huggingface.co/DeepBeepMeep/Wan2.1/tree/main/flow")
+
+        cfg = {"PRETRAINED_MODEL": str(flow_model_path)}
         annotator = FlowVisAnnotator(cfg)
-        # FlowVisAnnotator.forward() returns (flow_fields, flow_visualizations)
-        # We only need the visualizations (RGB images)
+        # FlowVisAnnotator.forward() returns flow_visualizations directly (list of RGB images)
         # Note: motion_strength is applied during frame warping in apply_structure_motion_with_tracking, not here
-        return lambda frames: annotator.forward(frames)[1]  # [1] = visualizations
+        return lambda frames: annotator.forward(frames)
     
     elif structure_type == "canny":
         wan_dir = Path(__file__).parent.parent / "Wan2GP"
         if str(wan_dir) not in sys.path:
             sys.path.insert(0, str(wan_dir))
-        
-        from preprocessing.canny import CannyVideoAnnotator
-        cfg = {"PRETRAINED_MODEL": "ckpts/scribble/netG_A_latest.pth"}
+
+        from Wan2GP.preprocessing.canny import CannyVideoAnnotator
+
+        # Ensure scribble/canny model is downloaded
+        canny_model_path = wan_dir / "ckpts" / "scribble" / "netG_A_latest.pth"
+        if not canny_model_path.exists():
+            dprint(f"[CANNY] Scribble model not found, downloading from Hugging Face...")
+            try:
+                from huggingface_hub import hf_hub_download
+                canny_model_path.parent.mkdir(parents=True, exist_ok=True)
+                hf_hub_download(
+                    repo_id="DeepBeepMeep/Wan2.1",
+                    filename="netG_A_latest.pth",
+                    local_dir=str(wan_dir / 'ckpts'),
+                    subfolder="scribble"
+                )
+                dprint(f"[CANNY] Scribble model downloaded successfully")
+            except Exception as e:
+                raise RuntimeError(f"Failed to download Scribble model: {e}. Please manually download from https://huggingface.co/DeepBeepMeep/Wan2.1/tree/main/scribble")
+
+        cfg = {"PRETRAINED_MODEL": str(canny_model_path)}
         annotator = CannyVideoAnnotator(cfg)
         
         def process_canny(frames):
@@ -820,11 +861,30 @@ def get_structure_preprocessor(
         wan_dir = Path(__file__).parent.parent / "Wan2GP"
         if str(wan_dir) not in sys.path:
             sys.path.insert(0, str(wan_dir))
-        
-        from preprocessing.depth_anything_v2.depth import DepthV2VideoAnnotator
+
+        from Wan2GP.preprocessing.depth_anything_v2.depth import DepthV2VideoAnnotator
+
         variant = "vitl"  # Could be configurable
+
+        # Ensure depth model is downloaded
+        depth_model_path = wan_dir / "ckpts" / "depth" / f"depth_anything_v2_{variant}.pth"
+        if not depth_model_path.exists():
+            dprint(f"[DEPTH] Depth Anything V2 {variant} model not found, downloading from Hugging Face...")
+            try:
+                from huggingface_hub import hf_hub_download
+                depth_model_path.parent.mkdir(parents=True, exist_ok=True)
+                hf_hub_download(
+                    repo_id="DeepBeepMeep/Wan2.1",
+                    filename=f"depth_anything_v2_{variant}.pth",
+                    local_dir=str(wan_dir / 'ckpts'),
+                    subfolder="depth"
+                )
+                dprint(f"[DEPTH] Depth Anything V2 {variant} model downloaded successfully")
+            except Exception as e:
+                raise RuntimeError(f"Failed to download Depth Anything V2 model: {e}. Please manually download from https://huggingface.co/DeepBeepMeep/Wan2.1/tree/main/depth")
+
         cfg = {
-            "PRETRAINED_MODEL": f"ckpts/depth/depth_anything_v2_{variant}.pth",
+            "PRETRAINED_MODEL": str(depth_model_path),
             "MODEL_VARIANT": variant
         }
         annotator = DepthV2VideoAnnotator(cfg)

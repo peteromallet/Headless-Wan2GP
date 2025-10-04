@@ -844,10 +844,13 @@ class WanAny2V:
         if guide_phases > 1: denoising_extra = f"Phase 1/{guide_phases} High Noise" if self.model2 is not None else f"Phase 1/{guide_phases}"
         def update_guidance(step_no, t, guide_scale, new_guide_scale, guidance_switch_done, switch_threshold, trans, phase_no, denoising_extra):
             if guide_phases >= phase_no and not guidance_switch_done and t <= switch_threshold:
+                print(f"[PHASE_SWITCH_DEBUG] Step {step_no}: t={t:.1f} <= {switch_threshold} → Switching to phase {phase_no}/{guide_phases}")
+                print(f"[PHASE_SWITCH_DEBUG] model_switch_phase={model_switch_phase}, phase_no-1={phase_no-1}, will switch model: {model_switch_phase == phase_no-1}")
                 if model_switch_phase == phase_no-1 and self.model2 is not None: trans = self.model2
                 guide_scale, guidance_switch_done = new_guide_scale, True
                 denoising_extra = f"Phase {phase_no}/{guide_phases} {'Low Noise' if trans == self.model2 else 'High Noise'}" if self.model2 is not None else f"Phase {phase_no}/{guide_phases}"
-                callback(step_no-1, denoising_extra = denoising_extra)
+                print(f"[PHASE_SWITCH_DEBUG] Calling callback({step_no}, denoising_extra='{denoising_extra}')")
+                callback(step_no, denoising_extra = denoising_extra)
             return guide_scale, guidance_switch_done, trans, denoising_extra
         update_loras_slists(self.model, loras_slists, updated_num_steps, phase_switch_step= phase_switch_step, phase_switch_step2= phase_switch_step2)
         if self.model2 is not None: update_loras_slists(self.model2, loras_slists, updated_num_steps, phase_switch_step= phase_switch_step, phase_switch_step2= phase_switch_step2)
