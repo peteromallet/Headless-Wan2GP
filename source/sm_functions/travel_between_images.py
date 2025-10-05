@@ -602,7 +602,21 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         original_frame_overlap = list(expanded_frame_overlap)
 
         # Check if all prompts and LoRAs are identical to enable frame consolidation
-        identity_analysis = detect_identical_parameters(orchestrator_payload, num_segments, dprint)
+        # IMPORTANT: Disable consolidation if enhance_prompt is enabled, because VLM will
+        # generate different prompts for each segment AFTER consolidation would have run.
+        # This would create consolidated segments with different prompts, breaking the
+        # consolidation assumption that all segments have identical parameters.
+        enhance_prompt_enabled = orchestrator_payload.get("enhance_prompt", False)
+        if enhance_prompt_enabled:
+            dprint(f"[FRAME_CONSOLIDATION] enhance_prompt=True detected - DISABLING frame consolidation")
+            dprint(f"[FRAME_CONSOLIDATION] Reason: VLM will generate unique prompts per segment, breaking identity assumption")
+            identity_analysis = {
+                "can_optimize_frames": False,
+                "can_reuse_model": False,
+                "is_identical": False
+            }
+        else:
+            identity_analysis = detect_identical_parameters(orchestrator_payload, num_segments, dprint)
 
         if identity_analysis["can_optimize_frames"]:
             # Only run consolidation if there are multiple segments to consolidate
@@ -828,6 +842,91 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 orchestrator_payload["structure_guidance_video_url"] = None
                 orchestrator_payload["structure_type"] = structure_type  # Still pass the type
 
+        # --- VLM BATCH PROCESSING (if enhance_prompt enabled) ---
+        # Generate all transition prompts upfront to reuse the VLM model across segments
+        vlm_enhanced_prompts = {}  # Dict: segment_idx -> enhanced_prompt
+        if orchestrator_payload.get("enhance_prompt", False):
+            dprint(f"[VLM_BATCH] enhance_prompt enabled - generating transition prompts for all segments...")
+            try:
+                # Import VLM helper
+                from ..vlm_utils import generate_transition_prompts_batch
+                from ..common_utils import download_image_if_url
+
+                # Get input images
+                input_images_resolved = orchestrator_payload.get("input_image_paths_resolved", [])
+                vlm_device = orchestrator_payload.get("vlm_device", "cuda")
+
+                # Build lists of image pairs and base prompts
+                image_pairs = []
+                base_prompts_for_batch = []
+                segment_indices = []  # Track which segment each pair belongs to
+
+                for idx in range(num_segments):
+                    # Determine which images this segment transitions between
+                    if orchestrator_payload.get("_consolidated_end_anchors"):
+                        consolidated_end_anchors = orchestrator_payload["_consolidated_end_anchors"]
+                        if idx < len(consolidated_end_anchors):
+                            end_anchor_idx = consolidated_end_anchors[idx]
+                            start_anchor_idx = 0 if idx == 0 else consolidated_end_anchors[idx - 1]
+                        else:
+                            start_anchor_idx = idx
+                            end_anchor_idx = idx + 1
+                    else:
+                        start_anchor_idx = idx
+                        end_anchor_idx = idx + 1
+
+                    # Ensure indices are within bounds
+                    if (start_anchor_idx < len(input_images_resolved) and
+                        end_anchor_idx < len(input_images_resolved)):
+
+                        start_image_path = input_images_resolved[start_anchor_idx]
+                        end_image_path = input_images_resolved[end_anchor_idx]
+
+                        # Download images if they're URLs
+                        start_image_path = download_image_if_url(
+                            start_image_path,
+                            current_run_output_dir,
+                            f"vlm_start_{idx}",
+                            debug_mode=False,
+                            descriptive_name=f"vlm_start_seg{idx}"
+                        )
+                        end_image_path = download_image_if_url(
+                            end_image_path,
+                            current_run_output_dir,
+                            f"vlm_end_{idx}",
+                            debug_mode=False,
+                            descriptive_name=f"vlm_end_seg{idx}"
+                        )
+
+                        image_pairs.append((start_image_path, end_image_path))
+                        base_prompts_for_batch.append(expanded_base_prompts[idx])
+                        segment_indices.append(idx)
+                    else:
+                        dprint(f"[VLM_BATCH] Segment {idx}: Skipping - image indices out of bounds")
+
+                # Generate all prompts in one batch (reuses VLM model)
+                if image_pairs:
+                    enhanced_prompts = generate_transition_prompts_batch(
+                        image_pairs=image_pairs,
+                        base_prompts=base_prompts_for_batch,
+                        device=vlm_device,
+                        dprint=dprint
+                    )
+
+                    # Map results back to segment indices
+                    for idx, enhanced in zip(segment_indices, enhanced_prompts):
+                        vlm_enhanced_prompts[idx] = enhanced
+                        dprint(f"[VLM_BATCH] Segment {idx}: {enhanced[:80]}...")
+
+                dprint(f"[VLM_BATCH] Generated {len(vlm_enhanced_prompts)} enhanced prompts")
+
+            except Exception as e_vlm_batch:
+                dprint(f"[VLM_BATCH] ERROR during batch VLM processing: {e_vlm_batch}")
+                import traceback
+                traceback.print_exc()
+                dprint(f"[VLM_BATCH] Falling back to original prompts for all segments")
+                vlm_enhanced_prompts = {}
+
         # Loop to queue all segment tasks (skip existing ones for idempotency)
         segments_created = 0
         for idx in range(num_segments):
@@ -901,11 +1000,19 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "orchestrator_details": orchestrator_payload
             }
             extracted_params = extract_orchestrator_parameters(
-                task_params_for_extraction, 
-                task_id=f"seg_{idx}_{orchestrator_task_id_str[:8]}", 
+                task_params_for_extraction,
+                task_id=f"seg_{idx}_{orchestrator_task_id_str[:8]}",
                 dprint=dprint
             )
-            
+
+            # VLM-enhanced prompt retrieval
+            # Prompts were pre-generated in batch processing (lines 845-924) for performance.
+            # This avoids reloading the VLM model for each segment.
+            segment_base_prompt = expanded_base_prompts[idx]
+            if idx in vlm_enhanced_prompts:
+                segment_base_prompt = vlm_enhanced_prompts[idx]
+                dprint(f"[VLM_ENHANCE] Segment {idx}: Using pre-generated enhanced prompt")
+
             segment_payload = {
                 "orchestrator_task_id_ref": orchestrator_task_id_str,
                 "orchestrator_run_id": run_id,
@@ -913,10 +1020,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "segment_index": idx,
                 "is_first_segment": (idx == 0),
                 "is_last_segment": (idx == num_segments - 1),
-                
+
                 "current_run_base_output_dir": str(current_run_output_dir.resolve()), # Base for segment's own output folder creation
 
-                "base_prompt": expanded_base_prompts[idx],
+                "base_prompt": segment_base_prompt,
                 "negative_prompt": expanded_negative_prompts[idx],
                 "segment_frames_target": expanded_segment_frames[idx],
                 "frame_overlap_from_previous": current_frame_overlap_from_previous,

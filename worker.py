@@ -1610,9 +1610,9 @@ def main():
     headless_logger.essential("Initializing queue-based task processing system...")
     # ALWAYS use the local Wan2GP under this directory
     wan_dir = str((Path(__file__).parent / "Wan2GP").resolve())
-    
+
     try:
-        task_queue = HeadlessTaskQueue(wan_dir=wan_dir, max_workers=cli_args.queue_workers)
+        task_queue = HeadlessTaskQueue(wan_dir=wan_dir, max_workers=cli_args.queue_workers, debug_mode=cli_args.debug)
         task_queue.start()
         headless_logger.success(f"Task queue initialized with {cli_args.queue_workers} workers")
         headless_logger.essential("Queue system will handle generation tasks efficiently with model reuse")
