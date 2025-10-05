@@ -926,7 +926,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
                 "parsed_resolution_wh": orchestrator_payload["parsed_resolution_wh"],
                 "model_name": orchestrator_payload["model_name"],
-                "seed_to_use": orchestrator_payload.get("seed_base", 12345) + idx,
+                "seed_to_use": orchestrator_payload.get("seed_base", 12345),
                 "use_causvid_lora": orchestrator_payload.get("apply_causvid", False),
                 "use_lighti2x_lora": orchestrator_payload.get("use_lighti2x_lora", False),
                 "apply_reward_lora": orchestrator_payload.get("apply_reward_lora", False),
