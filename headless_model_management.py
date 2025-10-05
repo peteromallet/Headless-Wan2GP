@@ -284,8 +284,32 @@ class HeadlessTaskQueue:
             _saved_cwd = os.getcwd()
             try:
                 sys.argv = ["headless_model_management.py"]  # Clean argv for wgp import
-                os.chdir(self.wan_dir)  # Change to Wan2GP - stay here for all WGP operations
-                self.logger.info(f"[LAZY_INIT] Changed directory to {self.wan_dir} (will remain here for WGP operations)")
+
+                # CRITICAL: Change to Wan2GP directory BEFORE importing/initializing WanOrchestrator
+                # wgp.py uses relative paths (defaults/*.json) and expects to run from Wan2GP/
+                self.logger.info(f"[LAZY_INIT] Changing to Wan2GP directory: {self.wan_dir}")
+                self.logger.info(f"[LAZY_INIT] Current directory before chdir: {os.getcwd()}")
+
+                os.chdir(self.wan_dir)
+
+                actual_cwd = os.getcwd()
+                self.logger.info(f"[LAZY_INIT] Changed directory to: {actual_cwd}")
+
+                # Verify the change worked
+                if actual_cwd != self.wan_dir:
+                    raise RuntimeError(
+                        f"Directory change failed! Expected {self.wan_dir}, got {actual_cwd}"
+                    )
+
+                # Verify critical structure exists
+                if not os.path.isdir("defaults"):
+                    raise RuntimeError(
+                        f"defaults/ directory not found in {actual_cwd}. "
+                        f"Cannot proceed without model definitions!"
+                    )
+
+                self.logger.info(f"[LAZY_INIT] ✅ Now in Wan2GP directory, importing WanOrchestrator...")
+
                 from headless_wgp import WanOrchestrator
                 self.orchestrator = WanOrchestrator(self.wan_dir)
             finally:
@@ -513,6 +537,18 @@ class HeadlessTaskQueue:
             # 2. Delegate actual generation to orchestrator
             # The orchestrator handles the heavy lifting while we manage the queue
             result_path = self._execute_generation(task, worker_name)
+
+            # Verify we're still in Wan2GP directory after generation
+            current_dir = os.getcwd()
+            if "Wan2GP" not in current_dir:
+                self.logger.warning(
+                    f"[PATH_CHECK] After generation: Current directory changed!\n"
+                    f"  Current: {current_dir}\n"
+                    f"  Expected: Should contain 'Wan2GP'\n"
+                    f"  This may cause issues for subsequent tasks!"
+                )
+            else:
+                self.logger.debug(f"[PATH_CHECK] After generation: Still in Wan2GP ✓")
 
             # 3. Validate output and update task status
             processing_time = time.time() - start_time
