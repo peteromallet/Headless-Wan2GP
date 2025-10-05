@@ -112,18 +112,13 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             if len(existing_segments) >= expected_segments and len(existing_stitch) >= 1:
                 # Clean up any duplicates but don't create new tasks
                 cleanup_summary = db_ops.cleanup_duplicate_child_tasks(orchestrator_task_id_str, expected_segments)
-
+                
                 if cleanup_summary['duplicate_segments_removed'] > 0 or cleanup_summary['duplicate_stitch_removed'] > 0:
                     travel_logger.info(f"Cleaned up duplicates: {cleanup_summary['duplicate_segments_removed']} segments, {cleanup_summary['duplicate_stitch_removed']} stitch tasks", task_id=orchestrator_task_id_str)
-
-                output_message_for_orchestrator_db = f"[IDEMPOTENT] Child tasks already exist for orchestrator {orchestrator_task_id_str}. Found {len(existing_segments)} segments and {len(existing_stitch)} stitch tasks. Cleaned up {cleanup_summary['duplicate_segments_removed']} duplicate segments and {cleanup_summary['duplicate_stitch_removed']} duplicate stitch tasks. Orchestrator marked as IN_PROGRESS to await child completion."
-                travel_logger.info(output_message_for_orchestrator_db, task_id=orchestrator_task_id_str)
-
-                # Mark orchestrator as IN_PROGRESS explicitly - worker will keep it there waiting for children
-                # This is important because returning True would normally complete non-orchestrator tasks
-                db_ops.update_task_status(orchestrator_task_id_str, db_ops.STATUS_IN_PROGRESS, output_message_for_orchestrator_db)
-
+                
                 generation_success = True
+                output_message_for_orchestrator_db = f"[IDEMPOTENT] Child tasks already exist for orchestrator {orchestrator_task_id_str}. Found {len(existing_segments)} segments and {len(existing_stitch)} stitch tasks. Cleaned up {cleanup_summary['duplicate_segments_removed']} duplicate segments and {cleanup_summary['duplicate_stitch_removed']} duplicate stitch tasks."
+                travel_logger.info(output_message_for_orchestrator_db, task_id=orchestrator_task_id_str)
                 return generation_success, output_message_for_orchestrator_db
             else:
                 # Partial completion - log and continue with missing tasks
