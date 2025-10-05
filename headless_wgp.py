@@ -13,37 +13,89 @@ from typing import Optional, List, Union
 from source.logging_utils import orchestrator_logger, model_logger, generation_logger
 
 
+def _verify_wgp_directory(logger, context: str = ""):
+    """
+    Verify we're still in the Wan2GP directory after any operation.
+
+    Wan2GP expects to run from its directory and uses relative paths.
+    Call this after any wgp operation to catch directory changes early.
+
+    Args:
+        logger: Logger instance to use
+        context: Description of what just happened (e.g., "after wgp.generate_video()")
+    """
+    current_dir = os.getcwd()
+    expected_substr = "Wan2GP"
+
+    if expected_substr not in current_dir:
+        logger.warning(
+            f"[PATH_CHECK] {context}: Current directory may be wrong!\n"
+            f"  Current: {current_dir}\n"
+            f"  Expected: Path containing 'Wan2GP'\n"
+            f"  This could cause issues with wgp.py's relative paths!"
+        )
+    else:
+        logger.debug(f"[PATH_CHECK] {context}: Still in Wan2GP directory ✓ ({current_dir})")
+
+    # Also verify critical dirs still accessible
+    if not os.path.exists("defaults"):
+        logger.error(
+            f"[PATH_CHECK] {context}: CRITICAL - defaults/ no longer accessible!\n"
+            f"  Current directory: {current_dir}"
+        )
+
+    return current_dir
+
+
 class WanOrchestrator:
     """Thin adapter around `wgp.generate_video` for easier programmatic use."""
 
     def __init__(self, wan_root: str):
         """Initialize orchestrator with WanGP directory.
-        
+
         Args:
-            wan_root: Path to WanGP repository root directory
+            wan_root: Path to WanGP repository root directory (MUST be absolute path to Wan2GP/)
+
+        IMPORTANT: Caller MUST have already changed to wan_root directory before calling this.
+        wgp.py uses relative paths and expects to run from Wan2GP/.
         """
-        # Always use the provided wan_root as working directory (assets/loras live here)
+        import logging
+        _init_logger = logging.getLogger('HeadlessQueue')
+
+        # Store the wan_root (should match current directory)
         self.wan_root = os.path.abspath(wan_root)
+        current_dir = os.getcwd()
 
-        # Always use the local Wan2GP under this directory
-        # Example: /workspace/agent_tasks/Headless-Wan2GP/Wan2GP
-        try:
-            from pathlib import Path as _Path
-            local_wan_root = str((_Path(__file__).parent / 'Wan2GP').resolve())
-            self.wan_root = local_wan_root
-        except Exception:
-            pass
+        _init_logger.info(f"[INIT_DEBUG] WanOrchestrator.__init__ called with wan_root: {self.wan_root}")
+        _init_logger.info(f"[INIT_DEBUG] Current working directory: {current_dir}")
 
-        # Ensure only this Wan2GP is on sys.path and set as cwd
-        try:
-            sys.path = [p for p in sys.path if p != self.wan_root]
-        except Exception:
-            pass
+        # CRITICAL CHECK: Verify caller already changed to the correct directory
+        # wgp.py will import and execute module-level code that uses relative paths like "defaults/*.json"
+        # If we're in the wrong directory, wgp will load 0 models and fail mysteriously
+        if current_dir != self.wan_root:
+            error_msg = (
+                f"CRITICAL: WanOrchestrator must be initialized from Wan2GP directory!\n"
+                f"  Current directory: {current_dir}\n"
+                f"  Expected directory: {self.wan_root}\n"
+                f"  Caller must chdir() before creating WanOrchestrator instance."
+            )
+            _init_logger.error(f"[INIT_DEBUG] {error_msg}")
+            raise RuntimeError(error_msg)
+
+        # Verify Wan2GP structure
+        if not os.path.isdir("defaults"):
+            raise RuntimeError(
+                f"defaults/ directory not found in {current_dir}. "
+                f"This doesn't appear to be a valid Wan2GP directory!"
+            )
+        if not os.path.isdir("models"):
+            _init_logger.warning(f"[INIT_DEBUG] models/ directory not found in {current_dir}")
+
+        # Ensure Wan2GP is first in sys.path so wgp.py imports correctly
+        if self.wan_root in sys.path:
+            sys.path.remove(self.wan_root)
         sys.path.insert(0, self.wan_root)
-        try:
-            os.chdir(self.wan_root)
-        except Exception:
-            pass
+        _init_logger.info(f"[INIT_DEBUG] Added {self.wan_root} to sys.path[0]")
         
         # Optional smoke/CPU-only modes
         self.smoke_mode = bool(os.environ.get("HEADLESS_WAN2GP_SMOKE", ""))
@@ -110,12 +162,32 @@ class WanOrchestrator:
         # Import WGP components after path setup (skip entirely in smoke mode)
         if not self.smoke_mode:
             try:
+                _init_logger.info(f"[INIT_DEBUG] About to import wgp module")
+                current_dir = os.getcwd()
+                _init_logger.info(f"[INIT_DEBUG] Current directory: {current_dir}")
+                _init_logger.info(f"[INIT_DEBUG] sys.path[0]: {sys.path[0] if sys.path else 'empty'}")
+                _init_logger.info(f"[INIT_DEBUG] wgp already in sys.modules: {'wgp' in sys.modules}")
+
+                # Double-check we're in the right directory before importing
+                if current_dir != self.wan_root:
+                    _init_logger.error(f"[INIT_DEBUG] CRITICAL: Current directory {current_dir} != expected {self.wan_root}")
+                    raise RuntimeError(f"Directory changed unexpectedly before wgp import: {current_dir} != {self.wan_root}")
+
+                # If wgp was previously imported from wrong directory, remove it so it reimports
+                if 'wgp' in sys.modules:
+                    _init_logger.warning(f"[INIT_DEBUG] wgp already in sys.modules - removing to force reimport from correct directory")
+                    del sys.modules['wgp']
+
                 _saved_argv = list(sys.argv)
                 sys.argv = ["headless_wgp.py"]
                 from wgp import (
                     generate_video, get_base_model_type, get_model_family,
                     test_vace_module, apply_changes
                 )
+
+                # Verify directory didn't change during wgp import
+                _verify_wgp_directory(_init_logger, "after importing wgp module")
+
                 # Apply VACE fix wrapper to generate_video
                 self._generate_video = self._create_vace_fixed_generate_video(generate_video)
                 self._get_base_model_type = get_base_model_type
@@ -225,9 +297,19 @@ class WanOrchestrator:
                         setattr(wgp, attr, default)
                 
                 # Debug: Check if model definitions are loaded
-                model_logger.debug(f"Available models after WGP import: {list(wgp.models_def.keys())}")
+                model_logger.info(f"[INIT_DEBUG] Available models after WGP import: {list(wgp.models_def.keys())}")
+                _verify_wgp_directory(model_logger, "after wgp setup and monkeypatching")
+
                 if not wgp.models_def:
-                    model_logger.warning("No model definitions found - this may cause model loading issues")
+                    error_msg = (
+                        f"CRITICAL: No model definitions found after importing wgp! "
+                        f"Current directory: {os.getcwd()}, "
+                        f"Expected: {self.wan_root}, "
+                        f"defaults/ exists: {os.path.exists('defaults')}, "
+                        f"finetunes/ exists: {os.path.exists('finetunes')}"
+                    )
+                    model_logger.error(error_msg)
+                    raise RuntimeError(error_msg)
             except ImportError as e:
                 raise ImportError(f"Failed to import wgp module. Ensure {wan_root} contains wgp.py: {e}")
             finally:
@@ -294,6 +376,10 @@ class WanOrchestrator:
                 quantization_choice="int8",
                 preload_model_policy_choice=[]
             )
+
+            # Verify directory after apply_changes (it may have done file operations)
+            _verify_wgp_directory(orchestrator_logger, "after apply_changes()")
+
         else:
             # Provide stubbed helpers for smoke mode
             self._get_base_model_type = lambda model_key: ("t2v" if "flux" not in (model_key or "") else "flux")
@@ -1437,14 +1523,26 @@ class WanOrchestrator:
                 generation_logger.info("FINAL PARAMETERS BEING SENT TO WGP generate_video():")
                 generation_logger.info("=" * 80)
                 for key, value in sorted(_filtered_params.items()):
-                    if key in ['guidance_scale', 'guidance2_scale', 'guidance3_scale', 'num_inference_steps', 'switch_threshold', 'switch_threshold2']:
+                    # Skip or truncate extremely verbose parameters
+                    if key == 'state':
+                        # State dict is huge - just show key info
+                        state_summary = {
+                            'model_type': value.get('model_type'),
+                            'gen_file_count': len(value.get('gen', {}).get('file_list', [])),
+                            'loras_count': len(value.get('loras', []))
+                        }
+                        generation_logger.info(f"[FINAL_PARAMS] {key}: {state_summary} (truncated)")
+                    elif key in ['guidance_scale', 'guidance2_scale', 'guidance3_scale', 'num_inference_steps', 'switch_threshold', 'switch_threshold2']:
                         generation_logger.info(f"[FINAL_PARAMS] {key}: {value} ⭐")  # Star important guidance params
                     else:
                         generation_logger.info(f"[FINAL_PARAMS] {key}: {value}")
                 generation_logger.info("=" * 80)
 
                 result = self._generate_video(**_filtered_params)
-            
+
+                # Verify directory after generation (wgp may have changed it during file operations)
+                _verify_wgp_directory(generation_logger, "after wgp.generate_video()")
+
             finally:
                 # ARCHITECTURAL FIX: Restore original UI state after generation
                 if activated_loras and len(activated_loras) > 0:
