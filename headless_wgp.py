@@ -1463,7 +1463,31 @@ class WanOrchestrator:
                     generation_logger.warning(f"{model_type_desc} generation completed but no output path found in file_list")
             except Exception as e:
                 generation_logger.warning(f"Could not retrieve output path from state: {e}")
-            
+
+            # Memory monitoring
+            try:
+                import torch
+                import psutil
+
+                # RAM usage
+                ram = psutil.virtual_memory()
+                ram_used_gb = ram.used / (1024**3)
+                ram_total_gb = ram.total / (1024**3)
+                ram_percent = ram.percent
+
+                # VRAM usage
+                if torch.cuda.is_available():
+                    vram_allocated = torch.cuda.memory_allocated(0) / (1024**3)
+                    vram_reserved = torch.cuda.memory_reserved(0) / (1024**3)
+                    vram_total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                    vram_percent = (vram_reserved / vram_total) * 100
+
+                    generation_logger.essential(f"💾 RAM: {ram_used_gb:.1f}GB / {ram_total_gb:.1f}GB ({ram_percent:.0f}%) | VRAM: {vram_reserved:.1f}GB / {vram_total:.1f}GB ({vram_percent:.0f}%) [Allocated: {vram_allocated:.1f}GB]")
+                else:
+                    generation_logger.essential(f"💾 RAM: {ram_used_gb:.1f}GB / {ram_total_gb:.1f}GB ({ram_percent:.0f}%)")
+            except Exception as e:
+                generation_logger.debug(f"Could not retrieve memory stats: {e}")
+
             return output_path
             
         except Exception as e:
