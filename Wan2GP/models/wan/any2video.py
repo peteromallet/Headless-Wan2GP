@@ -407,12 +407,12 @@ class WanAny2V:
         input_prompt,
         input_frames= None,
         input_masks = None,
-        input_ref_images = None,      
+        input_ref_images = None,
         input_video = None,
         image_start = None,
         image_end = None,
         denoising_strength = 1.0,
-        target_camera=None,                  
+        target_camera=None,
         context_scale=None,
         width = 1280,
         height = 720,
@@ -468,7 +468,30 @@ class WanAny2V:
         original_input_ref_images = [],
         **bbargs
                 ):
-        
+
+        import time
+        import torch
+        _generate_start_time = time.time()
+
+        # Log memory state at entry to detect fragmentation/leaks
+        if torch.cuda.is_available():
+            vram_allocated = torch.cuda.memory_allocated() / 1024**3
+            vram_reserved = torch.cuda.memory_reserved() / 1024**3
+            vram_free = (torch.cuda.memory_reserved() - torch.cuda.memory_allocated()) / 1024**3
+            print(f"[GENERATE_ENTRY] VRAM: allocated={vram_allocated:.2f}GB, reserved={vram_reserved:.2f}GB, free_in_reserved={vram_free:.2f}GB")
+
+        # Check if model components are on expected devices
+        print(f"[GENERATE_ENTRY] Model device: {self.device}")
+        print(f"[GENERATE_ENTRY] Model dtype: {self.dtype}")
+        if hasattr(self, 'text_encoder'):
+            try:
+                te_device = next(self.text_encoder.parameters()).device if hasattr(self.text_encoder, 'parameters') else 'unknown'
+                print(f"[GENERATE_ENTRY] Text encoder device: {te_device}")
+            except:
+                print(f"[GENERATE_ENTRY] Text encoder device: could not detect")
+
+        print(f"[GENERATE_TIMING] generate() called at {_generate_start_time:.3f}")
+
         if sample_solver =="euler":
             # prepare timesteps
             timesteps = list(np.linspace(self.num_timesteps, 1, sampling_steps, dtype=np.float32))
@@ -520,6 +543,18 @@ class WanAny2V:
         color_reference_frame = None
         if self._interrupt:
             return None
+
+        _before_text_encode = time.time()
+        print(f"[GENERATE_TIMING] Before text encoding at {_before_text_encode - _generate_start_time:.3f}s")
+
+        # Check if text encoder needs to be moved to GPU (async loading issue)
+        if hasattr(self, 'text_encoder'):
+            try:
+                te_device_before = next(self.text_encoder.parameters()).device if hasattr(self.text_encoder, 'parameters') else 'unknown'
+                print(f"[TEXT_ENCODE_DEBUG] Text encoder on {te_device_before} before encoding")
+            except:
+                print(f"[TEXT_ENCODE_DEBUG] Could not detect text encoder device")
+
         # Text Encoder
         if n_prompt == "":
             n_prompt = self.sample_neg_prompt
@@ -527,6 +562,14 @@ class WanAny2V:
         context_null = self.text_encoder([n_prompt], self.device)[0]
         context = context.to(self.dtype)
         context_null = context_null.to(self.dtype)
+
+        _after_text_encode = time.time()
+        text_encode_time = _after_text_encode - _before_text_encode
+        print(f"[GENERATE_TIMING] Text encoding took {text_encode_time:.3f}s")
+
+        # Flag if text encoding is abnormally slow (may indicate model loading from RAM)
+        if text_encode_time > 5.0:
+            print(f"[TEXT_ENCODE_WARNING] ⚠️  Text encoding took {text_encode_time:.1f}s (unusually slow - model may have been offloaded to RAM)")
         text_len = self.model.text_len
         context = torch.cat([context, context.new_zeros(text_len -context.size(0), context.size(1)) ]).unsqueeze(0) 
         context_null = torch.cat([context_null, context_null.new_zeros(text_len -context_null.size(0), context_null.size(1)) ]).unsqueeze(0) 
@@ -648,7 +691,29 @@ class WanAny2V:
             msk = msk.view(1, msk.shape[1] // 4, 4, lat_h, lat_w)
             msk = msk.transpose(1, 2)[0]
 
+            _before_vae_encode = time.time()
+            print(f"[VAE_ENCODE_DEBUG] Starting VAE encode at {_before_vae_encode - _generate_start_time:.3f}s, frames={enc.shape if hasattr(enc, 'shape') else 'unknown'}")
+
+            # Check VAE device location
+            try:
+                vae_device = next(self.vae.parameters()).device if hasattr(self.vae, 'parameters') else 'unknown'
+                print(f"[VAE_ENCODE_DEBUG] VAE on device: {vae_device}")
+            except:
+                print(f"[VAE_ENCODE_DEBUG] Could not detect VAE device")
+
+            # Check if input is on correct device
+            if hasattr(enc, 'device'):
+                print(f"[VAE_ENCODE_DEBUG] Input tensor on device: {enc.device}")
+
             lat_y = self.vae.encode([enc], VAE_tile_size, any_end_frame= any_end_frame and add_frames_for_end_image)[0]
+
+            _after_vae_encode = time.time()
+            vae_encode_time = _after_vae_encode - _before_vae_encode
+            print(f"[GENERATE_TIMING] VAE encoding took {vae_encode_time:.3f}s")
+
+            # Flag if VAE encoding is abnormally slow
+            if vae_encode_time > 10.0:
+                print(f"[VAE_ENCODE_WARNING] ⚠️  VAE encoding took {vae_encode_time:.1f}s (unusually slow - model may have been offloaded or data transfer is slow)")
             y = torch.concat([msk, lat_y])
             overlapped_latents_frames_num = int(1 + (preframes_count-1) // 4)
             # if overlapped_latents != None:
@@ -835,6 +900,19 @@ class WanAny2V:
         # init denoising
         updated_num_steps= len(timesteps)
 
+        _before_denoising_prep = time.time()
+        print(f"[GENERATE_TIMING] Starting denoising prep at {_before_denoising_prep - _generate_start_time:.3f}s")
+
+        # Check main transformer device (this is the big model that's often offloaded)
+        try:
+            model_device = next(self.model.parameters()).device if hasattr(self.model, 'parameters') else 'unknown'
+            print(f"[MODEL_DEVICE_DEBUG] Main transformer on device: {model_device}")
+            if self.model2 is not None:
+                model2_device = next(self.model2.parameters()).device if hasattr(self.model2, 'parameters') else 'unknown'
+                print(f"[MODEL_DEVICE_DEBUG] Secondary transformer on device: {model2_device}")
+        except:
+            print(f"[MODEL_DEVICE_DEBUG] Could not detect transformer device")
+
         denoising_extra = ""
         from shared.utils.loras_mutipliers import update_loras_slists, get_model_switch_steps
 
@@ -874,8 +952,27 @@ class WanAny2V:
 
 
         # denoising
+        _before_denoising_loop = time.time()
+        denoising_prep_time = _before_denoising_loop - _before_denoising_prep
+        print(f"[GENERATE_TIMING] Denoising prep took {denoising_prep_time:.3f}s")
+        print(f"[GENERATE_TIMING] Starting denoising loop at {_before_denoising_loop - _generate_start_time:.3f}s")
+
+        # Final VRAM check before denoising
+        if torch.cuda.is_available():
+            vram_allocated = torch.cuda.memory_allocated() / 1024**3
+            vram_reserved = torch.cuda.memory_reserved() / 1024**3
+            print(f"[PRE_DENOISE_VRAM] VRAM before loop: allocated={vram_allocated:.2f}GB, reserved={vram_reserved:.2f}GB")
+
         trans = self.model
+        _first_step_time = None
         for i, t in enumerate(tqdm(timesteps)):
+            # Log timing of first denoising step to detect if there's a delay entering the loop
+            if i == 0:
+                _first_step_start = time.time()
+                delay_before_first_step = _first_step_start - _before_denoising_loop
+                if delay_before_first_step > 1.0:
+                    print(f"[FIRST_STEP_DELAY] ⚠️  {delay_before_first_step:.1f}s delay before first denoising step (may indicate model loading)")
+                _first_step_time = _first_step_start
             guide_scale, guidance_switch_done, trans, denoising_extra = update_guidance(i, t, guide_scale, guide2_scale, guidance_switch_done, switch_threshold, trans, 2, denoising_extra)
             guide_scale, guidance_switch2_done, trans, denoising_extra = update_guidance(i, t, guide_scale, guide3_scale, guidance_switch2_done, switch2_threshold, trans, 3, denoising_extra)
             offload.set_step_no_for_lora(trans, start_step_no + i)
@@ -956,7 +1053,22 @@ class WanAny2V:
                 }
 
             if joint_pass and any_guidance:
+                # Log timing of first transformer forward pass (this is where MMGP async loading happens)
+                if i == 0:
+                    _before_first_forward = time.time()
+                    print(f"[FIRST_FORWARD_DEBUG] Starting first transformer forward pass at {_before_first_forward - _generate_start_time:.3f}s")
+
                 ret_values = trans( **gen_args , **kwargs)
+
+                if i == 0:
+                    _after_first_forward = time.time()
+                    first_forward_time = _after_first_forward - _before_first_forward
+                    print(f"[FIRST_FORWARD_TIMING] First forward pass took {first_forward_time:.3f}s")
+                    if first_forward_time > 30.0:
+                        print(f"[FIRST_FORWARD_WARNING] ⚠️  First forward took {first_forward_time:.1f}s (very slow - likely async loading from RAM to VRAM)")
+                    elif first_forward_time > 10.0:
+                        print(f"[FIRST_FORWARD_WARNING] ⚠️  First forward took {first_forward_time:.1f}s (slow - may indicate model loading)")
+
                 if self._interrupt:
                     return clear()               
             else:

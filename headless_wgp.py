@@ -12,6 +12,12 @@ from typing import Optional, List, Union
 # Import structured logging
 from source.logging_utils import orchestrator_logger, model_logger, generation_logger
 
+# Import debug mode flag
+try:
+    from worker import debug_mode
+except ImportError:
+    debug_mode = False
+
 
 def _verify_wgp_directory(logger, context: str = ""):
     """
@@ -66,8 +72,9 @@ class WanOrchestrator:
         self.wan_root = os.path.abspath(wan_root)
         current_dir = os.getcwd()
 
-        _init_logger.info(f"[INIT_DEBUG] WanOrchestrator.__init__ called with wan_root: {self.wan_root}")
-        _init_logger.info(f"[INIT_DEBUG] Current working directory: {current_dir}")
+        if debug_mode:
+            _init_logger.info(f"[INIT_DEBUG] WanOrchestrator.__init__ called with wan_root: {self.wan_root}")
+            _init_logger.info(f"[INIT_DEBUG] Current working directory: {current_dir}")
 
         # CRITICAL CHECK: Verify caller already changed to the correct directory
         # wgp.py will import and execute module-level code that uses relative paths like "defaults/*.json"
@@ -79,7 +86,8 @@ class WanOrchestrator:
                 f"  Expected directory: {self.wan_root}\n"
                 f"  Caller must chdir() before creating WanOrchestrator instance."
             )
-            _init_logger.error(f"[INIT_DEBUG] {error_msg}")
+            if debug_mode:
+                _init_logger.error(f"[INIT_DEBUG] {error_msg}")
             raise RuntimeError(error_msg)
 
         # Verify Wan2GP structure
@@ -89,13 +97,15 @@ class WanOrchestrator:
                 f"This doesn't appear to be a valid Wan2GP directory!"
             )
         if not os.path.isdir("models"):
-            _init_logger.warning(f"[INIT_DEBUG] models/ directory not found in {current_dir}")
+            if debug_mode:
+                _init_logger.warning(f"[INIT_DEBUG] models/ directory not found in {current_dir}")
 
         # Ensure Wan2GP is first in sys.path so wgp.py imports correctly
         if self.wan_root in sys.path:
             sys.path.remove(self.wan_root)
         sys.path.insert(0, self.wan_root)
-        _init_logger.info(f"[INIT_DEBUG] Added {self.wan_root} to sys.path[0]")
+        if debug_mode:
+            _init_logger.info(f"[INIT_DEBUG] Added {self.wan_root} to sys.path[0]")
         
         # Optional smoke/CPU-only modes
         self.smoke_mode = bool(os.environ.get("HEADLESS_WAN2GP_SMOKE", ""))
@@ -162,20 +172,24 @@ class WanOrchestrator:
         # Import WGP components after path setup (skip entirely in smoke mode)
         if not self.smoke_mode:
             try:
-                _init_logger.info(f"[INIT_DEBUG] About to import wgp module")
+                if debug_mode:
+                    _init_logger.info(f"[INIT_DEBUG] About to import wgp module")
                 current_dir = os.getcwd()
-                _init_logger.info(f"[INIT_DEBUG] Current directory: {current_dir}")
-                _init_logger.info(f"[INIT_DEBUG] sys.path[0]: {sys.path[0] if sys.path else 'empty'}")
-                _init_logger.info(f"[INIT_DEBUG] wgp already in sys.modules: {'wgp' in sys.modules}")
+                if debug_mode:
+                    _init_logger.info(f"[INIT_DEBUG] Current directory: {current_dir}")
+                    _init_logger.info(f"[INIT_DEBUG] sys.path[0]: {sys.path[0] if sys.path else 'empty'}")
+                    _init_logger.info(f"[INIT_DEBUG] wgp already in sys.modules: {'wgp' in sys.modules}")
 
                 # Double-check we're in the right directory before importing
                 if current_dir != self.wan_root:
-                    _init_logger.error(f"[INIT_DEBUG] CRITICAL: Current directory {current_dir} != expected {self.wan_root}")
+                    if debug_mode:
+                        _init_logger.error(f"[INIT_DEBUG] CRITICAL: Current directory {current_dir} != expected {self.wan_root}")
                     raise RuntimeError(f"Directory changed unexpectedly before wgp import: {current_dir} != {self.wan_root}")
 
                 # If wgp was previously imported from wrong directory, remove it so it reimports
                 if 'wgp' in sys.modules:
-                    _init_logger.warning(f"[INIT_DEBUG] wgp already in sys.modules - removing to force reimport from correct directory")
+                    if debug_mode:
+                        _init_logger.warning(f"[INIT_DEBUG] wgp already in sys.modules - removing to force reimport from correct directory")
                     del sys.modules['wgp']
 
                 _saved_argv = list(sys.argv)
@@ -297,7 +311,8 @@ class WanOrchestrator:
                         setattr(wgp, attr, default)
                 
                 # Debug: Check if model definitions are loaded
-                model_logger.info(f"[INIT_DEBUG] Available models after WGP import: {list(wgp.models_def.keys())}")
+                if debug_mode:
+                    model_logger.info(f"[INIT_DEBUG] Available models after WGP import: {list(wgp.models_def.keys())}")
                 _verify_wgp_directory(model_logger, "after wgp setup and monkeypatching")
 
                 if not wgp.models_def:

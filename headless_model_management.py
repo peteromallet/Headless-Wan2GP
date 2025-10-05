@@ -95,18 +95,20 @@ class HeadlessTaskQueue:
     while providing a clean API for headless operation.
     """
     
-    def __init__(self, wan_dir: str, max_workers: int = 1):
+    def __init__(self, wan_dir: str, max_workers: int = 1, debug_mode: bool = False):
         """
         Initialize the headless task queue.
-        
+
         Args:
             wan_dir: Path to WanGP directory
             max_workers: Number of concurrent generation workers (recommend 1 for GPU)
+            debug_mode: Enable debug-level logging
         """
         self.wan_dir = setup_wgp_path(wan_dir)
         self.max_workers = max_workers
         self.running = False
         self.start_time = time.time()
+        self.debug_mode = debug_mode
         
         # Import wgp after path setup (protect sys.argv to prevent argument conflicts)
         _saved_argv = sys.argv[:]
@@ -207,75 +209,81 @@ class HeadlessTaskQueue:
         self._orchestrator_init_attempted = True
         
         try:
-            self.logger.info("[LAZY_INIT] Initializing WanOrchestrator (first use)...")
-            self.logger.info("[LAZY_INIT] Warming up CUDA before importing wgp...")
+            if self.debug_mode:
+                self.logger.info("[LAZY_INIT] Initializing WanOrchestrator (first use)...")
+                self.logger.info("[LAZY_INIT] Warming up CUDA before importing wgp...")
 
             # Warm up CUDA before importing wgp (upstream T5EncoderModel has torch.cuda.current_device()
             # as a default arg, which is evaluated at module import time)
             import torch
 
             # Detailed CUDA diagnostics
-            self.logger.info("[CUDA_DEBUG] ========== CUDA DIAGNOSTICS ==========")
-            self.logger.info(f"[CUDA_DEBUG] torch.cuda.is_available(): {torch.cuda.is_available()}")
+            if self.debug_mode:
+                self.logger.info("[CUDA_DEBUG] ========== CUDA DIAGNOSTICS ==========")
+                self.logger.info(f"[CUDA_DEBUG] torch.cuda.is_available(): {torch.cuda.is_available()}")
 
             if torch.cuda.is_available():
-                try:
-                    device_count = torch.cuda.device_count()
-                    self.logger.info(f"[CUDA_DEBUG] Device count: {device_count}")
-
-                    for i in range(device_count):
-                        self.logger.info(f"[CUDA_DEBUG] Device {i}: {torch.cuda.get_device_name(i)}")
-                        self.logger.info(f"[CUDA_DEBUG]   - Properties: {torch.cuda.get_device_properties(i)}")
-
-                    # Try to get CUDA version info
+                if self.debug_mode:
                     try:
-                        self.logger.info(f"[CUDA_DEBUG] CUDA version (torch): {torch.version.cuda}")
-                    except:
-                        pass
+                        device_count = torch.cuda.device_count()
+                        self.logger.info(f"[CUDA_DEBUG] Device count: {device_count}")
 
-                    # Try to initialize current device
-                    try:
-                        current_dev = torch.cuda.current_device()
-                        self.logger.info(f"[CUDA_DEBUG] Current device: {current_dev}")
+                        for i in range(device_count):
+                            self.logger.info(f"[CUDA_DEBUG] Device {i}: {torch.cuda.get_device_name(i)}")
+                            self.logger.info(f"[CUDA_DEBUG]   - Properties: {torch.cuda.get_device_properties(i)}")
 
-                        # Try a simple tensor operation
-                        test_tensor = torch.tensor([1.0], device='cuda')
-                        self.logger.info(f"[CUDA_DEBUG] ✅ Successfully created tensor on CUDA: {test_tensor.device}")
+                        # Try to get CUDA version info
+                        try:
+                            self.logger.info(f"[CUDA_DEBUG] CUDA version (torch): {torch.version.cuda}")
+                        except:
+                            pass
+
+                        # Try to initialize current device
+                        try:
+                            current_dev = torch.cuda.current_device()
+                            self.logger.info(f"[CUDA_DEBUG] Current device: {current_dev}")
+
+                            # Try a simple tensor operation
+                            test_tensor = torch.tensor([1.0], device='cuda')
+                            self.logger.info(f"[CUDA_DEBUG] ✅ Successfully created tensor on CUDA: {test_tensor.device}")
+
+                        except Exception as e:
+                            self.logger.error(f"[CUDA_DEBUG] ❌ Failed to initialize current device: {e}")
+                            raise
 
                     except Exception as e:
-                        self.logger.error(f"[CUDA_DEBUG] ❌ Failed to initialize current device: {e}")
+                        self.logger.error(f"[CUDA_DEBUG] ❌ Error during CUDA diagnostics: {e}", exc_info=True)
                         raise
 
-                except Exception as e:
-                    self.logger.error(f"[CUDA_DEBUG] ❌ Error during CUDA diagnostics: {e}", exc_info=True)
-                    raise
-
             else:
-                self.logger.warning("[CUDA_DEBUG] ⚠️  torch.cuda.is_available() returned False")
-                self.logger.warning("[CUDA_DEBUG] Checking why CUDA is not available...")
+                if self.debug_mode:
+                    self.logger.warning("[CUDA_DEBUG] ⚠️  torch.cuda.is_available() returned False")
+                    self.logger.warning("[CUDA_DEBUG] Checking why CUDA is not available...")
 
-                # Check if CUDA was built with torch
-                self.logger.info(f"[CUDA_DEBUG] torch.version.cuda: {torch.version.cuda}")
-                self.logger.info(f"[CUDA_DEBUG] torch.backends.cudnn.version(): {torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else 'N/A'}")
+                    # Check if CUDA was built with torch
+                    self.logger.info(f"[CUDA_DEBUG] torch.version.cuda: {torch.version.cuda}")
+                    self.logger.info(f"[CUDA_DEBUG] torch.backends.cudnn.version(): {torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else 'N/A'}")
 
-                # Try to import pynvml for driver info
-                try:
-                    import pynvml
-                    pynvml.nvmlInit()
-                    driver_version = pynvml.nvmlSystemGetDriverVersion()
-                    self.logger.info(f"[CUDA_DEBUG] NVIDIA driver version: {driver_version}")
-                    device_count = pynvml.nvmlDeviceGetCount()
-                    self.logger.info(f"[CUDA_DEBUG] NVML device count: {device_count}")
-                    for i in range(device_count):
-                        handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-                        name = pynvml.nvmlDeviceGetName(handle)
-                        self.logger.info(f"[CUDA_DEBUG] NVML Device {i}: {name}")
-                except Exception as e:
-                    self.logger.warning(f"[CUDA_DEBUG] Could not get NVML info: {e}")
+                    # Try to import pynvml for driver info
+                    try:
+                        import pynvml
+                        pynvml.nvmlInit()
+                        driver_version = pynvml.nvmlSystemGetDriverVersion()
+                        self.logger.info(f"[CUDA_DEBUG] NVIDIA driver version: {driver_version}")
+                        device_count = pynvml.nvmlDeviceGetCount()
+                        self.logger.info(f"[CUDA_DEBUG] NVML device count: {device_count}")
+                        for i in range(device_count):
+                            handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                            name = pynvml.nvmlDeviceGetName(handle)
+                            self.logger.info(f"[CUDA_DEBUG] NVML Device {i}: {name}")
+                    except Exception as e:
+                        self.logger.warning(f"[CUDA_DEBUG] Could not get NVML info: {e}")
 
-            self.logger.info("[CUDA_DEBUG] ===========================================")
+            if self.debug_mode:
+                self.logger.info("[CUDA_DEBUG] ===========================================")
 
-            self.logger.info("[LAZY_INIT] Importing WanOrchestrator (this imports wgp and model modules)...")
+            if self.debug_mode:
+                self.logger.info("[LAZY_INIT] Importing WanOrchestrator (this imports wgp and model modules)...")
             # Protect sys.argv and working directory before importing headless_wgp which imports wgp
             # wgp.py will try to parse sys.argv and will fail if it contains Supabase/database arguments
             # wgp.py also uses relative paths for model loading and needs to run from Wan2GP directory
@@ -287,13 +295,15 @@ class HeadlessTaskQueue:
 
                 # CRITICAL: Change to Wan2GP directory BEFORE importing/initializing WanOrchestrator
                 # wgp.py uses relative paths (defaults/*.json) and expects to run from Wan2GP/
-                self.logger.info(f"[LAZY_INIT] Changing to Wan2GP directory: {self.wan_dir}")
-                self.logger.info(f"[LAZY_INIT] Current directory before chdir: {os.getcwd()}")
+                if self.debug_mode:
+                    self.logger.info(f"[LAZY_INIT] Changing to Wan2GP directory: {self.wan_dir}")
+                    self.logger.info(f"[LAZY_INIT] Current directory before chdir: {os.getcwd()}")
 
                 os.chdir(self.wan_dir)
 
                 actual_cwd = os.getcwd()
-                self.logger.info(f"[LAZY_INIT] Changed directory to: {actual_cwd}")
+                if self.debug_mode:
+                    self.logger.info(f"[LAZY_INIT] Changed directory to: {actual_cwd}")
 
                 # Verify the change worked
                 if actual_cwd != self.wan_dir:
@@ -308,7 +318,8 @@ class HeadlessTaskQueue:
                         f"Cannot proceed without model definitions!"
                     )
 
-                self.logger.info(f"[LAZY_INIT] ✅ Now in Wan2GP directory, importing WanOrchestrator...")
+                if self.debug_mode:
+                    self.logger.info(f"[LAZY_INIT] ✅ Now in Wan2GP directory, importing WanOrchestrator...")
 
                 from headless_wgp import WanOrchestrator
                 self.orchestrator = WanOrchestrator(self.wan_dir)
@@ -317,14 +328,16 @@ class HeadlessTaskQueue:
                 # NOTE: We do NOT restore the working directory - WGP expects to stay in Wan2GP/
                 # This ensures model downloads, file operations, etc. use correct paths
 
-            self.logger.info("[LAZY_INIT] ✅ WanOrchestrator initialized successfully")
-            
+            if self.debug_mode:
+                self.logger.info("[LAZY_INIT] ✅ WanOrchestrator initialized successfully")
+
             # Now that orchestrator exists, complete wgp integration
             self._init_wgp_integration()
-            
+
         except Exception as e:
-            self.logger.error(f"[LAZY_INIT] ❌ Failed to initialize WanOrchestrator: {e}")
-            self.logger.error("[LAZY_INIT] Traceback:", exc_info=True)
+            if self.debug_mode:
+                self.logger.error(f"[LAZY_INIT] ❌ Failed to initialize WanOrchestrator: {e}")
+                self.logger.error("[LAZY_INIT] Traceback:", exc_info=True)
             raise
     
     def _init_wgp_integration(self):
@@ -358,7 +371,64 @@ class HeadlessTaskQueue:
         # self.progress_callback = self._create_wgp_progress_callback()
         
         self.logger.info("WGP integration initialized")
-    
+
+    def _cleanup_memory_after_task(self, task_id: str):
+        """
+        Clean up memory after task completion WITHOUT unloading models.
+
+        This clears PyTorch caches and Python garbage to prevent memory fragmentation
+        that can slow down subsequent generations. Models remain loaded in VRAM.
+
+        Args:
+            task_id: ID of the completed task (for logging)
+        """
+        import torch
+        import gc
+
+        try:
+            # Log memory BEFORE cleanup
+            if torch.cuda.is_available():
+                vram_allocated_before = torch.cuda.memory_allocated() / 1024**3
+                vram_reserved_before = torch.cuda.memory_reserved() / 1024**3
+                self.logger.info(
+                    f"[MEMORY_CLEANUP] Task {task_id}: "
+                    f"BEFORE - VRAM allocated: {vram_allocated_before:.2f}GB, "
+                    f"reserved: {vram_reserved_before:.2f}GB"
+                )
+
+            # Clear PyTorch's CUDA cache (frees unused reserved memory, keeps models)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                self.logger.info(f"[MEMORY_CLEANUP] Task {task_id}: Cleared CUDA cache")
+
+            # Run Python garbage collection to free CPU memory
+            collected = gc.collect()
+            self.logger.info(f"[MEMORY_CLEANUP] Task {task_id}: Garbage collected {collected} objects")
+
+            # Log memory AFTER cleanup
+            if torch.cuda.is_available():
+                vram_allocated_after = torch.cuda.memory_allocated() / 1024**3
+                vram_reserved_after = torch.cuda.memory_reserved() / 1024**3
+                vram_freed = vram_reserved_before - vram_reserved_after
+
+                self.logger.info(
+                    f"[MEMORY_CLEANUP] Task {task_id}: "
+                    f"AFTER - VRAM allocated: {vram_allocated_after:.2f}GB, "
+                    f"reserved: {vram_reserved_after:.2f}GB"
+                )
+
+                if vram_freed > 0.01:  # Only log if freed >10MB
+                    self.logger.info(
+                        f"[MEMORY_CLEANUP] Task {task_id}: ✅ Freed {vram_freed:.2f}GB of reserved VRAM"
+                    )
+                else:
+                    self.logger.info(
+                        f"[MEMORY_CLEANUP] Task {task_id}: No significant VRAM freed (models still loaded)"
+                    )
+
+        except Exception as e:
+            self.logger.warning(f"[MEMORY_CLEANUP] Task {task_id}: Failed to cleanup memory: {e}")
+
     def start(self):
         """Start the task queue processing service."""
         if self.running:
@@ -575,7 +645,11 @@ class HeadlessTaskQueue:
                     task.error_message = "No output generated"
                     self.stats["tasks_failed"] += 1
                     self.logger.error(f"Task {task.id} failed after {processing_time:.1f}s: No output generated")
-            
+
+            # Memory cleanup after each task (does NOT unload models)
+            # This clears PyTorch's internal caches and Python garbage to prevent fragmentation
+            self._cleanup_memory_after_task(task.id)
+
         except Exception as e:
             # Handle task failure
             processing_time = time.time() - start_time
@@ -944,11 +1018,13 @@ class HeadlessTaskQueue:
                     resolved = _resolve_media_path(str(value))
                     if resolved:
                         wgp_params[wgp_param] = resolved
-                        self.logger.info(f"[PARAM_DEBUG] Task {task.id}: {our_param} path resolved: {resolved}")
+                        if self.debug_mode:
+                            self.logger.info(f"[PARAM_DEBUG] Task {task.id}: {our_param} path resolved: {resolved}")
                     else:
-                        self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: {our_param} not found at '{value}' (checked repo and Wan2GP); skipping")
+                        if self.debug_mode:
+                            self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: {our_param} not found at '{value}' (checked repo and Wan2GP); skipping")
                         continue
-                
+
                 # Special handling for image references
                 elif our_param == "image_refs" and value:
                     if isinstance(value, list):
@@ -960,24 +1036,30 @@ class HeadlessTaskQueue:
                                 if img_path_obj.exists():
                                     valid_images.append(str(img_path_obj.resolve()))
                                 else:
-                                    self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Image ref does not exist: {img_path}")
+                                    if self.debug_mode:
+                                        self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Image ref does not exist: {img_path}")
                             except Exception as e:
-                                self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Error processing image ref '{img_path}': {e}")
-                        
+                                if self.debug_mode:
+                                    self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Error processing image ref '{img_path}': {e}")
+
                         if valid_images:
                             wgp_params["image_refs"] = valid_images
-                            self.logger.info(f"[PARAM_DEBUG] Task {task.id}: Validated {len(valid_images)} image references")
+                            if self.debug_mode:
+                                self.logger.info(f"[PARAM_DEBUG] Task {task.id}: Validated {len(valid_images)} image references")
                     else:
                         # Single image reference
                         try:
                             img_path_obj = Path(value)
                             if img_path_obj.exists():
                                 wgp_params["image_refs"] = [str(img_path_obj.resolve())]
-                                self.logger.info(f"[PARAM_DEBUG] Task {task.id}: Validated single image reference")
+                                if self.debug_mode:
+                                    self.logger.info(f"[PARAM_DEBUG] Task {task.id}: Validated single image reference")
                             else:
-                                self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Single image ref does not exist: {value}")
+                                if self.debug_mode:
+                                    self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Single image ref does not exist: {value}")
                         except Exception as e:
-                            self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Error processing single image ref '{value}': {e}")
+                            if self.debug_mode:
+                                self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Error processing single image ref '{value}': {e}")
                 
                 else:
                     # Normal parameter mapping
@@ -1001,7 +1083,8 @@ class HeadlessTaskQueue:
         
         # Parameter resolution is now handled by WanOrchestrator._resolve_parameters()
         # This provides clean separation: HeadlessTaskQueue manages tasks, WanOrchestrator handles parameters
-        self.logger.info(f"[TASK_CONVERSION] Converting task {task.id} for model '{task.model}' - parameter resolution delegated to orchestrator")
+        if self.debug_mode:
+            self.logger.info(f"[TASK_CONVERSION] Converting task {task.id} for model '{task.model}' - parameter resolution delegated to orchestrator")
 
         # Filter out database/infrastructure parameters that should not be passed to WanGP
         db_params_to_remove = ["db_type", "supabase_url", "supabase_anon_key", "supabase_access_token", "sqlite_db_path"]

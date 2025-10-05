@@ -455,18 +455,18 @@ def update_task_status(task_id: str, status: str, output_location: str | None = 
     
     try:
         if DB_TYPE == "supabase":
-            print(f"[UPDATE_TASK_STATUS_DEBUG] Dispatching to update_task_status_supabase")
+            dprint(f"[UPDATE_TASK_STATUS_DEBUG] Dispatching to update_task_status_supabase")
             result = update_task_status_supabase(task_id, status, output_location)
-            print(f"[UPDATE_TASK_STATUS_DEBUG] update_task_status_supabase completed successfully")
+            dprint(f"[UPDATE_TASK_STATUS_DEBUG] update_task_status_supabase completed successfully")
             return result
         else:
-            print(f"[UPDATE_TASK_STATUS_DEBUG] Dispatching to update_task_status_sqlite")
+            dprint(f"[UPDATE_TASK_STATUS_DEBUG] Dispatching to update_task_status_sqlite")
             result = update_task_status_sqlite(SQLITE_DB_PATH, task_id, status, output_location)
-            print(f"[UPDATE_TASK_STATUS_DEBUG] update_task_status_sqlite completed successfully")
+            dprint(f"[UPDATE_TASK_STATUS_DEBUG] update_task_status_sqlite completed successfully")
             return result
     except Exception as e:
-        print(f"[UPDATE_TASK_STATUS_DEBUG] ❌ Exception in update_task_status: {e}")
-        print(f"[UPDATE_TASK_STATUS_DEBUG] Exception type: {type(e).__name__}")
+        dprint(f"[UPDATE_TASK_STATUS_DEBUG] ❌ Exception in update_task_status: {e}")
+        dprint(f"[UPDATE_TASK_STATUS_DEBUG] Exception type: {type(e).__name__}")
         traceback.print_exc()
         raise
 
