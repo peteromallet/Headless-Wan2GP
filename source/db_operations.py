@@ -636,13 +636,16 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
         try:
             # Check if output_location_val is a local file path
             output_path = Path(output_location_val)
-            
+
             if output_path.exists() and output_path.is_file():
-                # Read the file and encode as base64
                 import base64
-                with open(output_path, 'rb') as f:
-                    file_data = base64.b64encode(f.read()).decode('utf-8')
-                
+                import mimetypes
+
+                # Get file size to determine upload strategy
+                file_size = output_path.stat().st_size
+                file_size_mb = file_size / (1024 * 1024)
+                dprint(f"[DEBUG] File size: {file_size_mb:.2f} MB")
+
                 # Check if this is a video file and extract first frame
                 first_frame_data = None
                 video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v'}
@@ -651,18 +654,18 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                         import tempfile
                         from .common_utils import save_frame_from_video
                         import cv2
-                        
+
                         # Create temporary file for first frame
                         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_frame:
                             temp_frame_path = Path(temp_frame.name)
-                        
+
                         # Get video resolution for frame extraction
                         cap = cv2.VideoCapture(str(output_path))
                         if cap.isOpened():
                             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
                             cap.release()
-                            
+
                             # Extract first frame (index 0)
                             if save_frame_from_video(output_path, 0, temp_frame_path, (width, height)):
                                 # Read the first frame and encode as base64
@@ -673,33 +676,98 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                                 dprint(f"[WARNING] Failed to extract first frame from video {output_path.name}")
                         else:
                             dprint(f"[WARNING] Could not open video {output_path.name} for frame extraction")
-                        
+
                         # Clean up temporary file
                         try:
                             temp_frame_path.unlink()
                         except:
                             pass
-                            
+
                     except Exception as e:
                         dprint(f"[WARNING] Error extracting first frame from {output_path.name}: {e}")
                         # Continue without first frame if extraction fails
-                
+
                 headers = {"Content-Type": "application/json"}
                 if SUPABASE_ACCESS_TOKEN:
                     headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
 
-                payload = {
-                    "task_id": task_id_str, 
-                    "file_data": file_data,
-                    "filename": output_path.name
-                }
-                
-                # Add first frame data if available
-                if first_frame_data:
-                    payload["first_frame_data"] = first_frame_data
-                    payload["first_frame_filename"] = f"{output_path.stem}_frame_0.jpg"
-                dprint(f"[DEBUG] Calling complete_task Edge Function with file upload for task {task_id_str}")
-                resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)
+                # Decision logic: use presigned URL for files over 50MB
+                if file_size > 50 * 1024 * 1024:
+                    dprint(f"[DEBUG] Large file detected ({file_size_mb:.2f} MB), using presigned upload")
+
+                    # Step 1: Get signed upload URL
+                    generate_url_edge = f"{SUPABASE_URL.rstrip('/')}/functions/v1/generate-upload-url"
+                    content_type = mimetypes.guess_type(str(output_path))[0] or 'application/octet-stream'
+
+                    upload_url_resp = httpx.post(
+                        generate_url_edge,
+                        headers=headers,
+                        json={
+                            "task_id": task_id_str,
+                            "filename": output_path.name,
+                            "content_type": content_type
+                        },
+                        timeout=30
+                    )
+
+                    if upload_url_resp.status_code != 200:
+                        error_msg = f"Failed to generate upload URL: {upload_url_resp.status_code} - {upload_url_resp.text}"
+                        print(f"[ERROR] {error_msg}")
+                        _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
+                        return
+
+                    upload_data = upload_url_resp.json()
+
+                    # Step 2: Upload file directly to storage using presigned URL
+                    with open(output_path, 'rb') as f:
+                        put_resp = httpx.put(
+                            upload_data["upload_url"],
+                            headers={"Content-Type": content_type},
+                            content=f,
+                            timeout=300  # 5 minute timeout for large files
+                        )
+
+                    if put_resp.status_code not in [200, 201]:
+                        error_msg = f"Failed to upload file to storage: {put_resp.status_code} - {put_resp.text}"
+                        print(f"[ERROR] {error_msg}")
+                        _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
+                        return
+
+                    dprint(f"[DEBUG] Large file uploaded successfully via presigned URL")
+
+                    # Step 3: Complete task with storage path
+                    payload = {
+                        "task_id": task_id_str,
+                        "storage_path": upload_data["storage_path"]
+                    }
+
+                    # Add first frame data if available
+                    if first_frame_data:
+                        payload["first_frame_data"] = first_frame_data
+                        payload["first_frame_filename"] = f"{output_path.stem}_frame_0.jpg"
+
+                    dprint(f"[DEBUG] Calling complete_task Edge Function with storage_path for task {task_id_str}")
+                    resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)
+                else:
+                    # Small file: use base64 encoding (existing path)
+                    dprint(f"[DEBUG] Small file ({file_size_mb:.2f} MB), using base64 upload")
+
+                    with open(output_path, 'rb') as f:
+                        file_data = base64.b64encode(f.read()).decode('utf-8')
+
+                    payload = {
+                        "task_id": task_id_str,
+                        "file_data": file_data,
+                        "filename": output_path.name
+                    }
+
+                    # Add first frame data if available
+                    if first_frame_data:
+                        payload["first_frame_data"] = first_frame_data
+                        payload["first_frame_filename"] = f"{output_path.stem}_frame_0.jpg"
+
+                    dprint(f"[DEBUG] Calling complete_task Edge Function with file upload for task {task_id_str}")
+                    resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)
                 
                 if resp.status_code == 200:
                     dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE with file upload")
@@ -1429,52 +1497,7 @@ def get_abs_path_from_db_path(db_path: str, dprint) -> Path | None:
         dprint(f"Warning: Resolved path '{resolved_path}' from DB path '{db_path}' does not exist.")
         return None
 
-def upload_to_supabase_storage(file_path, bucket_name="image_uploads", custom_path=None):
-    """Upload a file to Supabase storage with improved error handling."""
-    if not SUPABASE_CLIENT:
-        print("[ERROR] Supabase client not initialized. Cannot upload file.")
-        return None
-
-    try:
-        # Ensure file exists
-        if not os.path.exists(file_path):
-            print(f"[ERROR] File does not exist: {file_path}")
-            return None
-
-        file_name = os.path.basename(file_path)
-        storage_path = custom_path or f"system/{file_name}"
-        
-        dprint(f"Uploading {file_path} to {bucket_name}/{storage_path}")
-
-        # Read file data
-        with open(file_path, 'rb') as f:
-            file_data = f.read()
-
-        # Upload to Supabase storage
-        res = SUPABASE_CLIENT.storage.from_(bucket_name).upload(storage_path, file_data)
-        
-        # Handle the new UploadResponse API
-        if hasattr(res, 'error') and res.error:
-            print(f"Supabase upload error: {res.error}")
-            return None
-        elif hasattr(res, 'data') and res.data:
-            # Success case - get the public URL
-            public_url = SUPABASE_CLIENT.storage.from_(bucket_name).get_public_url(storage_path)
-            dprint(f"Supabase upload successful. Public URL: {public_url}")
-            return public_url
-        else:
-            # Try to get public URL anyway (upload might have succeeded)
-            try:
-                public_url = SUPABASE_CLIENT.storage.from_(bucket_name).get_public_url(storage_path)
-                dprint(f"Upload completed, public URL: {public_url}")
-                return public_url
-            except Exception as url_error:
-                print(f"[ERROR] Could not get public URL after upload: {url_error}")
-                return None
-
-    except Exception as e:
-        print(f"[ERROR] An exception occurred during Supabase upload: {e}")
-        return None 
+ 
 
 def mark_task_failed_supabase(task_id_str, error_message):
     """Marks a task as Failed with an error message using direct database update."""
