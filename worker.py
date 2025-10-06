@@ -45,6 +45,7 @@ if wan2gp_path not in sys.path:
 
 # --- SM_RESTRUCTURE: Import moved/new utilities ---
 from source import db_operations as db_ops
+from source.fatal_error_handler import FatalWorkerError, safe_handle_fatal_error, reset_fatal_error_counter
 from source.specialized_handlers import (
     handle_generate_openpose_task,
     handle_rife_interpolate_task,
@@ -1772,6 +1773,11 @@ def main():
 
     # Parse CLI arguments first to determine debug mode
     cli_args = parse_args()
+    
+    # Set worker ID environment variable for fatal error tracking
+    if cli_args.worker:
+        os.environ["WORKER_ID"] = cli_args.worker
+        os.environ["WAN2GP_WORKER_MODE"] = "true"
 
     # Global heartbeat control
     global heartbeat_thread, heartbeat_stop_event
@@ -2115,6 +2121,9 @@ def main():
             )
 
             if task_succeeded:
+                # Reset fatal error counter on successful task completion
+                reset_fatal_error_counter()
+                
                 # Orchestrator tasks stay "In Progress" until their children report back.
                 orchestrator_types_waiting = {"travel_orchestrator", "different_perspective_orchestrator"}
 
@@ -2162,6 +2171,32 @@ def main():
             
             time.sleep(1) # Brief pause before checking for the next task
 
+    except FatalWorkerError as fatal_error:
+        # Fatal error detected - worker must terminate
+        headless_logger.critical(
+            f"🚨 FATAL ERROR - WORKER TERMINATING 🚨\n"
+            f"Category: {fatal_error.error_category}\n"
+            f"Error: {fatal_error}\n"
+            f"Worker ID: {cli_args.worker if cli_args.worker else 'unknown'}\n"
+            f"The worker has encountered a fatal error and will shut down."
+        )
+        
+        # Note: Worker and task status already updated by fatal_error_handler
+        # For Supabase workers: marked as 'error', task reset to 'Queued'
+        # Orchestrator will detect error status and terminate the RunPod pod
+        
+        if cli_args.worker:
+            headless_logger.info(
+                f"Worker {cli_args.worker} marked for termination. "
+                f"Orchestrator will terminate the pod within grace period."
+            )
+        
+        # Exit with error code to signal fatal error
+        # For RunPod: Orchestrator detects error status and terminates pod
+        # For local: Process exits and can be restarted by supervisor
+        headless_logger.critical("Exiting process due to fatal error...")
+        sys.exit(1)
+    
     except KeyboardInterrupt:
         headless_logger.essential("Server shutting down gracefully...")
 
