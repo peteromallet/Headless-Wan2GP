@@ -37,17 +37,12 @@ from dotenv import load_dotenv
 from supabase import create_client, Client as SupabaseClient
 
 # Pre-import critical modules in main thread to prevent circular imports in worker threads
-# accelerate.big_modeling has circular import issues if first imported in threads
-try:
-    import torch
-    import accelerate
-    from accelerate import dispatch_model
-    # Trigger full module initialization
-    _ = torch.cuda.is_available()
-except ImportError as e:
-    print(f"Warning: Could not pre-import torch/accelerate modules: {e}")
-except Exception as e:
-    print(f"Warning: Error during torch/accelerate pre-initialization: {e}")
+# If these imports fail, we want to fail fast with a clear error rather than mask the issue
+import torch
+import accelerate
+from accelerate import dispatch_model
+# Trigger full module initialization to catch issues early
+_ = torch.cuda.is_available()
 
 # Add the current directory to Python path so Wan2GP can be imported as a module
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
