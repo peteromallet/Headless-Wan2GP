@@ -36,6 +36,19 @@ from pathlib import Path
 from dotenv import load_dotenv
 from supabase import create_client, Client as SupabaseClient
 
+# Pre-import critical modules in main thread to prevent circular imports in worker threads
+# accelerate.big_modeling has circular import issues if first imported in threads
+try:
+    import torch
+    import accelerate
+    from accelerate import dispatch_model
+    # Trigger full module initialization
+    _ = torch.cuda.is_available()
+except ImportError as e:
+    print(f"Warning: Could not pre-import torch/accelerate modules: {e}")
+except Exception as e:
+    print(f"Warning: Error during torch/accelerate pre-initialization: {e}")
+
 # Add the current directory to Python path so Wan2GP can be imported as a module
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Add the Wan2GP subdirectory to the path for its internal imports
@@ -1613,18 +1626,6 @@ def main():
 
     try:
         task_queue = HeadlessTaskQueue(wan_dir=wan_dir, max_workers=cli_args.queue_workers, debug_mode=cli_args.debug)
-
-        # Force orchestrator initialization in main thread BEFORE starting worker threads
-        # This prevents circular import issues when workers try to lazily import wgp/accelerate
-        headless_logger.essential("Pre-initializing orchestrator to avoid thread import conflicts...")
-        try:
-            task_queue.model_manager._ensure_orchestrator()
-            headless_logger.success("Orchestrator pre-initialized successfully")
-        except Exception as e_orch_init:
-            headless_logger.error(f"Failed to pre-initialize orchestrator: {e_orch_init}")
-            traceback.print_exc()
-            raise
-
         task_queue.start()
         headless_logger.success(f"Task queue initialized with {cli_args.queue_workers} workers")
         headless_logger.essential("Queue system will handle generation tasks efficiently with model reuse")
