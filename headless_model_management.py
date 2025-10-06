@@ -653,13 +653,32 @@ class HeadlessTaskQueue:
         except Exception as e:
             # Handle task failure
             processing_time = time.time() - start_time
+            error_message_str = str(e)
+            
             with self.queue_lock:
                 task.status = "failed"
-                task.error_message = str(e)
+                task.error_message = error_message_str
                 task.processing_time = processing_time
                 self.stats["tasks_failed"] += 1
             
             self.logger.error(f"Task {task.id} failed after {processing_time:.1f}s: {e}")
+            
+            # Check if this is a fatal error that requires worker termination
+            try:
+                from source.fatal_error_handler import check_and_handle_fatal_error, FatalWorkerError
+                check_and_handle_fatal_error(
+                    error_message=error_message_str,
+                    exception=e,
+                    logger=self.logger,
+                    worker_id=os.getenv("WORKER_ID"),
+                    task_id=task.id
+                )
+            except FatalWorkerError:
+                # Re-raise fatal errors to propagate to main worker loop
+                raise
+            except Exception as fatal_check_error:
+                # If fatal error checking itself fails, log but don't crash
+                self.logger.error(f"Error checking for fatal errors: {fatal_check_error}")
         
         finally:
             with self.queue_lock:
