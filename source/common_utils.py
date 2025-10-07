@@ -68,7 +68,7 @@ def extract_orchestrator_parameters(db_task_params: dict, task_id: str = "unknow
         # Extract specific parameters that should be available at top level
         extraction_map = {
             "additional_loras": "additional_loras",
-            "prompt": "prompt", 
+            "prompt": "prompt",
             "negative_prompt": "negative_prompt",
             "resolution": "resolution",
             "video_length": "video_length",
@@ -76,12 +76,21 @@ def extract_orchestrator_parameters(db_task_params: dict, task_id: str = "unknow
             "model": "model",
             "num_inference_steps": "num_inference_steps",
             "guidance_scale": "guidance_scale",
+            "guidance2_scale": "guidance2_scale",
+            "guidance3_scale": "guidance3_scale",
+            "guidance_phases": "guidance_phases",
             "flow_shift": "flow_shift",
             "switch_threshold": "switch_threshold",
+            "switch_threshold2": "switch_threshold2",
+            "model_switch_phase": "model_switch_phase",
             "sample_solver": "sample_solver",
             "use_causvid_lora": "use_causvid_lora",
             "use_lighti2x_lora": "use_lighti2x_lora",
             "apply_reward_lora": "apply_reward_lora",
+            # LoRA parameters from phase_config
+            "lora_names": "lora_names",
+            "lora_multipliers": "lora_multipliers",
+            "activated_loras": "activated_loras",
             # Magic edit parameters
             "image_url": "image_url",
             "in_scene": "in_scene",
@@ -94,6 +103,7 @@ def extract_orchestrator_parameters(db_task_params: dict, task_id: str = "unknow
             "video_prompt_type": "video_prompt_type",
             "control_net_weight": "control_net_weight",
             "amount_of_motion": "amount_of_motion",
+            "phase_config": "phase_config",
         }
         
         extracted_count = 0

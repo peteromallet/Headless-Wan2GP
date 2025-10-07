@@ -74,22 +74,17 @@ def generate_transition_prompt(
         )
 
         # Craft the query prompt with examples
-        query = """You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence.
+        base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "a cinematic sequence"
+        query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence. Your goal is to create a prompt that describes the transition from one to the next based on the user's description of this/the overall sequence: '{base_prompt_text}'
 
-Describe the transition between these two frames in a single sentence that captures the motion, camera movement, scene changes, character actions, and object movements. Focus on what changes and how it changes. Include actions of characters, objects, or environmental elements when visible.
+In the first line, you should describe the movement between these two frames in a single sentence that captures the motion, camera movement, scene changes, character actions, and object movements. Focus on what changes and how it changes. Include actions of characters, objects, or environmental elements when visible. In the next line, include details on what different aspects of the scene are and how they move.
 
 Examples of good descriptions:
-- "She runs from the kitchen to the playground as the camera pans right"
-- "The camera zooms in on the eye to reveal a horse in the reflection"
-- "The moon descends below the horizon as the sun rises above the mountains, bathing the landscape in golden light"
-- "He walks towards the door while the camera slowly dollies back"
-- "The flower blooms and the camera orbits around it in a circular motion"
-- "He raises his sword and charges forward as the camera tracks alongside him"
-- "She steps into the water while the camera pulls back to reveal the mountain landscape"
-- "The character's expression shifts from calm to intense as red energy radiates outward"
-- "The spacecraft rotates and accelerates away from the planet as stars blur into streaks"
+- "The pale moon descends below the horizon as the sun rises above the mountains, bathing the landscape in golden light. The butterflies flutter away as the night falls and there's a beautiful shimmer on the water."
+- "The tall blonde woman runs from the kitchen to the playground as the camera pans right. The colorful toys scatter across the ground while birds take flight from nearby trees."
+- "The camera zooms in on the eye to reveal a brown horse in the reflection. The iris dilates as warm sunlight filters through, casting dynamic shadows across the pupil."
 
-Describe this transition in one sentence:"""
+Describe this transition based on the user's description of this/the overall sequence: '{base_prompt_text}'"""
 
         system_prompt = "You are a video direction assistant. Describe visual transitions concisely and cinematically."
 
@@ -103,14 +98,7 @@ Describe this transition in one sentence:"""
         vlm_prompt = result.prompt.strip()
         dprint(f"[VLM_TRANSITION] Generated: {vlm_prompt}")
 
-        # Combine with base_prompt if provided
-        if base_prompt and base_prompt.strip():
-            final_prompt = f"{vlm_prompt}, {base_prompt}"
-            dprint(f"[VLM_TRANSITION] Combined with base prompt: {final_prompt}")
-        else:
-            final_prompt = vlm_prompt
-
-        return final_prompt
+        return vlm_prompt
 
     except Exception as e:
         dprint(f"[VLM_TRANSITION] ERROR: Failed to generate transition prompt: {e}")
@@ -186,24 +174,6 @@ def generate_transition_prompts_batch(
 
         dprint(f"[VLM_BATCH] Model loaded (initially on CPU)")
 
-        # Craft the query prompt with examples (same for all)
-        query_template = """You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence.
-
-Describe the transition between these two frames in a single sentence that captures the motion, camera movement, scene changes, character actions, and object movements. Focus on what changes and how it changes. Include actions of characters, objects, or environmental elements when visible.
-
-Examples of good descriptions:
-- "She runs from the kitchen to the playground as the camera pans right"
-- "The camera zooms in on the eye to reveal a horse in the reflection"
-- "The moon descends below the horizon as the sun rises above the mountains, bathing the landscape in golden light"
-- "He walks towards the door while the camera slowly dollies back"
-- "The flower blooms and the camera orbits around it in a circular motion"
-- "He raises his sword and charges forward as the camera tracks alongside him"
-- "She steps into the water while the camera pulls back to reveal the mountain landscape"
-- "The character's expression shifts from calm to intense as red energy radiates outward"
-- "The spacecraft rotates and accelerates away from the planet as stars blur into streaks"
-
-Describe this transition in one sentence:"""
-
         system_prompt = "You are a video direction assistant. Describe visual transitions concisely and cinematically."
 
         results = []
@@ -221,9 +191,22 @@ Describe this transition in one sentence:"""
                 combined_img.paste(start_img, (0, 0))
                 combined_img.paste(end_img, (start_img.width, 0))
 
+                # Craft query with base_prompt context
+                base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "a cinematic sequence"
+                query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence. Your goal is to create a prompt that describes the transition from one to the next based on the user's description of this/the overall sequence: '{base_prompt_text}'
+
+In the first line, you should describe the movement between these two frames in a single sentence that captures the motion, camera movement, scene changes, character actions, and object movements. Focus on what changes and how it changes. Include actions of characters, objects, or environmental elements when visible. In the next line, include details on what different aspects of the scene are and how they move.
+
+Examples of good descriptions:
+- "The pale moon descends below the horizon as the sun rises above the mountains, bathing the landscape in golden light. The butterflies flutter away as the night falls and there's a beautiful shimmer on the water."
+- "The tall blonde woman runs from the kitchen to the playground as the camera pans right. The colorful toys scatter across the ground while birds take flight from nearby trees."
+- "The camera zooms in on the eye to reveal a brown horse in the reflection. The iris dilates as warm sunlight filters through, casting dynamic shadows across the pupil."
+
+Describe this transition based on the user's description of this/the overall sequence: '{base_prompt_text}'"""
+
                 # Run inference
                 result = extender.extend_with_img(
-                    prompt=query_template,
+                    prompt=query,
                     system_prompt=system_prompt,
                     image=combined_img
                 )
@@ -231,13 +214,7 @@ Describe this transition in one sentence:"""
                 vlm_prompt = result.prompt.strip()
                 dprint(f"[VLM_BATCH] Generated: {vlm_prompt}")
 
-                # Combine with base_prompt if provided
-                if base_prompt and base_prompt.strip():
-                    final_prompt = f"{vlm_prompt}, {base_prompt}"
-                else:
-                    final_prompt = vlm_prompt
-
-                results.append(final_prompt)
+                results.append(vlm_prompt)
 
             except Exception as e:
                 dprint(f"[VLM_BATCH] ERROR processing pair {i+1}: {e}")

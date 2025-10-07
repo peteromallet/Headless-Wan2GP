@@ -149,6 +149,256 @@ def _cleanup_temporary_files(task_id: str = "unknown") -> None:
 # Queue-based Task Processing Functions
 # -----------------------------------------------------------------------------
 
+def parse_phase_config(phase_config: dict, num_inference_steps: int, task_id: str = "unknown") -> dict:
+    """
+    Parse phase_config override block and return computed parameters.
+
+    Args:
+        phase_config: Phase configuration dict with structure:
+            {
+                "num_phases": 3,
+                "steps_per_phase": [2, 2, 2],
+                "flow_shift": 5.0,
+                "sample_solver": "euler",
+                "model_switch_phase": 2,
+                "phases": [
+                    {
+                        "phase": 1,
+                        "guidance_scale": 3.0,
+                        "loras": [
+                            {"url": "...", "multiplier": "1.0"} or {"url": "...", "multiplier": "0.5,0.7,1.0"}
+                        ]
+                    },
+                    ...
+                ]
+            }
+        num_inference_steps: Total number of inference steps
+        task_id: Task ID for logging
+
+    Returns:
+        dict with computed parameters ready for generation:
+            - guidance_phases: int
+            - switch_threshold: float
+            - switch_threshold2: float (if 3 phases)
+            - guidance_scale, guidance2_scale, guidance3_scale: float
+            - flow_shift: float
+            - sample_solver: str
+            - model_switch_phase: int
+            - lora_names: list[str]
+            - lora_multipliers: list[str] (phase-formatted)
+            - additional_loras: dict[str, float]
+    """
+    import numpy as np
+
+    # Import the timestep_transform function from phase_distribution_simulator
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'testing_tools'))
+    try:
+        from phase_distribution_simulator import timestep_transform
+    except ImportError:
+        # Fallback: inline implementation
+        def timestep_transform(t: float, shift: float = 5.0, num_timesteps: int = 1000) -> float:
+            t = t / num_timesteps
+            new_t = shift * t / (1 + (shift - 1) * t)
+            new_t = new_t * num_timesteps
+            return new_t
+
+    # Validation
+    num_phases = phase_config.get("num_phases", 3)
+    steps_per_phase = phase_config.get("steps_per_phase", [2, 2, 2])
+    flow_shift = phase_config.get("flow_shift", 5.0)
+
+    if num_phases not in [2, 3]:
+        raise ValueError(f"Task {task_id}: num_phases must be 2 or 3, got {num_phases}")
+
+    if len(steps_per_phase) != num_phases:
+        raise ValueError(f"Task {task_id}: steps_per_phase length ({len(steps_per_phase)}) must match num_phases ({num_phases})")
+
+    total_steps = sum(steps_per_phase)
+    if total_steps != num_inference_steps:
+        raise ValueError(f"Task {task_id}: steps_per_phase {steps_per_phase} sum to {total_steps}, but num_inference_steps is {num_inference_steps}")
+
+    phases_config = phase_config.get("phases", [])
+    if len(phases_config) != num_phases:
+        raise ValueError(f"Task {task_id}: Expected {num_phases} phase configs, got {len(phases_config)}")
+
+    # Generate timesteps using the same logic as WGP's actual scheduler
+    sample_solver = phase_config.get("sample_solver", "euler")
+
+    # Validate sample_solver compatibility
+    if sample_solver == "causvid":
+        headless_logger.warning(f"phase_config with causvid solver is not recommended - causvid uses hardcoded timesteps", task_id=task_id)
+
+    # Replicate the EXACT logic from the actual WGP schedulers
+    # See: Wan2GP/shared/utils/fm_solvers_unipc.py and fm_solvers.py
+    if sample_solver == "unipc" or sample_solver == "":
+        # UniPC: linspace(1.0, 0.001, n+1)[:-1] → shift → * 1000
+        # See: fm_solvers_unipc.py lines 182-205
+        sigma_max = 1.0
+        sigma_min = 0.001
+
+        sigmas = list(np.linspace(sigma_max, sigma_min, num_inference_steps + 1, dtype=np.float32))[:-1]
+        sigmas = [flow_shift * s / (1 + (flow_shift - 1) * s) for s in sigmas]
+        timesteps = [s * 1000 for s in sigmas]
+
+        headless_logger.debug(f"Generated UniPC timesteps with shift={flow_shift}", task_id=task_id)
+
+    elif sample_solver in ["dpm++", "dpm++_sde"]:
+        # DPM++: linspace(1, 0, n+1)[:n] → shift → * 1000
+        # See: get_sampling_sigmas() in fm_solvers.py lines 22-26
+        sigmas = list(np.linspace(1, 0, num_inference_steps + 1, dtype=np.float32))[:num_inference_steps]
+        sigmas = [flow_shift * s / (1 + (flow_shift - 1) * s) for s in sigmas]
+        timesteps = [s * 1000 for s in sigmas]
+
+        headless_logger.debug(f"Generated DPM++ timesteps with shift={flow_shift} for {sample_solver}", task_id=task_id)
+    elif sample_solver == "euler":
+        # Euler uses direct timestep transform
+        timesteps = list(np.linspace(1000, 1, num_inference_steps, dtype=np.float32))
+        timesteps.append(0.)
+        timesteps = [timestep_transform(t, shift=flow_shift, num_timesteps=1000) for t in timesteps][:-1]
+        headless_logger.debug(f"Generated Euler-style timesteps with shift={flow_shift}", task_id=task_id)
+    else:
+        # Fallback for unknown solvers
+        timesteps = list(np.linspace(1000, 1, num_inference_steps, dtype=np.float32))
+        headless_logger.debug(f"Generated linear timesteps for unknown solver {sample_solver}", task_id=task_id)
+
+    headless_logger.debug(f"Generated timesteps for phase_config: {[f'{t:.1f}' for t in timesteps]}", task_id=task_id)
+
+    # Calculate switch thresholds based on steps_per_phase
+    # steps_per_phase=[5,2,2] means: phase1=steps 0-4, phase2=steps 5-6, phase3=steps 7-8
+    # The switch must trigger BEFORE entering the new phase's first step
+    # Since the check is "t <= threshold", we set threshold between the last step of old phase and first step of new phase
+
+    switch_step_1 = steps_per_phase[0]  # First step of phase 2
+    switch_threshold = None
+    switch_threshold2 = None
+
+    if switch_step_1 < num_inference_steps:
+        # Set threshold between last step of phase 1 (switch_step_1-1) and first step of phase 2 (switch_step_1)
+        # Use midpoint so the switch triggers when entering phase 2's first step
+        last_phase1_t = timesteps[switch_step_1 - 1]
+        first_phase2_t = timesteps[switch_step_1]
+        switch_threshold = float((last_phase1_t + first_phase2_t) / 2)
+        headless_logger.debug(f"Calculated switch_threshold (phase 1→2): {switch_threshold:.1f} (between step {switch_step_1-1} t={last_phase1_t:.1f} and step {switch_step_1} t={first_phase2_t:.1f})", task_id=task_id)
+
+    if num_phases >= 3:
+        switch_step_2 = steps_per_phase[0] + steps_per_phase[1]  # First step of phase 3
+        if switch_step_2 < num_inference_steps:
+            last_phase2_t = timesteps[switch_step_2 - 1]
+            first_phase3_t = timesteps[switch_step_2]
+            switch_threshold2 = float((last_phase2_t + first_phase3_t) / 2)
+            headless_logger.debug(f"Calculated switch_threshold2 (phase 2→3): {switch_threshold2:.1f} (between step {switch_step_2-1} t={last_phase2_t:.1f} and step {switch_step_2} t={first_phase3_t:.1f})", task_id=task_id)
+
+    # Build result dict
+    result = {
+        "guidance_phases": num_phases,
+        "switch_threshold": switch_threshold,
+        "switch_threshold2": switch_threshold2,
+        "flow_shift": flow_shift,
+        "sample_solver": sample_solver,
+        "model_switch_phase": phase_config.get("model_switch_phase", 2),
+    }
+
+    # Extract guidance scales per phase
+    if num_phases >= 1:
+        result["guidance_scale"] = phases_config[0].get("guidance_scale", 3.0)
+    if num_phases >= 2:
+        result["guidance2_scale"] = phases_config[1].get("guidance_scale", 1.0)
+    if num_phases >= 3:
+        result["guidance3_scale"] = phases_config[2].get("guidance_scale", 1.0)
+
+    # Process LoRAs: collect all unique LoRA URLs and build phase-formatted multipliers
+    all_lora_urls = set()
+    for phase_cfg in phases_config:
+        for lora in phase_cfg.get("loras", []):
+            all_lora_urls.add(lora["url"])
+
+    all_lora_urls = sorted(all_lora_urls)  # Consistent ordering
+    lora_multipliers = []
+    additional_loras = {}
+
+    for lora_url in all_lora_urls:
+        # Build phase-formatted multiplier string: "phase1;phase2;phase3"
+        phase_mults = []
+
+        for phase_idx, phase_cfg in enumerate(phases_config):
+            # Find this LoRA in this phase
+            lora_in_phase = None
+            for lora in phase_cfg.get("loras", []):
+                if lora["url"] == lora_url:
+                    lora_in_phase = lora
+                    break
+
+            if lora_in_phase:
+                multiplier_str = str(lora_in_phase["multiplier"])
+
+                # Validate multiplier format
+                if "," in multiplier_str:
+                    # Ramp format: "0.5,0.7,1.0"
+                    values = multiplier_str.split(",")
+                    expected_count = steps_per_phase[phase_idx]
+                    if len(values) != expected_count:
+                        raise ValueError(
+                            f"Task {task_id}: Phase {phase_idx+1} LoRA multiplier has {len(values)} values, "
+                            f"but phase has {expected_count} steps"
+                        )
+                    # Validate each value
+                    for val in values:
+                        try:
+                            num = float(val)
+                            if num < 0 or num > 2.0:
+                                raise ValueError(f"Multiplier {val} out of range [0.0-2.0]")
+                        except ValueError as e:
+                            raise ValueError(f"Task {task_id}: Invalid multiplier value '{val}': {e}")
+
+                    phase_mults.append(multiplier_str)
+                else:
+                    # Single value
+                    try:
+                        num = float(multiplier_str)
+                        if num < 0 or num > 2.0:
+                            raise ValueError(f"Multiplier {multiplier_str} out of range [0.0-2.0]")
+                    except ValueError as e:
+                        raise ValueError(f"Task {task_id}: Invalid multiplier value '{multiplier_str}': {e}")
+
+                    phase_mults.append(multiplier_str)
+            else:
+                # LoRA not in this phase, use "0"
+                phase_mults.append("0")
+
+        # Combine phases with semicolons
+        if num_phases == 2:
+            multiplier_string = f"{phase_mults[0]};{phase_mults[1]}"
+        else:  # 3 phases
+            multiplier_string = f"{phase_mults[0]};{phase_mults[1]};{phase_mults[2]}"
+
+        lora_multipliers.append(multiplier_string)
+
+        # For additional_loras, use the first phase's value for download handling
+        try:
+            first_val = float(phase_mults[0].split(",")[0])
+            additional_loras[lora_url] = first_val
+        except (ValueError, IndexError):
+            additional_loras[lora_url] = 1.0
+
+    result["lora_names"] = all_lora_urls
+    result["lora_multipliers"] = lora_multipliers
+    result["additional_loras"] = additional_loras
+
+    dprint(f"[PHASE_CONFIG_DEBUG] Task {task_id}: parse_phase_config returning lora_multipliers={lora_multipliers}")
+
+    headless_logger.info(
+        f"phase_config parsed: {num_phases} phases, "
+        f"steps={steps_per_phase}, "
+        f"thresholds=[{switch_threshold}, {switch_threshold2}], "
+        f"{len(all_lora_urls)} LoRAs, "
+        f"lora_multipliers={lora_multipliers}",
+        task_id=task_id
+    )
+
+    return result
+
+
 def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: str) -> GenerationTask:
     """
     Convert a database task row to a GenerationTask object for the queue system.
@@ -261,7 +511,18 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
     
     # Extract parameters from orchestrator_details using centralized function
     extracted_params = extract_orchestrator_parameters(db_task_params, task_id, dprint)
-    
+
+    # Update db_task_params with extracted phase_config (checked later at line ~768)
+    if "phase_config" in extracted_params:
+        db_task_params["phase_config"] = extracted_params["phase_config"]
+        headless_logger.info(f"[PHASE_CONFIG_DEBUG] Extracted phase_config from orchestrator_details", task_id=task_id)
+    else:
+        headless_logger.info(f"[PHASE_CONFIG_DEBUG] No phase_config in extracted_params. Keys: {list(extracted_params.keys())}", task_id=task_id)
+        if "orchestrator_details" in db_task_params:
+            orch_keys = list(db_task_params["orchestrator_details"].keys())
+            headless_logger.info(f"[PHASE_CONFIG_DEBUG] orchestrator_details keys: {orch_keys}", task_id=task_id)
+            headless_logger.info(f"[PHASE_CONFIG_DEBUG] phase_config in orchestrator_details: {'phase_config' in db_task_params['orchestrator_details']}", task_id=task_id)
+
     # Update generation_params with extracted parameters
     for param in ["additional_loras", "orchestrator_payload"]:
         if param in extracted_params and param not in generation_params:
@@ -302,8 +563,14 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
     if "loras_multipliers" in generation_params:
         multipliers = generation_params["loras_multipliers"]
         if isinstance(multipliers, str):
-            # Convert comma-separated string to list of floats
-            generation_params["lora_multipliers"] = [float(x.strip()) for x in multipliers.split(",") if x.strip()]
+            # Check if this is phase-config format (contains semicolons)
+            if ";" in multipliers:
+                # Phase-config format: space-separated strings like "1.0;0 0;1.0"
+                # Keep as strings, don't convert to floats
+                generation_params["lora_multipliers"] = [x.strip() for x in multipliers.split(" ") if x.strip()]
+            else:
+                # Regular format: comma-separated floats like "1.0,0.8"
+                generation_params["lora_multipliers"] = [float(x.strip()) for x in multipliers.split(",") if x.strip()]
         # Keep as-is if already a list
 
     # Specialized handling for Qwen Image Style tasks
@@ -542,15 +809,78 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
     # All parameter resolution is now centralized in WanOrchestrator._resolve_parameters()
     # to ensure consistent precedence without conflicts
     
+    # ========================================================================
+    # PHASE_CONFIG OVERRIDE - Complete phase control system
+    # ========================================================================
+    # If phase_config is present, it overrides ALL phase-related parameters:
+    # - guidance_phases, switch_threshold, switch_threshold2
+    # - guidance_scale, guidance2_scale, guidance3_scale
+    # - flow_shift, sample_solver, model_switch_phase
+    # - lora_names, lora_multipliers, additional_loras
+    #
+    # This provides complete per-phase control when needed, while preserving
+    # existing behavior when phase_config is not provided.
+
+    if "phase_config" in db_task_params:
+        headless_logger.info("phase_config detected - parsing comprehensive phase override", task_id=task_id)
+
+        try:
+            # Calculate num_inference_steps from phase_config (it overrides everything)
+            steps_per_phase = db_task_params["phase_config"].get("steps_per_phase", [2, 2, 2])
+            phase_config_steps = sum(steps_per_phase)
+
+            headless_logger.info(f"phase_config overriding num_inference_steps: {phase_config_steps} (from steps_per_phase {steps_per_phase})", task_id=task_id)
+
+            # Parse phase_config and get all computed parameters
+            parsed_phase_config = parse_phase_config(
+                phase_config=db_task_params["phase_config"],
+                num_inference_steps=phase_config_steps,
+                task_id=task_id
+            )
+
+            # Override ALL phase-related parameters INCLUDING num_inference_steps
+            generation_params["num_inference_steps"] = phase_config_steps
+
+            for key in ["guidance_phases", "switch_threshold", "switch_threshold2",
+                       "guidance_scale", "guidance2_scale", "guidance3_scale",
+                       "flow_shift", "sample_solver", "model_switch_phase",
+                       "lora_names", "lora_multipliers", "additional_loras"]:
+                if key in parsed_phase_config and parsed_phase_config[key] is not None:
+                    generation_params[key] = parsed_phase_config[key]
+
+            headless_logger.info(
+                f"phase_config applied: {parsed_phase_config['guidance_phases']} phases, "
+                f"steps={phase_config_steps}, "
+                f"guidance=[{parsed_phase_config.get('guidance_scale')}, "
+                f"{parsed_phase_config.get('guidance2_scale')}, "
+                f"{parsed_phase_config.get('guidance3_scale')}], "
+                f"flow_shift={parsed_phase_config['flow_shift']}, "
+                f"{len(parsed_phase_config['lora_names'])} LoRAs",
+                task_id=task_id
+            )
+
+        except Exception as e:
+            headless_logger.error(f"Failed to parse phase_config: {e}", task_id=task_id)
+            raise ValueError(f"Task {task_id}: Invalid phase_config: {e}")
+
+    # ========================================================================
+    # END PHASE_CONFIG OVERRIDE
+    # ========================================================================
+
     # Auto-enable built-in acceleration LoRAs only if no LoRAs explicitly specified
     # This doesn't interfere with parameter precedence
-    if ("2_2" in model or "cocktail_2_2" in model) and "lora_names" not in generation_params and "activated_loras" not in db_task_params:
+    # SKIP if phase_config was used (it already set LoRAs)
+    if ("phase_config" not in db_task_params and
+        ("2_2" in model or "cocktail_2_2" in model) and
+        "lora_names" not in generation_params and
+        "activated_loras" not in db_task_params):
         generation_params["lora_names"] = ["CausVid", "DetailEnhancerV1"]
         generation_params["lora_multipliers"] = [1.0, 0.2]  # DetailEnhancer at reduced strength
         headless_logger.debug(f"Auto-enabled Wan 2.2 acceleration LoRAs (no parameter overrides)", task_id=task_id)
 
     # Auto-add/update Lightning LoRA based on amount_of_motion parameter
-    amount_of_motion = db_task_params.get("amount_of_motion", None)
+    # SKIP if phase_config was used (it already controls LoRAs completely)
+    amount_of_motion = db_task_params.get("amount_of_motion", None) if "phase_config" not in db_task_params else None
 
     if amount_of_motion is not None and ("2_2" in model or "cocktail_2_2" in model):
         try:
@@ -722,6 +1052,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
     This replaces the complex blocking logic in travel_between_images.py with direct
     queue submission, maintaining model persistence and eliminating triple-queue inefficiency.
     """
+    print(f"[SEGMENT_ROUTING_DEBUG] _handle_travel_segment_via_queue called for task_id={task_id}")
     headless_logger.debug(f"Starting travel segment queue processing", task_id=task_id)
     
     try:
@@ -847,76 +1178,78 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             dprint(f"[QUEUE_PARAMS] Added {len(additional_loras)} additional LoRAs from orchestrator payload")
 
         # Auto-add Lightning LoRA based on amount_of_motion from orchestrator
+        # SKIP if phase_config is present (it will handle all LoRAs)
         amount_of_motion = full_orchestrator_payload.get("amount_of_motion", None)
 
-        if amount_of_motion is not None and ("2_2" in model_name or "lightning" in model_name.lower()):
+        if amount_of_motion is not None and ("2_2" in model_name or "lightning" in model_name.lower()) and "phase_config" not in full_orchestrator_payload:
             try:
                 amount_of_motion = float(amount_of_motion)
             except (ValueError, TypeError):
                 amount_of_motion = None
 
-        if amount_of_motion is not None and ("2_2" in model_name or "lightning" in model_name.lower()):
-            # Calculate strength: input 0.0→0.5, input 1.0→1.0 (linear scaling from 0.5 to 1.0)
-            first_phase_strength = 0.5 + (amount_of_motion * 0.5)
+            # Only proceed if amount_of_motion is still valid after conversion
+            if amount_of_motion is not None:
+                # Calculate strength: input 0.0→0.5, input 1.0→1.0 (linear scaling from 0.5 to 1.0)
+                first_phase_strength = 0.5 + (amount_of_motion * 0.5)
 
-            lightning_lora_name = "high_noise_model.safetensors"
+                lightning_lora_name = "high_noise_model.safetensors"
 
-            # Get or initialize LoRA lists
-            current_lora_names = generation_params.get("lora_names", [])
-            current_lora_mults = generation_params.get("lora_multipliers", [])
+                # Get or initialize LoRA lists
+                current_lora_names = generation_params.get("lora_names", [])
+                current_lora_mults = generation_params.get("lora_multipliers", [])
 
-            if not isinstance(current_lora_names, list):
-                current_lora_names = [current_lora_names] if current_lora_names else []
-            if not isinstance(current_lora_mults, list):
-                current_lora_mults = [current_lora_mults] if current_lora_mults else []
+                if not isinstance(current_lora_names, list):
+                    current_lora_names = [current_lora_names] if current_lora_names else []
+                if not isinstance(current_lora_mults, list):
+                    current_lora_mults = [current_lora_mults] if current_lora_mults else []
 
-            current_lora_names = list(current_lora_names)
-            current_lora_mults = list(current_lora_mults)
+                current_lora_names = list(current_lora_names)
+                current_lora_mults = list(current_lora_mults)
 
-            # Check if Lightning LoRA already exists and update/add it
-            lightning_index = -1
-            for i, lora_name in enumerate(current_lora_names):
-                if "Lightning" in str(lora_name) or "lightning" in str(lora_name).lower():
-                    lightning_index = i
-                    break
+                # Check if Lightning LoRA already exists and update/add it
+                lightning_index = -1
+                for i, lora_name in enumerate(current_lora_names):
+                    if "Lightning" in str(lora_name) or "lightning" in str(lora_name).lower():
+                        lightning_index = i
+                        break
 
-            if lightning_index >= 0:
-                # Update existing Lightning LoRA - preserve phases 2 and 3 if they exist
-                current_lora_names[lightning_index] = lightning_lora_name
-                if lightning_index < len(current_lora_mults):
-                    existing_mult = str(current_lora_mults[lightning_index])
-                    existing_phases = existing_mult.split(";")
-                    # Keep existing phase 2 and 3 values, or default to 0.0
-                    phase2 = existing_phases[1] if len(existing_phases) > 1 else "0.0"
-                    phase3 = existing_phases[2] if len(existing_phases) > 2 else "0.0"
-                    lightning_strength = f"{first_phase_strength:.2f};{phase2};{phase3}"
-                    current_lora_mults[lightning_index] = lightning_strength
+                if lightning_index >= 0:
+                    # Update existing Lightning LoRA - preserve phases 2 and 3 if they exist
+                    current_lora_names[lightning_index] = lightning_lora_name
+                    if lightning_index < len(current_lora_mults):
+                        existing_mult = str(current_lora_mults[lightning_index])
+                        existing_phases = existing_mult.split(";")
+                        # Keep existing phase 2 and 3 values, or default to 0.0
+                        phase2 = existing_phases[1] if len(existing_phases) > 1 else "0.0"
+                        phase3 = existing_phases[2] if len(existing_phases) > 2 else "0.0"
+                        lightning_strength = f"{first_phase_strength:.2f};{phase2};{phase3}"
+                        current_lora_mults[lightning_index] = lightning_strength
+                    else:
+                        lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
+                        current_lora_mults.append(lightning_strength)
+                    dprint(f"[LIGHTNING_LORA] Travel segment {task_id}: Updated Lightning LoRA strength to {lightning_strength} based on amount_of_motion={amount_of_motion}")
                 else:
+                    # Add new Lightning LoRA with default phase 2/3 values
                     lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
+                    current_lora_names.append(lightning_lora_name)
                     current_lora_mults.append(lightning_strength)
-                dprint(f"[LIGHTNING_LORA] Travel segment {task_id}: Updated Lightning LoRA strength to {lightning_strength} based on amount_of_motion={amount_of_motion}")
-            else:
-                # Add new Lightning LoRA with default phase 2/3 values
-                lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
-                current_lora_names.append(lightning_lora_name)
-                current_lora_mults.append(lightning_strength)
-                dprint(f"[LIGHTNING_LORA] Travel segment {task_id}: Added Lightning LoRA with strength {lightning_strength} based on amount_of_motion={amount_of_motion}")
+                    dprint(f"[LIGHTNING_LORA] Travel segment {task_id}: Added Lightning LoRA with strength {lightning_strength} based on amount_of_motion={amount_of_motion}")
 
-            # Ensure multipliers list matches names list length
-            while len(current_lora_mults) < len(current_lora_names):
-                current_lora_mults.append("1.0")
+                # Ensure multipliers list matches names list length
+                while len(current_lora_mults) < len(current_lora_names):
+                    current_lora_mults.append("1.0")
 
-            generation_params["lora_names"] = current_lora_names
-            generation_params["lora_multipliers"] = current_lora_mults
+                generation_params["lora_names"] = current_lora_names
+                generation_params["lora_multipliers"] = current_lora_mults
 
-            # Add to additional_loras for download handling
-            if "additional_loras" not in generation_params:
-                generation_params["additional_loras"] = {}
+                # Add to additional_loras for download handling
+                if "additional_loras" not in generation_params:
+                    generation_params["additional_loras"] = {}
 
-            lightning_url = "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-T2V-A14B-4steps-lora-250928/high_noise_model.safetensors"
-            generation_params["additional_loras"][lightning_url] = first_phase_strength
+                lightning_url = "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-T2V-A14B-4steps-lora-250928/high_noise_model.safetensors"
+                generation_params["additional_loras"][lightning_url] = first_phase_strength
 
-            headless_logger.info(f"Travel segment Lightning LoRA configured: strength={lightning_strength}, amount_of_motion={amount_of_motion}", task_id=task_id)
+                headless_logger.info(f"Travel segment Lightning LoRA configured: strength={lightning_strength}, amount_of_motion={amount_of_motion}", task_id=task_id)
         
         # Only add explicit parameters if they're provided (let model preset handle defaults)
         # Check both 'steps' and 'num_inference_steps' from orchestrator payload
@@ -950,7 +1283,56 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         if explicit_flow_shift:
             generation_params["flow_shift"] = explicit_flow_shift
             dprint(f"[QUEUE_PARAMS] Using explicit flow_shift: {explicit_flow_shift}")
-        
+
+        # ========================================================================
+        # PHASE_CONFIG OVERRIDE for Travel Segments
+        # ========================================================================
+        headless_logger.info(f"[DEBUG] Checking for phase_config. Keys in full_orchestrator_payload: {list(full_orchestrator_payload.keys())[:10]}", task_id=task_id)
+        if "phase_config" in full_orchestrator_payload:
+            headless_logger.info("phase_config detected in orchestrator payload - parsing comprehensive phase override", task_id=task_id)
+
+            try:
+                # Calculate num_inference_steps from phase_config (it overrides everything)
+                steps_per_phase = full_orchestrator_payload["phase_config"].get("steps_per_phase", [2, 2, 2])
+                phase_config_steps = sum(steps_per_phase)
+
+                headless_logger.info(f"phase_config overriding num_inference_steps: {phase_config_steps} (from steps_per_phase {steps_per_phase})", task_id=task_id)
+
+                # Parse phase_config and get all computed parameters
+                parsed_phase_config = parse_phase_config(
+                    phase_config=full_orchestrator_payload["phase_config"],
+                    num_inference_steps=phase_config_steps,
+                    task_id=task_id
+                )
+
+                # Override ALL phase-related parameters INCLUDING num_inference_steps
+                generation_params["num_inference_steps"] = phase_config_steps
+
+                for key in ["guidance_phases", "switch_threshold", "switch_threshold2",
+                           "guidance_scale", "guidance2_scale", "guidance3_scale",
+                           "flow_shift", "sample_solver", "model_switch_phase",
+                           "lora_names", "lora_multipliers", "additional_loras"]:
+                    if key in parsed_phase_config and parsed_phase_config[key] is not None:
+                        generation_params[key] = parsed_phase_config[key]
+
+                dprint(f"[PHASE_CONFIG_DEBUG] Task {task_id}: After applying parse_phase_config, generation_params['lora_multipliers']={generation_params.get('lora_multipliers')}")
+
+                headless_logger.info(
+                    f"phase_config applied: {parsed_phase_config['guidance_phases']} phases, "
+                    f"steps={phase_config_steps}, "
+                    f"guidance=[{parsed_phase_config.get('guidance_scale')}, "
+                    f"{parsed_phase_config.get('guidance2_scale')}, "
+                    f"{parsed_phase_config.get('guidance3_scale')}], "
+                    f"flow_shift={parsed_phase_config['flow_shift']}, "
+                    f"{len(parsed_phase_config['lora_names'])} LoRAs, "
+                    f"lora_multipliers={generation_params.get('lora_multipliers')}",
+                    task_id=task_id
+                )
+
+            except Exception as e:
+                headless_logger.error(f"Failed to parse phase_config: {e}", task_id=task_id)
+                raise ValueError(f"Task {task_id}: Invalid phase_config: {e}")
+
         # Add video guide if available (ESSENTIAL for VACE models)
         if guide_video_path:
             generation_params["video_guide"] = str(guide_video_path)
@@ -1042,7 +1424,8 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
 
 def process_single_task(task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True, task_queue: HeadlessTaskQueue = None):
     task_id = task_params_dict.get("task_id", "unknown_task_" + str(time.time()))
-    
+
+    print(f"[PROCESS_TASK_DEBUG] process_single_task called: task_type='{task_type}', task_id={task_id}")
     headless_logger.debug(f"Entering process_single_task", task_id=task_id)
     headless_logger.debug(f"Task Type: {task_type}", task_id=task_id)
     headless_logger.debug(f"Project ID: {project_id_for_task}", task_id=task_id)
@@ -1142,6 +1525,7 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
             task_params_dict["orchestrator_details"]["orchestrator_task_id"] = task_id
         return tbi._handle_travel_orchestrator_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, orchestrator_task_id_str=task_id, orchestrator_project_id=project_id_for_task, dprint=dprint)
     elif task_type == "travel_segment":
+        print(f"[ROUTING_DEBUG] Matched travel_segment for task_id={task_id}")
         headless_logger.debug("Using direct queue integration for travel segment", task_id=task_id)
         # NEW: Route travel segments directly to queue to eliminate blocking wait
         return _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base, task_id, apply_reward_lora, colour_match_videos, mask_active_frames, task_queue=task_queue, dprint=dprint)
@@ -1780,6 +2164,26 @@ def main():
 
     except KeyboardInterrupt:
         headless_logger.essential("Server shutting down gracefully...")
+
+        # Reset current task back to Queued if it was in progress
+        if current_task_id_for_status_update:
+            try:
+                headless_logger.essential(f"Resetting task {current_task_id_for_status_update} back to Queued...")
+                if db_ops.DB_TYPE == "supabase":
+                    db_ops.update_task_status_supabase(
+                        current_task_id_for_status_update,
+                        db_ops.STATUS_QUEUED,
+                        "Reset to Queued due to worker shutdown"
+                    )
+                else:
+                    db_ops.update_task_status(
+                        current_task_id_for_status_update,
+                        db_ops.STATUS_QUEUED,
+                        "Reset to Queued due to worker shutdown"
+                    )
+                headless_logger.success(f"Task {current_task_id_for_status_update} reset to Queued")
+            except Exception as e_reset:
+                headless_logger.error(f"Failed to reset task status: {e_reset}")
     finally:
         # Stop heartbeat thread
         if cli_args.worker and db_ops.DB_TYPE == "supabase":
