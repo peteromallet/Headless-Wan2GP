@@ -97,6 +97,59 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         orchestrator_payload = task_params_from_db['orchestrator_details']
         travel_logger.debug(f"Orchestrator payload: {json.dumps(orchestrator_payload, indent=2, default=str)[:500]}...", task_id=orchestrator_task_id_str)
 
+        # Parse phase_config if present and add parsed values to orchestrator_payload
+        if "phase_config" in orchestrator_payload:
+            travel_logger.info(f"phase_config detected in orchestrator - parsing comprehensive phase configuration", task_id=orchestrator_task_id_str)
+
+            try:
+                # Import parse_phase_config
+                import sys
+                from pathlib import Path
+                worker_path = Path(__file__).parent.parent / "worker.py"
+                worker_dir = worker_path.parent
+                if str(worker_dir) not in sys.path:
+                    sys.path.insert(0, str(worker_dir))
+
+                from worker import parse_phase_config
+
+                # Get total steps from phase_config
+                phase_config = orchestrator_payload["phase_config"]
+                steps_per_phase = phase_config.get("steps_per_phase", [2, 2, 2])
+                total_steps = sum(steps_per_phase)
+
+                # Parse phase_config to get all parameters
+                parsed = parse_phase_config(
+                    phase_config=phase_config,
+                    num_inference_steps=total_steps,
+                    task_id=orchestrator_task_id_str
+                )
+
+                # Add parsed values to orchestrator_payload so segments can use them
+                for key in ["guidance_phases", "switch_threshold", "switch_threshold2",
+                           "guidance_scale", "guidance2_scale", "guidance3_scale",
+                           "flow_shift", "sample_solver", "model_switch_phase",
+                           "lora_names", "lora_multipliers", "additional_loras"]:
+                    if key in parsed and parsed[key] is not None:
+                        orchestrator_payload[key] = parsed[key]
+                        dprint(f"[ORCHESTRATOR_PHASE_CONFIG] Added {key} to orchestrator_payload: {parsed[key]}")
+
+                # Also update num_inference_steps
+                orchestrator_payload["num_inference_steps"] = total_steps
+
+                travel_logger.info(
+                    f"phase_config parsed: {parsed['guidance_phases']} phases, "
+                    f"steps={total_steps}, "
+                    f"{len(parsed['lora_names'])} LoRAs, "
+                    f"lora_multipliers={parsed['lora_multipliers']}",
+                    task_id=orchestrator_task_id_str
+                )
+
+            except Exception as e:
+                travel_logger.error(f"Failed to parse phase_config: {e}", task_id=orchestrator_task_id_str)
+                import traceback
+                traceback.print_exc()
+                return False, f"Failed to parse phase_config: {e}"
+
         # IDEMPOTENCY CHECK: Look for existing child tasks before creating new ones
         dprint(f"[IDEMPOTENCY] Checking for existing child tasks for orchestrator {orchestrator_task_id_str}")
         existing_child_tasks = db_ops.get_orchestrator_child_tasks(orchestrator_task_id_str)
@@ -856,12 +909,36 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 input_images_resolved = orchestrator_payload.get("input_image_paths_resolved", [])
                 vlm_device = orchestrator_payload.get("vlm_device", "cuda")
 
+                # Get pre-existing enhanced prompts if available
+                expanded_enhanced_prompts = orchestrator_payload.get("enhanced_prompts_expanded", [])
+                base_prompt = orchestrator_payload.get("base_prompt", "")
+
+                if base_prompt:
+                    dprint(f"[VLM_BATCH] Base prompt from payload: '{base_prompt[:80]}...'")
+                else:
+                    dprint(f"[VLM_BATCH] No base_prompt found in payload")
+
+                if expanded_enhanced_prompts:
+                    dprint(f"[VLM_BATCH] Found {len(expanded_enhanced_prompts)} pre-existing enhanced prompts in payload")
+                    for idx, prompt in enumerate(expanded_enhanced_prompts):
+                        if prompt and prompt.strip():
+                            dprint(f"[VLM_BATCH]   Segment {idx}: '{prompt[:80]}...'")
+                else:
+                    dprint(f"[VLM_BATCH] No pre-existing enhanced prompts found in payload")
+
                 # Build lists of image pairs and base prompts
                 image_pairs = []
                 base_prompts_for_batch = []
                 segment_indices = []  # Track which segment each pair belongs to
 
                 for idx in range(num_segments):
+                    # Check if enhanced prompt already exists for this segment
+                    if idx < len(expanded_enhanced_prompts) and expanded_enhanced_prompts[idx] and expanded_enhanced_prompts[idx].strip():
+                        # Use existing enhanced prompt, skip VLM enrichment
+                        vlm_enhanced_prompts[idx] = expanded_enhanced_prompts[idx]
+                        dprint(f"[VLM_BATCH] Segment {idx}: Using pre-existing enhanced prompt: {expanded_enhanced_prompts[idx][:80]}...")
+                        continue
+
                     # Determine which images this segment transitions between
                     if orchestrator_payload.get("_consolidated_end_anchors"):
                         consolidated_end_anchors = orchestrator_payload["_consolidated_end_anchors"]
@@ -899,7 +976,9 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                         )
 
                         image_pairs.append((start_image_path, end_image_path))
-                        base_prompts_for_batch.append(expanded_base_prompts[idx])
+                        # Use segment-specific base_prompt if available, otherwise use overall base_prompt
+                        segment_base_prompt = expanded_base_prompts[idx] if expanded_base_prompts[idx] and expanded_base_prompts[idx].strip() else base_prompt
+                        base_prompts_for_batch.append(segment_base_prompt)
                         segment_indices.append(idx)
                     else:
                         dprint(f"[VLM_BATCH] Segment {idx}: Skipping - image indices out of bounds")
@@ -919,6 +998,59 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                         dprint(f"[VLM_BATCH] Segment {idx}: {enhanced[:80]}...")
 
                 dprint(f"[VLM_BATCH] Generated {len(vlm_enhanced_prompts)} enhanced prompts")
+
+                # Call Supabase edge function to update shot_generations with newly enriched prompts
+                try:
+                    import httpx
+
+                    # Build complete enhanced_prompts array (empty strings for non-enriched segments)
+                    complete_enhanced_prompts = []
+                    for idx in range(num_segments):
+                        if idx in vlm_enhanced_prompts:
+                            complete_enhanced_prompts.append(vlm_enhanced_prompts[idx])
+                        else:
+                            complete_enhanced_prompts.append("")
+
+                    # Only call if we have SUPABASE configured and generated any new prompts
+                    # Use SERVICE_KEY if available (admin), otherwise use ACCESS_TOKEN (user with ownership check)
+                    auth_token = db_ops.SUPABASE_SERVICE_KEY or db_ops.SUPABASE_ACCESS_TOKEN
+                    if db_ops.DB_TYPE == "supabase" and db_ops.SUPABASE_URL and auth_token and len(complete_enhanced_prompts) > 0:
+                        # Extract shot_id from orchestrator_payload
+                        shot_id = orchestrator_payload.get("shot_id")
+                        if not shot_id:
+                            dprint(f"[VLM_BATCH] WARNING: No shot_id found in orchestrator_payload, skipping edge function call")
+                        else:
+                            # Call edge function to update shot_generations with enhanced prompts
+                            edge_url = f"{db_ops.SUPABASE_URL.rstrip('/')}/functions/v1/update-shot-pair-prompts"
+                            headers = {"Content-Type": "application/json"}
+                            if auth_token:
+                                headers["Authorization"] = f"Bearer {auth_token}"
+
+                            payload = {
+                                "shot_id": shot_id,
+                                "enhanced_prompts": complete_enhanced_prompts
+                            }
+
+                            dprint(f"[VLM_BATCH] Calling edge function to update shot_generations with enhanced prompts...")
+                            dprint(f"[VLM_BATCH] Payload: shot_id={shot_id}, enhanced_prompts={len(complete_enhanced_prompts)} items")
+                            dprint(f"[VLM_BATCH] Using auth token: {'SERVICE_KEY' if db_ops.SUPABASE_SERVICE_KEY else ('ACCESS_TOKEN' if db_ops.SUPABASE_ACCESS_TOKEN else 'None')}")
+
+                            resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
+
+                            if resp.status_code == 200:
+                                dprint(f"[VLM_BATCH] Successfully updated shot_generations via edge function")
+                                resp_json = resp.json()
+                                dprint(f"[VLM_BATCH] Edge function response: {resp_json}")
+                            else:
+                                dprint(f"[VLM_BATCH] WARNING: Edge function call failed: {resp.status_code} - {resp.text}")
+                    else:
+                        dprint(f"[VLM_BATCH] Skipping edge function call (DB_TYPE={db_ops.DB_TYPE}, has_auth_token={bool(auth_token)}, generated={len(complete_enhanced_prompts)} prompts)")
+
+                except Exception as e_edge:
+                    dprint(f"[VLM_BATCH] WARNING: Failed to call edge function: {e_edge}")
+                    import traceback
+                    traceback.print_exc()
+                    # Non-fatal - continue with task creation
 
             except Exception as e_vlm_batch:
                 dprint(f"[VLM_BATCH] ERROR during batch VLM processing: {e_vlm_batch}")
