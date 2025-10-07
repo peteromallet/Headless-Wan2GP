@@ -16,6 +16,8 @@ def generate_transition_prompt(
     start_image_path: str,
     end_image_path: str,
     base_prompt: Optional[str] = None,
+    num_frames: Optional[int] = None,
+    fps: int = 16,
     device: str = "cuda",
     dprint=print
 ) -> str:
@@ -28,6 +30,8 @@ def generate_transition_prompt(
         start_image_path: Path to the starting image
         end_image_path: Path to the ending image
         base_prompt: Optional base prompt to append after VLM-generated description
+        num_frames: Number of frames in the video segment (for duration calculation)
+        fps: Frames per second (default: 16)
         device: Device to run the model on ('cuda' or 'cpu')
         dprint: Print function for logging
 
@@ -75,7 +79,14 @@ def generate_transition_prompt(
 
         # Craft the query prompt with examples
         base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "a cinematic sequence"
-        query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence. Your goal is to create a prompt that describes the transition from one to the next based on the user's description of this/the overall sequence: '{base_prompt_text}'
+
+        # Add duration info if available
+        duration_text = ""
+        if num_frames and fps:
+            duration_seconds = num_frames / fps
+            duration_text = f" This transition occurs over approximately {duration_seconds:.1f} seconds ({num_frames} frames at {fps} FPS)."
+
+        query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence.{duration_text} Your goal is to create a prompt that describes the transition from one to the next based on the user's description of this/the overall sequence: '{base_prompt_text}'
 
 In the first line, you should describe the movement between these two frames in a single sentence that captures the motion, camera movement, scene changes, character actions, and object movements. Focus on what changes and how it changes. Include actions of characters, objects, or environmental elements when visible. In the next line, include details on what different aspects of the scene are and how they move.
 
@@ -117,6 +128,8 @@ Describe this transition based on the user's description of this/the overall seq
 def generate_transition_prompts_batch(
     image_pairs: List[Tuple[str, str]],
     base_prompts: List[Optional[str]],
+    num_frames_list: Optional[List[int]] = None,
+    fps: int = 16,
     device: str = "cuda",
     dprint=print
 ) -> List[str]:
@@ -129,6 +142,8 @@ def generate_transition_prompts_batch(
     Args:
         image_pairs: List of (start_image_path, end_image_path) tuples
         base_prompts: List of base prompts to append (one per pair, can be None)
+        num_frames_list: List of frame counts for each segment (for duration calculation)
+        fps: Frames per second (default: 16)
         device: Device to run the model on ('cuda' or 'cpu')
         dprint: Print function for logging
 
@@ -193,7 +208,15 @@ def generate_transition_prompts_batch(
 
                 # Craft query with base_prompt context
                 base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "a cinematic sequence"
-                query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence. Your goal is to create a prompt that describes the transition from one to the next based on the user's description of this/the overall sequence: '{base_prompt_text}'
+
+                # Add duration info if available
+                duration_text = ""
+                if num_frames_list and i < len(num_frames_list) and num_frames_list[i]:
+                    num_frames = num_frames_list[i]
+                    duration_seconds = num_frames / fps
+                    duration_text = f" This transition occurs over approximately {duration_seconds:.1f} seconds ({num_frames} frames at {fps} FPS)."
+
+                query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence.{duration_text} Your goal is to create a prompt that describes the transition from one to the next based on the user's description of this/the overall sequence: '{base_prompt_text}'
 
 In the first line, you should describe the movement between these two frames in a single sentence that captures the motion, camera movement, scene changes, character actions, and object movements. Focus on what changes and how it changes. Include actions of characters, objects, or environmental elements when visible. In the next line, include details on what different aspects of the scene are and how they move.
 
