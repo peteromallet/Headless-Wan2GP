@@ -309,12 +309,21 @@ def parse_phase_config(phase_config: dict, num_inference_steps: int, task_id: st
         result["guidance3_scale"] = phases_config[2].get("guidance_scale", 1.0)
 
     # Process LoRAs: collect all unique LoRA URLs and build phase-formatted multipliers
-    all_lora_urls = set()
+    # IMPORTANT: Preserve the order LoRAs appear in phases (first occurrence order)
+    # Do NOT sort alphabetically - this would break the multiplier correspondence
+    all_lora_urls = []
+    seen_urls = set()
     for phase_cfg in phases_config:
         for lora in phase_cfg.get("loras", []):
-            all_lora_urls.add(lora["url"])
+            url = lora["url"]
+            # Skip empty URLs (phases without LoRAs)
+            if not url or not url.strip():
+                headless_logger.debug(f"Skipping empty LoRA URL in phase_config", task_id=task_id)
+                continue
+            if url not in seen_urls:
+                all_lora_urls.append(url)
+                seen_urls.add(url)
 
-    all_lora_urls = sorted(all_lora_urls)  # Consistent ordering
     lora_multipliers = []
     additional_loras = {}
 

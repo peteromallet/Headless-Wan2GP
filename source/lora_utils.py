@@ -295,12 +295,63 @@ def normalize_lora_format(params: Dict[str, Any], task_id: str = "unknown", dpri
     if "loras_multipliers" in params:
         multipliers = params["loras_multipliers"]
         if isinstance(multipliers, str):
-            # Convert comma-separated string to list of floats
-            params["lora_multipliers"] = [float(x.strip()) for x in multipliers.split(",") if x.strip()]
+            # Check if this is phase-config format (contains semicolons)
+            # Phase-config: "0.9;0 0;0.9" (space-separated) or "0.9;0,0;0.9" (comma-separated)
+            # Regular: "0.9,1.0" (comma-separated floats)
+            if ";" in multipliers:
+                # Phase-config format: split by spaces first, fallback to commas
+                if " " in multipliers:
+                    params["lora_multipliers"] = [x.strip() for x in multipliers.split(" ") if x.strip()]
+                else:
+                    params["lora_multipliers"] = [x.strip() for x in multipliers.split(",") if x.strip()]
+            else:
+                # Regular format: convert comma-separated string to list of floats
+                params["lora_multipliers"] = [float(x.strip()) for x in multipliers.split(",") if x.strip()]
         # Keep as-is if already a list
-        
+
         if dprint:
-            dprint(f"[LORA_NORM] Task {task_id}: Normalized lora_multipliers: {params.get('lora_multipliers', [])}")
+            dprint(f"[LORA_NORM] Task {task_id}: Normalized loras_multipliers: {params.get('lora_multipliers', [])}")
+
+    # CRITICAL: Also normalize lora_multipliers (without 's') from orchestrator
+    # This is needed when phase_config parsing sets lora_multipliers directly
+    if "lora_multipliers" in params:
+        multipliers = params["lora_multipliers"]
+        if dprint:
+            dprint(f"[LORA_NORM] Task {task_id}: Processing lora_multipliers (without 's'): type={type(multipliers)}, value={multipliers}")
+        if isinstance(multipliers, list):
+            # Check if this is phase-config format (any element contains semicolon)
+            is_phase_config = any(";" in str(m) for m in multipliers)
+            if dprint:
+                dprint(f"[LORA_NORM] Task {task_id}: is_phase_config check: {is_phase_config}, elements: {[str(m) for m in multipliers]}")
+            if not is_phase_config:
+                # Regular format: ensure all elements are floats
+                try:
+                    params["lora_multipliers"] = [float(m) for m in multipliers]
+                    if dprint:
+                        dprint(f"[LORA_NORM] Task {task_id}: Converted regular lora_multipliers to floats: {params['lora_multipliers']}")
+                except (ValueError, TypeError):
+                    # Keep as-is if conversion fails
+                    if dprint:
+                        dprint(f"[LORA_NORM] Task {task_id}: Keeping lora_multipliers as-is (conversion failed): {multipliers}")
+            else:
+                # Phase-config format: keep strings intact
+                if dprint:
+                    dprint(f"[LORA_NORM] Task {task_id}: Keeping phase-config lora_multipliers as strings: {multipliers}")
+        elif isinstance(multipliers, str):
+            # Same logic as above for string format
+            if ";" in multipliers:
+                # Phase-config format
+                if " " in multipliers:
+                    params["lora_multipliers"] = [x.strip() for x in multipliers.split(" ") if x.strip()]
+                else:
+                    params["lora_multipliers"] = [x.strip() for x in multipliers.split(",") if x.strip()]
+                if dprint:
+                    dprint(f"[LORA_NORM] Task {task_id}: Parsed phase-config lora_multipliers from string: {params['lora_multipliers']}")
+            else:
+                # Regular format
+                params["lora_multipliers"] = [float(x.strip()) for x in multipliers.split(",") if x.strip()]
+                if dprint:
+                    dprint(f"[LORA_NORM] Task {task_id}: Parsed regular lora_multipliers from string: {params['lora_multipliers']}")
     
     # Process additional_loras dict format
     additional_loras_dict = params.get("additional_loras", {})
@@ -660,10 +711,59 @@ def process_all_loras(params: Dict[str, Any], task_params: Dict[str, Any], model
     if orchestrator_payload and "additional_loras" in orchestrator_payload:
         params["additional_loras"] = orchestrator_payload["additional_loras"]
         params = normalize_lora_format(params, task_id, dprint)  # Re-normalize after adding additional
-        
+
         if dprint:
             dprint(f"[LORA_PROCESS] Task {task_id}: Added {len(orchestrator_payload['additional_loras'])} additional LoRAs from orchestrator")
-    
+
+    # Step 3.5: Parse phase_config if present in orchestrator_payload
+    if orchestrator_payload and "phase_config" in orchestrator_payload:
+        if dprint:
+            dprint(f"[LORA_PROCESS] Task {task_id}: phase_config detected in orchestrator_payload - parsing LoRA configuration")
+
+        # Import parse_phase_config from worker.py
+        import sys
+        from pathlib import Path
+        worker_dir = Path(__file__).parent.parent
+        if str(worker_dir) not in sys.path:
+            sys.path.insert(0, str(worker_dir))
+
+        try:
+            from worker import parse_phase_config
+
+            # Get num_inference_steps for parsing
+            phase_config = orchestrator_payload["phase_config"]
+            steps_per_phase = phase_config.get("steps_per_phase", [2, 2, 2])
+            total_steps = sum(steps_per_phase)
+
+            # Parse phase_config to get lora_names and lora_multipliers
+            parsed = parse_phase_config(
+                phase_config=phase_config,
+                num_inference_steps=total_steps,
+                task_id=task_id
+            )
+
+            # Override with parsed values
+            if "lora_names" in parsed:
+                params["lora_names"] = parsed["lora_names"]
+                if dprint:
+                    dprint(f"[LORA_PROCESS] Task {task_id}: Using phase_config lora_names: {parsed['lora_names']}")
+
+            if "lora_multipliers" in parsed:
+                params["lora_multipliers"] = parsed["lora_multipliers"]
+                if dprint:
+                    dprint(f"[LORA_PROCESS] Task {task_id}: Using phase_config lora_multipliers: {parsed['lora_multipliers']}")
+
+            if "additional_loras" in parsed:
+                params["additional_loras"] = parsed["additional_loras"]
+                if dprint:
+                    dprint(f"[LORA_PROCESS] Task {task_id}: Using phase_config additional_loras: {len(parsed['additional_loras'])} LoRAs")
+
+        except Exception as e:
+            if dprint:
+                dprint(f"[LORA_PROCESS] Task {task_id}: ERROR parsing phase_config: {e}")
+            import traceback
+            traceback.print_exc()
+
     # Step 4: Ensure all LoRAs in the list exist (auto-download if needed)
     lora_names = params.get("lora_names", [])
     if lora_names:
@@ -698,20 +798,54 @@ def process_all_loras(params: Dict[str, Any], task_params: Dict[str, Any], model
     lora_names = params.get("lora_names", [])
     lora_multipliers = params.get("lora_multipliers", [])
     
+    # DEBUG: Log multipliers before extension
+    if dprint:
+        dprint(f"[LORA_DEBUG] Task {task_id}: Before extension - lora_multipliers={lora_multipliers}, len={len(lora_multipliers)}, lora_names count={len(lora_names)}")
+
     # Extend multipliers list if needed
+    # IMPORTANT: Detect if we're in phase-config mode to extend with proper format
+    is_phase_config = any(";" in str(m) for m in lora_multipliers) if lora_multipliers else False
     while len(lora_multipliers) < len(lora_names):
-        lora_multipliers.append(1.0)
-    
+        if is_phase_config:
+            # Phase-config: need to determine number of phases and append proper format
+            # Parse first multiplier to count phases
+            first_mult_str = str(lora_multipliers[0])
+            num_phases = first_mult_str.count(";") + 1
+            # Append "1.0;1.0;..." for the number of phases
+            default_mult = ";".join(["1.0"] * num_phases)
+            lora_multipliers.append(default_mult)
+            if dprint:
+                dprint(f"[LORA_DEBUG] Task {task_id}: Extended phase-config with {default_mult}")
+        else:
+            lora_multipliers.append(1.0)
+
     # Truncate multipliers list if too long
     if len(lora_multipliers) > len(lora_names):
         lora_multipliers = lora_multipliers[:len(lora_names)]
-    
+
+    # DEBUG: Log multipliers after extension
+    if dprint:
+        dprint(f"[LORA_DEBUG] Task {task_id}: After extension - lora_multipliers={lora_multipliers}")
+
     params["lora_multipliers"] = lora_multipliers
-    
+
     # Step 6: Convert to final WGP format
     if lora_names:
         params["activated_loras"] = lora_names  # WGP expects this format
-        params["loras_multipliers"] = ",".join(map(str, lora_multipliers))  # WGP expects comma-separated string
+
+        # Detect if multipliers are in phase-config format (contain semicolons)
+        # Phase-config format: ["0.9;0", "0;0.9"] → space-separated "0.9;0 0;0.9"
+        # Regular format: [0.9, 1.0] → comma-separated "0.9,1.0"
+        if any(";" in str(m) for m in lora_multipliers):
+            result = " ".join(map(str, lora_multipliers))
+            params["loras_multipliers"] = result  # Space-separated for phase-config
+            if dprint:
+                dprint(f"[LORA_DEBUG] Task {task_id}: Phase-config format detected, output: '{result}'")
+        else:
+            result = ",".join(map(str, lora_multipliers))
+            params["loras_multipliers"] = result  # Comma-separated for regular
+            if dprint:
+                dprint(f"[LORA_DEBUG] Task {task_id}: Regular format detected, output: '{result}'")
         
         if dprint:
             dprint(f"[LORA_PROCESS] Task {task_id}: Final LoRA processing complete")

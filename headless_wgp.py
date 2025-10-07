@@ -792,7 +792,7 @@ class WanOrchestrator:
                 embedded_guidance_scale: Optional[float] = None,
                 # LoRA parameters
                 lora_names: Optional[List[str]] = None,
-                lora_multipliers: Optional[List[float]] = None,
+                lora_multipliers: Optional[List] = None,  # Can be List[float] or List[str] for phase-config
                 # Other parameters
                 negative_prompt: Optional[str] = None,
                 batch_size: Optional[int] = None,
@@ -1043,6 +1043,12 @@ class WanOrchestrator:
                         return name
 
                     for idx, name in enumerate(lora_names):
+                        # Skip empty URLs from phase_config (phases without LoRAs)
+                        if not name or not name.strip():
+                            generation_logger.info(
+                                f"Skipping empty LoRA URL at index {idx} (phase without LoRA)"
+                            )
+                            continue
                         if _exists_any(name):
                             # Use absolute path so WGP join does not override it
                             resolved = _resolve_first(name)
@@ -1110,11 +1116,17 @@ class WanOrchestrator:
                     activated_loras = lora_names.copy()
                     filtered_multipliers = (lora_multipliers or []).copy()
             # WGP expects loras_multipliers as string, not list
-            if filtered_multipliers:
-                # Convert list of floats to space-separated string
-                loras_multipliers_str = " ".join(str(m) for m in filtered_multipliers)
-            elif lora_multipliers:
-                loras_multipliers_str = " ".join(str(m) for m in lora_multipliers)
+            # Detect phase-config format (contains semicolons) vs regular format
+            multipliers_to_convert = filtered_multipliers if filtered_multipliers else (lora_multipliers or [])
+            if multipliers_to_convert:
+                # Check if phase-config format (any multiplier contains semicolon)
+                is_phase_config = any(";" in str(m) for m in multipliers_to_convert)
+                if is_phase_config:
+                    # Phase-config format: ["1.0;0", "0;1.0"] → space-separated "1.0;0 0;1.0"
+                    loras_multipliers_str = " ".join(str(m) for m in multipliers_to_convert)
+                else:
+                    # Regular format: [1.0, 0.8] → comma-separated "1.0,0.8"
+                    loras_multipliers_str = ",".join(str(m) for m in multipliers_to_convert)
             else:
                 loras_multipliers_str = ""
 

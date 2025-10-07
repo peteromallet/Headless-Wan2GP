@@ -916,6 +916,11 @@ class WanAny2V:
         denoising_extra = ""
         from shared.utils.loras_mutipliers import update_loras_slists, get_model_switch_steps
 
+        # DEBUG: Log actual timesteps from scheduler
+        print(f"[TIMESTEPS_DEBUG] sample_solver={sample_solver}, num_steps={updated_num_steps}, flow_shift={shift}")
+        print(f"[TIMESTEPS_DEBUG] Actual timesteps from scheduler: {[f'{float(t):.1f}' for t in timesteps]}")
+        print(f"[TIMESTEPS_DEBUG] switch_threshold={switch_threshold}, switch_threshold2={switch2_threshold}")
+
         phase_switch_step, phase_switch_step2, phases_description = get_model_switch_steps(timesteps, updated_num_steps, guide_phases, 0 if self.model2 is None else model_switch_phase, switch_threshold, switch2_threshold )
         if len(phases_description) > 0:  set_header_text(phases_description)
         guidance_switch_done =  guidance_switch2_done = False

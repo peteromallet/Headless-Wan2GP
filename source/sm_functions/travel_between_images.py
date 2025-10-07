@@ -104,7 +104,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             try:
                 # Import parse_phase_config
                 import sys
-                from pathlib import Path
+                # Path is already imported at module level, don't shadow it
                 worker_path = Path(__file__).parent.parent / "worker.py"
                 worker_dir = worker_path.parent
                 if str(worker_dir) not in sys.path:
@@ -926,9 +926,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 else:
                     dprint(f"[VLM_BATCH] No pre-existing enhanced prompts found in payload")
 
-                # Build lists of image pairs and base prompts
+                # Build lists of image pairs, base prompts, and frame counts
                 image_pairs = []
                 base_prompts_for_batch = []
+                segment_frame_counts = []  # Frame count for each segment
                 segment_indices = []  # Track which segment each pair belongs to
 
                 for idx in range(num_segments):
@@ -979,15 +980,23 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                         # Use segment-specific base_prompt if available, otherwise use overall base_prompt
                         segment_base_prompt = expanded_base_prompts[idx] if expanded_base_prompts[idx] and expanded_base_prompts[idx].strip() else base_prompt
                         base_prompts_for_batch.append(segment_base_prompt)
+                        # Get frame count for this segment for duration calculation
+                        segment_frames = expanded_segment_frames[idx] if idx < len(expanded_segment_frames) else None
+                        segment_frame_counts.append(segment_frames)
                         segment_indices.append(idx)
                     else:
                         dprint(f"[VLM_BATCH] Segment {idx}: Skipping - image indices out of bounds")
 
                 # Generate all prompts in one batch (reuses VLM model)
                 if image_pairs:
+                    # Get FPS from orchestrator payload (default to 16)
+                    fps_helpers = orchestrator_payload.get("fps_helpers", 16)
+
                     enhanced_prompts = generate_transition_prompts_batch(
                         image_pairs=image_pairs,
                         base_prompts=base_prompts_for_batch,
+                        num_frames_list=segment_frame_counts,
+                        fps=fps_helpers,
                         device=vlm_device,
                         dprint=dprint
                     )
@@ -1305,6 +1314,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
     except Exception as e:
         msg = f"[ERROR Task ID: {orchestrator_task_id_str}] Failed during travel orchestration processing: {e}"
         print(msg)
+        import traceback
         traceback.print_exc()
         generation_success = False
         output_message_for_orchestrator_db = msg
@@ -1382,11 +1392,12 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             dprint(f"Segment {segment_idx}: Found additional_loras via centralized extraction: {additional_loras}")
 
         current_run_base_output_dir_str = segment_params.get("current_run_base_output_dir")
+        from pathlib import Path  # Ensure Path is available in local scope
+
         if not current_run_base_output_dir_str: # Should be passed by orchestrator/prev segment
             current_run_base_output_dir_str = full_orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
             current_run_base_output_dir_str = str(Path(current_run_base_output_dir_str) / f"travel_run_{orchestrator_run_id}")
 
-        from pathlib import Path  # Ensure Path is available in local scope
         current_run_base_output_dir = Path(current_run_base_output_dir_str)
         # Use the base directory directly without creating segment-specific subdirectories
         segment_processing_dir = current_run_base_output_dir
@@ -1697,6 +1708,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             
         except Exception as e_shared_processor:
             dprint(f"[ERROR] Seg {segment_idx}: Shared processor failed: {e_shared_processor}")
+            import traceback
             traceback.print_exc()
             return False, f"Shared processor failed: {e_shared_processor}", None
         
@@ -1872,7 +1884,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         # Ensure sensible defaults for critical generation params using shared utilities
         # ------------------------------------------------------------------
         import sys
-        from pathlib import Path
+        # Path already imported at top of function
         source_dir = Path(__file__).parent.parent
         if str(source_dir) not in sys.path:
             sys.path.insert(0, str(source_dir))
