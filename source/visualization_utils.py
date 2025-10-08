@@ -844,8 +844,10 @@ def _create_timeline_clip(
                 x_pos = bar_start_x + int(progress_ratio * bar_width)
                 image_x_positions.append(x_pos)
 
-            # For horizontal layout, y is at top
-            image_y_positions = [10] * len(image_x_positions)
+            # For horizontal layout, y should be high enough to allow pushing active images up
+            # Start at a position that leaves room for upward movement
+            base_y = 80  # Enough room to push active images up by 40px and still have margin
+            image_y_positions = [base_y] * len(image_x_positions)
 
         # Draw thumbnails at their calculated positions
         for i, (thumb, x_center, y_center) in enumerate(zip(thumbnails, image_x_positions, image_y_positions)):
