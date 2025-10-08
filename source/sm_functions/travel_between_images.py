@@ -1007,7 +1007,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     # Only call if we have SUPABASE configured and generated any new prompts
                     # Use SERVICE_KEY if available (admin), otherwise use ACCESS_TOKEN (user with ownership check)
                     auth_token = db_ops.SUPABASE_SERVICE_KEY or db_ops.SUPABASE_ACCESS_TOKEN
-                    if db_ops.DB_TYPE == "supabase" and db_ops.SUPABASE_URL and auth_token and len(complete_enhanced_prompts) > 0:
+                    if db_ops.SUPABASE_URL and auth_token and len(complete_enhanced_prompts) > 0:
                         # Extract shot_id from orchestrator_payload
                         shot_id = orchestrator_payload.get("shot_id")
                         if not shot_id:
@@ -1037,7 +1037,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                             else:
                                 dprint(f"[VLM_BATCH] WARNING: Edge function call failed: {resp.status_code} - {resp.text}")
                     else:
-                        dprint(f"[VLM_BATCH] Skipping edge function call (DB_TYPE={db_ops.DB_TYPE}, has_auth_token={bool(auth_token)}, generated={len(complete_enhanced_prompts)} prompts)")
+                        dprint(f"[VLM_BATCH] Skipping edge function call (has_auth_token={bool(auth_token)}, has_supabase_url={bool(db_ops.SUPABASE_URL)}, generated={len(complete_enhanced_prompts)} prompts)")
 
                 except Exception as e_edge:
                     dprint(f"[VLM_BATCH] WARNING: Failed to call edge function: {e_edge}")
@@ -2372,7 +2372,6 @@ def attempt_ffmpeg_crossfade_fallback(segment_video_paths: list[str], overlaps: 
 def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: Path, stitch_task_id_str: str, *, dprint):
     print(f"[IMMEDIATE DEBUG] _handle_travel_stitch_task: Starting for {stitch_task_id_str}")
     print(f"[IMMEDIATE DEBUG] task_params_from_db keys: {list(task_params_from_db.keys())}")
-    print(f"[IMMEDIATE DEBUG] DB_TYPE: {db_ops.DB_TYPE}")
     
     dprint(f"_handle_travel_stitch_task: Starting for {stitch_task_id_str}")
     dprint(f"Stitch task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
