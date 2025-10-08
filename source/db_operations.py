@@ -860,107 +860,71 @@ def _run_db_migrations():
 
 def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | None = None, db_path: str | None = None) -> str:
     """
-    Adds a new task to the database, dispatching to SQLite or Supabase.
-    The `db_path` argument is for legacy SQLite compatibility and is ignored for Supabase.
-    
+    Adds a new task to the database via Supabase Edge Function.
+    The `db_path` argument is ignored (kept for API compatibility).
+
     Returns:
         str: The actual database row ID (UUID) that was assigned to the task
     """
-    # Generate a new UUID for the database row ID (ignore task_id from params)
+    # Generate a new UUID for the database row ID
     import uuid
     actual_db_row_id = str(uuid.uuid4())
-    
-    # Shared logic: Sanitize payload and get project_id
+
+    # Sanitize payload and get project_id
     params_for_db = task_payload.copy()
-    params_for_db.pop("task_type", None) # Ensure task_type is not duplicated in params
-    params_json_str = json.dumps(params_for_db)
+    params_for_db.pop("task_type", None)  # Ensure task_type is not duplicated in params
     project_id = task_payload.get("project_id", "default_project_id")
 
-    if DB_TYPE == "supabase":
-        # Use Edge Function exclusively
-        
-        # Build Edge URL – env var override > global constant > default pattern
-        edge_url = (
-            SUPABASE_EDGE_CREATE_TASK_URL  # may be set at runtime
-            if "SUPABASE_EDGE_CREATE_TASK_URL" in globals() else None
-        ) or (os.getenv("SUPABASE_EDGE_CREATE_TASK_URL") or None) or (
-            f"{SUPABASE_URL.rstrip('/')}/functions/v1/create-task" if SUPABASE_URL else None
-        )
+    # Build Edge URL
+    edge_url = (
+        SUPABASE_EDGE_CREATE_TASK_URL if "SUPABASE_EDGE_CREATE_TASK_URL" in globals() else None
+    ) or os.getenv("SUPABASE_EDGE_CREATE_TASK_URL") or (
+        f"{SUPABASE_URL.rstrip('/')}/functions/v1/create-task" if SUPABASE_URL else None
+    )
 
-        if not edge_url:
-            raise ValueError("Edge Function URL for create-task is not configured")
+    if not edge_url:
+        raise ValueError("Edge Function URL for create-task is not configured")
 
-        headers = {"Content-Type": "application/json"}
-        if SUPABASE_ACCESS_TOKEN:
-            headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
+    headers = {"Content-Type": "application/json"}
+    if SUPABASE_ACCESS_TOKEN:
+        headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
 
-        # Defensive check: if a dependency is specified, ensure it exists before enqueueing
-        if dependant_on:
-            try:
-                if SUPABASE_CLIENT:
-                    # Query tasks table for existence of dependant_on
-                    resp_exist = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("id").eq("id", dependant_on).single().execute()
-                    if not getattr(resp_exist, "data", None):
-                        dprint(f"[ERROR][DEBUG_DEPENDENCY_CHAIN] dependant_on not found: {dependant_on}. Refusing to create task of type {task_type_str} with broken dependency.")
-                        raise RuntimeError(f"dependant_on {dependant_on} not found")
-                # If no client, skip hard check (Edge will still reject bad chains during claim)
-            except Exception as e_depchk:
-                # Only warn on verification failure (network/transient). If it's truly missing, above raises already.
-                dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on {dependant_on} existence prior to enqueue: {e_depchk}")
-
-        payload_edge = {
-            "task_id": actual_db_row_id,  # Use generated UUID as database row ID
-            "params": params_for_db,  # pass JSON directly
-            "task_type": task_type_str,
-            "project_id": project_id,
-            "dependant_on": dependant_on,
-        }
-
-        dprint(f"Supabase Edge call >>> POST {edge_url} payload={str(payload_edge)[:120]}…")
-
+    # Defensive check: if a dependency is specified, ensure it exists before enqueueing
+    if dependant_on:
         try:
-            resp = httpx.post(edge_url, json=payload_edge, headers=headers, timeout=30)
+            if SUPABASE_CLIENT:
+                resp_exist = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("id").eq("id", dependant_on).single().execute()
+                if not getattr(resp_exist, "data", None):
+                    dprint(f"[ERROR][DEBUG_DEPENDENCY_CHAIN] dependant_on not found: {dependant_on}. Refusing to create task of type {task_type_str} with broken dependency.")
+                    raise RuntimeError(f"dependant_on {dependant_on} not found")
+        except Exception as e_depchk:
+            dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on {dependant_on} existence prior to enqueue: {e_depchk}")
 
-            if resp.status_code == 200:
-                print(f"Task {actual_db_row_id} (Type: {task_type_str}) queued via Edge Function.")
-                return actual_db_row_id
-            else:
-                error_msg = f"Edge Function create-task failed: {resp.status_code} - {resp.text}"
-                print(f"[ERROR] {error_msg}")
-                raise RuntimeError(error_msg)
-                
-        except httpx.RequestError as e:
-            error_msg = f"Edge Function create-task request failed: {e}"
+    payload_edge = {
+        "task_id": actual_db_row_id,
+        "params": params_for_db,
+        "task_type": task_type_str,
+        "project_id": project_id,
+        "dependant_on": dependant_on,
+    }
+
+    dprint(f"Supabase Edge call >>> POST {edge_url} payload={str(payload_edge)[:120]}…")
+
+    try:
+        resp = httpx.post(edge_url, json=payload_edge, headers=headers, timeout=30)
+
+        if resp.status_code == 200:
+            print(f"Task {actual_db_row_id} (Type: {task_type_str}) queued via Edge Function.")
+            return actual_db_row_id
+        else:
+            error_msg = f"Edge Function create-task failed: {resp.status_code} - {resp.text}"
             print(f"[ERROR] {error_msg}")
             raise RuntimeError(error_msg)
 
-    else: # Default to SQLite
-        db_to_use = db_path if db_path else SQLITE_DB_PATH
-        if not db_to_use:
-            raise ValueError("SQLite DB path is not configured.")
-
-        def _add_op(conn):
-            cursor = conn.cursor()
-            current_timestamp = datetime.datetime.utcnow().isoformat() + "Z"
-            cursor.execute(
-                f"INSERT INTO tasks (id, params, task_type, status, created_at, project_id, dependant_on) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    actual_db_row_id,  # Use generated UUID as database row ID
-                    params_json_str,
-                    task_type_str,
-                    STATUS_QUEUED,
-                    current_timestamp,
-                    project_id,
-                    dependant_on,
-                ),
-            )
-        try:
-            execute_sqlite_with_retry(db_to_use, _add_op)
-            print(f"Task {actual_db_row_id} (Type: {task_type_str}) added to SQLite database {db_to_use}.")
-            return actual_db_row_id
-        except Exception as e:
-            print(f"SQLite error when adding task {actual_db_row_id} (Type: {task_type_str}): {e}")
-            raise
+    except httpx.RequestError as e:
+        error_msg = f"Edge Function create-task request failed: {e}"
+        print(f"[ERROR] {error_msg}")
+        raise RuntimeError(error_msg)
 
 def poll_task_status(task_id: str, poll_interval_seconds: int = 10, timeout_seconds: int = 1800, db_path: str | None = None) -> str | None:
     """

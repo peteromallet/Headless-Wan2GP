@@ -535,19 +535,35 @@ def _create_timeline_clip(
         img = Image.fromarray(canvas)
         draw = ImageDraw.Draw(img)
 
-        # Calculate current frame and segment
+        # Calculate current frame and determine active image based on halfway point
         current_frame = int(t * fps)
-        current_segment = 0
 
-        # Find which segment we're in
-        for i, (start, end) in enumerate(segment_boundaries):
-            if start <= current_frame <= end:
-                current_segment = i
-                break
+        # For N+1 images with N segments, determine which image should be highlighted
+        # Switchover happens halfway between current and next image positions
+        active_image_index = 0
+        if len(input_image_paths) == len(segment_frames) + 1:
+            # N+1 pattern: calculate halfway points between images
+            for i in range(len(image_frame_positions) - 1):
+                current_img_frame = image_frame_positions[i]
+                next_img_frame = image_frame_positions[i + 1]
+                halfway_frame = (current_img_frame + next_img_frame) / 2
 
-        # If we're past all segments, we're in the last segment
-        if current_frame > segment_boundaries[-1][1]:
-            current_segment = len(segment_boundaries) - 1
+                if current_frame >= halfway_frame:
+                    active_image_index = i + 1
+                else:
+                    break
+            # Clamp to last image
+            active_image_index = min(active_image_index, len(input_image_paths) - 1)
+        else:
+            # N pattern: use segment boundaries
+            current_segment = 0
+            for i, (start, end) in enumerate(segment_boundaries):
+                if start <= current_frame <= end:
+                    current_segment = i
+                    break
+            if current_frame > segment_boundaries[-1][1]:
+                current_segment = len(segment_boundaries) - 1
+            active_image_index = current_segment
 
         # Calculate image positions spread evenly across available width
         # Ensure progress bar uses full width and images fit within
@@ -570,24 +586,8 @@ def _create_timeline_clip(
             # Ensure thumbnail doesn't overflow left or right
             x_start = max(margin, min(x_start, width - margin - thumb.shape[1]))
 
-            # Determine if this image should be highlighted
-            # For N+1 images with N segments: image i corresponds to segment i-1 ending (except first image)
-            # Image 0 -> start (frame 0)
-            # Image 1 -> end of segment 0
-            # Image 2 -> end of segment 1
-            # Image 3 -> end of segment 2
-            should_highlight = False
-            if len(input_image_paths) == len(segment_frames) + 1:
-                # N+1 pattern: image i+1 corresponds to end of segment i
-                if i == 0 and current_frame == 0:
-                    should_highlight = True  # First frame
-                elif i > 0 and i - 1 == current_segment:
-                    # This image represents the end of current segment
-                    should_highlight = True
-            else:
-                # N pattern: image i corresponds to segment i
-                if i == current_segment:
-                    should_highlight = True
+            # Determine if this image should be highlighted based on active_image_index
+            should_highlight = (i == active_image_index)
 
             if should_highlight:
                 # Draw highlight border
@@ -634,18 +634,8 @@ def _create_timeline_clip(
 
         # Draw image markers on the progress bar at each image position
         for i, x_pos in enumerate(image_x_positions):
-            # Determine if this marker should be highlighted (same logic as image highlighting)
-            marker_active = False
-            if len(input_image_paths) == len(segment_frames) + 1:
-                # N+1 pattern
-                if i == 0 and current_frame == 0:
-                    marker_active = True
-                elif i > 0 and i - 1 == current_segment:
-                    marker_active = True
-            else:
-                # N pattern
-                if i == current_segment:
-                    marker_active = True
+            # Determine if this marker should be highlighted (same as active_image_index)
+            marker_active = (i == active_image_index)
 
             # Draw vertical line marker
             marker_color = (255, 100, 0) if marker_active else (100, 100, 100)
@@ -663,6 +653,15 @@ def _create_timeline_clip(
                 fill=marker_color,
                 outline=(255, 255, 255)
             )
+
+        # Calculate current segment for text display (based on segment boundaries)
+        current_segment = 0
+        for i, (start, end) in enumerate(segment_boundaries):
+            if start <= current_frame <= end:
+                current_segment = i
+                break
+        if current_frame > segment_boundaries[-1][1]:
+            current_segment = len(segment_boundaries) - 1
 
         # Draw text info
         try:
