@@ -419,11 +419,11 @@ def _create_triple_layout(
     else:
         video_array = clips_array([[structure_resized, output_resized]])
 
-    # Create timeline overlay
+    # Create timeline overlay (height increased to 200 to allow room for active image upward movement)
     timeline_clip = _create_timeline_clip(
         duration=output_clip.duration,
         width=video_array.w,
-        height=100,
+        height=200,
         input_image_paths=input_image_paths,
         segment_frames=segment_frames,
         segment_prompts=segment_prompts,
@@ -866,9 +866,9 @@ def _create_timeline_clip(
                 x_start = x_center - scaled_w // 2
                 # Push the active image up by 40 pixels from baseline (not from center)
                 y_start = y_center - 40
-                # Ensure thumbnail doesn't overflow
-                x_start = max(margin, min(x_start, width - margin - scaled_w))
-                y_start = max(margin, min(y_start, height - margin - scaled_h))
+                # Ensure thumbnail doesn't overflow (but allow it to go above margin for upward movement)
+                x_start = max(0, min(x_start, width - scaled_w))
+                y_start = max(0, min(y_start, height - scaled_h))
 
                 # Draw highlight border around scaled image
                 border_color = (255, 100, 0)
@@ -887,8 +887,8 @@ def _create_timeline_clip(
                 # Don't subtract half height - keep thumbnail top aligned at y_center
                 y_start = y_center
                 # Ensure thumbnail doesn't overflow
-                x_start = max(margin, min(x_start, width - margin - thumb.shape[1]))
-                y_start = max(margin, min(y_start, height - margin - thumb.shape[0]))
+                x_start = max(0, min(x_start, width - thumb.shape[1]))
+                y_start = max(0, min(y_start, height - thumb.shape[0]))
 
                 # Paste thumbnail
                 thumb_img = Image.fromarray(thumb)
