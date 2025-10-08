@@ -11,7 +11,7 @@ from PIL import Image # pip install Pillow
 # Import from the new common_utils and db_operations modules
 from .. import db_operations as db_ops
 from ..common_utils import (
-    DEBUG_MODE, dprint, generate_unique_task_id, add_task_to_db, poll_task_status,
+    DEBUG_MODE, dprint, generate_unique_task_id,
     save_frame_from_video, create_pose_interpolated_guide_video,
     generate_different_perspective_debug_video_summary,
     parse_resolution as sm_parse_resolution,
