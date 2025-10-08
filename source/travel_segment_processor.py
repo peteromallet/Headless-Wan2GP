@@ -450,16 +450,8 @@ class TravelSegmentProcessor:
                         # Return the original URL - this will likely cause an error downstream but preserves existing behavior
                         return raw_path_from_db
                 else:
-                    # Local path or relative path - handle SQLite path resolution
-                    if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and raw_path_from_db.startswith("files/"):
-                        from pathlib import Path
-                        sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
-                        resolved_path = str((sqlite_db_parent / "public" / raw_path_from_db).resolve())
-                        ctx.dprint(f"Seg {ctx.segment_idx}: Resolved SQLite relative path from DB '{raw_path_from_db}' to absolute path '{resolved_path}'")
-                        return resolved_path
-                    else:
-                        # Path from DB is already absolute (Supabase) or an old absolute SQLite path
-                        return raw_path_from_db
+                    # Path from DB is already absolute (Supabase)
+                    return raw_path_from_db
             else:
                 ctx.dprint(f"[WARNING] Seg {ctx.segment_idx}: Could not retrieve predecessor output")
                 return None
