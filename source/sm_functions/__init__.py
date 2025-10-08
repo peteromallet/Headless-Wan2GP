@@ -22,7 +22,6 @@ from ..common_utils import (
     image_to_frame,
     create_color_frame,
     create_video_from_frames_list,
-    poll_task_status,
     extract_video_segment_ffmpeg,
     stitch_videos_ffmpeg,
     save_frame_from_video,
@@ -64,7 +63,7 @@ from ..common_utils import (
 
 __all__ = [
     # common_utils exports
-    "DEBUG_MODE", "dprint", "generate_unique_task_id", "poll_task_status",
+    "DEBUG_MODE", "dprint", "generate_unique_task_id",
     "extract_video_segment_ffmpeg", "stitch_videos_ffmpeg",
     "create_pose_interpolated_guide_video",
     "generate_debug_summary_video",
