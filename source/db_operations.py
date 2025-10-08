@@ -5,9 +5,7 @@ import json
 import time
 import traceback
 import datetime
-import sqlite3
 import urllib.parse
-import threading
 import httpx  # For calling Supabase Edge Function
 from pathlib import Path
 import base64 # Added for JWT decoding
@@ -20,9 +18,7 @@ except ImportError:
 # -----------------------------------------------------------------------------
 # Global DB Configuration (will be set by worker.py)
 # -----------------------------------------------------------------------------
-DB_TYPE = "sqlite"
 PG_TABLE_NAME = "tasks"
-SQLITE_DB_PATH = "tasks.db"
 SUPABASE_URL = None
 SUPABASE_SERVICE_KEY = None
 SUPABASE_VIDEO_BUCKET = "image_uploads"
@@ -31,11 +27,6 @@ SUPABASE_EDGE_COMPLETE_TASK_URL: str | None = None  # Optional override for edge
 SUPABASE_ACCESS_TOKEN: str | None = None # Will be set by worker.py
 SUPABASE_EDGE_CREATE_TASK_URL: str | None = None # Will be set by worker.py
 SUPABASE_EDGE_CLAIM_TASK_URL: str | None = None # Will be set by worker.py
-
-sqlite_lock = threading.Lock()
-
-SQLITE_MAX_RETRIES = 5
-SQLITE_RETRY_DELAY = 0.5  # seconds
 
 # -----------------------------------------------------------------------------
 # Status Constants
@@ -54,45 +45,6 @@ def dprint(msg: str):
     """Print a debug message if debug_mode is enabled."""
     if debug_mode:
         print(f"[DEBUG {datetime.datetime.now().isoformat()}] {msg}")
-
-# -----------------------------------------------------------------------------
-# Internal Helpers
-# -----------------------------------------------------------------------------
-
-def execute_sqlite_with_retry(db_path_str: str, operation_func, *args, **kwargs):
-    """Execute SQLite operations with retry logic for handling locks and I/O errors"""
-    for attempt in range(SQLITE_MAX_RETRIES):
-        try:
-            with sqlite_lock:  # Ensure only one thread accesses SQLite at a time
-                conn = sqlite3.connect(db_path_str, timeout=30.0)  # 30 second timeout
-                conn.execute("PRAGMA journal_mode=WAL")  # Enable WAL mode for better concurrency
-                conn.execute("PRAGMA synchronous=NORMAL")  # Balance between safety and performance
-                conn.execute("PRAGMA busy_timeout=30000")  # 30 second busy timeout
-                try:
-                    result = operation_func(conn, *args, **kwargs)
-                    conn.commit()
-                    return result
-                finally:
-                    conn.close()
-        except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
-            error_msg = str(e).lower()
-            if "database is locked" in error_msg or "disk i/o error" in error_msg or "database disk image is malformed" in error_msg:
-                if attempt < SQLITE_MAX_RETRIES - 1:
-                    wait_time = SQLITE_RETRY_DELAY * (2 ** attempt)  # Exponential backoff
-                    print(f"SQLite error on attempt {attempt + 1}: {e}. Retrying in {wait_time:.1f}s...")
-                    time.sleep(wait_time)
-                    continue
-                else:
-                    print(f"SQLite error after {SQLITE_MAX_RETRIES} attempts: {e}")
-                    raise
-            else:
-                # For other SQLite errors, don't retry
-                raise
-        except Exception as e:
-            # For non-SQLite errors, don't retry
-            raise
-    
-    raise sqlite3.OperationalError(f"Failed to execute SQLite operation after {SQLITE_MAX_RETRIES} attempts")
 
 # -----------------------------------------------------------------------------
 # Internal Helpers for Supabase
@@ -129,31 +81,31 @@ def _mark_task_failed_via_edge_function(task_id_str: str, error_message: str):
     """Mark a task as failed using the update-task-status Edge Function"""
     try:
         edge_url = (
-            os.getenv("SUPABASE_EDGE_UPDATE_TASK_URL") 
+            os.getenv("SUPABASE_EDGE_UPDATE_TASK_URL")
             or (f"{SUPABASE_URL.rstrip('/')}/functions/v1/update-task-status" if SUPABASE_URL else None)
         )
-        
+
         if not edge_url:
             print(f"[ERROR] No update-task-status edge function URL available for marking task {task_id_str} as failed")
             return
-            
+
         headers = {"Content-Type": "application/json"}
         if SUPABASE_ACCESS_TOKEN:
             headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
-        
+
         payload = {
             "task_id": task_id_str,
             "status": STATUS_FAILED,
             "output_location": error_message
         }
-        
+
         resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
-        
+
         if resp.status_code == 200:
             dprint(f"[DEBUG] Successfully marked task {task_id_str} as Failed via Edge Function")
         else:
             print(f"[ERROR] Failed to mark task {task_id_str} as Failed: {resp.status_code} - {resp.text}")
-            
+
     except Exception as e:
         print(f"[ERROR] Exception marking task {task_id_str} as Failed: {e}")
 
@@ -161,327 +113,43 @@ def _mark_task_failed_via_edge_function(task_id_str: str, error_message: str):
 # Public Database Functions
 # -----------------------------------------------------------------------------
 
-def _migrate_sqlite_schema(db_path_str: str):
-    """Applies necessary schema migrations to an existing SQLite database."""
-    dprint(f"SQLite Migration: Checking schema for {db_path_str}...")
-    try:
-        def migration_operations(conn):
-            cursor = conn.cursor()
-
-            # --- Check if 'tasks' table exists before attempting migrations ---
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'")
-            if cursor.fetchone() is None:
-                dprint("SQLite Migration: 'tasks' table does not exist. Skipping schema migration steps. init_db will create it.")
-                return True # Indicate success as there's nothing to migrate on a non-existent table
-
-            # Check if task_type column exists
-            cursor.execute(f"PRAGMA table_info(tasks)")
-            columns = [row[1] for row in cursor.fetchall()]
-            task_type_column_exists = 'task_type' in columns
-
-            if not task_type_column_exists:
-                dprint("SQLite Migration: 'task_type' column not found. Adding it.")
-                cursor.execute("ALTER TABLE tasks ADD COLUMN task_type TEXT") # Add as nullable first
-                conn.commit() # Commit alter table before data migration
-                dprint("SQLite Migration: 'task_type' column added.")
-            else:
-                dprint("SQLite Migration: 'task_type' column already exists.")
-
-            # --- Add/Rename dependant_on column if not exists --- (Section 2.2)
-            dependant_on_column_exists = 'dependant_on' in columns
-            depends_on_column_exists_old_name = 'depends_on' in columns # Check for the previously incorrect name
-
-            if not dependant_on_column_exists:
-                if depends_on_column_exists_old_name:
-                    dprint("SQLite Migration: Found old 'depends_on' column. Renaming to 'dependant_on'.")
-                    try:
-                        # Ensure no other column is already named 'dependant_on' before renaming
-                        # This scenario is unlikely if migrations are run sequentially but good for robustness
-                        if 'dependant_on' not in columns:
-                            cursor.execute("ALTER TABLE tasks RENAME COLUMN depends_on TO dependant_on")
-                            dprint("SQLite Migration: Renamed 'depends_on' to 'dependant_on'.")
-                            dependant_on_column_exists = True # Mark as existing now
-                        else:
-                             dprint("SQLite Migration: 'dependant_on' column already exists. Skipping rename of 'depends_on'.")
-                    except sqlite3.OperationalError as e_rename:
-                        dprint(f"SQLite Migration: Could not rename 'depends_on' to 'dependant_on' (perhaps 'dependant_on' already exists or other issue): {e_rename}. Will attempt to ADD 'dependant_on' if it truly doesn't exist after this.")
-                        # Re-check columns after attempted rename or if it failed
-                        cursor.execute(f"PRAGMA table_info(tasks)")
-                        rechecked_columns = [row[1] for row in cursor.fetchall()]
-                        if 'dependant_on' not in rechecked_columns:
-                            dprint("SQLite Migration: 'dependant_on' still not found after rename attempt, adding new column.")
-                            cursor.execute("ALTER TABLE tasks ADD COLUMN dependant_on TEXT NULL")
-                            dprint("SQLite Migration: 'dependant_on' column added.")
-                        else:
-                            dprint("SQLite Migration: 'dependant_on' column now exists (possibly due to a concurrent migration or complex rename scenario).")
-                            dependant_on_column_exists = True
-                else:
-                    dprint("SQLite Migration: 'dependant_on' column not found and no 'depends_on' to rename. Adding new 'dependant_on' column.")
-                    cursor.execute("ALTER TABLE tasks ADD COLUMN dependant_on TEXT NULL")
-                    dprint("SQLite Migration: 'dependant_on' column added.")
-            else:
-                dprint("SQLite Migration: 'dependant_on' column already exists.")
-            # --- End add/rename dependant_on column ---
-
-            # Ensure the index for dependant_on exists
-            cursor.execute("PRAGMA index_list(tasks)")
-            indexes = [row[1] for row in cursor.fetchall()]
-            if 'idx_dependant_on' not in indexes:
-                dprint("SQLite Migration: Creating 'idx_dependant_on' index.")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_dependant_on ON tasks(dependant_on)")
-            else:
-                dprint("SQLite Migration: 'idx_dependant_on' index already exists.")
-
-            # --- Add generation_started_at column if not exists ---
-            generation_started_at_column_exists = 'generation_started_at' in columns
-            if not generation_started_at_column_exists:
-                dprint("SQLite Migration: 'generation_started_at' column not found. Adding it.")
-                cursor.execute("ALTER TABLE tasks ADD COLUMN generation_started_at TEXT NULL")
-                dprint("SQLite Migration: 'generation_started_at' column added.")
-            else:
-                dprint("SQLite Migration: 'generation_started_at' column already exists.")
-
-            # --- Add generation_processed_at column if not exists ---
-            generation_processed_at_column_exists = 'generation_processed_at' in columns
-            if not generation_processed_at_column_exists:
-                dprint("SQLite Migration: 'generation_processed_at' column not found. Adding it.")
-                cursor.execute("ALTER TABLE tasks ADD COLUMN generation_processed_at TEXT NULL")
-                dprint("SQLite Migration: 'generation_processed_at' column added.")
-            else:
-                dprint("SQLite Migration: 'generation_processed_at' column already exists.")
-
-            # Populate task_type from params if it's NULL (for old rows or newly added column)
-            dprint("SQLite Migration: Attempting to populate NULL 'task_type' from 'params' JSON...")
-            cursor.execute("SELECT id, params FROM tasks WHERE task_type IS NULL")
-            rows_to_migrate = cursor.fetchall()
-            
-            migrated_count = 0
-            for task_id, params_json_str in rows_to_migrate:
-                try:
-                    params_dict = json.loads(params_json_str)
-                    # Attempt to get task_type from common old locations within params
-                    # The user might need to adjust these keys if their old storage was different
-                    old_task_type = params_dict.get("task_type") # Most likely if it was in params
-                    
-                    if old_task_type:
-                        dprint(f"SQLite Migration: Found task_type '{old_task_type}' in params for task_id {task_id}. Updating row.")
-                        cursor.execute("UPDATE tasks SET task_type = ? WHERE id = ?", (old_task_type, task_id))
-                        migrated_count += 1
-                    else:
-                        # If task_type is not in params, it might be inferred from 'model' or other fields
-                        # For instance, if 'model' field implied the task type for older tasks.
-                        # This part is highly dependent on previous conventions.
-                        # As a simple default, if not found, it will remain NULL unless a default is set.
-                        # For 'travel_between_images' and 'different_perspective', these are typically set by steerable_motion.py
-                        # and wouldn't exist as 'task_type' inside params for worker.py's default processing.
-                        # Headless tasks like 'generate_openpose' *did* use task_type in params.
-                        dprint(f"SQLite Migration: No 'task_type' key in params for task_id {task_id}. It will remain NULL or needs manual/specific migration logic if it was inferred differently.")
-                except json.JSONDecodeError:
-                    dprint(f"SQLite Migration: Could not parse params JSON for task_id {task_id}. Skipping 'task_type' population for this row.")
-                except Exception as e_row:
-                    dprint(f"SQLite Migration: Error processing row for task_id {task_id}: {e_row}")
-            
-            if migrated_count > 0:
-                conn.commit()
-            dprint(f"SQLite Migration: Populated 'task_type' for {migrated_count} rows from params.")
-
-            # Default remaining NULL task_types for old standard tasks
-            # This ensures rows that didn't have an explicit 'task_type' in their params (e.g. old default WGP tasks)
-            # get a value, respecting the NOT NULL constraint if the table is new or fully validated.
-            default_task_type_for_old_rows = "standard_wgp_task" 
-            cursor.execute(
-                f"UPDATE tasks SET task_type = ? WHERE task_type IS NULL", 
-                (default_task_type_for_old_rows,)
-            )
-            updated_to_default_count = cursor.rowcount
-            if updated_to_default_count > 0:
-                conn.commit()
-            dprint(f"SQLite Migration: Updated {updated_to_default_count} older rows with NULL task_type to default '{default_task_type_for_old_rows}'.")
-
-            dprint("SQLite Migration: Schema check and population attempt complete.")
-            return True
-
-        execute_sqlite_with_retry(db_path_str, migration_operations)
-        
-    except Exception as e:
-        print(f"[ERROR] SQLite Migration: Failed to migrate schema for {db_path_str}: {e}")
-        traceback.print_exc()
-        # Depending on severity, you might want to sys.exit(1)
-
-def _init_db_sqlite(db_path_str: str):
-    """Initialize the SQLite database with proper error handling"""
-    def _init_operation(conn):
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id TEXT PRIMARY KEY,
-                task_type TEXT NOT NULL,
-                params TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'Queued',
-                dependant_on TEXT NULL,
-                output_location TEXT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NULL,
-                generation_started_at TEXT NULL,
-                generation_processed_at TEXT NULL,
-                project_id TEXT NOT NULL,
-                FOREIGN KEY (project_id) REFERENCES projects(id)
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_status_created ON tasks(status, created_at)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_dependant_on ON tasks(dependant_on)")
-        return True
-    
-    try:
-        execute_sqlite_with_retry(db_path_str, _init_operation)
-        print(f"SQLite database initialized: {db_path_str}")
-    except Exception as e:
-        print(f"Failed to initialize SQLite database: {e}")
-        sys.exit(1)
-
-def get_oldest_queued_task_sqlite(db_path_str: str):
-    """Get the oldest queued task with proper error handling"""
-    def _get_operation(conn):
-        cursor = conn.cursor()
-        # Modified to select tasks with status 'Queued' only
-        # Also fetch project_id
-        sql_query = f"""
-            SELECT t.id, t.params, t.task_type, t.project_id
-            FROM   tasks AS t
-            LEFT JOIN tasks AS d             ON d.id = t.dependant_on
-            WHERE  t.status = ? 
-              AND (t.dependant_on IS NULL OR d.status = ?)
-            ORDER BY t.created_at ASC
-            LIMIT  1
-        """
-        query_params = (STATUS_QUEUED, STATUS_COMPLETE)
-        
-        cursor.execute(sql_query, query_params)
-        task_row = cursor.fetchone()
-        if task_row:
-            task_id = task_row[0]
-            dprint(f"SQLite: Fetched raw task_row: {task_row}")
-            
-            # Update status to IN_PROGRESS and set generation_started_at
-            current_utc_iso_ts = datetime.datetime.utcnow().isoformat() + "Z"
-            cursor.execute("""
-                UPDATE tasks 
-                SET status = ?, 
-                    updated_at = ?, 
-                    generation_started_at = ?
-                WHERE id = ?
-            """, (STATUS_IN_PROGRESS, current_utc_iso_ts, current_utc_iso_ts, task_id))
-            
-            return {"task_id": task_id, "params": json.loads(task_row[1]), "task_type": task_row[2], "project_id": task_row[3]}
-        return None
-    
-    try:
-        return execute_sqlite_with_retry(db_path_str, _get_operation)
-    except Exception as e:
-        print(f"Error getting oldest queued task: {e}")
-        return None
-
-def update_task_status_sqlite(db_path_str: str, task_id: str, status: str, output_location_val: str | None = None):
-    """Updates a task's status and updated_at timestamp with proper error handling"""
-    def _update_operation(conn, task_id, status, output_location_val):
-        cursor = conn.cursor()
-        
-        if status == STATUS_COMPLETE and output_location_val is not None:
-            # Step 1: Update output_location and updated_at for the location change
-            current_utc_iso_ts_loc_update = datetime.datetime.utcnow().isoformat() + "Z"
-            dprint(f"SQLite Update (Split Step 1): Updating output_location for {task_id} to {output_location_val}")
-            cursor.execute("UPDATE tasks SET output_location = ?, updated_at = ? WHERE id = ?",
-                           (output_location_val, current_utc_iso_ts_loc_update, task_id))
-            conn.commit()  # Explicitly commit the output_location update
-
-            # Step 2: Update status, updated_at, and generation_processed_at for the completion
-            current_utc_iso_ts_status_update = datetime.datetime.utcnow().isoformat() + "Z"
-            dprint(f"SQLite Update (Split Step 2): Updating status for {task_id} to {status}")
-            cursor.execute("UPDATE tasks SET status = ?, updated_at = ?, generation_processed_at = ? WHERE id = ?",
-                           (status, current_utc_iso_ts_status_update, current_utc_iso_ts_status_update, task_id))
-            # The final commit for this status update will be handled by execute_sqlite_with_retry
-
-        elif status == STATUS_FAILED and output_location_val is not None: # output_location_val is error message here
-            current_utc_iso_ts_fail_update = datetime.datetime.utcnow().isoformat() + "Z"
-            dprint(f"SQLite Update (Single): Updating status to FAILED and output_location (error msg) for {task_id}")
-            cursor.execute("UPDATE tasks SET status = ?, updated_at = ?, output_location = ? WHERE id = ?",
-                           (status, current_utc_iso_ts_fail_update, output_location_val, task_id))
-
-        else: # For "In Progress" or other statuses, or if output_location_val is None
-            current_utc_iso_ts_progress_update = datetime.datetime.utcnow().isoformat() + "Z"
-            dprint(f"SQLite Update (Single): Updating status for {task_id} to {status} (output_location_val: {output_location_val})")
-            # If output_location_val is None even for COMPLETE or FAILED, it won't be set here.
-            # This branch primarily handles IN_PROGRESS or status changes where output_location is not part of the update.
-            # If status is COMPLETE/FAILED and output_location_val is None, only status and updated_at change.
-            if output_location_val is not None and status in [STATUS_COMPLETE, STATUS_FAILED]:
-                 # This case should ideally be caught by the specific branches above,
-                 # but as a safeguard if logic changes:
-                 dprint(f"SQLite Update (Single with output_location): Updating status, output_location for {task_id}")
-                 cursor.execute("UPDATE tasks SET status = ?, updated_at = ?, output_location = ? WHERE id = ?",
-                               (status, current_utc_iso_ts_progress_update, output_location_val, task_id))
-            else:
-                 cursor.execute("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
-                               (status, current_utc_iso_ts_progress_update, task_id))
-        return True
-    
-    try:
-        execute_sqlite_with_retry(db_path_str, _update_operation, task_id, status, output_location_val)
-        dprint(f"SQLite: Updated status of task {task_id} to {status}. Output: {output_location_val if output_location_val else 'N/A'}")
-    except Exception as e:
-        print(f"Error updating task status for {task_id}: {e}")
-        # Don't raise here to avoid crashing the main loop
-
 def init_db():
-    """Initializes the database, dispatching to the correct implementation."""
-    if DB_TYPE == "supabase":
-        return init_db_supabase()
-    else:
-        return _init_db_sqlite(SQLITE_DB_PATH)
+    """Initializes the Supabase database connection."""
+    return init_db_supabase()
 
 def get_oldest_queued_task():
-    """Gets the oldest queued task, dispatching to the correct implementation."""
-    if DB_TYPE == "supabase":
-        return get_oldest_queued_task_supabase()
-    else:
-        return get_oldest_queued_task_sqlite(SQLITE_DB_PATH)
+    """Gets the oldest queued task from Supabase."""
+    return get_oldest_queued_task_supabase()
 
 def update_task_status(task_id: str, status: str, output_location: str | None = None):
-    """Updates a task's status, dispatching to the correct implementation."""
+    """Updates a task's status in Supabase."""
     dprint(f"[UPDATE_TASK_STATUS_DEBUG] Called with:")
     dprint(f"[UPDATE_TASK_STATUS_DEBUG]   task_id: '{task_id}'")
     dprint(f"[UPDATE_TASK_STATUS_DEBUG]   status: '{status}'")
     dprint(f"[UPDATE_TASK_STATUS_DEBUG]   output_location: '{output_location}'")
-    dprint(f"[UPDATE_TASK_STATUS_DEBUG]   DB_TYPE: '{DB_TYPE}'")
-    
+
     try:
-        if DB_TYPE == "supabase":
-            dprint(f"[UPDATE_TASK_STATUS_DEBUG] Dispatching to update_task_status_supabase")
-            result = update_task_status_supabase(task_id, status, output_location)
-            dprint(f"[UPDATE_TASK_STATUS_DEBUG] update_task_status_supabase completed successfully")
-            return result
-        else:
-            dprint(f"[UPDATE_TASK_STATUS_DEBUG] Dispatching to update_task_status_sqlite")
-            result = update_task_status_sqlite(SQLITE_DB_PATH, task_id, status, output_location)
-            dprint(f"[UPDATE_TASK_STATUS_DEBUG] update_task_status_sqlite completed successfully")
-            return result
+        dprint(f"[UPDATE_TASK_STATUS_DEBUG] Dispatching to update_task_status_supabase")
+        result = update_task_status_supabase(task_id, status, output_location)
+        dprint(f"[UPDATE_TASK_STATUS_DEBUG] update_task_status_supabase completed successfully")
+        return result
     except Exception as e:
         dprint(f"[UPDATE_TASK_STATUS_DEBUG] ❌ Exception in update_task_status: {e}")
         dprint(f"[UPDATE_TASK_STATUS_DEBUG] Exception type: {type(e).__name__}")
         traceback.print_exc()
         raise
 
-def init_db_supabase(): # Renamed from init_db_postgres
-    """Check if the Supabase tasks table exists (assuming it's already set up)."""
+def init_db_supabase():
+    """Check if the Supabase tasks table exists and is accessible."""
     if not SUPABASE_CLIENT:
         print("[ERROR] Supabase client not initialized. Cannot check database table.")
         sys.exit(1)
     try:
         # Simply check if the tasks table exists by querying it
-        # Since the table already exists, we don't need to create it
         result = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("count", count="exact").limit(1).execute()
         print(f"Supabase: Table '{PG_TABLE_NAME}' exists and accessible (count: {result.count})")
         return True
-    except Exception as e: 
+    except Exception as e:
         print(f"[ERROR] Supabase table check failed: {e}")
         # Don't exit - the table might exist but have different permissions
         # Let the actual operations try and fail gracefully
@@ -540,8 +208,8 @@ def check_task_counts_supabase(run_type: str = "gpu") -> dict | None:
         dprint(f"Task-counts call failed: {e_counts}")
         return None
 
-def get_oldest_queued_task_supabase(worker_id: str = None): # Renamed from get_oldest_queued_task_postgres
-    """Fetches the oldest task via Supabase Edge Function only. First checks task counts to avoid unnecessary claim attempts."""
+def get_oldest_queued_task_supabase(worker_id: str = None):
+    """Fetches the oldest task via Supabase Edge Function. First checks task counts to avoid unnecessary claim attempts."""
     if not SUPABASE_CLIENT:
         print("[ERROR] Supabase client not initialized. Cannot get task.")
         return None
@@ -612,8 +280,8 @@ def get_oldest_queued_task_supabase(worker_id: str = None): # Renamed from get_o
         dprint("ERROR: No edge function URL or access token available for task claiming")
         return None
 
-def update_task_status_supabase(task_id_str, status_str, output_location_val=None): # Renamed from update_task_status_postgres
-    """Updates a task's status via Supabase Edge Functions only."""
+def update_task_status_supabase(task_id_str, status_str, output_location_val=None):
+    """Updates a task's status via Supabase Edge Functions."""
     dprint(f"[DEBUG] update_task_status_supabase called: task_id={task_id_str}, status={status_str}, output_location={output_location_val}")
     
     if not SUPABASE_CLIENT:
@@ -844,27 +512,22 @@ def _migrate_supabase_schema():
     return  # No-op - migrations complete
 
 def _run_db_migrations():
-    """Runs database migrations based on the configured DB_TYPE."""
-    dprint(f"DB Migrations: Running for DB_TYPE: {DB_TYPE}")
-    if DB_TYPE == "sqlite":
-        if SQLITE_DB_PATH:
-            _migrate_sqlite_schema(SQLITE_DB_PATH)
-        else:
-            print("[ERROR] DB Migration: SQLITE_DB_PATH not set. Skipping SQLite migration.")
-    elif DB_TYPE == "supabase":
-        # The Supabase schema is managed externally. Edge Function architecture complete.
-        dprint("DB Migrations: Skipping Supabase migrations (table assumed to exist).")
-        return
-    else:
-        dprint(f"DB Migrations: No migration logic for DB_TYPE '{DB_TYPE}'. Skipping migrations.")
+    """Runs database migrations (no-op for Supabase as schema is managed externally)."""
+    dprint("DB Migrations: Skipping Supabase migrations (table assumed to exist).")
+    return
 
 def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | None = None, db_path: str | None = None) -> str:
     """
-    Adds a new task to the database via Supabase Edge Function.
-    The `db_path` argument is ignored (kept for API compatibility).
+    Adds a new task to the Supabase database via Edge Function.
+
+    Args:
+        task_payload: Task parameters dictionary
+        task_type_str: Type of task being created
+        dependant_on: Optional dependency task ID
+        db_path: Ignored (kept for API compatibility)
 
     Returns:
-        str: The actual database row ID (UUID) that was assigned to the task
+        str: The database row ID (UUID) assigned to the task
     """
     # Generate a new UUID for the database row ID
     import uuid
@@ -928,8 +591,16 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
 
 def poll_task_status(task_id: str, poll_interval_seconds: int = 10, timeout_seconds: int = 1800, db_path: str | None = None) -> str | None:
     """
-    Polls the DB for task completion and returns the output_location.
-    Dispatches to SQLite or Supabase. `db_path` is for legacy SQLite calls.
+    Polls Supabase for task completion and returns the output_location.
+
+    Args:
+        task_id: Task ID to poll
+        poll_interval_seconds: Seconds between polls
+        timeout_seconds: Maximum time to wait
+        db_path: Ignored (kept for API compatibility)
+
+    Returns:
+        Output location string if successful, None otherwise
     """
     print(f"Polling for completion of task {task_id} (timeout: {timeout_seconds}s)...")
     start_time = time.time()
@@ -944,41 +615,23 @@ def poll_task_status(task_id: str, poll_interval_seconds: int = 10, timeout_seco
         status = None
         output_location = None
 
-        if DB_TYPE == "supabase":
-            if not SUPABASE_CLIENT:
-                print("[ERROR] Supabase client not initialized. Cannot poll status.")
-                time.sleep(poll_interval_seconds)
-                continue
-            try:
-                # Direct table query for polling status
-                resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("status, output_location").eq("id", task_id).single().execute()
-                if resp.data:
-                    status = resp.data.get("status")
-                    output_location = resp.data.get("output_location")
-            except Exception as e:
-                print(f"Supabase error while polling task {task_id}: {e}. Retrying...")
-        else: # SQLite
-            db_to_use = db_path if db_path else SQLITE_DB_PATH
-            if not db_to_use:
-                raise ValueError("SQLite DB path is not configured for polling.")
-            
-            def _poll_op(conn):
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute(f"SELECT status, output_location FROM tasks WHERE id = ?", (task_id,))
-                return cursor.fetchone()
-            try:
-                row = execute_sqlite_with_retry(db_to_use, _poll_op)
-                if row:
-                    status = row["status"]
-                    output_location = row["output_location"]
-            except Exception as e:
-                print(f"SQLite error while polling task {task_id}: {e}. Retrying...")
+        if not SUPABASE_CLIENT:
+            print("[ERROR] Supabase client not initialized. Cannot poll status.")
+            time.sleep(poll_interval_seconds)
+            continue
+        try:
+            # Direct table query for polling status
+            resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("status, output_location").eq("id", task_id).single().execute()
+            if resp.data:
+                status = resp.data.get("status")
+                output_location = resp.data.get("output_location")
+        except Exception as e:
+            print(f"Supabase error while polling task {task_id}: {e}. Retrying...")
 
         if status:
-            if current_time - last_status_print_time > poll_interval_seconds * 2 :
-                 print(f"Task {task_id}: Status = {status} (Output: {output_location if output_location else 'N/A'})")
-                 last_status_print_time = current_time
+            if current_time - last_status_print_time > poll_interval_seconds * 2:
+                print(f"Task {task_id}: Status = {status} (Output: {output_location if output_location else 'N/A'})")
+                last_status_print_time = current_time
 
             if status == STATUS_COMPLETE:
                 if output_location:
@@ -994,7 +647,7 @@ def poll_task_status(task_id: str, poll_interval_seconds: int = 10, timeout_seco
                 print(f"Warning: Task {task_id} has unknown status '{status}'. Treating as error.")
                 return None
         else:
-             if current_time - last_status_print_time > poll_interval_seconds * 2 :
+            if current_time - last_status_print_time > poll_interval_seconds * 2:
                 print(f"Task {task_id}: Not found in DB yet or status pending...")
                 last_status_print_time = current_time
 
@@ -1002,157 +655,111 @@ def poll_task_status(task_id: str, poll_interval_seconds: int = 10, timeout_seco
 
 # Helper to query DB for a specific task's output (needed by segment handler)
 def get_task_output_location_from_db(task_id_to_find: str) -> str | None:
-    dprint(f"Querying DB for output location of task: {task_id_to_find}")
-    if DB_TYPE == "sqlite":
-        def _get_op(conn):
-            cursor = conn.cursor()
-            # Ensure we only get tasks that are actually complete with an output
-            cursor.execute("SELECT output_location FROM tasks WHERE id = ? AND status = ? AND output_location IS NOT NULL", 
-                           (task_id_to_find, STATUS_COMPLETE))
-            row = cursor.fetchone()
-            return row[0] if row else None
-        try:
-            return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_op)
-        except Exception as e:
-            print(f"Error querying SQLite for task output {task_id_to_find}: {e}")
-            return None
-    elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
-        try:
-            response = SUPABASE_CLIENT.table(PG_TABLE_NAME)\
-                .select("output_location, status")\
-                .eq("id", task_id_to_find)\
-                .single()\
-                .execute()
+    """
+    Queries Supabase for a specific task's output location.
 
-            if response.data:
-                task_details = response.data
-                if task_details.get("status") == STATUS_COMPLETE and task_details.get("output_location"):
-                    return task_details.get("output_location")
-                else:
-                    dprint(f"Task {task_id_to_find} found but not complete or no output_location. Status: {task_details.get('status')}")
-                    return None
+    Args:
+        task_id_to_find: Task ID to look up
+
+    Returns:
+        Output location string if task is complete, None otherwise
+    """
+    dprint(f"Querying DB for output location of task: {task_id_to_find}")
+    if not SUPABASE_CLIENT:
+        print(f"[ERROR] Supabase client not initialized. Cannot query task output {task_id_to_find}")
+        return None
+
+    try:
+        response = SUPABASE_CLIENT.table(PG_TABLE_NAME)\
+            .select("output_location, status")\
+            .eq("id", task_id_to_find)\
+            .single()\
+            .execute()
+
+        if response.data:
+            task_details = response.data
+            if task_details.get("status") == STATUS_COMPLETE and task_details.get("output_location"):
+                return task_details.get("output_location")
             else:
-                dprint(f"Task {task_id_to_find} not found in Supabase.")
+                dprint(f"Task {task_id_to_find} found but not complete or no output_location. Status: {task_details.get('status')}")
                 return None
-        except Exception as e:
-            print(f"Error querying Supabase for task output {task_id_to_find}: {e}")
-            traceback.print_exc()
+        else:
+            dprint(f"Task {task_id_to_find} not found in Supabase.")
             return None
-    dprint(f"DB type {DB_TYPE} not supported or client not init for get_task_output_location_from_db")
-    return None
+    except Exception as e:
+        print(f"Error querying Supabase for task output {task_id_to_find}: {e}")
+        traceback.print_exc()
+        return None
 
 def get_task_params(task_id: str) -> str | None:
-    """Gets the raw params JSON string for a given task ID."""
-    if DB_TYPE == "sqlite":
-        def _get_op(conn):
-            cursor = conn.cursor()
-            cursor.execute("SELECT params FROM tasks WHERE id = ?", (task_id,))
-            row = cursor.fetchone()
-            return row[0] if row else None
-        return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_op)
-    elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
-        try:
-            resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("params").eq("id", task_id).single().execute()
-            if resp.data:
-                return resp.data.get("params")
-            return None
-        except Exception as e:
-            dprint(f"Error getting task params for {task_id} from Supabase: {e}")
-            return None
-    return None
+    """Gets the raw params JSON string for a given task ID from Supabase."""
+    if not SUPABASE_CLIENT:
+        print(f"[ERROR] Supabase client not initialized. Cannot get task params for {task_id}")
+        return None
+
+    try:
+        resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("params").eq("id", task_id).single().execute()
+        if resp.data:
+            return resp.data.get("params")
+        return None
+    except Exception as e:
+        dprint(f"Error getting task params for {task_id} from Supabase: {e}")
+        return None
 
 def get_task_dependency(task_id: str) -> str | None:
-    """Gets the dependency task ID for a given task ID."""
-    if DB_TYPE == "sqlite":
-        def _get_op(conn):
-            cursor = conn.cursor()
-            cursor.execute("SELECT dependant_on FROM tasks WHERE id = ?", (task_id,))
-            row = cursor.fetchone()
-            return row[0] if row else None
-        return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_op)
-    elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
-        try:
-            response = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("dependant_on").eq("id", task_id).single().execute()
-            if response.data:
-                return response.data.get("dependant_on")
-            return None
-        except Exception as e_supabase_dep:
-            dprint(f"Error fetching dependant_on from Supabase for task {task_id}: {e_supabase_dep}")
-            return None
-    return None
+    """Gets the dependency task ID for a given task ID from Supabase."""
+    if not SUPABASE_CLIENT:
+        print(f"[ERROR] Supabase client not initialized. Cannot get task dependency for {task_id}")
+        return None
+
+    try:
+        response = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("dependant_on").eq("id", task_id).single().execute()
+        if response.data:
+            return response.data.get("dependant_on")
+        return None
+    except Exception as e_supabase_dep:
+        dprint(f"Error fetching dependant_on from Supabase for task {task_id}: {e_supabase_dep}")
+        return None
 
 def get_orchestrator_child_tasks(orchestrator_task_id: str) -> dict:
     """
-    Gets all child tasks for a given orchestrator task ID.
+    Gets all child tasks for a given orchestrator task ID from Supabase.
     Returns dict with 'segments' and 'stitch' lists.
     """
-    if DB_TYPE == "sqlite":
-        def _get_op(conn):
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, task_type, status, params 
-                FROM tasks 
-                WHERE JSON_EXTRACT(params, '$.orchestrator_task_id_ref') = ?
-                ORDER BY created_at ASC
-            """, (orchestrator_task_id,))
-            rows = cursor.fetchall()
-            
-            segments = []
-            stitch = []
-            for row in rows:
+    if not SUPABASE_CLIENT:
+        print(f"[ERROR] Supabase client not initialized. Cannot get orchestrator child tasks for {orchestrator_task_id}")
+        return {'segments': [], 'stitch': []}
+
+    try:
+        # Query for child tasks referencing this orchestrator
+        response = SUPABASE_CLIENT.table(PG_TABLE_NAME)\
+            .select("id, task_type, status, params")\
+            .contains("params", {"orchestrator_task_id_ref": orchestrator_task_id})\
+            .order("created_at", desc=False)\
+            .execute()
+
+        segments = []
+        stitch = []
+
+        if response.data:
+            for task in response.data:
                 task_data = {
-                    'id': row[0],
-                    'task_type': row[1], 
-                    'status': row[2],
-                    'params': json.loads(row[3]) if row[3] else {}
+                    'id': task['id'],
+                    'task_type': task['task_type'],
+                    'status': task['status'],
+                    'params': task.get('params', {})
                 }
-                if row[1] == 'travel_segment':
+                if task['task_type'] == 'travel_segment':
                     segments.append(task_data)
-                elif row[1] == 'travel_stitch':
+                elif task['task_type'] == 'travel_stitch':
                     stitch.append(task_data)
-            
-            return {'segments': segments, 'stitch': stitch}
-        
-        try:
-            return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_op)
-        except Exception as e:
-            dprint(f"Error querying SQLite for orchestrator child tasks {orchestrator_task_id}: {e}")
-            return {'segments': [], 'stitch': []}
-            
-    elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
-        try:
-            # Query for child tasks referencing this orchestrator
-            response = SUPABASE_CLIENT.table(PG_TABLE_NAME)\
-                .select("id, task_type, status, params")\
-                .contains("params", {"orchestrator_task_id_ref": orchestrator_task_id})\
-                .order("created_at", desc=False)\
-                .execute()
-            
-            segments = []
-            stitch = []
-            
-            if response.data:
-                for task in response.data:
-                    task_data = {
-                        'id': task['id'],
-                        'task_type': task['task_type'],
-                        'status': task['status'],
-                        'params': task.get('params', {})
-                    }
-                    if task['task_type'] == 'travel_segment':
-                        segments.append(task_data)
-                    elif task['task_type'] == 'travel_stitch':
-                        stitch.append(task_data)
-            
-            return {'segments': segments, 'stitch': stitch}
-            
-        except Exception as e:
-            dprint(f"Error querying Supabase for orchestrator child tasks {orchestrator_task_id}: {e}")
-            traceback.print_exc()
-            return {'segments': [], 'stitch': []}
-    
-    dprint(f"DB type {DB_TYPE} not supported for get_orchestrator_child_tasks")
-    return {'segments': [], 'stitch': []}
+
+        return {'segments': segments, 'stitch': stitch}
+
+    except Exception as e:
+        dprint(f"Error querying Supabase for orchestrator child tasks {orchestrator_task_id}: {e}")
+        traceback.print_exc()
+        return {'segments': [], 'stitch': []}
 
 def cleanup_duplicate_child_tasks(orchestrator_task_id: str, expected_segments: int) -> dict:
     """
@@ -1210,258 +817,200 @@ def cleanup_duplicate_child_tasks(orchestrator_task_id: str, expected_segments: 
     return cleanup_summary
 
 def _delete_task_by_id(task_id: str) -> bool:
-    """Helper to delete a task by ID. Returns True if successful."""
-    if DB_TYPE == "sqlite":
-        def _delete_op(conn):
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-            return cursor.rowcount > 0
-        
-        try:
-            return execute_sqlite_with_retry(SQLITE_DB_PATH, _delete_op)
-        except Exception as e:
-            dprint(f"Error deleting SQLite task {task_id}: {e}")
-            return False
-            
-    elif DB_TYPE == "supabase" and SUPABASE_CLIENT:
-        try:
-            response = SUPABASE_CLIENT.table(PG_TABLE_NAME).delete().eq("id", task_id).execute()
-            return len(response.data) > 0 if response.data else False
-        except Exception as e:
-            dprint(f"Error deleting Supabase task {task_id}: {e}")
-            return False
-    
-    return False
+    """Helper to delete a task by ID from Supabase. Returns True if successful."""
+    if not SUPABASE_CLIENT:
+        print(f"[ERROR] Supabase client not initialized. Cannot delete task {task_id}")
+        return False
+
+    try:
+        response = SUPABASE_CLIENT.table(PG_TABLE_NAME).delete().eq("id", task_id).execute()
+        return len(response.data) > 0 if response.data else False
+    except Exception as e:
+        dprint(f"Error deleting Supabase task {task_id}: {e}")
+        return False
 
 def get_predecessor_output_via_edge_function(task_id: str) -> tuple[str | None, str | None]:
     """
-    Gets both the predecessor task ID and its output location in a single call using Edge Function.
-    Returns: (predecessor_id, output_location) or (None, None) if no dependency or error.
-    
-    This replaces the separate calls to get_task_dependency() + get_task_output_location_from_db().
+    Gets both the predecessor task ID and its output location using Supabase Edge Function.
+
+    Args:
+        task_id: Task ID to get predecessor for
+
+    Returns:
+        (predecessor_id, output_location) or (None, None) if no dependency or error
     """
-    if DB_TYPE == "sqlite":
-        # For SQLite, fall back to separate calls since we don't have Edge Functions
+    if not SUPABASE_URL or not SUPABASE_ACCESS_TOKEN:
+        print("[ERROR] Supabase configuration incomplete. Falling back to direct queries.")
         predecessor_id = get_task_dependency(task_id)
         if predecessor_id:
             output_location = get_task_output_location_from_db(predecessor_id)
             return predecessor_id, output_location
         return None, None
-        
-    elif DB_TYPE == "supabase" and SUPABASE_URL and SUPABASE_ACCESS_TOKEN:
-        # Use the new Edge Function for Supabase
-        edge_url = f"{SUPABASE_URL.rstrip('/')}/functions/v1/get-predecessor-output"
-        
-        try:
-            dprint(f"Calling Edge Function: {edge_url} for task {task_id}")
-            headers = {
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {SUPABASE_ACCESS_TOKEN}'
-            }
-            
-            resp = httpx.post(edge_url, json={"task_id": task_id}, headers=headers, timeout=15)
-            dprint(f"Edge Function response status: {resp.status_code}")
-            
-            if resp.status_code == 200:
-                result = resp.json()
-                dprint(f"Edge Function result: {result}")
-                
-                if result is None:
-                    # No dependency
-                    return None, None
-                
-                predecessor_id = result.get("predecessor_id")
-                output_location = result.get("output_location")
-                return predecessor_id, output_location
-                
-            elif resp.status_code == 404:
-                dprint(f"Edge Function: Task {task_id} not found")
+
+    edge_url = f"{SUPABASE_URL.rstrip('/')}/functions/v1/get-predecessor-output"
+
+    try:
+        dprint(f"Calling Edge Function: {edge_url} for task {task_id}")
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {SUPABASE_ACCESS_TOKEN}'
+        }
+
+        resp = httpx.post(edge_url, json={"task_id": task_id}, headers=headers, timeout=15)
+        dprint(f"Edge Function response status: {resp.status_code}")
+
+        if resp.status_code == 200:
+            result = resp.json()
+            dprint(f"Edge Function result: {result}")
+
+            if result is None:
+                # No dependency
                 return None, None
-            else:
-                dprint(f"Edge Function returned {resp.status_code}: {resp.text}. Falling back to direct queries.")
-                # Fall back to separate calls
-                predecessor_id = get_task_dependency(task_id)
-                if predecessor_id:
-                    output_location = get_task_output_location_from_db(predecessor_id)
-                    return predecessor_id, output_location
-                return None, None
-                
-        except Exception as e_edge:
-            dprint(f"Edge Function call failed: {e_edge}. Falling back to direct queries.")
+
+            predecessor_id = result.get("predecessor_id")
+            output_location = result.get("output_location")
+            return predecessor_id, output_location
+
+        elif resp.status_code == 404:
+            dprint(f"Edge Function: Task {task_id} not found")
+            return None, None
+        else:
+            dprint(f"Edge Function returned {resp.status_code}: {resp.text}. Falling back to direct queries.")
             # Fall back to separate calls
             predecessor_id = get_task_dependency(task_id)
             if predecessor_id:
                 output_location = get_task_output_location_from_db(predecessor_id)
                 return predecessor_id, output_location
             return None, None
-    
-    # If we can't use Edge Function, fall back to separate calls
-    predecessor_id = get_task_dependency(task_id)
-    if predecessor_id:
-        output_location = get_task_output_location_from_db(predecessor_id)
-        return predecessor_id, output_location
-    return None, None
+
+    except Exception as e_edge:
+        dprint(f"Edge Function call failed: {e_edge}. Falling back to direct queries.")
+        # Fall back to separate calls
+        predecessor_id = get_task_dependency(task_id)
+        if predecessor_id:
+            output_location = get_task_output_location_from_db(predecessor_id)
+            return predecessor_id, output_location
+        return None, None
 
 
 def get_completed_segment_outputs_for_stitch(run_id: str, project_id: str | None = None) -> list:
-    """Gets completed travel_segment outputs for a given run_id for stitching."""
-    
-    if DB_TYPE == "sqlite":
-        def _get_op(conn):
-            cursor = conn.cursor()
-            sql_query = f"""
-                SELECT json_extract(t.params, '$.segment_index') AS segment_idx, t.output_location
-                FROM tasks t
-                INNER JOIN (
-                    SELECT 
-                        json_extract(params, '$.segment_index') AS segment_idx, 
-                        MAX(created_at) AS max_created_at
-                    FROM tasks
-                    WHERE json_extract(params, '$.orchestrator_run_id') = ?
-                      AND task_type = 'travel_segment'
-                      AND status = ?
-                      AND output_location IS NOT NULL
-                    GROUP BY segment_idx
-                ) AS latest_tasks
-                ON json_extract(t.params, '$.segment_index') = latest_tasks.segment_idx 
-                AND t.created_at = latest_tasks.max_created_at
-                WHERE json_extract(t.params, '$.orchestrator_run_id') = ?
-                  AND t.task_type = 'travel_segment'
-                  AND t.status = ?
-                ORDER BY CAST(json_extract(t.params, '$.segment_index') AS INTEGER) ASC
-            """
-            cursor.execute(sql_query, (run_id, STATUS_COMPLETE, run_id, STATUS_COMPLETE))
-            rows = cursor.fetchall()
-            return rows
-        return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_op)
-    elif DB_TYPE == "supabase":
-        edge_url = f"{SUPABASE_URL.rstrip('/')}/functions/v1/get-completed-segments"
-        try:
-            dprint(f"Calling Edge Function: {edge_url} for run_id {run_id}, project_id {project_id}")
-            headers = {
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {SUPABASE_ACCESS_TOKEN}'
-            }
-            payload = {"run_id": run_id}
-            if project_id:
-                payload["project_id"] = project_id
+    """Gets completed travel_segment outputs for a given run_id for stitching from Supabase."""
+    if not SUPABASE_URL or not SUPABASE_ACCESS_TOKEN:
+        print("[ERROR] Supabase configuration incomplete. Cannot get completed segments.")
+        return []
 
-            resp = httpx.post(edge_url, json=payload, headers=headers, timeout=15)
-            if resp.status_code == 200:
-                results = resp.json()
-                sorted_results = sorted(results, key=lambda x: x['segment_index'])
-                return [(r['segment_index'], r['output_location']) for r in sorted_results]
-            else:
-                dprint(f"Edge Function returned {resp.status_code}: {resp.text}. Falling back to direct query.")
-        except Exception as e:
-            dprint(f"Edge Function failed: {e}. Falling back to direct query.")
-        
-        # Fallback to direct query
-        try:
-            # First, let's debug by getting ALL completed tasks to see what's there
-            debug_resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("id, task_type, status, params, output_location")\
-                .eq("status", STATUS_COMPLETE).execute()
-            
-            dprint(f"[DEBUG_STITCH] Looking for run_id: '{run_id}' (type: {type(run_id)})")
-            dprint(f"[DEBUG_STITCH] Total completed tasks in DB: {len(debug_resp.data) if debug_resp.data else 0}")
-            
-            travel_segment_count = 0
-            matching_run_id_count = 0
-            
-            if debug_resp.data:
-                for task in debug_resp.data:
-                    task_type = task.get("task_type", "")
-                    if task_type == "travel_segment":
-                        travel_segment_count += 1
-                        params_raw = task.get("params", {})
-                        try:
-                            params_obj = params_raw if isinstance(params_raw, dict) else json.loads(params_raw)
-                            task_run_id = params_obj.get("orchestrator_run_id")
-                            dprint(f"[DEBUG_STITCH] Found travel_segment task {task.get('id')}: orchestrator_run_id='{task_run_id}' (type: {type(task_run_id)}), segment_index={params_obj.get('segment_index')}, output_location={task.get('output_location', 'None')}")
-                            
-                            if str(task_run_id) == str(run_id):
-                                matching_run_id_count += 1
-                                dprint(f"[DEBUG_STITCH] ✅ MATCH FOUND! Task {task.get('id')} matches run_id {run_id}")
-                        except Exception as e_debug:
-                            dprint(f"[DEBUG_STITCH] Error parsing params for task {task.get('id')}: {e_debug}")
-            
-            dprint(f"[DEBUG_STITCH] Travel_segment tasks found: {travel_segment_count}")
-            dprint(f"[DEBUG_STITCH] Tasks matching run_id '{run_id}': {matching_run_id_count}")
-            
-            # Now do the actual query
-            sel_resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("params, output_location")\
-                .eq("task_type", "travel_segment").eq("status", STATUS_COMPLETE).execute()
-            
-            results = []
-            if sel_resp.data:
-                import json
-                for i, row in enumerate(sel_resp.data):
-                    params_raw = row.get("params")
-                    if params_raw is None: 
-                        continue
+    edge_url = f"{SUPABASE_URL.rstrip('/')}/functions/v1/get-completed-segments"
+    try:
+        dprint(f"Calling Edge Function: {edge_url} for run_id {run_id}, project_id {project_id}")
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {SUPABASE_ACCESS_TOKEN}'
+        }
+        payload = {"run_id": run_id}
+        if project_id:
+            payload["project_id"] = project_id
+
+        resp = httpx.post(edge_url, json=payload, headers=headers, timeout=15)
+        if resp.status_code == 200:
+            results = resp.json()
+            sorted_results = sorted(results, key=lambda x: x['segment_index'])
+            return [(r['segment_index'], r['output_location']) for r in sorted_results]
+        else:
+            dprint(f"Edge Function returned {resp.status_code}: {resp.text}. Falling back to direct query.")
+    except Exception as e:
+        dprint(f"Edge Function failed: {e}. Falling back to direct query.")
+
+    # Fallback to direct query
+    if not SUPABASE_CLIENT:
+        print("[ERROR] Supabase client not initialized. Cannot fall back to direct query.")
+        return []
+
+    try:
+        # First, let's debug by getting ALL completed tasks to see what's there
+        debug_resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("id, task_type, status, params, output_location")\
+            .eq("status", STATUS_COMPLETE).execute()
+
+        dprint(f"[DEBUG_STITCH] Looking for run_id: '{run_id}' (type: {type(run_id)})")
+        dprint(f"[DEBUG_STITCH] Total completed tasks in DB: {len(debug_resp.data) if debug_resp.data else 0}")
+
+        travel_segment_count = 0
+        matching_run_id_count = 0
+
+        if debug_resp.data:
+            for task in debug_resp.data:
+                task_type = task.get("task_type", "")
+                if task_type == "travel_segment":
+                    travel_segment_count += 1
+                    params_raw = task.get("params", {})
                     try:
                         params_obj = params_raw if isinstance(params_raw, dict) else json.loads(params_raw)
-                    except Exception as e:
-                        continue
-                    
-                    row_run_id = params_obj.get("orchestrator_run_id")
-                    
-                    # Use string comparison to handle type mismatches
-                    if str(row_run_id) == str(run_id):
-                        seg_idx = params_obj.get("segment_index")
-                        output_loc = row.get("output_location")
-                        results.append((seg_idx, output_loc))
-                        dprint(f"[DEBUG_STITCH] Added to results: segment_index={seg_idx}, output_location={output_loc}")
-            
-            sorted_results = sorted(results, key=lambda x: x[0] if x[0] is not None else 0)
-            dprint(f"[DEBUG_STITCH] Final sorted results: {sorted_results}")
-            return sorted_results
-        except Exception as e_sel:
-            dprint(f"Stitch Supabase: Direct select failed: {e_sel}")
-            traceback.print_exc()
-            return []
-    
-    return []
+                        task_run_id = params_obj.get("orchestrator_run_id")
+                        dprint(f"[DEBUG_STITCH] Found travel_segment task {task.get('id')}: orchestrator_run_id='{task_run_id}' (type: {type(task_run_id)}), segment_index={params_obj.get('segment_index')}, output_location={task.get('output_location', 'None')}")
+
+                        if str(task_run_id) == str(run_id):
+                            matching_run_id_count += 1
+                            dprint(f"[DEBUG_STITCH] MATCH FOUND! Task {task.get('id')} matches run_id {run_id}")
+                    except Exception as e_debug:
+                        dprint(f"[DEBUG_STITCH] Error parsing params for task {task.get('id')}: {e_debug}")
+
+        dprint(f"[DEBUG_STITCH] Travel_segment tasks found: {travel_segment_count}")
+        dprint(f"[DEBUG_STITCH] Tasks matching run_id '{run_id}': {matching_run_id_count}")
+
+        # Now do the actual query
+        sel_resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("params, output_location")\
+            .eq("task_type", "travel_segment").eq("status", STATUS_COMPLETE).execute()
+
+        results = []
+        if sel_resp.data:
+            for i, row in enumerate(sel_resp.data):
+                params_raw = row.get("params")
+                if params_raw is None:
+                    continue
+                try:
+                    params_obj = params_raw if isinstance(params_raw, dict) else json.loads(params_raw)
+                except Exception as e:
+                    continue
+
+                row_run_id = params_obj.get("orchestrator_run_id")
+
+                # Use string comparison to handle type mismatches
+                if str(row_run_id) == str(run_id):
+                    seg_idx = params_obj.get("segment_index")
+                    output_loc = row.get("output_location")
+                    results.append((seg_idx, output_loc))
+                    dprint(f"[DEBUG_STITCH] Added to results: segment_index={seg_idx}, output_location={output_loc}")
+
+        sorted_results = sorted(results, key=lambda x: x[0] if x[0] is not None else 0)
+        dprint(f"[DEBUG_STITCH] Final sorted results: {sorted_results}")
+        return sorted_results
+    except Exception as e_sel:
+        dprint(f"Stitch Supabase: Direct select failed: {e_sel}")
+        traceback.print_exc()
+        return []
 
 def get_initial_task_counts() -> tuple[int, int] | None:
-    """Gets the total and queued task counts from the SQLite DB. Returns (None, None) on failure."""
-    if DB_TYPE != "sqlite": return None
-    
-    def _get_counts_op(conn):
-        cursor = conn.cursor()
-        cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE_NAME}")
-        total_tasks = cursor.fetchone()[0]
-        cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE_NAME} WHERE status = ?", (STATUS_QUEUED,))
-        queued_tasks = cursor.fetchone()[0]
-        return total_tasks, queued_tasks
-    
-    try:
-        return execute_sqlite_with_retry(SQLITE_DB_PATH, _get_counts_op)
-    except Exception as e:
-        print(f"SQLite error getting task counts: {e}")
-        return None
-        
+    """
+    Gets the total and queued task counts (no longer supported - returns None).
+    This function was for SQLite only and is kept for API compatibility.
+    """
+    return None
+
 def get_abs_path_from_db_path(db_path: str, dprint) -> Path | None:
-    """Helper to resolve a path from the DB (which might be relative) to a usable absolute path."""
+    """
+    Helper to resolve a path from the DB to a usable absolute path.
+    Assumes paths from Supabase are already absolute or valid URLs.
+    """
     if not db_path:
         return None
-        
-    resolved_path = None
-    if DB_TYPE == "sqlite" and SQLITE_DB_PATH and isinstance(db_path, str) and db_path.startswith("files/"):
-        sqlite_db_parent = Path(SQLITE_DB_PATH).resolve().parent
-        resolved_path = (sqlite_db_parent / "public" / db_path).resolve()
-        dprint(f"Resolved SQLite relative path '{db_path}' to '{resolved_path}'")
-    else:
-        # Path from DB is already absolute (Supabase) or a non-standard path
-        resolved_path = Path(db_path).resolve()
-    
+
+    # Path from DB is assumed to be absolute (Supabase) or a URL
+    resolved_path = Path(db_path).resolve()
+
     if resolved_path and resolved_path.exists():
         return resolved_path
     else:
         dprint(f"Warning: Resolved path '{resolved_path}' from DB path '{db_path}' does not exist.")
         return None
-
- 
 
 def mark_task_failed_supabase(task_id_str, error_message):
     """Marks a task as Failed with an error message using direct database update."""
