@@ -194,7 +194,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             print(msg)
             return True, msg
 
-        db_path_for_add = db_ops.SQLITE_DB_PATH if db_ops.DB_TYPE == "sqlite" else None
         # Track actual DB row IDs by segment index to avoid mixing logical IDs
         actual_segment_db_id_by_index: dict[int, str] = {}
 
@@ -218,23 +217,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         dprint(f"[IDEMPOTENCY] Existing segment indices: {sorted(existing_segment_indices)}")
         dprint(f"[IDEMPOTENCY] Stitch task exists: {stitch_already_exists} (ID: {existing_stitch_task_id})")
 
-        # --- Determine image download directory for this orchestrated run ---
+        # Image download directory is not needed for Supabase - images are already uploaded
         segment_image_download_dir_str : str | None = None
-        if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH: # SQLITE_DB_PATH is global
-            try:
-                sqlite_db_path_obj = Path(db_ops.SQLITE_DB_PATH).resolve()
-                if sqlite_db_path_obj.is_file():
-                    sqlite_db_parent_dir = sqlite_db_path_obj.parent
-                    # Orchestrated downloads go into a subfolder named after the run_id
-                    candidate_download_dir = sqlite_db_parent_dir / "public" / "data" / "image_downloads_orchestrated" / run_id
-                    candidate_download_dir.mkdir(parents=True, exist_ok=True)
-                    segment_image_download_dir_str = str(candidate_download_dir.resolve())
-                    dprint(f"Orchestrator {orchestrator_task_id_str}: Determined segment_image_download_dir for run {run_id}: {segment_image_download_dir_str}")
-                else:
-                    dprint(f"Orchestrator {orchestrator_task_id_str}: SQLITE_DB_PATH '{db_ops.SQLITE_DB_PATH}' is not a file. Cannot determine parent for image_download_dir.")
-            except Exception as e_idir_orch:
-                dprint(f"Orchestrator {orchestrator_task_id_str}: Could not create image_download_dir for run {run_id}: {e_idir_orch}. Segments may not download URL images to specific dir.")
-        # Add similar logic for Supabase if a writable shared path convention exists.
 
         # Expanded arrays from orchestrator payload
         expanded_base_prompts = orchestrator_payload["base_prompts_expanded"]
@@ -1578,20 +1562,13 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                 msg = f"Seg {segment_idx}: Continue video path {path_to_previous_segment_video_output_for_guide} invalid."
                 print(f"[ERROR Task {segment_task_id_str}]: {msg}"); return False, msg
         elif is_subsequent_segment:
-            # Get predecessor task ID and its output location in a single call using Edge Function (or fallback for SQLite)
+            # Get predecessor task ID and its output location in a single call using Edge Function
             task_dependency_id, raw_path_from_db = db_ops.get_predecessor_output_via_edge_function(segment_task_id_str)
             
             if task_dependency_id and raw_path_from_db:
                 dprint(f"Seg {segment_idx}: Task {segment_task_id_str} depends on {task_dependency_id} with output: {raw_path_from_db}")
-                # path_to_previous_segment_video_output_for_guide will be relative ("files/...") if from SQLite and stored that way
-                # or absolute if from Supabase or stored absolutely in SQLite.
-                if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and raw_path_from_db.startswith("files/"):
-                    sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
-                    path_to_previous_segment_video_output_for_guide = str((sqlite_db_parent / "public" / raw_path_from_db).resolve())
-                    dprint(f"Seg {segment_idx}: Resolved SQLite relative path from DB '{raw_path_from_db}' to absolute path '{path_to_previous_segment_video_output_for_guide}'")
-                else:
-                    # Path from DB is already absolute (Supabase) or an old absolute SQLite path
-                    path_to_previous_segment_video_output_for_guide = raw_path_from_db
+                # Path from DB is absolute (Supabase URL or absolute path)
+                path_to_previous_segment_video_output_for_guide = raw_path_from_db
             elif task_dependency_id and not raw_path_from_db:
                 dprint(f"Seg {segment_idx}: Found dependency task {task_dependency_id} but no output_location available.")
                 path_to_previous_segment_video_output_for_guide = None
@@ -1743,13 +1720,11 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
 
         # The WGP task will run with a unique ID, but it's processed in-line now
         wgp_inline_task_id = sm_generate_unique_task_id(f"wgp_inline_{segment_task_id_str[:8]}_")
-        
+
         # Define the absolute final output path for the WGP generation by process_single_task.
-        # If DB_TYPE is SQLite, process_single_task will ignore this and save to public/files, returning a relative path.
-        # If not SQLite, process_single_task will use this path (or its default construction) and return an absolute path.
+        # wgp_final_output_path_for_this_segment is a suggestion for process_single_task.
+        # With Supabase, process_single_task will use this path (or its default construction) and return an absolute path or URL.
         wgp_video_filename = f"{orchestrator_run_id}_seg{segment_idx:02d}_output.mp4"
-        # For non-SQLite, wgp_final_output_path_for_this_segment is a suggestion for process_single_task
-        # For SQLite, this specific path isn't strictly used by process_single_task for its *final* save, but can be logged.
         wgp_final_output_path_for_this_segment = segment_processing_dir / wgp_video_filename 
         
         safe_vace_image_ref_paths_for_wgp = [str(p.resolve()) if p else None for p in actual_vace_image_ref_paths_for_wgp]
@@ -1799,8 +1774,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             "frames": final_frames_for_wgp_generation,
             "seed": segment_params["seed_to_use"],
             # output_path for process_single_task: 
-            # - If SQLite, it's ignored, output goes to public/files, and a relative path is returned.
-            # - If not SQLite, this suggested path (or process_single_task's default) is used, and an absolute path is returned.
+            # This suggested path (or process_single_task's default) is used, and an absolute path or URL is returned.
             "output_path": str(wgp_final_output_path_for_this_segment.resolve()), 
             "video_guide_path": str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
             "use_causvid_lora": full_orchestrator_payload.get("apply_causvid", False),
@@ -2048,22 +2022,17 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
         return False, f"Task {wgp_task_id}: Missing travel_chain_details. Cannot proceed with chaining.", None
     
     # actual_wgp_output_video_path comes from process_single_task.
-    # If DB_TYPE is sqlite, it will be like "files/wgp_output.mp4".
-    # Otherwise, it's an absolute path.
+    # Path is an absolute path or URL from Supabase.
     if not actual_wgp_output_video_path: # Check if it's None or empty string
         return False, f"Task {wgp_task_id}: WGP output video path is None or empty. Cannot chain.", None
 
     # This variable will track the absolute path of the video as it gets processed.
     video_to_process_abs_path: Path
-    # This will hold the path to be stored in the DB (can be relative for SQLite).
+    # This will hold the path to be stored in the DB (absolute path or URL)
     final_video_path_for_db = actual_wgp_output_video_path
 
-    # Resolve initial absolute path
-    if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and isinstance(actual_wgp_output_video_path, str) and actual_wgp_output_video_path.startswith("files/"):
-        sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
-        video_to_process_abs_path = sqlite_db_parent / "public" / actual_wgp_output_video_path
-    else:
-        video_to_process_abs_path = Path(actual_wgp_output_video_path)
+    # Path is already absolute (Supabase URL or absolute path)
+    video_to_process_abs_path = Path(actual_wgp_output_video_path)
 
     if not video_to_process_abs_path.exists():
         return False, f"Task {wgp_task_id}: Source video for chaining '{video_to_process_abs_path}' (from '{actual_wgp_output_video_path}') does not exist.", actual_wgp_output_video_path
@@ -2514,7 +2483,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         print(f"[IMMEDIATE DEBUG] Final completed_segment_outputs_from_db: {completed_segment_outputs_from_db}")
 
         # ------------------------------------------------------------------
-        # 2b. Resolve each returned video path (local, SQLite-relative, or URL)
+        # 2b. Resolve each returned video path (relative path or URL)
         # ------------------------------------------------------------------
         dprint(f"[STITCH_DEBUG] Starting path resolution for {len(completed_segment_outputs_from_db)} segments")
         dprint(f"[STITCH_DEBUG] Raw DB results: {completed_segment_outputs_from_db}")
@@ -2526,19 +2495,12 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 dprint(f"[STITCH_DEBUG] WARNING: Segment {seg_idx} has empty video_path in DB; skipping.")
                 continue
 
-            # Case A: Relative path that starts with files/ (works for both sqlite and supabase when worker has local access)
+            # Case A: Relative path that starts with files/ - resolve from current working directory
             if video_path_str_from_db.startswith("files/") or video_path_str_from_db.startswith("public/files/"):
                 dprint(f"[STITCH_DEBUG] Case A: Relative path detected for segment {seg_idx}")
-                sqlite_db_parent = None
-                if db_ops.SQLITE_DB_PATH:
-                    sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
-                else:
-                    # Fall back: examine cwd and assume standard layout ../public
-                    try:
-                        sqlite_db_parent = Path.cwd()
-                    except Exception:
-                        sqlite_db_parent = Path(".")
-                absolute_path_candidate = (sqlite_db_parent / "public" / video_path_str_from_db.lstrip("public/")).resolve()
+                # Resolve relative to current working directory
+                base_dir = Path.cwd()
+                absolute_path_candidate = (base_dir / "public" / video_path_str_from_db.lstrip("public/")).resolve()
                 print(f"[STITCH_DEBUG] Resolved relative path '{video_path_str_from_db}' to '{absolute_path_candidate}' for segment {seg_idx}")
                 dprint(f"Stitch: Resolved relative path '{video_path_str_from_db}' to '{absolute_path_candidate}' for segment {seg_idx}")
                 if absolute_path_candidate.exists() and absolute_path_candidate.is_file():
@@ -3045,8 +3007,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 "prompt": full_orchestrator_payload.get("original_task_args",{}).get("upscale_prompt", "cinematic, masterpiece, high detail, 4k"), 
                 "seed": full_orchestrator_payload.get("seed_for_upscale", full_orchestrator_payload.get("seed_base", 12345) + 5000),
             }
-            
-            db_path_for_upscale_add = db_ops.SQLITE_DB_PATH if db_ops.DB_TYPE == "sqlite" else None
+
             upscaler_engine_to_use = stitch_params.get("execution_engine_for_upscale", "wgp")
             
             db_ops.add_task_to_db(
@@ -3070,12 +3031,8 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             dprint(f"Stitch Task {stitch_task_id_str}: Upscale sub-task {upscale_sub_task_id} poll result: {upscaled_video_db_location}")
 
             if upscaled_video_db_location:
-                upscaled_video_abs_path: Path
-                if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and upscaled_video_db_location.startswith("files/"):
-                    sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
-                    upscaled_video_abs_path = sqlite_db_parent / "public" / upscaled_video_db_location
-                else: 
-                    upscaled_video_abs_path = Path(upscaled_video_db_location)
+                # Path is already absolute (Supabase URL or absolute path)
+                upscaled_video_abs_path: Path = Path(upscaled_video_db_location)
 
                 if upscaled_video_abs_path.exists():
                     print(f"[STITCH UPSCALE] Upscale completed successfully: {upscaled_video_abs_path}")
