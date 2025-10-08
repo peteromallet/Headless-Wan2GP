@@ -864,8 +864,8 @@ def _create_timeline_clip(
 
                 # Recalculate position to keep centered horizontally and push up vertically
                 x_start = x_center - scaled_w // 2
-                # Push the active image up by 40 pixels
-                y_start = y_center - scaled_h // 2 - 40
+                # Push the active image up by 40 pixels from baseline (not from center)
+                y_start = y_center - 40
                 # Ensure thumbnail doesn't overflow
                 x_start = max(margin, min(x_start, width - margin - scaled_w))
                 y_start = max(margin, min(y_start, height - margin - scaled_h))
@@ -882,9 +882,10 @@ def _create_timeline_clip(
                 # Paste scaled thumbnail
                 img.paste(thumb_img, (x_start, y_start))
             else:
-                # Normal size thumbnail
+                # Normal size thumbnail - keep at baseline y_center without moving up
                 x_start = x_center - thumb.shape[1] // 2
-                y_start = y_center - thumb.shape[0] // 2
+                # Don't subtract half height - keep thumbnail top aligned at y_center
+                y_start = y_center
                 # Ensure thumbnail doesn't overflow
                 x_start = max(margin, min(x_start, width - margin - thumb.shape[1]))
                 y_start = max(margin, min(y_start, height - margin - thumb.shape[0]))
