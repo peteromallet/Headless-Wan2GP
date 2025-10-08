@@ -126,7 +126,9 @@ def create_travel_visualization(
     fps: int = 16,
     show_guidance: bool = True,
     structure_video_treatment: str = "adjust",
-    frame_overlaps: Optional[List[int]] = None
+    frame_overlaps: Optional[List[int]] = None,
+    structure_video_type: Optional[str] = None,
+    structure_video_strength: Optional[float] = None
 ) -> str:
     """
     Create a visualization collage showing the generation process.
@@ -139,11 +141,13 @@ def create_travel_visualization(
         segment_frames: List of frame counts per segment (raw, before overlap subtraction)
         segment_prompts: Optional list of prompts per segment
         viz_output_path: Where to save visualization (default: adds _viz suffix)
-        layout: Layout type - "side_by_side", "triple", or "grid"
+        layout: Layout type - "side_by_side", "triple", "grid", or "vertical"
         fps: FPS for output video
         show_guidance: Whether to include guidance video
         structure_video_treatment: "adjust" (stretch/compress) or "clip" (temporal sample)
         frame_overlaps: Optional list of overlap counts between segments
+        structure_video_type: Optional structure video type label for overlay (e.g., "depth", "canny")
+        structure_video_strength: Optional structure video strength value for overlay
 
     Returns:
         Path to created visualization video
@@ -204,7 +208,9 @@ def create_travel_visualization(
             segment_frames=segment_frames,
             segment_prompts=segment_prompts,
             fps=fps,
-            frame_overlaps=frame_overlaps
+            frame_overlaps=frame_overlaps,
+            structure_video_type=structure_video_type,
+            structure_video_strength=structure_video_strength
         )
     elif layout == "triple":
         result = _create_triple_layout(
@@ -215,7 +221,9 @@ def create_travel_visualization(
             segment_frames=segment_frames,
             segment_prompts=segment_prompts,
             fps=fps,
-            frame_overlaps=frame_overlaps
+            frame_overlaps=frame_overlaps,
+            structure_video_type=structure_video_type,
+            structure_video_strength=structure_video_strength
         )
     elif layout == "grid":
         result = _create_grid_layout(
@@ -226,7 +234,22 @@ def create_travel_visualization(
             segment_frames=segment_frames,
             segment_prompts=segment_prompts,
             fps=fps,
-            frame_overlaps=frame_overlaps
+            frame_overlaps=frame_overlaps,
+            structure_video_type=structure_video_type,
+            structure_video_strength=structure_video_strength
+        )
+    elif layout == "vertical":
+        result = _create_vertical_layout(
+            output_clip=output_clip,
+            structure_clip=structure_clip,
+            guidance_clip=guidance_clip,
+            input_image_paths=input_image_paths,
+            segment_frames=segment_frames,
+            segment_prompts=segment_prompts,
+            fps=fps,
+            frame_overlaps=frame_overlaps,
+            structure_video_type=structure_video_type,
+            structure_video_strength=structure_video_strength
         )
     else:
         raise ValueError(f"Unknown layout: {layout}")
@@ -239,6 +262,7 @@ def create_travel_visualization(
         codec='libx264',
         audio=False,
         preset='medium',
+        ffmpeg_params=['-pix_fmt', 'yuv420p'],  # Force compatible pixel format
         logger=None  # Suppress moviepy progress bar
     )
 
@@ -261,7 +285,9 @@ def _create_side_by_side_layout(
     segment_frames: List[int],
     segment_prompts: Optional[List[str]],
     fps: int,
-    frame_overlaps: Optional[List[int]] = None
+    frame_overlaps: Optional[List[int]] = None,
+    structure_video_type: Optional[str] = None,
+    structure_video_strength: Optional[float] = None
 ):
     """
     Create side-by-side layout with timeline on top.
@@ -283,6 +309,28 @@ def _create_side_by_side_layout(
     # Resize clips
     structure_resized = structure_clip.resize(height=target_height)
     output_resized = output_clip.resize(height=target_height)
+
+    # Add structure video overlay if metadata provided
+    if structure_video_type and structure_video_strength is not None:
+        from moviepy.editor import TextClip, CompositeVideoClip
+
+        # Create overlay text
+        overlay_text = f"{structure_video_type} | {structure_video_strength:.1f}"
+
+        try:
+            text_clip = TextClip(
+                overlay_text,
+                fontsize=16,
+                color='white',
+                font='DejaVu-Sans-Bold',
+                bg_color='black',
+                method='caption',
+                size=(None, None)
+            ).set_duration(structure_resized.duration).set_position(('left', 'top'))
+
+            structure_resized = CompositeVideoClip([structure_resized, text_clip])
+        except Exception as e:
+            print(f"Warning: Could not add structure overlay: {e}")
 
     # Create side-by-side video
     video_array = clips_array([[structure_resized, output_resized]])
@@ -319,7 +367,9 @@ def _create_triple_layout(
     segment_frames: List[int],
     segment_prompts: Optional[List[str]],
     fps: int,
-    frame_overlaps: Optional[List[int]] = None
+    frame_overlaps: Optional[List[int]] = None,
+    structure_video_type: Optional[str] = None,
+    structure_video_strength: Optional[float] = None
 ):
     """
     Create triple view layout.
@@ -340,6 +390,28 @@ def _create_triple_layout(
     # Resize clips
     structure_resized = structure_clip.resize(height=target_height)
     output_resized = output_clip.resize(height=target_height)
+
+    # Add structure video overlay if metadata provided
+    if structure_video_type and structure_video_strength is not None:
+        from moviepy.editor import TextClip, CompositeVideoClip
+
+        # Create overlay text
+        overlay_text = f"{structure_video_type} | {structure_video_strength:.1f}"
+
+        try:
+            text_clip = TextClip(
+                overlay_text,
+                fontsize=16,
+                color='white',
+                font='DejaVu-Sans-Bold',
+                bg_color='black',
+                method='caption',
+                size=(None, None)
+            ).set_duration(structure_resized.duration).set_position(('left', 'top'))
+
+            structure_resized = CompositeVideoClip([structure_resized, text_clip])
+        except Exception as e:
+            print(f"Warning: Could not add structure overlay: {e}")
 
     if guidance_clip:
         guidance_resized = guidance_clip.resize(height=target_height)
@@ -379,7 +451,9 @@ def _create_grid_layout(
     segment_frames: List[int],
     segment_prompts: Optional[List[str]],
     fps: int,
-    frame_overlaps: Optional[List[int]] = None
+    frame_overlaps: Optional[List[int]] = None,
+    structure_video_type: Optional[str] = None,
+    structure_video_strength: Optional[float] = None
 ):
     """
     Create 2x2 grid layout.
@@ -400,6 +474,28 @@ def _create_grid_layout(
     # Resize clips
     structure_resized = structure_clip.resize(height=target_height)
     output_resized = output_clip.resize(height=target_height)
+
+    # Add structure video overlay if metadata provided
+    if structure_video_type and structure_video_strength is not None:
+        from moviepy.editor import TextClip, CompositeVideoClip
+
+        # Create overlay text
+        overlay_text = f"{structure_video_type} | {structure_video_strength:.1f}"
+
+        try:
+            text_clip = TextClip(
+                overlay_text,
+                fontsize=16,
+                color='white',
+                font='DejaVu-Sans-Bold',
+                bg_color='black',
+                method='caption',
+                size=(None, None)
+            ).set_duration(structure_resized.duration).set_position(('left', 'top'))
+
+            structure_resized = CompositeVideoClip([structure_resized, text_clip])
+        except Exception as e:
+            print(f"Warning: Could not add structure overlay: {e}")
 
     if guidance_clip:
         guidance_resized = guidance_clip.resize(height=target_height)
@@ -433,6 +529,131 @@ def _create_grid_layout(
     return video_array
 
 
+def _create_vertical_layout(
+    output_clip,
+    structure_clip,
+    guidance_clip,
+    input_image_paths: List[str],
+    segment_frames: List[int],
+    segment_prompts: Optional[List[str]],
+    fps: int,
+    frame_overlaps: Optional[List[int]] = None,
+    structure_video_type: Optional[str] = None,
+    structure_video_strength: Optional[float] = None
+):
+    """
+    Create vertical layout with images on left, videos stacked on right.
+
+    Layout:
+    ┌────────┬───────────────┐
+    │ Img 1  │               │
+    │ Img 2  │  Structure    │
+    │ Img 3  │     Video     │
+    │ Img 4  │               │
+    │ Img 5  │───────────────│
+    │  ...   │               │
+    │        │  Output       │
+    │        │    Video      │
+    │        │               │
+    └────────┴───────────────┘
+    """
+    from moviepy.editor import clips_array, CompositeVideoClip
+
+    # Target dimensions for videos
+    video_target_height = 300
+
+    # Resize structure and output videos
+    structure_resized = structure_clip.resize(height=video_target_height)
+    output_resized = output_clip.resize(height=video_target_height)
+
+    # Ensure resized clips have even dimensions for H.264 compatibility
+    def ensure_even_dimensions(clip):
+        w, h = clip.w, clip.h
+        if w % 2 != 0:
+            w += 1
+        if h % 2 != 0:
+            h += 1
+        if w != clip.w or h != clip.h:
+            return clip.resize(width=w, height=h)
+        return clip
+
+    structure_resized = ensure_even_dimensions(structure_resized)
+    output_resized = ensure_even_dimensions(output_resized)
+
+    print(f"  structure_resized: {structure_resized.w}x{structure_resized.h}")
+    print(f"  output_resized: {output_resized.w}x{output_resized.h}")
+
+    # Add structure video overlay if metadata provided
+    if structure_video_type and structure_video_strength is not None:
+        from moviepy.editor import TextClip, CompositeVideoClip
+
+        # Create overlay text
+        overlay_text = f"{structure_video_type} | {structure_video_strength:.1f}"
+
+        try:
+            text_clip = TextClip(
+                overlay_text,
+                fontsize=16,
+                color='white',
+                font='DejaVu-Sans-Bold',
+                bg_color='black',
+                method='caption',
+                size=(None, None)
+            ).set_duration(structure_resized.duration).set_position(('left', 'top'))
+
+            structure_resized = CompositeVideoClip([structure_resized, text_clip])
+        except Exception as e:
+            print(f"Warning: Could not add structure overlay: {e}")
+
+    # Stack videos vertically on the right
+    video_stack = clips_array([[structure_resized], [output_resized]])
+
+    # Create timeline clip for the left side (vertical arrangement of images)
+    # Make it match the height of the video stack
+    timeline_height = video_stack.h
+    timeline_width = 200  # Fixed width for the image column
+
+    # Ensure the TOTAL width (timeline + video_stack) is even for H.264 compatibility
+    video_stack_width = video_stack.w
+    total_width = timeline_width + video_stack_width
+
+    # If total is odd, adjust timeline width to make it even
+    if total_width % 2 != 0:
+        timeline_width += 1  # Change timeline from 200 to 201
+
+    # Also ensure height is even
+    if video_stack.h % 2 != 0:
+        timeline_height = video_stack.h + 1
+        video_stack = video_stack.resize(height=timeline_height)
+
+    timeline_clip = _create_timeline_clip(
+        duration=output_clip.duration,
+        width=timeline_width,
+        height=timeline_height,
+        input_image_paths=input_image_paths,
+        segment_frames=segment_frames,
+        segment_prompts=segment_prompts,
+        fps=fps,
+        frame_overlaps=frame_overlaps,
+        vertical=True  # Stack images vertically for vertical layout
+    )
+
+    # Combine timeline (left) with video_stack (right)
+    final = clips_array([[timeline_clip, video_stack]])
+
+    # Ensure final dimensions are even for H.264 compatibility
+    final_width = final.w
+    final_height = final.h
+    if final_width % 2 != 0 or final_height % 2 != 0:
+        if final_width % 2 != 0:
+            final_width += 1
+        if final_height % 2 != 0:
+            final_height += 1
+        final = final.resize(width=final_width, height=final_height)
+
+    return final
+
+
 def _create_timeline_clip(
     duration: float,
     width: int,
@@ -441,7 +662,8 @@ def _create_timeline_clip(
     segment_frames: List[int],
     segment_prompts: Optional[List[str]],
     fps: int,
-    frame_overlaps: Optional[List[int]] = None
+    frame_overlaps: Optional[List[int]] = None,
+    vertical: bool = False
 ):
     """
     Create an animated timeline clip showing:
@@ -500,17 +722,22 @@ def _create_timeline_clip(
     available_width = width - (2 * margin)
 
     # Load and prepare input images with consistent sizing
-    # Calculate max thumb width ensuring images don't overflow
     num_images = len(input_image_paths)
-    spacing = 10
-    total_spacing = spacing * (num_images - 1)
 
-    # Reserve space for half-width of images on each end to prevent overflow
-    max_thumb_width = int((available_width - total_spacing) / num_images)
-    # Further reduce to leave room for image edges
-    max_thumb_width = int(max_thumb_width * 0.9)
-
-    thumb_height = int(height * 0.6)  # Use 60% of height for images
+    if vertical:
+        # For vertical layout, make images much larger
+        # Use most of the width, leaving room for progress bar and margins
+        max_thumb_width = int(width * 0.8)  # 80% of width for images
+        available_height = height - (2 * margin)
+        # Divide height by number of images
+        max_thumb_height = int(available_height / (num_images + 0.5))  # Leave some spacing
+    else:
+        # Original horizontal sizing
+        spacing = 10
+        total_spacing = spacing * (num_images - 1)
+        max_thumb_width = int((available_width - total_spacing) / num_images)
+        max_thumb_width = int(max_thumb_width * 0.9)
+        max_thumb_height = int(height * 0.6)  # Use 60% of height for images
 
     thumbnails = []
     for img_path in input_image_paths:
@@ -518,9 +745,9 @@ def _create_timeline_clip(
         # Resize to fixed width, maintaining aspect ratio
         aspect = img.height / img.width
         target_h = int(max_thumb_width * aspect)
-        if target_h > thumb_height:
-            target_h = thumb_height
-            thumb_w = int(thumb_height / aspect)
+        if target_h > max_thumb_height:
+            target_h = max_thumb_height
+            thumb_w = int(max_thumb_height / aspect)
         else:
             thumb_w = max_thumb_width
         img = img.resize((thumb_w, target_h), Image.Resampling.LANCZOS)
@@ -565,94 +792,183 @@ def _create_timeline_clip(
                 current_segment = len(segment_boundaries) - 1
             active_image_index = current_segment
 
-        # Calculate image positions spread evenly across available width
-        # Ensure progress bar uses full width and images fit within
-        bar_start_x = margin
-        bar_end_x = margin + available_width
-        bar_width = available_width
+        # Calculate image positions
+        if vertical:
+            # Stack images vertically with active image at the top
+            available_height = height - (2 * margin) - 50  # Reserve space for text at bottom
+            num_images = len(image_frame_positions)
 
-        image_x_positions = []
-        for i, frame_pos in enumerate(image_frame_positions):
-            # Calculate x position based on frame position in timeline
-            progress_ratio = frame_pos / (total_frames - 1) if total_frames > 1 else 0
-            x_pos = bar_start_x + int(progress_ratio * bar_width)
-            image_x_positions.append(x_pos)
+            # Always put active image at the top
+            image_y_positions = []
+            top_y = margin + 30  # Top position for active image
+
+            # Active image goes at top
+            image_y_positions.append(top_y)
+
+            # Remaining images distributed below
+            if num_images > 1:
+                remaining_height = available_height - 100  # Space below the top image
+                spacing_y = remaining_height / max(num_images - 1, 1)
+                for i in range(1, num_images):
+                    y_pos = top_y + 100 + int((i - 1) * spacing_y)
+                    image_y_positions.append(y_pos)
+
+            # Reorder y positions based on active image index
+            # Move active image position to first slot
+            ordered_positions = image_y_positions.copy()
+            if active_image_index < len(ordered_positions):
+                # Swap: put active image's position at index 0
+                temp_positions = [0] * num_images
+                temp_positions[active_image_index] = ordered_positions[0]  # Active gets top spot
+
+                # Distribute others
+                other_idx = 1
+                for i in range(num_images):
+                    if i != active_image_index:
+                        temp_positions[i] = ordered_positions[other_idx]
+                        other_idx += 1
+                image_y_positions = temp_positions
+
+            # For vertical layout, x is centered
+            image_x_positions = [width // 2] * num_images
+        else:
+            # Original horizontal layout
+            bar_start_x = margin
+            bar_end_x = margin + available_width
+            bar_width = available_width
+
+            image_x_positions = []
+            for i, frame_pos in enumerate(image_frame_positions):
+                # Calculate x position based on frame position in timeline
+                progress_ratio = frame_pos / (total_frames - 1) if total_frames > 1 else 0
+                x_pos = bar_start_x + int(progress_ratio * bar_width)
+                image_x_positions.append(x_pos)
+
+            # For horizontal layout, y is at top
+            image_y_positions = [10] * len(image_x_positions)
 
         # Draw thumbnails at their calculated positions
-        y_offset = 10
-        for i, (thumb, x_center) in enumerate(zip(thumbnails, image_x_positions)):
-            # Center the thumbnail at x_center, but clamp to stay within bounds
-            x_start = x_center - thumb.shape[1] // 2
-            # Ensure thumbnail doesn't overflow left or right
-            x_start = max(margin, min(x_start, width - margin - thumb.shape[1]))
-
+        for i, (thumb, x_center, y_center) in enumerate(zip(thumbnails, image_x_positions, image_y_positions)):
             # Determine if this image should be highlighted based on active_image_index
             should_highlight = (i == active_image_index)
 
+            # Feature 1: Scale active image to 1.15x
             if should_highlight:
-                # Draw highlight border
+                # Scale thumbnail to 1.15x
+                thumb_img = Image.fromarray(thumb)
+                scaled_w = int(thumb_img.width * 1.15)
+                scaled_h = int(thumb_img.height * 1.15)
+                thumb_img = thumb_img.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
+
+                # Recalculate position to keep centered
+                x_start = x_center - scaled_w // 2
+                y_start = y_center - scaled_h // 2
+                # Ensure thumbnail doesn't overflow
+                x_start = max(margin, min(x_start, width - margin - scaled_w))
+                y_start = max(margin, min(y_start, height - margin - scaled_h))
+
+                # Draw highlight border around scaled image
                 border_color = (255, 100, 0)
                 draw.rectangle(
-                    [x_start - 3, y_offset - 3,
-                     x_start + thumb.shape[1] + 3, y_offset + thumb.shape[0] + 3],
+                    [x_start - 3, y_start - 3,
+                     x_start + scaled_w + 3, y_start + scaled_h + 3],
                     outline=border_color,
                     width=4
                 )
 
-            # Paste thumbnail
-            thumb_img = Image.fromarray(thumb)
-            img.paste(thumb_img, (x_start, y_offset))
+                # Paste scaled thumbnail
+                img.paste(thumb_img, (x_start, y_start))
+            else:
+                # Normal size thumbnail
+                x_start = x_center - thumb.shape[1] // 2
+                y_start = y_center - thumb.shape[0] // 2
+                # Ensure thumbnail doesn't overflow
+                x_start = max(margin, min(x_start, width - margin - thumb.shape[1]))
+                y_start = max(margin, min(y_start, height - margin - thumb.shape[0]))
 
-        # Find the max thumbnail height for positioning the progress bar
-        max_thumb_h = max(thumb.shape[0] for thumb in thumbnails)
+                # Paste thumbnail
+                thumb_img = Image.fromarray(thumb)
+                img.paste(thumb_img, (x_start, y_start))
 
-        # Draw progress bar using full available width
-        bar_y = y_offset + max_thumb_h + 10
-        bar_height = 12
+        # Draw progress bar
+        if vertical:
+            # Vertical progress bar on the right side
+            bar_width = 12
+            bar_x = width - margin - bar_width
+            bar_start_y = margin
+            bar_end_y = height - margin
+            bar_height = bar_end_y - bar_start_y
 
-        # Background bar
-        draw.rectangle(
-            [bar_start_x, bar_y, bar_end_x, bar_y + bar_height],
-            fill=(200, 200, 200),
-            outline=(150, 150, 150)
-        )
-
-        # Progress fill - aligned from bar_start_x to current position
-        # Use the actual video time vs duration to ensure we reach 100%
-        progress = min(t / duration, 1.0)
-        progress_x = bar_start_x + int(bar_width * progress)
-
-        # Ensure at least 1 pixel of progress
-        if progress_x <= bar_start_x and progress > 0:
-            progress_x = bar_start_x + 1
-
-        draw.rectangle(
-            [bar_start_x, bar_y, progress_x, bar_y + bar_height],
-            fill=(0, 150, 255),
-            outline=None
-        )
-
-        # Draw image markers on the progress bar at each image position
-        for i, x_pos in enumerate(image_x_positions):
-            # Determine if this marker should be highlighted (same as active_image_index)
-            marker_active = (i == active_image_index)
-
-            # Draw vertical line marker
-            marker_color = (255, 100, 0) if marker_active else (100, 100, 100)
-            draw.line(
-                [(x_pos, bar_y - 5), (x_pos, bar_y + bar_height + 5)],
-                fill=marker_color,
-                width=3 if marker_active else 2
+            # Background bar
+            draw.rectangle(
+                [bar_x, bar_start_y, bar_x + bar_width, bar_end_y],
+                fill=(200, 200, 200),
+                outline=(150, 150, 150)
             )
 
-            # Draw small circle at marker position
-            circle_r = 4
-            draw.ellipse(
-                [x_pos - circle_r, bar_y + bar_height//2 - circle_r,
-                 x_pos + circle_r, bar_y + bar_height//2 + circle_r],
-                fill=marker_color,
-                outline=(255, 255, 255)
+            # Progress fill - from top to current position
+            progress = min(t / duration, 1.0)
+            progress_y = bar_start_y + int(bar_height * progress)
+
+            # Ensure at least 1 pixel of progress
+            if progress_y <= bar_start_y and progress > 0:
+                progress_y = bar_start_y + 1
+
+            draw.rectangle(
+                [bar_x, bar_start_y, bar_x + bar_width, progress_y],
+                fill=(0, 150, 255),
+                outline=None
             )
+        else:
+            # Horizontal progress bar
+            max_thumb_h = max(thumb.shape[0] for thumb in thumbnails)
+
+            bar_y = 10 + max_thumb_h + 10
+            bar_height = 12
+
+            # Background bar
+            draw.rectangle(
+                [bar_start_x, bar_y, bar_end_x, bar_y + bar_height],
+                fill=(200, 200, 200),
+                outline=(150, 150, 150)
+            )
+
+            # Progress fill - aligned from bar_start_x to current position
+            progress = min(t / duration, 1.0)
+            progress_x = bar_start_x + int(bar_width * progress)
+
+            # Ensure at least 1 pixel of progress
+            if progress_x <= bar_start_x and progress > 0:
+                progress_x = bar_start_x + 1
+
+            draw.rectangle(
+                [bar_start_x, bar_y, progress_x, bar_y + bar_height],
+                fill=(0, 150, 255),
+                outline=None
+            )
+
+        # Draw image markers on the progress bar (only for horizontal layout)
+        if not vertical:
+            for i, x_pos in enumerate(image_x_positions):
+                # Determine if this marker should be highlighted (same as active_image_index)
+                marker_active = (i == active_image_index)
+
+                # Draw vertical line marker
+                marker_color = (255, 100, 0) if marker_active else (100, 100, 100)
+                draw.line(
+                    [(x_pos, bar_y - 5), (x_pos, bar_y + bar_height + 5)],
+                    fill=marker_color,
+                    width=3 if marker_active else 2
+                )
+
+                # Draw small circle at marker position
+                circle_r = 4
+                draw.ellipse(
+                    [x_pos - circle_r, bar_y + bar_height//2 - circle_r,
+                     x_pos + circle_r, bar_y + bar_height//2 + circle_r],
+                    fill=marker_color,
+                    outline=(255, 255, 255)
+                )
 
         # Calculate current segment for text display (based on segment boundaries)
         current_segment = 0
@@ -674,7 +990,12 @@ def _create_timeline_clip(
             prompt_preview = segment_prompts[current_segment][:50]
             text += f" | {prompt_preview}..."
 
-        draw.text((margin, bar_y + 20), text, fill=(50, 50, 50), font=font)
+        # Position text below progress bar (horizontal) or at bottom (vertical)
+        if vertical:
+            text_y = height - margin - 30
+        else:
+            text_y = bar_y + 20
+        draw.text((margin, text_y), text, fill=(50, 50, 50), font=font)
 
         return np.array(img)
 
