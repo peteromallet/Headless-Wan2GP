@@ -62,6 +62,9 @@ from source.sm_functions import travel_between_images as tbi
 from source.sm_functions import different_perspective as dp
 # single_image tasks now use direct queue integration (wan_2_2_t2i)
 from source.sm_functions import magic_edit as me
+from source.sm_functions.join_clips import _handle_join_clips_task
+from source.sm_functions.inpaint_frames import _handle_inpaint_frames_task
+from source.sm_functions.create_visualization import _handle_create_visualization_task
 # --- New Queue-based Architecture Imports ---
 # Protect sys.argv before importing queue management which imports wgp.py
 _original_argv = sys.argv[:]
@@ -447,7 +450,9 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             "i2v": "i2v_14B",
             "i2v_22": "i2v_2_2",  # Wan 2.2 I2V
             "hunyuan": "hunyuan",
-            "ltxv": "ltxv_13B"
+            "ltxv": "ltxv_13B",
+            "join_clips": "lightning_baseline_2_2_2",  # Join clips uses Lightning baseline for fast generation
+            "inpaint_frames": "lightning_baseline_2_2_2"  # Inpaint frames uses Lightning baseline for fast generation
         }
         # Custom mapping for Qwen image style tasks
         if task_type == "qwen_image_style":
@@ -1565,6 +1570,32 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
             task_params_from_db=task_params_dict,
             main_output_dir_base=main_output_dir_base,
             task_id=task_id,
+            dprint=dprint
+        )
+    elif task_type == "join_clips":
+        headless_logger.debug("Delegating to join clips handler", task_id=task_id)
+        return _handle_join_clips_task(
+            task_params_from_db=task_params_dict,
+            main_output_dir_base=main_output_dir_base,
+            task_id=task_id,
+            task_queue=task_queue,
+            dprint=dprint
+        )
+    elif task_type == "inpaint_frames":
+        headless_logger.debug("Delegating to inpaint frames handler", task_id=task_id)
+        return _handle_inpaint_frames_task(
+            task_params_from_db=task_params_dict,
+            main_output_dir_base=main_output_dir_base,
+            task_id=task_id,
+            task_queue=task_queue,
+            dprint=dprint
+        )
+    elif task_type == "create_visualization":
+        headless_logger.debug("Delegating to create visualization handler", task_id=task_id)
+        return _handle_create_visualization_task(
+            task_params_from_db=task_params_dict,
+            main_output_dir_base=main_output_dir_base,
+            viz_task_id_str=task_id,
             dprint=dprint
         )
 
