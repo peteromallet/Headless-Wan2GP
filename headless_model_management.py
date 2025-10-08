@@ -1021,7 +1021,7 @@ class HeadlessTaskQueue:
             return None
 
         # Database/infrastructure parameters that should never be passed to WanGP
-        db_param_blacklist = {"db_type", "supabase_url", "supabase_anon_key", "supabase_access_token", "sqlite_db_path"}
+        db_param_blacklist = {"supabase_url", "supabase_anon_key", "supabase_access_token"}
 
         # Map parameters with proper defaults
         for our_param, wgp_param in param_mapping.items():
@@ -1106,7 +1106,7 @@ class HeadlessTaskQueue:
             self.logger.info(f"[TASK_CONVERSION] Converting task {task.id} for model '{task.model}' - parameter resolution delegated to orchestrator")
 
         # Filter out database/infrastructure parameters that should not be passed to WanGP
-        db_params_to_remove = ["db_type", "supabase_url", "supabase_anon_key", "supabase_access_token", "sqlite_db_path"]
+        db_params_to_remove = ["supabase_url", "supabase_anon_key", "supabase_access_token"]
         for param in db_params_to_remove:
             if param in wgp_params:
                 self.logger.debug(f"[PARAM_FILTER] Removing infrastructure parameter '{param}' from WanGP params")

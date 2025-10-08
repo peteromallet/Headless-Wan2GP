@@ -1,8 +1,7 @@
 """Wan2GP Worker Server.
 
-This long-running process polls the `tasks` table (SQLite by default, or
-Supabase-backed Postgres when configured), claims queued tasks, and executes
-them using the HeadlessTaskQueue system. Besides standard generation
+This long-running process polls the Supabase-backed Postgres `tasks` table,
+claims queued tasks, and executes them using the HeadlessTaskQueue system. Besides standard generation
 tasks it also contains specialised handlers for:
 
 • `generate_openpose` – creates OpenPose skeleton images using dwpose.
@@ -993,8 +992,6 @@ def parse_args():
     parser = argparse.ArgumentParser("WanGP Worker Server")
 
     pgroup_server = parser.add_argument_group("Server Settings")
-    pgroup_server.add_argument("--db-file", type=str, default="tasks.db",
-                               help="Path to the SQLite database file (if not using PostgreSQL via .env).")
     pgroup_server.add_argument("--main-output-dir", type=str, default="./outputs",
                                help="Base directory where outputs for each task will be saved (in subdirectories)")
     pgroup_server.add_argument("--poll-interval", type=int, default=10,
@@ -1005,8 +1002,6 @@ def parse_args():
                                help="Worker name/ID - creates a log file named {worker}.log in the logs folder")
     pgroup_server.add_argument("--save-logging", type=str, nargs='?', const='logs/worker.log', default=None,
                                help="Save all logging output to a file (in addition to console output). Optionally specify path, defaults to 'logs/worker.log'")
-    pgroup_server.add_argument("--delete-db", action="store_true",
-                               help="Delete existing database files before starting (fresh start)")
     pgroup_server.add_argument("--migrate-only", action="store_true",
                                help="Run database migrations and then exit.")
     pgroup_server.add_argument("--apply-reward-lora", action="store_true",
@@ -1020,14 +1015,12 @@ def parse_args():
                                help="Disable automatic mask video generation.")
     pgroup_server.add_argument("--queue-workers", type=int, default=1,
                                help="Number of queue workers for task processing (default: 1, recommended for GPU systems)")
-    
-    # --- New Supabase-related arguments ---
-    pgroup_server.add_argument("--db-type", type=str, choices=["sqlite", "supabase"], default="sqlite",
-                               help="Database type to use (default: sqlite)")
-    pgroup_server.add_argument("--supabase-url", type=str, default=None,
-                               help="Supabase project URL (required if db_type = supabase)")
-    pgroup_server.add_argument("--supabase-access-token", type=str, default=None,
-                               help="Supabase access token (JWT) for authentication (required if db_type = supabase)")
+
+    # --- Supabase-related arguments (REQUIRED) ---
+    pgroup_server.add_argument("--supabase-url", type=str, required=True,
+                               help="Supabase project URL (required)")
+    pgroup_server.add_argument("--supabase-access-token", type=str, required=True,
+                               help="Supabase access token (JWT) for authentication (required)")
     pgroup_server.add_argument("--supabase-anon-key", type=str, default=None,
                                help="Supabase anon (public) API key used to create the client when authenticating with a user JWT. If omitted, falls back to SUPABASE_ANON_KEY env var or service key.")
 
@@ -1719,21 +1712,15 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
 
 
         if chaining_result_path_override:
-            path_to_check_existence: Path | None = None
-            if db_ops.DB_TYPE == "sqlite" and db_ops.SQLITE_DB_PATH and isinstance(chaining_result_path_override, str) and chaining_result_path_override.startswith("files/"):
-                sqlite_db_parent = Path(db_ops.SQLITE_DB_PATH).resolve().parent
-                path_to_check_existence = (sqlite_db_parent / "public" / chaining_result_path_override).resolve()
-                headless_logger.debug(f"Chaining returned SQLite relative path '{chaining_result_path_override}'. Resolved to '{path_to_check_existence}' for existence check.", task_id=task_id)
-            elif chaining_result_path_override:
-                path_to_check_existence = Path(chaining_result_path_override).resolve()
-                headless_logger.debug(f"Chaining returned absolute-like path '{chaining_result_path_override}'. Resolved to '{path_to_check_existence}' for existence check.", task_id=task_id)
+            path_to_check_existence = Path(chaining_result_path_override).resolve()
+            headless_logger.debug(f"Chaining returned path '{chaining_result_path_override}'. Resolved to '{path_to_check_existence}' for existence check.", task_id=task_id)
 
-            if path_to_check_existence and path_to_check_existence.exists() and path_to_check_existence.is_file():
+            if path_to_check_existence.exists() and path_to_check_existence.is_file():
                 is_output_path_different = str(chaining_result_path_override) != str(output_location_to_db)
                 if is_output_path_different:
                     headless_logger.debug(f"Chaining modified output path for DB. Original: {output_location_to_db}, New: {chaining_result_path_override} (Checked file: {path_to_check_existence})", task_id=task_id)
                 output_location_to_db = chaining_result_path_override
-            elif chaining_result_path_override is not None:
+            else:
                 headless_logger.warning(f"Chaining reported success, but final path '{chaining_result_path_override}' (checked as '{path_to_check_existence}') is invalid or not a file. Using original WGP output '{output_location_to_db}' for DB.", task_id=task_id)
 
 
@@ -1754,8 +1741,8 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
 def send_worker_heartbeat(worker_id: str) -> bool:
     """Send heartbeat with proper error handling."""
 
-    if db_ops.DB_TYPE != "supabase" or not db_ops.SUPABASE_CLIENT:
-        headless_logger.debug(f"[HEARTBEAT] SQLite mode - no heartbeat needed")
+    if not db_ops.SUPABASE_CLIENT:
+        headless_logger.debug(f"[HEARTBEAT] Supabase client not available")
         return True
 
     # Direct table update - reliable and simple
@@ -1809,7 +1796,7 @@ def heartbeat_worker_thread(worker_id: str, stop_event: threading.Event, interva
 
 def main():
     load_dotenv() # Load .env file variables into environment
-    global DB_TYPE, SQLITE_DB_PATH, SUPABASE_CLIENT, SUPABASE_VIDEO_BUCKET
+    global SUPABASE_CLIENT, SUPABASE_VIDEO_BUCKET
 
     # Parse CLI arguments first to determine debug mode
     cli_args = parse_args()
@@ -1833,14 +1820,12 @@ def main():
     else:
         disable_debug_mode()
 
-    # Determine DB type from environment variables
-    env_db_type = os.getenv("DB_TYPE", "sqlite").lower()
+    # Read Supabase configuration from environment variables
     env_pg_table_name = os.getenv("POSTGRES_TABLE_NAME", "tasks")
     env_supabase_url = os.getenv("SUPABASE_URL")
     env_supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SERVICE_KEY")  # Support both names
     env_supabase_anon_key = os.getenv("SUPABASE_ANON_KEY")
     env_supabase_bucket = os.getenv("SUPABASE_VIDEO_BUCKET", "image_uploads")
-    env_sqlite_db_path = os.getenv("SQLITE_DB_PATH_ENV") # Read SQLite DB path from .env
 
     # ------------------------------------------------------------------
     # Auto-enable file logging when --debug flag is present
@@ -1861,31 +1846,6 @@ def main():
         cli_args.save_logging = str(default_logs_dir / f"{cli_args.worker}.log")
         headless_logger.debug(f"Worker-specific logging enabled: {cli_args.save_logging}")
     # ------------------------------------------------------------------
-
-    # --- Handle --delete-db flag ---
-    if cli_args.delete_db:
-        db_file_to_delete = cli_args.db_file
-        env_sqlite_db_path = os.getenv("SQLITE_DB_PATH_ENV")
-        if env_sqlite_db_path:
-            db_file_to_delete = env_sqlite_db_path
-        
-        db_files_to_remove = [
-            db_file_to_delete,
-            f"{db_file_to_delete}-wal",
-            f"{db_file_to_delete}-shm"
-        ]
-        
-        headless_logger.essential("Cleaning up database files")
-        for db_file in db_files_to_remove:
-            if Path(db_file).exists():
-                try:
-                    Path(db_file).unlink()
-                    headless_logger.success(f"Removed database file: {db_file}")
-                except Exception as e:
-                    headless_logger.error(f"Could not remove database file {db_file}: {e}")
-        
-        headless_logger.success("Database cleanup complete. Starting fresh.")
-    # --- End delete-db handling ---
 
     # --- Setup logging to file if requested ---
     if cli_args.save_logging:
@@ -1926,60 +1886,39 @@ def main():
         atexit.register(lambda: hasattr(sys.stdout, 'close') and sys.stdout.close())
     # --- End logging setup ---
 
-    # --- Configure DB Type and Connection Globals ---
-    # This block sets DB_TYPE, SQLITE_DB_PATH, SUPABASE_CLIENT, etc. in the db_ops module
-    if cli_args.db_type == "supabase" and cli_args.supabase_url and cli_args.supabase_access_token:
-        try:
-            # --- New PAT/JWT-based Supabase client initialization ---
-            # For PATs and user JWTs, we primarily use edge functions and avoid direct 
-            # Supabase client authentication which expects specific JWT formats.
-            # We'll create a client with the service key for internal operations,
-            # but use the access token in headers for edge function calls.
-            
-            # Use service key for admin operations if available, otherwise anon key
-            client_key = env_supabase_key or cli_args.supabase_anon_key or env_supabase_anon_key
-            
-            if not client_key:
-                raise ValueError("Need either service key or anon key for Supabase client initialization.")
+    # --- Configure Supabase Connection ---
+    try:
+        client_key = env_supabase_key or cli_args.supabase_anon_key or env_supabase_anon_key
 
-            headless_logger.debug(f"Initializing Supabase client for {cli_args.supabase_url}")
-            temp_supabase_client = create_client(cli_args.supabase_url, client_key)
-            
-            # For PATs and user tokens, we'll primarily rely on edge functions
-            # The access token will be passed in Authorization headers
-            headless_logger.debug("Supabase client initialized. Access token will be used in edge function calls.")
+        if not client_key:
+            raise ValueError("Need either service key or anon key for Supabase client initialization.")
 
-            # --- Assign to db_ops globals on success ---
-            db_ops.DB_TYPE = "supabase"
-            db_ops.PG_TABLE_NAME = env_pg_table_name
-            db_ops.SUPABASE_URL = cli_args.supabase_url
-            db_ops.SUPABASE_SERVICE_KEY = env_supabase_key # Keep service key if present
-            db_ops.SUPABASE_VIDEO_BUCKET = env_supabase_bucket
-            db_ops.SUPABASE_CLIENT = temp_supabase_client
-            # Store the access token for use in Edge Function calls
-            db_ops.SUPABASE_ACCESS_TOKEN = cli_args.supabase_access_token
+        headless_logger.debug(f"Initializing Supabase client for {cli_args.supabase_url}")
+        temp_supabase_client = create_client(cli_args.supabase_url, client_key)
 
-            # Local globals for convenience
-            DB_TYPE = "supabase"
-            SUPABASE_CLIENT = temp_supabase_client
-            SUPABASE_VIDEO_BUCKET = env_supabase_bucket
-            
-            headless_logger.success("Supabase client initialized successfully")
+        headless_logger.debug("Supabase client initialized. Access token will be used in edge function calls.")
 
-        except Exception as e:
-            headless_logger.error(f"Failed to initialize Supabase client: {e}")
-            headless_logger.debug(traceback.format_exc())
-            headless_logger.warning("Falling back to SQLite due to Supabase client initialization error")
-            db_ops.DB_TYPE = "sqlite"
-            db_ops.SQLITE_DB_PATH = env_sqlite_db_path if env_sqlite_db_path else cli_args.db_file
-    else: # Default to sqlite if .env DB_TYPE is unrecognized or not set, or if it's explicitly "sqlite"
-        if cli_args.db_type != "sqlite":
-            headless_logger.warning(f"DB_TYPE '{cli_args.db_type}' in CLI args is not recognized. Defaulting to SQLite.")
-        db_ops.DB_TYPE = "sqlite"
-        db_ops.SQLITE_DB_PATH = env_sqlite_db_path if env_sqlite_db_path else cli_args.db_file
-        DB_TYPE = "sqlite"
-        SQLITE_DB_PATH = db_ops.SQLITE_DB_PATH
-    # --- End DB Type Configuration ---
+        # --- Assign to db_ops globals ---
+        db_ops.DB_TYPE = "supabase"
+        db_ops.PG_TABLE_NAME = env_pg_table_name
+        db_ops.SUPABASE_URL = cli_args.supabase_url
+        db_ops.SUPABASE_SERVICE_KEY = env_supabase_key
+        db_ops.SUPABASE_VIDEO_BUCKET = env_supabase_bucket
+        db_ops.SUPABASE_CLIENT = temp_supabase_client
+        db_ops.SUPABASE_ACCESS_TOKEN = cli_args.supabase_access_token
+
+        # Local globals for convenience
+        SUPABASE_CLIENT = temp_supabase_client
+        SUPABASE_VIDEO_BUCKET = env_supabase_bucket
+
+        headless_logger.success("Supabase client initialized successfully")
+
+    except Exception as e:
+        headless_logger.error(f"Failed to initialize Supabase client: {e}")
+        headless_logger.debug(traceback.format_exc())
+        headless_logger.critical("Cannot continue without Supabase connection. Exiting.")
+        sys.exit(1)
+    # --- End Supabase Configuration ---
 
     # --- Run DB Migrations ---
     # Must be after DB type/config is determined but before DB schema is strictly enforced by init_db or heavy use.
@@ -2000,15 +1939,12 @@ def main():
     print(f"WanGP Headless Server Started.")
     if cli_args.worker:
         print(f"Worker ID: {cli_args.worker}")
-    if db_ops.DB_TYPE == "supabase":
-        print(f"Monitoring Supabase (PostgreSQL backend) table: {db_ops.PG_TABLE_NAME}")
-    else: # SQLite
-        print(f"Monitoring SQLite database: {db_ops.SQLITE_DB_PATH}")
+    print(f"Monitoring Supabase (PostgreSQL backend) table: {db_ops.PG_TABLE_NAME}")
     print(f"Outputs will be saved under: {main_output_dir}")
     print(f"Polling interval: {cli_args.poll_interval} seconds.")
 
     # Start heartbeat thread if worker ID is provided
-    if cli_args.worker and db_ops.DB_TYPE == "supabase":
+    if cli_args.worker:
         print(f"Starting heartbeat thread for worker: {cli_args.worker}")
         heartbeat_thread = threading.Thread(
             target=heartbeat_worker_thread,
@@ -2017,24 +1953,17 @@ def main():
         )
         heartbeat_thread.start()
         print(f"✅ Heartbeat thread started (20-second intervals)")
-    elif cli_args.worker:
-        print(f"⚠️  Worker ID provided but SQLite mode - heartbeat not needed")
     else:
         print(f"⚠️  No worker ID provided - heartbeat disabled")
 
     # Initialize database
     # Supabase table/schema assumed to exist; skip initialization RPC
-    if db_ops.DB_TYPE == "supabase":
-        dprint("Supabase: Skipping init_db_supabase – table assumed present.")
-    else: # SQLite
-        db_ops.init_db() # Existing SQLite init
+    dprint("Supabase: Skipping init_db – table assumed present.")
 
     # Activate global debug switch early so that all subsequent code paths can use dprint()
     debug_mode = cli_args.debug
     db_ops.debug_mode = cli_args.debug # Also set it in the db_ops module
     dprint("Verbose debug logging enabled.")
-
-    db_path_str = str(db_ops.SQLITE_DB_PATH) if db_ops.DB_TYPE == "sqlite" else db_ops.PG_TABLE_NAME # Use consistent string path for db functions
 
     # --- Initialize Task Queue System (required) ---
     headless_logger.essential("Initializing queue-based task processing system...")
@@ -2054,46 +1983,21 @@ def main():
     # --- End Task Queue Initialization ---
 
     try:
-        # --- Add a one-time diagnostic log for task counts ---
-        if db_ops.DB_TYPE == "sqlite" and debug_mode:
-            try:
-                counts = db_ops.get_initial_task_counts()
-                if counts:
-                    total_tasks, queued_tasks = counts
-                    dprint(f"SQLite Initial State: Total tasks in '{db_ops.PG_TABLE_NAME}': {total_tasks}. Tasks with status '{db_ops.STATUS_QUEUED}': {queued_tasks}.")
-            except Exception as e_diag:
-                dprint(f"SQLite Diagnostic Error: Could not get initial task counts: {e_diag}")
-        # --- End one-time diagnostic log ---
-
         while True:
             task_info = None
             current_task_id_for_status_update = None # Used to hold the task_id for status updates
             current_project_id = None # To hold the project_id for the current task
 
-            if db_ops.DB_TYPE == "supabase":
-                dprint(f"Checking for queued tasks in Supabase (PostgreSQL backend) table {db_ops.PG_TABLE_NAME} via Supabase RPC...")
-                task_info = db_ops.get_oldest_queued_task_supabase(worker_id=cli_args.worker)
-                dprint(f"Supabase task_info: {task_info}") # ADDED DPRINT
-                if task_info:
-                    current_task_id_for_status_update = task_info["task_id"]
-                    # Status is already set to IN_PROGRESS by claim-next-task Edge Function
-            else: # SQLite
-                dprint(f"Checking for queued tasks in SQLite {db_ops.SQLITE_DB_PATH}...")
-                task_info = db_ops.get_oldest_queued_task()
-                dprint(f"SQLite task_info: {task_info}") # ADDED DPRINT
-                if task_info:
-                    current_task_id_for_status_update = task_info["task_id"]
-                    db_ops.update_task_status(current_task_id_for_status_update, db_ops.STATUS_IN_PROGRESS)
+            dprint(f"Checking for queued tasks in Supabase (PostgreSQL backend) table {db_ops.PG_TABLE_NAME} via Supabase RPC...")
+            task_info = db_ops.get_oldest_queued_task_supabase(worker_id=cli_args.worker)
+            dprint(f"Supabase task_info: {task_info}")
+            if task_info:
+                current_task_id_for_status_update = task_info["task_id"]
+                # Status is already set to IN_PROGRESS by claim-next-task Edge Function
 
             if not task_info:
                 dprint("No queued tasks found. Sleeping...")
-                if db_ops.DB_TYPE == "sqlite":
-                    # Wait until either the WAL/db file changes or the normal
-                    # poll interval elapses.  This reduces perceived latency
-                    # without hammering the database.
-                    _wait_for_sqlite_change(db_ops.SQLITE_DB_PATH, cli_args.poll_interval)
-                else:
-                    time.sleep(cli_args.poll_interval)
+                time.sleep(cli_args.poll_interval)
                 continue
 
             # current_task_data = task_info["params"] # Params are already a dict
@@ -2102,29 +2006,23 @@ def main():
             current_project_id = task_info.get("project_id") # Get project_id, might be None if not returned
             
             # This fallback logic remains, but it's less likely to be needed
-            # if get_oldest_queued_task and its supabase equivalent are reliable.
+            # if get_oldest_queued_task_supabase is reliable.
             if current_project_id is None and current_task_id_for_status_update:
                 headless_logger.debug(f"Project ID not directly available. Attempting to fetch manually...", task_id=current_task_id_for_status_update)
-                if db_ops.DB_TYPE == "supabase" and db_ops.SUPABASE_CLIENT:
-                    try:
-                        # Using 'id' as the column name for task_id based on Supabase schema conventions seen elsewhere (e.g. init_db)
-                        response = db_ops.SUPABASE_CLIENT.table(db_ops.PG_TABLE_NAME)\
-                            .select("project_id")\
-                            .eq("id", current_task_id_for_status_update)\
-                            .single()\
-                            .execute()
-                        if response.data and response.data.get("project_id"):
-                            current_project_id = response.data["project_id"]
-                            headless_logger.debug(f"Successfully fetched project_id '{current_project_id}' from Supabase", task_id=current_task_id_for_status_update)
-                        else:
-                            headless_logger.debug(f"Could not fetch project_id from Supabase. Response data: {response.data}, error: {response.error}", task_id=current_task_id_for_status_update)
-                    except Exception as e_fetch_proj_id:
-                        headless_logger.debug(f"Exception while fetching project_id from Supabase: {e_fetch_proj_id}", task_id=current_task_id_for_status_update)
-                elif db_ops.DB_TYPE == "sqlite": # Should have been fetched, but as a fallback
-                    # This fallback no longer needs its own db connection logic.
-                    # A new helper could be added to db_ops if this is truly needed,
-                    # but for now, we assume the primary fetch works.
-                    headless_logger.debug(f"Project_id was not fetched from SQLite. This is unexpected.", task_id=current_task_id_for_status_update)
+                try:
+                    # Using 'id' as the column name for task_id based on Supabase schema conventions
+                    response = db_ops.SUPABASE_CLIENT.table(db_ops.PG_TABLE_NAME)\
+                        .select("project_id")\
+                        .eq("id", current_task_id_for_status_update)\
+                        .single()\
+                        .execute()
+                    if response.data and response.data.get("project_id"):
+                        current_project_id = response.data["project_id"]
+                        headless_logger.debug(f"Successfully fetched project_id '{current_project_id}' from Supabase", task_id=current_task_id_for_status_update)
+                    else:
+                        headless_logger.debug(f"Could not fetch project_id from Supabase. Response data: {response.data}, error: {response.error}", task_id=current_task_id_for_status_update)
+                except Exception as e_fetch_proj_id:
+                    headless_logger.debug(f"Exception while fetching project_id from Supabase: {e_fetch_proj_id}", task_id=current_task_id_for_status_update)
 
             
             # Critical check: project_id is NOT NULL for sub-tasks created by orchestrator
@@ -2132,10 +2030,7 @@ def main():
                 headless_logger.error(f"Orchestrator task has no project_id. Sub-tasks cannot be created. Skipping task.", task_id=current_task_id_for_status_update)
                 # Update status to FAILED to prevent re-processing this broken state
                 error_message_for_db = "Failed: Orchestrator task missing project_id, cannot create sub-tasks."
-                if db_ops.DB_TYPE == "supabase":
-                    db_ops.update_task_status_supabase(current_task_id_for_status_update, db_ops.STATUS_FAILED, error_message_for_db)
-                else:
-                    db_ops.update_task_status(current_task_id_for_status_update, db_ops.STATUS_FAILED, error_message_for_db)
+                db_ops.update_task_status_supabase(current_task_id_for_status_update, db_ops.STATUS_FAILED, error_message_for_db)
                 time.sleep(1) # Brief pause
                 continue # Skip to next polling cycle
 
@@ -2180,18 +2075,11 @@ def main():
                         task_id=current_task_id_for_status_update
                     )
                 else:
-                    if db_ops.DB_TYPE == "supabase":
-                        db_ops.update_task_status_supabase(
-                            current_task_id_for_status_update,
-                            db_ops.STATUS_COMPLETE,
-                            output_location,
-                        )
-                    else:
-                        db_ops.update_task_status(
-                            current_task_id_for_status_update,
-                            db_ops.STATUS_COMPLETE,
-                            output_location,
-                        )
+                    db_ops.update_task_status_supabase(
+                        current_task_id_for_status_update,
+                        db_ops.STATUS_COMPLETE,
+                        output_location,
+                    )
                     headless_logger.success(
                         f"Task completed successfully: {output_location}",
                         task_id=current_task_id_for_status_update
@@ -2200,12 +2088,9 @@ def main():
                     # Clean up generated files unless debug mode is enabled
                     cleanup_generated_files(output_location, current_task_id_for_status_update)
             else:
-                if db_ops.DB_TYPE == "supabase":
-                    db_ops.update_task_status_supabase(current_task_id_for_status_update, db_ops.STATUS_FAILED, output_location)
-                else:
-                    db_ops.update_task_status(current_task_id_for_status_update, db_ops.STATUS_FAILED, output_location)
+                db_ops.update_task_status_supabase(current_task_id_for_status_update, db_ops.STATUS_FAILED, output_location)
                 headless_logger.error(
-                    f"Task failed. Output: {output_location if output_location else 'N/A'}", 
+                    f"Task failed. Output: {output_location if output_location else 'N/A'}",
                     task_id=current_task_id_for_status_update
                 )
             
@@ -2244,24 +2129,17 @@ def main():
         if current_task_id_for_status_update:
             try:
                 headless_logger.essential(f"Resetting task {current_task_id_for_status_update} back to Queued...")
-                if db_ops.DB_TYPE == "supabase":
-                    db_ops.update_task_status_supabase(
-                        current_task_id_for_status_update,
-                        db_ops.STATUS_QUEUED,
-                        "Reset to Queued due to worker shutdown"
-                    )
-                else:
-                    db_ops.update_task_status(
-                        current_task_id_for_status_update,
-                        db_ops.STATUS_QUEUED,
-                        "Reset to Queued due to worker shutdown"
-                    )
+                db_ops.update_task_status_supabase(
+                    current_task_id_for_status_update,
+                    db_ops.STATUS_QUEUED,
+                    "Reset to Queued due to worker shutdown"
+                )
                 headless_logger.success(f"Task {current_task_id_for_status_update} reset to Queued")
             except Exception as e_reset:
                 headless_logger.error(f"Failed to reset task status: {e_reset}")
     finally:
         # Stop heartbeat thread
-        if cli_args.worker and db_ops.DB_TYPE == "supabase":
+        if cli_args.worker:
             print("Stopping heartbeat thread...")
             heartbeat_stop_event.set()
             if heartbeat_thread and heartbeat_thread.is_alive():
@@ -2282,46 +2160,6 @@ def main():
         
         headless_logger.essential("Server stopped")
 
-
-
-def _wait_for_sqlite_change(db_path_str: str, timeout_seconds: int):
-    """Block up to timeout_seconds waiting for mtime change on db / -wal / -shm.
-
-    This lets the headless server react almost immediately when another process
-    commits a transaction that only touches the WAL file.  We fall back to a
-    normal sleep when the auxiliary files do not exist (e.g. before first
-    write).
-    """
-    related_paths = [
-        Path(db_path_str),
-        Path(f"{db_path_str}-wal"),
-        Path(f"{db_path_str}-shm"),
-    ]
-
-    # Snapshot the most-recent modification time we can observe now.
-    last_mtime = 0.0
-    for p in related_paths:
-        try:
-            last_mtime = max(last_mtime, p.stat().st_mtime)
-        except FileNotFoundError:
-            # Aux file not created yet – ignore.
-            pass
-
-    # Poll in small increments until something changes or timeout expires.
-    poll_step = 0.25  # seconds
-    waited = 0.0
-    while waited < timeout_seconds:
-        time.sleep(poll_step)
-        waited += poll_step
-        for p in related_paths:
-            try:
-                if p.stat().st_mtime > last_mtime:
-                    return  # Change detected – return immediately
-            except FileNotFoundError:
-                # File still missing – keep waiting
-                pass
-    # Timed out – return control to caller
-    return
 
 if __name__ == "__main__":
     main() 

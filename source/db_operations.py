@@ -991,7 +991,7 @@ def get_completed_segment_outputs_for_stitch(run_id: str, project_id: str | None
 def get_initial_task_counts() -> tuple[int, int] | None:
     """
     Gets the total and queued task counts (no longer supported - returns None).
-    This function was for SQLite only and is kept for API compatibility.
+    This function is kept for API compatibility.
     """
     return None
 
