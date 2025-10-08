@@ -10,7 +10,7 @@
       "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-T2V-A14B-4steps-lora-250928/low_noise_model.safetensors"
     ],
     "loras_multipliers": [
-      "0;1.0;0",
+      "0.75;1.0;0",
       "0;0;1"
     ],
     "lock_guidance_phases": true,
