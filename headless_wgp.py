@@ -959,7 +959,8 @@ class WanOrchestrator:
             actual_guidance = final_guidance_scale
 
         # Set up VACE parameters
-        if not is_vace:
+        # Only disable VACE if model doesn't support it AND no VACE params were provided
+        if not is_vace and not video_guide and not video_mask:
             video_guide = None
             video_mask = None
             video_prompt_type = "disabled"
@@ -1417,7 +1418,7 @@ class WanOrchestrator:
         
         generation_logger.essential(f"Generating {model_type_desc} {content_type}: {resolution}, {count_desc}")
         if is_vace:
-            encodings = [c for c in video_prompt_type if c in "PDSLCMUA"]
+            encodings = [c for c in video_prompt_type if c in "VPDSLCMUA"]
             generation_logger.debug(f"VACE encodings: {encodings}")
         if activated_loras:
             generation_logger.debug(f"LoRAs: {activated_loras}")

@@ -728,10 +728,40 @@ class HeadlessTaskQueue:
         
         # Convert task parameters to WanOrchestrator format
         wgp_params = self._convert_to_wgp_task(task)
-        
+
         # Remove model and prompt from params since they're passed separately to avoid duplication
         generation_params = {k: v for k, v in wgp_params.items() if k not in ("model", "prompt")}
-        
+
+        # DEBUG: Log all parameter keys to verify _parsed_phase_config is present
+        self.logger.info(f"[PHASE_CONFIG_DEBUG] Task {task.id}: generation_params keys: {list(generation_params.keys())}")
+
+        # CRITICAL: Apply phase_config patches NOW in the worker thread where wgp is imported
+        # Store patch info for cleanup in finally block
+        _patch_applied = False
+        _parsed_phase_config_for_restore = None
+        _model_name_for_restore = None
+
+        if "_parsed_phase_config" in generation_params and "_phase_config_model_name" in generation_params:
+            parsed_phase_config = generation_params.pop("_parsed_phase_config")
+            model_name = generation_params.pop("_phase_config_model_name")
+
+            # Save for restoration
+            _parsed_phase_config_for_restore = parsed_phase_config
+            _model_name_for_restore = model_name
+
+            self.logger.info(f"[PHASE_CONFIG] Applying model patch in GenerationWorker for '{model_name}'")
+
+            # Import apply_phase_config_patch from worker
+            import sys
+            from pathlib import Path
+            worker_dir = Path(__file__).parent
+            if str(worker_dir) not in sys.path:
+                sys.path.insert(0, str(worker_dir))
+
+            from worker import apply_phase_config_patch
+            apply_phase_config_patch(parsed_phase_config, model_name, task.id)
+            _patch_applied = True
+
         # Log generation parameters for debugging
         dprint(f"[GENERATION_DEBUG] Task {task.id}: Generation parameters:")
         for key, value in generation_params.items():
@@ -739,8 +769,8 @@ class HeadlessTaskQueue:
                 dprint(f"[GENERATION_DEBUG]   {key}: {value}")
             elif key in ["video_length", "resolution", "num_inference_steps"]:
                 dprint(f"[GENERATION_DEBUG]   {key}: {value}")
-        
-        # Determine generation type and delegate
+
+        # Determine generation type and delegate - wrap in try/finally for patch restoration
         try:
             # Check if model supports VACE features
             model_supports_vace = self._model_supports_vace(task.model)
@@ -795,11 +825,24 @@ class HeadlessTaskQueue:
                     return png_result
 
             return result
-            
+
         except Exception as e:
             self.logger.error(f"{worker_name} generation failed for task {task.id}: {e}")
             raise
-    
+        finally:
+            # CRITICAL: Restore model patches to prevent contamination across tasks
+            if _patch_applied and _parsed_phase_config_for_restore and _model_name_for_restore:
+                try:
+                    from worker import restore_model_patches
+                    restore_model_patches(
+                        _parsed_phase_config_for_restore,
+                        _model_name_for_restore,
+                        task.id
+                    )
+                    self.logger.info(f"[PHASE_CONFIG] Restored original model definition for '{_model_name_for_restore}' after task {task.id}")
+                except Exception as restore_error:
+                    self.logger.warning(f"[PHASE_CONFIG] Failed to restore model patches for task {task.id}: {restore_error}")
+
     def _model_supports_vace(self, model_key: str) -> bool:
         """
         Check if a model supports VACE features (video guides, masks, etc.).
@@ -995,6 +1038,9 @@ class HeadlessTaskQueue:
             "sample_solver": "sample_solver",
             "lora_names": "lora_names",
             "lora_multipliers": "lora_multipliers",
+            # Special phase_config patching parameters (internal use)
+            "_parsed_phase_config": "_parsed_phase_config",
+            "_phase_config_model_name": "_phase_config_model_name",
         }
         
 
@@ -1088,10 +1134,18 @@ class HeadlessTaskQueue:
         if "activated_loras" in task.parameters:
             wgp_params["lora_names"] = task.parameters["activated_loras"]
         if "loras_multipliers" in task.parameters:
-            # Convert from string format "1.0,0.8" to list
+            # Convert from string format to list
             if isinstance(task.parameters["loras_multipliers"], str):
                 multipliers_str = task.parameters["loras_multipliers"]
-                wgp_params["lora_multipliers"] = [float(x.strip()) for x in multipliers_str.split(",") if x.strip()]
+
+                # Detect phase-config format (contains semicolons)
+                if ";" in multipliers_str:
+                    # Phase-config format: space-separated strings like "1.0;0 0;1.0"
+                    # Keep as strings, don't convert to floats
+                    wgp_params["lora_multipliers"] = [x.strip() for x in multipliers_str.split() if x.strip()]
+                else:
+                    # Regular format: comma-separated floats like "1.0,0.8"
+                    wgp_params["lora_multipliers"] = [float(x.strip()) for x in multipliers_str.split(",") if x.strip()]
             else:
                 wgp_params["lora_multipliers"] = task.parameters["loras_multipliers"]
 
@@ -1112,11 +1166,18 @@ class HeadlessTaskQueue:
                 self.logger.debug(f"[PARAM_FILTER] Removing infrastructure parameter '{param}' from WanGP params")
                 wgp_params.pop(param)
 
+        # DEBUG: Check if _parsed_phase_config made it through param_mapping
+        if "_parsed_phase_config" in wgp_params:
+            self.logger.info(f"[PARAM_MAPPING_CHECK] Task {task.id}: ✅ _parsed_phase_config PRESENT in wgp_params before LoRA processing")
+        else:
+            self.logger.warning(f"[PARAM_MAPPING_CHECK] Task {task.id}: ❌ _parsed_phase_config MISSING from wgp_params before LoRA processing")
+            self.logger.info(f"[PARAM_MAPPING_CHECK] Task {task.id}: Available keys: {list(wgp_params.keys())}")
+
         # Apply sampler-specific CFG settings if available
         sample_solver = task.parameters.get("sample_solver", wgp_params.get("sample_solver", ""))
         if sample_solver:
             self._apply_sampler_cfg_preset(task.model, sample_solver, wgp_params)
-        
+
         # Complete LoRA processing pipeline using centralized utilities
         # CRITICAL: lora_utils imports wgp, so we must change to Wan2GP directory first
         import sys
