@@ -146,7 +146,157 @@ def _cleanup_temporary_files(task_id: str = "unknown") -> None:
     # This function is mainly a safety net for any edge cases where cleanup
     # might not have occurred properly during normal execution.
 
+    # Clean up phase_config in-memory model patches
+    # Note: The cleanup is now handled by restore_model_patches() which should be
+    # called at the end of task processing. This is just a safety net.
+    try:
+        import sys
+        wan_dir_path = str(Path(__file__).parent / "Wan2GP")
+        if wan_dir_path in sys.path:
+            # Check if we have any stored patch info to restore
+            # (This would only happen if the task didn't clean up properly)
+            pass  # Actual restoration happens in the task processing flow
+    except Exception as e:
+        headless_logger.warning(f"Failed during model patch cleanup check: {e}", task_id=task_id)
+
     headless_logger.debug(f"Temporary file cleanup completed (most temp files auto-cleaned by their creators)", task_id=task_id)
+
+# -----------------------------------------------------------------------------
+# Phase Config Model Patching Functions
+# -----------------------------------------------------------------------------
+
+def apply_phase_config_patch(parsed_phase_config: dict, model_name: str, task_id: str):
+    """
+    Apply phase_config patches to the model definition in WGP.
+    This must be called AFTER WGP is initialized (right before generation).
+
+    Args:
+        parsed_phase_config: The result dict from parse_phase_config() containing patch info
+        model_name: The model name to patch
+        task_id: Task ID for logging
+    """
+    if not parsed_phase_config.get("_patch_config"):
+        return  # No patch needed
+
+    try:
+        import sys
+        import json
+        import os
+        from pathlib import Path
+        import copy
+
+        wan_dir = Path(__file__).parent / "Wan2GP"
+        defaults_dir = wan_dir / "defaults"
+
+        if str(wan_dir) not in sys.path:
+            sys.path.insert(0, str(wan_dir))
+
+        # Change to Wan2GP directory so WGP can find model definitions
+        _saved_cwd = os.getcwd()
+        os.chdir(str(wan_dir))
+
+        # Protect sys.argv before importing WGP to avoid argparse errors
+        _saved_argv = sys.argv[:]
+        sys.argv = ["apply_phase_config_patch.py"]
+        try:
+            import wgp
+
+            # FORCE-load the model definition if not already loaded
+            # This ensures wgp.models_def is populated before patching
+            if model_name not in wgp.models_def:
+                headless_logger.debug(
+                    f"Model definition '{model_name}' not in wgp.models_def, force-loading it now",
+                    task_id=task_id
+                )
+                model_def = wgp.get_model_def(model_name)
+                if not model_def:
+                    headless_logger.warning(
+                        f"Model '{model_name}' not found, cannot patch for phase_config",
+                        task_id=task_id
+                    )
+                    return
+
+                # Ensure the model definition is now in wgp.models_def
+                # get_model_def should have added it, but verify
+                if model_name not in wgp.models_def:
+                    # Manually add it if get_model_def didn't
+                    wgp.models_def[model_name] = wgp.init_model_def(model_name, model_def)
+                    headless_logger.debug(
+                        f"Manually added '{model_name}' to wgp.models_def",
+                        task_id=task_id
+                    )
+
+            # Check if model exists in models_def (should be loaded now)
+            if model_name in wgp.models_def:
+                # Store original for restoration later
+                parsed_phase_config["_original_model_def"] = copy.deepcopy(wgp.models_def[model_name])
+                parsed_phase_config["_model_was_patched"] = True
+
+                # Get the patch config we saved earlier
+                patch_config = parsed_phase_config["_patch_config"]
+
+                # Overwrite the ORIGINAL model entry in models_def
+                temp_model_def = copy.deepcopy(patch_config["model"])
+
+                # Store settings (top-level config minus model) in model_def
+                temp_settings = copy.deepcopy(patch_config)
+                del temp_settings["model"]
+                temp_model_def["settings"] = temp_settings
+
+                # DIRECTLY PATCH the original model name's entry
+                # First set the partial def, then run init_model_def to add family-handler defaults like vace_class
+                wgp.models_def[model_name] = temp_model_def
+                temp_model_def = wgp.init_model_def(model_name, temp_model_def)
+                wgp.models_def[model_name] = temp_model_def
+
+                headless_logger.info(
+                    f"✅ Patched wgp.models_def['{model_name}'] in memory: {patch_config.get('guidance_phases')} phases, "
+                    f"cleared built-in LoRAs, flow_shift={patch_config.get('flow_shift')}, "
+                    f"solver={patch_config.get('sample_solver')}",
+                    task_id=task_id
+                )
+            else:
+                headless_logger.warning(
+                    f"Model '{model_name}' not found in wgp.models_def after load attempt",
+                    task_id=task_id
+                )
+        finally:
+            sys.argv = _saved_argv
+            os.chdir(_saved_cwd)
+    except Exception as e:
+        headless_logger.warning(f"Failed to apply phase_config patch: {e}", task_id=task_id)
+        import traceback
+        headless_logger.debug(f"Patch error traceback: {traceback.format_exc()}", task_id=task_id)
+
+
+def restore_model_patches(parsed_phase_config: dict, model_name: str, task_id: str):
+    """
+    Restore the original model definition after phase_config patching.
+
+    Args:
+        parsed_phase_config: The result dict from parse_phase_config()
+        model_name: The original model name that was patched
+        task_id: Task ID for logging
+    """
+    if not parsed_phase_config.get("_model_was_patched"):
+        return  # Nothing to restore
+
+    try:
+        import sys
+        wan_dir_path = str(Path(__file__).parent / "Wan2GP")
+        if wan_dir_path in sys.path:
+            import wgp
+
+            if "_original_model_def" in parsed_phase_config and model_name in wgp.models_def:
+                # Restore the original model definition
+                wgp.models_def[model_name] = parsed_phase_config["_original_model_def"]
+                headless_logger.info(
+                    f"✅ Restored original wgp.models_def['{model_name}']",
+                    task_id=task_id
+                )
+    except Exception as e:
+        headless_logger.warning(f"Failed to restore model patches: {e}", task_id=task_id)
+
 
 # -----------------------------------------------------------------------------
 # Queue-based Task Processing Functions
@@ -206,16 +356,33 @@ def parse_phase_config(phase_config: dict, num_inference_steps: int, task_id: st
             new_t = new_t * num_timesteps
             return new_t
 
-    # Validation
+    # Validation with auto-correction
     num_phases = phase_config.get("num_phases", 3)
     steps_per_phase = phase_config.get("steps_per_phase", [2, 2, 2])
     flow_shift = phase_config.get("flow_shift", 5.0)
+    phases_config = phase_config.get("phases", [])
+
+    # Auto-correct num_phases if it doesn't match steps_per_phase or phases array
+    if len(steps_per_phase) != num_phases or len(phases_config) != num_phases:
+        inferred_phases = len(steps_per_phase)
+        if len(phases_config) != inferred_phases:
+            # Mismatch between all three - use phases array as source of truth
+            inferred_phases = len(phases_config)
+            headless_logger.warning(
+                f"phase_config mismatch: num_phases={num_phases}, steps_per_phase has {len(steps_per_phase)} values, "
+                f"phases array has {len(phases_config)} entries. Using phases array length: {inferred_phases}",
+                task_id=task_id
+            )
+        else:
+            headless_logger.warning(
+                f"phase_config mismatch: num_phases={num_phases} but steps_per_phase has {len(steps_per_phase)} values. "
+                f"Auto-correcting num_phases to {inferred_phases}",
+                task_id=task_id
+            )
+        num_phases = inferred_phases
 
     if num_phases not in [2, 3]:
         raise ValueError(f"Task {task_id}: num_phases must be 2 or 3, got {num_phases}")
-
-    if len(steps_per_phase) != num_phases:
-        raise ValueError(f"Task {task_id}: steps_per_phase length ({len(steps_per_phase)}) must match num_phases ({num_phases})")
 
     total_steps = sum(steps_per_phase)
     if total_steps != num_inference_steps:
@@ -393,57 +560,70 @@ def parse_phase_config(phase_config: dict, num_inference_steps: int, task_id: st
         except (ValueError, IndexError):
             additional_loras[lora_url] = 1.0
 
-    # COMPATIBILITY FIX: Check if model expects more phases than phase_config specifies
-    # This happens when using 2-phase config with 3-phase models like lightning_baseline_2_2_2
-    # The model has built-in LoRAs with 3-phase format, so we need to pad our LoRAs to match
-    if model_name and num_phases == 2:
+    # PREPARE patch config (will be applied later when WGP is initialized)
+    # We don't apply the patch here because WGP might not be loaded yet.
+    # The patch will be applied by apply_phase_config_patch() right before generation.
+    headless_logger.debug(f"[PATCH_CHECK] model_name parameter = {repr(model_name)}", task_id=task_id)
+    if model_name:
         try:
-            # Try to detect model's expected guidance_phases
-            import sys
+            import json
             from pathlib import Path
             wan_dir = Path(__file__).parent / "Wan2GP"
-            if str(wan_dir) not in sys.path:
-                sys.path.insert(0, str(wan_dir))
+            defaults_dir = wan_dir / "defaults"
 
-            _saved_argv = sys.argv[:]
-            try:
-                sys.argv = ["worker.py"]
-                import wgp
-                model_def = wgp.get_model_def(model_name)
+            # Load the original model config file to prepare the patch
+            original_config_path = defaults_dir / f"{model_name}.json"
+            if original_config_path.exists():
+                with open(original_config_path, 'r') as f:
+                    original_config = json.load(f)
 
-                if model_def:
-                    # Check if model config has guidance_phases=3
-                    model_guidance_phases = model_def.get("guidance_phases", 2)
+                # Create modified config with phase_config LoRAs instead of built-in ones
+                import copy
+                temp_config = copy.deepcopy(original_config)
 
-                    if model_guidance_phases == 3:
-                        headless_logger.warning(
-                            f"Model {model_name} expects 3 guidance phases, but phase_config specifies 2. "
-                            f"Padding LoRA multipliers to 3-phase format for compatibility.",
-                            task_id=task_id
-                        )
+                # Override guidance_phases and scales
+                temp_config["guidance_phases"] = num_phases
 
-                        # Pad all lora_multipliers from "val1;val2" to "val1;val2;0"
-                        padded_multipliers = []
-                        for mult_str in lora_multipliers:
-                            padded_multipliers.append(f"{mult_str};0")
+                # Set guidance scales from phase_config
+                guidance_scales = [p.get("guidance_scale", 1.0) for p in phases_config]
+                if len(guidance_scales) >= 1:
+                    temp_config["guidance_scale"] = guidance_scales[0]
+                if len(guidance_scales) >= 2:
+                    temp_config["guidance2_scale"] = guidance_scales[1]
+                if len(guidance_scales) >= 3:
+                    temp_config["guidance3_scale"] = guidance_scales[2]
 
-                        lora_multipliers = padded_multipliers
+                # Set flow_shift and sample_solver from phase_config
+                temp_config["flow_shift"] = phase_config.get("flow_shift", temp_config.get("flow_shift", 5.0))
+                temp_config["sample_solver"] = phase_config.get("sample_solver", temp_config.get("sample_solver", "euler"))
 
-                        # Update guidance_phases to 3 and add phase 3 guidance scale
-                        result["guidance_phases"] = 3
-                        result["guidance3_scale"] = 1.0  # Default for phase 3
+                # Clear built-in LoRAs - phase_config LoRAs will be passed separately
+                if "model" in temp_config:
+                    temp_config["model"]["loras"] = []
+                    temp_config["model"]["loras_multipliers"] = []
 
-                        headless_logger.info(
-                            f"Padded LoRA multipliers to 3-phase format: {lora_multipliers}",
-                            task_id=task_id
-                        )
-            finally:
-                sys.argv = _saved_argv
+                # Store the patch config to be applied later
+                result["_patch_config"] = temp_config
+                result["_patch_model_name"] = model_name
+
+                headless_logger.info(
+                    f"📦 Prepared phase_config patch for '{model_name}': {num_phases} phases, "
+                    f"cleared built-in LoRAs, flow_shift={temp_config['flow_shift']}, "
+                    f"solver={temp_config['sample_solver']} (will apply before generation)",
+                    task_id=task_id
+                )
+            else:
+                headless_logger.warning(
+                    f"Model config file not found: {original_config_path}",
+                    task_id=task_id
+                )
         except Exception as e:
             headless_logger.warning(
-                f"Could not check model guidance_phases for compatibility: {e}",
+                f"Could not prepare phase_config patch: {e}",
                 task_id=task_id
             )
+            import traceback
+            headless_logger.debug(f"Patch prep error traceback: {traceback.format_exc()}", task_id=task_id)
 
     result["lora_names"] = all_lora_urls
     result["lora_multipliers"] = lora_multipliers
@@ -901,7 +1081,8 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             parsed_phase_config = parse_phase_config(
                 phase_config=db_task_params["phase_config"],
                 num_inference_steps=phase_config_steps,
-                task_id=task_id
+                task_id=task_id,
+                model_name=model
             )
 
             # Override ALL phase-related parameters INCLUDING num_inference_steps
@@ -913,6 +1094,37 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
                        "lora_names", "lora_multipliers", "additional_loras"]:
                 if key in parsed_phase_config and parsed_phase_config[key] is not None:
                     generation_params[key] = parsed_phase_config[key]
+
+            # CRITICAL: Also set old-style WGP parameters for compatibility
+            # WGP internally uses activated_loras (list) and loras_multipliers (space-separated string)
+            if "lora_names" in parsed_phase_config:
+                generation_params["activated_loras"] = parsed_phase_config["lora_names"]
+            if "lora_multipliers" in parsed_phase_config:
+                # Convert list of phase-config strings to space-separated string
+                # e.g., ['1.0;0', '0;1.0'] → '1.0;0 0;1.0'
+                generation_params["loras_multipliers"] = " ".join(str(m) for m in parsed_phase_config["lora_multipliers"])
+                headless_logger.debug(
+                    f"Set loras_multipliers string: {generation_params['loras_multipliers']}",
+                    task_id=task_id
+                )
+
+            # PHASE_CONFIG IN-MEMORY PATCH:
+            # Store the parsed_phase_config in task parameters so the GenerationWorker can apply it
+            # The patch MUST be applied in the worker thread where wgp is actually imported
+            if "_patch_config" in parsed_phase_config:
+                generation_params["_parsed_phase_config"] = parsed_phase_config
+                generation_params["_phase_config_model_name"] = model
+                headless_logger.info(
+                    f"[PHASE_CONFIG] Prepared phase_config patch for model '{model}': "
+                    f"cleared built-in LoRAs, guidance_phases={parsed_phase_config['guidance_phases']} "
+                    f"(will be applied in GenerationWorker)",
+                    task_id=task_id
+                )
+            else:
+                headless_logger.info(
+                    f"[HOT_SWAP] Using base model '{model}' with default parameters",
+                    task_id=task_id
+                )
 
             headless_logger.info(
                 f"phase_config applied: {parsed_phase_config['guidance_phases']} phases, "
@@ -1221,7 +1433,10 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         
         # Create generation task parameters optimized for queue processing
         # Let WanOrchestrator handle parameter resolution with proper model preset precedence
+        # IMPORTANT: We use the CANONICAL model name (e.g., lightning_baseline_2_2_2) to avoid
+        # model reloads, and pass all phase_config parameters explicitly to hot-swap them.
         generation_params = {
+            "model_name": model_name,  # CRITICAL: Use canonical model name, NOT temp config name
             "negative_prompt": negative_prompt_for_wgp,
             "resolution": f"{parsed_res_wh[0]}x{parsed_res_wh[1]}",
             "video_length": total_frames_for_segment,
@@ -1362,7 +1577,8 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 parsed_phase_config = parse_phase_config(
                     phase_config=full_orchestrator_payload["phase_config"],
                     num_inference_steps=phase_config_steps,
-                    task_id=task_id
+                    task_id=task_id,
+                    model_name=generation_params.get("model_name")
                 )
 
                 # Override ALL phase-related parameters INCLUDING num_inference_steps
@@ -1374,6 +1590,40 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                            "lora_names", "lora_multipliers", "additional_loras"]:
                     if key in parsed_phase_config and parsed_phase_config[key] is not None:
                         generation_params[key] = parsed_phase_config[key]
+
+                # CRITICAL: Also set old-style WGP parameters for compatibility
+                # WGP internally uses activated_loras (list) and loras_multipliers (space-separated string)
+                if "lora_names" in parsed_phase_config:
+                    generation_params["activated_loras"] = parsed_phase_config["lora_names"]
+                if "lora_multipliers" in parsed_phase_config:
+                    # Convert list of phase-config strings to space-separated string
+                    # e.g., ['1.0;0', '0;1.0'] → '1.0;0 0;1.0'
+                    generation_params["loras_multipliers"] = " ".join(str(m) for m in parsed_phase_config["lora_multipliers"])
+                    headless_logger.debug(
+                        f"Set loras_multipliers string: {generation_params['loras_multipliers']}",
+                        task_id=task_id
+                    )
+
+                # HOT-SWAP OPTIMIZATION:
+                # Instead of creating a unique temp model and reloading, we:
+                # 1. Keep using the base model (e.g., lightning_baseline_2_2_2)
+                # 2. Patch wgp.models_def in memory (gets wiped on first orchestrator init, but persists after)
+                # 3. Pass phase_config patch through to GenerationWorker for restoration after each task
+
+                # Apply patch here in main thread (will persist after first orchestrator init)
+                if "_patch_config" in parsed_phase_config:
+                    apply_phase_config_patch(parsed_phase_config, model_name, task_id)
+                    headless_logger.info(
+                        f"[PHASE_CONFIG] Patched wgp.models_def for model '{model_name}': "
+                        f"cleared built-in LoRAs, guidance_phases={parsed_phase_config['guidance_phases']} "
+                        f"(will also be re-applied in GenerationWorker after orchestrator init if needed)",
+                        task_id=task_id
+                    )
+                else:
+                    headless_logger.info(
+                        f"[HOT_SWAP] Using base model '{model_name}' with default parameters",
+                        task_id=task_id
+                    )
 
                 dprint(f"[PHASE_CONFIG_DEBUG] Task {task_id}: After applying parse_phase_config, generation_params['lora_multipliers']={generation_params.get('lora_multipliers')}")
 
