@@ -152,7 +152,7 @@ def _cleanup_temporary_files(task_id: str = "unknown") -> None:
 # Queue-based Task Processing Functions
 # -----------------------------------------------------------------------------
 
-def parse_phase_config(phase_config: dict, num_inference_steps: int, task_id: str = "unknown") -> dict:
+def parse_phase_config(phase_config: dict, num_inference_steps: int, task_id: str = "unknown", model_name: str = None) -> dict:
     """
     Parse phase_config override block and return computed parameters.
 
@@ -392,6 +392,58 @@ def parse_phase_config(phase_config: dict, num_inference_steps: int, task_id: st
             additional_loras[lora_url] = first_val
         except (ValueError, IndexError):
             additional_loras[lora_url] = 1.0
+
+    # COMPATIBILITY FIX: Check if model expects more phases than phase_config specifies
+    # This happens when using 2-phase config with 3-phase models like lightning_baseline_2_2_2
+    # The model has built-in LoRAs with 3-phase format, so we need to pad our LoRAs to match
+    if model_name and num_phases == 2:
+        try:
+            # Try to detect model's expected guidance_phases
+            import sys
+            from pathlib import Path
+            wan_dir = Path(__file__).parent / "Wan2GP"
+            if str(wan_dir) not in sys.path:
+                sys.path.insert(0, str(wan_dir))
+
+            _saved_argv = sys.argv[:]
+            try:
+                sys.argv = ["worker.py"]
+                import wgp
+                model_def = wgp.get_model_def(model_name)
+
+                if model_def:
+                    # Check if model config has guidance_phases=3
+                    model_guidance_phases = model_def.get("guidance_phases", 2)
+
+                    if model_guidance_phases == 3:
+                        headless_logger.warning(
+                            f"Model {model_name} expects 3 guidance phases, but phase_config specifies 2. "
+                            f"Padding LoRA multipliers to 3-phase format for compatibility.",
+                            task_id=task_id
+                        )
+
+                        # Pad all lora_multipliers from "val1;val2" to "val1;val2;0"
+                        padded_multipliers = []
+                        for mult_str in lora_multipliers:
+                            padded_multipliers.append(f"{mult_str};0")
+
+                        lora_multipliers = padded_multipliers
+
+                        # Update guidance_phases to 3 and add phase 3 guidance scale
+                        result["guidance_phases"] = 3
+                        result["guidance3_scale"] = 1.0  # Default for phase 3
+
+                        headless_logger.info(
+                            f"Padded LoRA multipliers to 3-phase format: {lora_multipliers}",
+                            task_id=task_id
+                        )
+            finally:
+                sys.argv = _saved_argv
+        except Exception as e:
+            headless_logger.warning(
+                f"Could not check model guidance_phases for compatibility: {e}",
+                task_id=task_id
+            )
 
     result["lora_names"] = all_lora_urls
     result["lora_multipliers"] = lora_multipliers
