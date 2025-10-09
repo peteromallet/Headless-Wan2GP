@@ -739,7 +739,8 @@ def process_all_loras(params: Dict[str, Any], task_params: Dict[str, Any], model
             parsed = parse_phase_config(
                 phase_config=phase_config,
                 num_inference_steps=total_steps,
-                task_id=task_id
+                task_id=task_id,
+                model_name=orchestrator_payload.get("model_name")
             )
 
             # Override with parsed values

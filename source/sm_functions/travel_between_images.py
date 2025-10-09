@@ -121,7 +121,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 parsed = parse_phase_config(
                     phase_config=phase_config,
                     num_inference_steps=total_steps,
-                    task_id=orchestrator_task_id_str
+                    task_id=orchestrator_task_id_str,
+                    model_name=orchestrator_payload.get("model_name")
                 )
 
                 # Add parsed values to orchestrator_payload so segments can use them
