@@ -2,10 +2,11 @@
 Join Clips - Bridge two video clips using VACE generation
 
 This module provides functionality to smoothly join two video clips by:
-1. Extracting context frames from the end of the first clip
-2. Extracting context frames from the beginning of the second clip
-3. Generating transition frames between them using VACE
-4. Using mask video to preserve the context frames and only generate the gap
+1. Optionally standardizing both videos to a target aspect ratio (via center-crop)
+2. Extracting context frames from the end of the first clip
+3. Extracting context frames from the beginning of the second clip
+4. Generating transition frames between them using VACE
+5. Using mask video to preserve the context frames and only generate the gap
 
 This is a simplified, single-generation task that reuses the VACE continuation
 infrastructure from travel_between_images without the complexity of orchestration.
@@ -27,6 +28,7 @@ from ..common_utils import (
 )
 from ..video_utils import (
     extract_frames_from_video as sm_extract_frames_from_video,
+    standardize_video_aspect_ratio,
 )
 from ..vace_frame_utils import (
     create_guide_and_mask_for_generation,
@@ -52,10 +54,16 @@ def _handle_join_clips_task(
             - context_frame_count: Number of frames to extract from each clip
             - gap_frame_count: Number of frames to generate between clips
             - prompt: Generation prompt for the transition
+            - aspect_ratio: Optional aspect ratio (e.g., "16:9", "9:16", "1:1") to standardize both videos
             - model: Optional model override (defaults to lightning_baseline_2_2_2)
             - resolution: Optional [width, height] override
             - fps: Optional FPS override (defaults to 16)
-            - Other standard VACE parameters
+            - max_wait_time: Optional timeout in seconds for generation (defaults to 1800s / 30 minutes)
+            - use_causvid_lora: Optional bool to enable CausVid LoRA
+            - use_lighti2x_lora: Optional bool to enable LightI2X LoRA
+            - apply_reward_lora: Optional bool to enable Reward LoRA
+            - additional_loras: Optional dict of additional LoRAs {name: weight}
+            - Other standard VACE parameters (guidance_scale, flow_shift, etc.)
         main_output_dir_base: Base output directory
         task_id: Task ID for logging and status updates
         task_queue: HeadlessTaskQueue instance for generation
@@ -73,6 +81,7 @@ def _handle_join_clips_task(
         context_frame_count = task_params_from_db.get("context_frame_count", 8)
         gap_frame_count = task_params_from_db.get("gap_frame_count", 53)
         prompt = task_params_from_db.get("prompt", "")
+        aspect_ratio = task_params_from_db.get("aspect_ratio")  # Optional: e.g., "16:9", "9:16", "1:1"
 
         # Validate required parameters
         if not starting_video_path:
@@ -129,8 +138,119 @@ def _handle_join_clips_task(
         dprint(f"[JOIN_CLIPS]   Ending video: {ending_video}")
         dprint(f"[JOIN_CLIPS]   Context frames: {context_frame_count}")
         dprint(f"[JOIN_CLIPS]   Gap frames: {gap_frame_count}")
+        if aspect_ratio:
+            dprint(f"[JOIN_CLIPS]   Target aspect ratio: {aspect_ratio}")
 
-        # --- 2. Extract Video Properties ---
+        # --- 2. Standardize Videos to Target Aspect Ratio (if specified) ---
+        if aspect_ratio:
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Standardizing videos to aspect ratio {aspect_ratio}...")
+
+            # Standardize starting video
+            standardized_start_path = join_clips_dir / f"start_standardized_{task_id}.mp4"
+            result = standardize_video_aspect_ratio(
+                input_video_path=starting_video,
+                output_video_path=standardized_start_path,
+                target_aspect_ratio=aspect_ratio,
+                task_id_for_logging=task_id,
+                dprint=dprint
+            )
+            if result is None:
+                error_msg = f"Failed to standardize starting video to aspect ratio {aspect_ratio}"
+                dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
+                return False, error_msg
+            starting_video = standardized_start_path
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Starting video standardized")
+
+            # Standardize ending video
+            standardized_end_path = join_clips_dir / f"end_standardized_{task_id}.mp4"
+            result = standardize_video_aspect_ratio(
+                input_video_path=ending_video,
+                output_video_path=standardized_end_path,
+                target_aspect_ratio=aspect_ratio,
+                task_id_for_logging=task_id,
+                dprint=dprint
+            )
+            if result is None:
+                error_msg = f"Failed to standardize ending video to aspect ratio {aspect_ratio}"
+                dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
+                return False, error_msg
+            ending_video = standardized_end_path
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Ending video standardized")
+        else:
+            # No explicit aspect ratio specified - auto-standardize ending video to match starting video
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Checking if videos have matching aspect ratios...")
+
+            # Get dimensions of both videos
+            try:
+                import subprocess
+
+                def get_video_dimensions(video_path):
+                    probe_cmd = [
+                        'ffprobe', '-v', 'error',
+                        '-select_streams', 'v:0',
+                        '-show_entries', 'stream=width,height',
+                        '-of', 'csv=p=0',
+                        str(video_path)
+                    ]
+                    result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+                    if result.returncode != 0:
+                        return None, None
+                    width_str, height_str = result.stdout.strip().split(',')
+                    return int(width_str), int(height_str)
+
+                start_w, start_h = get_video_dimensions(starting_video)
+                end_w, end_h = get_video_dimensions(ending_video)
+
+                if start_w and start_h and end_w and end_h:
+                    start_aspect = start_w / start_h
+                    end_aspect = end_w / end_h
+
+                    dprint(f"[JOIN_CLIPS] Task {task_id}: Starting video: {start_w}x{start_h} (aspect: {start_aspect:.3f})")
+                    dprint(f"[JOIN_CLIPS] Task {task_id}: Ending video: {end_w}x{end_h} (aspect: {end_aspect:.3f})")
+
+                    # If aspect ratios differ by more than 1%, standardize ending video to match starting video
+                    if abs(start_aspect - end_aspect) > 0.01:
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: Aspect ratios differ - standardizing ending video to match starting video")
+
+                        # Calculate aspect ratio string from starting video
+                        # Use common aspect ratios or create from dimensions
+                        if abs(start_aspect - 16/9) < 0.01:
+                            auto_aspect_ratio = "16:9"
+                        elif abs(start_aspect - 9/16) < 0.01:
+                            auto_aspect_ratio = "9:16"
+                        elif abs(start_aspect - 1.0) < 0.01:
+                            auto_aspect_ratio = "1:1"
+                        elif abs(start_aspect - 4/3) < 0.01:
+                            auto_aspect_ratio = "4:3"
+                        elif abs(start_aspect - 21/9) < 0.01:
+                            auto_aspect_ratio = "21:9"
+                        else:
+                            # Use exact dimensions as ratio
+                            auto_aspect_ratio = f"{start_w}:{start_h}"
+
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: Auto-detected aspect ratio: {auto_aspect_ratio}")
+
+                        standardized_end_path = join_clips_dir / f"end_standardized_{task_id}.mp4"
+                        result = standardize_video_aspect_ratio(
+                            input_video_path=ending_video,
+                            output_video_path=standardized_end_path,
+                            target_aspect_ratio=auto_aspect_ratio,
+                            task_id_for_logging=task_id,
+                            dprint=dprint
+                        )
+                        if result is None:
+                            dprint(f"[JOIN_CLIPS_WARNING] Task {task_id}: Failed to auto-standardize ending video, proceeding with original")
+                        else:
+                            ending_video = standardized_end_path
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: Ending video standardized to match starting video")
+                    else:
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: Videos have matching aspect ratios, no standardization needed")
+
+            except Exception as e:
+                dprint(f"[JOIN_CLIPS_WARNING] Task {task_id}: Could not check video dimensions: {e}")
+                dprint(f"[JOIN_CLIPS] Task {task_id}: Proceeding with original videos")
+
+        # --- 3. Extract Video Properties ---
         try:
             start_frame_count, start_fps = get_video_frame_count_and_fps(str(starting_video))
             end_frame_count, end_fps = get_video_frame_count_and_fps(str(ending_video))
@@ -157,7 +277,7 @@ def _handle_join_clips_task(
         # Use FPS from task params, or default to starting video FPS
         target_fps = task_params_from_db.get("fps", start_fps)
 
-        # --- 3. Extract Context Frames ---
+        # --- 4. Extract Context Frames ---
         dprint(f"[JOIN_CLIPS] Task {task_id}: Extracting context frames...")
 
         try:
@@ -201,7 +321,7 @@ def _handle_join_clips_task(
             parsed_res_wh = (frame_width, frame_height)
             dprint(f"[JOIN_CLIPS] Task {task_id}: Using detected resolution: {parsed_res_wh}")
 
-        # --- 4. Build Guide and Mask Videos (using shared helper) ---
+        # --- 5. Build Guide and Mask Videos (using shared helper) ---
         try:
             created_guide_video, created_mask_video = create_guide_and_mask_for_generation(
                 context_frames_before=start_context_frames,
@@ -223,7 +343,7 @@ def _handle_join_clips_task(
 
         total_frames = context_frame_count * 2 + gap_frame_count
 
-        # --- 5. Prepare Generation Parameters (using shared helper) ---
+        # --- 6. Prepare Generation Parameters (using shared helper) ---
         dprint(f"[JOIN_CLIPS] Task {task_id}: Preparing generation parameters...")
 
         # Determine model (default to Lightning baseline for fast generation)
@@ -235,6 +355,11 @@ def _handle_join_clips_task(
             task_params_from_db.get("negative_prompt", "")
         )
 
+        # Extract additional_loras for logging (if present)
+        additional_loras = task_params_from_db.get("additional_loras", {})
+        if additional_loras:
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Found {len(additional_loras)} additional LoRAs: {list(additional_loras.keys())}")
+
         # Use shared helper to prepare standardized VACE parameters
         generation_params = prepare_vace_generation_params(
             guide_video_path=created_guide_video,
@@ -245,7 +370,7 @@ def _handle_join_clips_task(
             negative_prompt=negative_prompt,
             model=model,
             seed=task_params_from_db.get("seed", -1),
-            task_params=task_params_from_db  # Pass through for optional param merging
+            task_params=task_params_from_db  # Pass through for optional param merging (includes additional_loras)
         )
 
         dprint(f"[JOIN_CLIPS] Task {task_id}: Generation parameters prepared")
@@ -253,7 +378,17 @@ def _handle_join_clips_task(
         dprint(f"[JOIN_CLIPS]   Video length: {total_frames} frames")
         dprint(f"[JOIN_CLIPS]   Resolution: {parsed_res_wh}")
 
-        # --- 6. Submit to Generation Queue ---
+        # Log LoRA settings
+        if generation_params.get("use_causvid_lora"):
+            dprint(f"[JOIN_CLIPS]   CausVid LoRA: enabled")
+        if generation_params.get("use_lighti2x_lora"):
+            dprint(f"[JOIN_CLIPS]   LightI2X LoRA: enabled")
+        if generation_params.get("apply_reward_lora"):
+            dprint(f"[JOIN_CLIPS]   Reward LoRA: enabled")
+        if generation_params.get("additional_loras"):
+            dprint(f"[JOIN_CLIPS]   Additional LoRAs: {len(generation_params['additional_loras'])} configured")
+
+        # --- 7. Submit to Generation Queue ---
         dprint(f"[JOIN_CLIPS] Task {task_id}: Submitting to generation queue...")
 
         try:
@@ -273,9 +408,11 @@ def _handle_join_clips_task(
             dprint(f"[JOIN_CLIPS] Task {task_id}: Submitted to generation queue as {submitted_task_id}")
 
             # Wait for completion using polling pattern (same as direct queue tasks)
-            max_wait_time = 600  # 10 minute timeout
+            # Allow timeout override via task params (default: 30 minutes to handle slow model loading)
+            max_wait_time = task_params_from_db.get("max_wait_time", 1800)  # 30 minute default timeout
             wait_interval = 2  # Check every 2 seconds
             elapsed_time = 0
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Waiting for generation (timeout: {max_wait_time}s)")
 
             while elapsed_time < max_wait_time:
                 status = task_queue.get_task_status(task_id)
@@ -291,7 +428,7 @@ def _handle_join_clips_task(
                     dprint(f"[JOIN_CLIPS] Task {task_id}: Generation completed successfully in {processing_time:.1f}s")
                     dprint(f"[JOIN_CLIPS] Task {task_id}: Transition video: {transition_video_path}")
 
-                    # --- 7. Concatenate Full Clips with Transition ---
+                    # --- 8. Concatenate Full Clips with Transition ---
                     dprint(f"[JOIN_CLIPS] Task {task_id}: Concatenating full clips with transition...")
 
                     try:
@@ -315,10 +452,10 @@ def _handle_join_clips_task(
                         dprint(f"[JOIN_CLIPS] Task {task_id}: Trimming clip1 - keeping {frames_to_keep_clip1}/{start_frame_count} frames")
 
                         # Use select filter for frame-accurate trimming: frames 0 to (frames_to_keep_clip1 - 1)
+                        # setpts resets timestamps for smooth concatenation
                         trim_clip1_cmd = [
                             'ffmpeg', '-y', '-i', str(starting_video),
-                            '-vf', f'select=between(n\\,0\\,{frames_to_keep_clip1 - 1})',
-                            '-vsync', 'vfr',
+                            '-vf', f'select=between(n\\,0\\,{frames_to_keep_clip1 - 1}),setpts=N/FR/TB',
                             '-r', str(start_fps),
                             str(clip1_trimmed_path)
                         ]
@@ -334,11 +471,10 @@ def _handle_join_clips_task(
 
                         dprint(f"[JOIN_CLIPS] Task {task_id}: Trimming clip2 - skipping first {frames_to_skip_clip2}/{end_frame_count} frames, keeping {frames_remaining_clip2}")
 
-                        # Select frames from context_frame_count onwards
+                        # Select frames from context_frame_count onwards and reset PTS for smooth concatenation
                         trim_clip2_cmd = [
                             'ffmpeg', '-y', '-i', str(ending_video),
-                            '-vf', f'select=gte(n\\,{frames_to_skip_clip2})',
-                            '-vsync', 'vfr',
+                            '-vf', f'select=gte(n\\,{frames_to_skip_clip2}),setpts=N/FR/TB',
                             '-r', str(end_fps),
                             str(clip2_trimmed_path)
                         ]

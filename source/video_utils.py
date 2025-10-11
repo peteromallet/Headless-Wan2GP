@@ -1403,3 +1403,127 @@ def overlay_start_end_images_above_video(
         except Exception:
             pass
         return False
+
+
+def standardize_video_aspect_ratio(
+    input_video_path: str | Path,
+    output_video_path: str | Path,
+    target_aspect_ratio: str,
+    task_id_for_logging: str = "",
+    dprint=print
+) -> Path | None:
+    """
+    Standardize video to target aspect ratio by center-cropping.
+
+    Args:
+        input_video_path: Path to input video
+        output_video_path: Path where standardized video will be saved
+        target_aspect_ratio: Target aspect ratio as string (e.g., "16:9", "9:16", "1:1")
+        task_id_for_logging: Task ID for logging
+        dprint: Print function for logging
+
+    Returns:
+        Path to standardized video if successful, None otherwise
+    """
+    import subprocess
+    from pathlib import Path
+
+    input_path = Path(input_video_path)
+    output_path = Path(output_video_path)
+
+    if not input_path.exists():
+        dprint(f"[STANDARDIZE_ASPECT] Task {task_id_for_logging}: Input video not found: {input_path}")
+        return None
+
+    # Parse aspect ratio
+    try:
+        ar_parts = target_aspect_ratio.split(":")
+        if len(ar_parts) != 2:
+            raise ValueError(f"Invalid aspect ratio format: {target_aspect_ratio}")
+        target_w, target_h = float(ar_parts[0]), float(ar_parts[1])
+        target_aspect = target_w / target_h
+    except Exception as e:
+        dprint(f"[STANDARDIZE_ASPECT] Task {task_id_for_logging}: Failed to parse aspect ratio '{target_aspect_ratio}': {e}")
+        return None
+
+    # Get input video dimensions using ffprobe
+    try:
+        probe_cmd = [
+            'ffprobe', '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=width,height',
+            '-of', 'csv=p=0',
+            str(input_path)
+        ]
+        result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            dprint(f"[STANDARDIZE_ASPECT] Task {task_id_for_logging}: ffprobe failed: {result.stderr}")
+            return None
+
+        width_str, height_str = result.stdout.strip().split(',')
+        src_w, src_h = int(width_str), int(height_str)
+        src_aspect = src_w / src_h
+
+        dprint(f"[STANDARDIZE_ASPECT] Task {task_id_for_logging}: Input video: {src_w}x{src_h} (aspect: {src_aspect:.3f})")
+        dprint(f"[STANDARDIZE_ASPECT] Task {task_id_for_logging}: Target aspect: {target_aspect:.3f}")
+
+    except Exception as e:
+        dprint(f"[STANDARDIZE_ASPECT] Task {task_id_for_logging}: Failed to get video dimensions: {e}")
+        return None
+
+    # Check if aspect ratio is already correct (within 1% tolerance)
+    if abs(src_aspect - target_aspect) < 0.01:
+        dprint(f"[STANDARDIZE_ASPECT] Task {task_id_for_logging}: Video already has target aspect ratio, copying...")
+        try:
+            import shutil
+            shutil.copy2(input_path, output_path)
+            return output_path
+        except Exception as e:
+            dprint(f"[STANDARDIZE_ASPECT] Task {task_id_for_logging}: Failed to copy video: {e}")
+            return None
+
+    # Calculate crop dimensions
+    if src_aspect > target_aspect:
+        # Source is wider - crop width
+        new_w = int(src_h * target_aspect)
+        new_h = src_h
+        crop_x = (src_w - new_w) // 2
+        crop_y = 0
+    else:
+        # Source is taller - crop height
+        new_w = src_w
+        new_h = int(src_w / target_aspect)
+        crop_x = 0
+        crop_y = (src_h - new_h) // 2
+
+    dprint(f"[STANDARDIZE_ASPECT] Task {task_id_for_logging}: Center-cropping to {new_w}x{new_h}")
+
+    # Apply crop using ffmpeg
+    try:
+        crop_cmd = [
+            'ffmpeg', '-y', '-i', str(input_path),
+            '-vf', f'crop={new_w}:{new_h}:{crop_x}:{crop_y}',
+            '-c:a', 'copy',  # Copy audio stream if present
+            str(output_path)
+        ]
+
+        result = subprocess.run(crop_cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            dprint(f"[STANDARDIZE_ASPECT] Task {task_id_for_logging}: ffmpeg crop failed: {result.stderr}")
+            return None
+
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            dprint(f"[STANDARDIZE_ASPECT] Task {task_id_for_logging}: Output video not created or empty")
+            return None
+
+        dprint(f"[STANDARDIZE_ASPECT] Task {task_id_for_logging}: Successfully standardized video to {target_aspect_ratio}")
+        return output_path
+
+    except Exception as e:
+        dprint(f"[STANDARDIZE_ASPECT] Task {task_id_for_logging}: Failed to crop video: {e}")
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except Exception:
+                pass
+        return None

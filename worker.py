@@ -1279,6 +1279,8 @@ def parse_args():
                                help="Disable automatic mask video generation.")
     pgroup_server.add_argument("--queue-workers", type=int, default=1,
                                help="Number of queue workers for task processing (default: 1, recommended for GPU systems)")
+    pgroup_server.add_argument("--db-type", type=str, default="supabase",
+                               help="Database type (accepted but not used, kept for compatibility)")
 
     # --- Supabase-related arguments (REQUIRED) ---
     pgroup_server.add_argument("--supabase-url", type=str, required=True,
