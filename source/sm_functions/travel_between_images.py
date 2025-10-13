@@ -876,7 +876,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 dprint(f"[ERROR] Failed to create pre-warped guidance video: {e}")
                 import traceback
                 traceback.print_exc()
-                dprint(f"[WARNING] Segments will fall back to legacy per-segment flow extraction")
+                dprint(f"[WARNING] Structure guidance will not be available for this generation")
                 orchestrator_payload["structure_guidance_video_url"] = None
                 orchestrator_payload["structure_type"] = structure_type  # Still pass the type
 
