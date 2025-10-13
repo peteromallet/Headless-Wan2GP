@@ -287,240 +287,17 @@ def load_structure_video_frames(
     return processed_frames
 
 
-def extract_optical_flow_from_frames(
-    frames: List[np.ndarray],
-    dprint: Callable = print
-) -> Tuple[List[np.ndarray], List[np.ndarray]]:
-    """
-    Extract optical flow from video frames using FlowAnnotator.
-    
-    Follows wgp.py pattern from get_preprocessor (line 3643-3648).
-    CRITICAL: Explicitly cleans up RAFT model from GPU after use.
-    
-    Args:
-        frames: List of numpy uint8 arrays [H, W, C]
-        dprint: Debug print function
-        
-    Returns:
-        (flow_fields, flow_visualizations)
-        - flow_fields: List of flow arrays [H, W, 2] float32 (N-1 flows for N frames)
-        - flow_visualizations: List of RGB visualization frames
-    """
-    import gc
-    import torch
-    
-    if len(frames) < 2:
-        raise ValueError(f"Need at least 2 frames for optical flow, got {len(frames)}")
-    
-    # Import FlowAnnotator (WGP pattern)
-    wan_dir = Path(__file__).parent.parent / "Wan2GP"
-    if str(wan_dir) not in sys.path:
-        sys.path.insert(0, str(wan_dir))
-    
-    from Wan2GP.preprocessing.flow import FlowAnnotator
-    
-    # Initialize annotator (WGP pattern line 3643-3648)
-    flow_model_path = wan_dir / 'ckpts' / 'flow' / 'raft-things.pth'
-    
-    # Ensure RAFT model is downloaded
-    if not flow_model_path.exists():
-        dprint(f"[OPTICAL_FLOW] RAFT model not found, downloading from Hugging Face...")
-        try:
-            from huggingface_hub import hf_hub_download
-            flow_model_path.parent.mkdir(parents=True, exist_ok=True)
-            hf_hub_download(
-                repo_id="DeepBeepMeep/Wan2.1",
-                filename="raft-things.pth",
-                local_dir=str(wan_dir / 'ckpts'),
-                subfolder="flow"
-            )
-            dprint(f"[OPTICAL_FLOW] RAFT model downloaded successfully")
-        except Exception as e:
-            raise RuntimeError(f"Failed to download RAFT model: {e}. Please manually download from https://huggingface.co/DeepBeepMeep/Wan2.1/tree/main/flow")
-    
-    flow_cfg = {
-        'PRETRAINED_MODEL': str(flow_model_path)
-    }
-    flow_annotator = FlowAnnotator(flow_cfg)
-    
-    try:
-        dprint(f"[OPTICAL_FLOW] Extracting flow from {len(frames)} frames")
-        dprint(f"[OPTICAL_FLOW] Will produce {len(frames)-1} flow fields")
-        
-        # Extract flow (FlowAnnotator.forward handles conversion internally)
-        # Returns N-1 flows for N frames (line 44 in flow.py)
-        flow_fields, flow_vis = flow_annotator.forward(frames)
-        
-        dprint(f"[OPTICAL_FLOW] Extracted {len(flow_fields)} optical flow fields")
-        dprint(f"[OPTICAL_FLOW] Flow shape: {flow_fields[0].shape if flow_fields else 'N/A'}")
-        
-        return flow_fields, flow_vis
-    
-    finally:
-        # CRITICAL: Clean up RAFT model from GPU
-        # Pattern from wgp.py lines 5285-5299 (cleanup on generation end/error)
-        del flow_annotator
-        gc.collect()
-        torch.cuda.empty_cache()
-        dprint(f"[OPTICAL_FLOW] Cleaned up RAFT model from GPU memory")
-
-
-def adjust_flow_field_count(
-    flow_fields: List[np.ndarray],
-    target_count: int,
-    treatment: str,
-    dprint: Callable = print
-) -> List[np.ndarray]:
-    """
-    Adjust number of flow fields to match target count.
-    
-    Args:
-        flow_fields: List of optical flow fields [H, W, 2]
-        target_count: Desired number of flow fields
-        treatment: "adjust" (interpolate) or "clip" (use what's available)
-        dprint: Debug print function
-        
-    Returns:
-        Adjusted list of flow fields (may be shorter than target_count for "clip")
-    """
-    source_count = len(flow_fields)
-    
-    if source_count == 0:
-        raise ValueError("No flow fields provided")
-    
-    if source_count == target_count:
-        dprint(f"[FLOW_ADJUST] Count matches ({source_count}), no adjustment needed")
-        return flow_fields
-    
-    if treatment == "clip":
-        if source_count >= target_count:
-            # Truncate - use only what's needed
-            adjusted = flow_fields[:target_count]
-            dprint(f"[FLOW_ADJUST] Clipped from {source_count} to {target_count} flows")
-        else:
-            # CRITICAL: Don't pad, just return what we have
-            # Remaining frames will be left unchanged (gray)
-            adjusted = flow_fields
-            dprint(f"[FLOW_ADJUST] Clip mode: Using all {source_count} available flows (target was {target_count})")
-            dprint(f"[FLOW_ADJUST] Remaining {target_count - source_count} frames will be left unchanged")
-        
-        return adjusted
-    
-    elif treatment == "adjust":
-        # Temporal interpolation to match target exactly
-        adjusted_flows = []
-        
-        for target_idx in range(target_count):
-            # Map target index to source space
-            # CORRECTED: Avoid off-by-one error
-            if target_count == 1:
-                source_idx_float = 0.0
-            else:
-                # Map [0, target_count-1] to [0, source_count-1]
-                source_idx_float = target_idx * (source_count - 1) / (target_count - 1)
-            
-            source_idx_low = int(np.floor(source_idx_float))
-            source_idx_high = int(np.ceil(source_idx_float))
-            
-            # Clamp to valid range
-            source_idx_low = np.clip(source_idx_low, 0, source_count - 1)
-            source_idx_high = np.clip(source_idx_high, 0, source_count - 1)
-            
-            if source_idx_low == source_idx_high:
-                # Exact match
-                adjusted_flows.append(flow_fields[source_idx_low].copy())
-            else:
-                # Linear interpolation between two flows
-                alpha = source_idx_float - source_idx_low
-                flow_low = flow_fields[source_idx_low]
-                flow_high = flow_fields[source_idx_high]
-                interpolated = (1 - alpha) * flow_low + alpha * flow_high
-                adjusted_flows.append(interpolated)
-        
-        dprint(f"[FLOW_ADJUST] Interpolated from {source_count} to {target_count} flows")
-        return adjusted_flows
-    
-    else:
-        raise ValueError(f"Invalid treatment: {treatment}. Must be 'adjust' or 'clip'")
-
-
-def apply_optical_flow_warp(
-    source_frame: np.ndarray,
-    flow: np.ndarray,
-    target_resolution: Tuple[int, int],
-    motion_strength: float = 1.0
-) -> np.ndarray:
-    """
-    Warp a frame using optical flow with adjustable motion strength.
-    
-    Args:
-        source_frame: Frame to warp [H, W, C] uint8
-        flow: Optical flow field [H, W, 2] float32
-        target_resolution: (width, height)
-        motion_strength: Strength multiplier for motion (0.0=no motion, 1.0=full, >1.0=amplified)
-        
-    Returns:
-        Warped frame [H, W, C] uint8
-    """
-    import cv2
-    
-    w, h = target_resolution
-    
-    # Ensure source frame matches target resolution
-    if source_frame.shape[:2] != (h, w):
-        source_frame = cv2.resize(source_frame, (w, h), interpolation=cv2.INTER_LINEAR)
-    
-    # Ensure flow matches target resolution
-    if flow.shape[:2] != (h, w):
-        # Resize flow field
-        flow_resized = cv2.resize(flow, (w, h), interpolation=cv2.INTER_LINEAR)
-        
-        # CRITICAL: Scale flow vectors when resizing
-        # flow[:,:,0] is x-displacement, scale by width ratio
-        # flow[:,:,1] is y-displacement, scale by height ratio
-        original_h, original_w = flow.shape[:2]
-        flow_resized[:, :, 0] *= w / original_w
-        flow_resized[:, :, 1] *= h / original_h
-        
-        flow = flow_resized
-    
-    # SCALE FLOW VECTORS by motion strength
-    # This physically reduces/amplifies the motion magnitude
-    # 0.0 = no motion (stays at anchor), 1.0 = full motion, 2.0 = double motion
-    flow_scaled = flow * motion_strength
-    
-    # Create proper coordinate grid using meshgrid
-    # np.meshgrid with indexing='xy' gives (X, Y) where X varies along columns
-    x_coords, y_coords = np.meshgrid(np.arange(w), np.arange(h), indexing='xy')
-    
-    # Apply scaled flow to coordinates
-    # flow_scaled[:,:,0] is x-displacement, flow_scaled[:,:,1] is y-displacement
-    map_x = (x_coords + flow_scaled[:, :, 0]).astype(np.float32)
-    map_y = (y_coords + flow_scaled[:, :, 1]).astype(np.float32)
-    
-    # Warp frame using remap
-    warped = cv2.remap(
-        source_frame,
-        map_x,
-        map_y,
-        interpolation=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REPLICATE  # Replicate edge pixels for out-of-bounds
-    )
-    
-    return warped
-
-
 def apply_structure_motion_with_tracking(
     frames_for_guide_list: List[np.ndarray],
     guidance_tracker: GuidanceTracker,
-    structure_video_path: str | None,
-    structure_video_treatment: str,
-    parsed_res_wh: Tuple[int, int],
-    fps_helpers: int,
+    structure_video_path: str | None,  # Not used by segments (orchestrator uses it)
+    structure_video_treatment: str,  # Not used by segments (orchestrator applies treatment)
+    parsed_res_wh: Tuple[int, int],  # Not used by segments (orchestrator uses it)
+    fps_helpers: int,  # Not used by segments (orchestrator uses it)
     structure_type: str = "flow",
-    motion_strength: float = 1.0,
-    canny_intensity: float = 1.0,
-    depth_contrast: float = 1.0,
+    motion_strength: float = 1.0,  # Not used by segments (orchestrator applies it)
+    canny_intensity: float = 1.0,  # Not used by segments (orchestrator applies it)
+    depth_contrast: float = 1.0,  # Not used by segments (orchestrator applies it)
     structure_guidance_video_url: str | None = None,
     segment_processing_dir: Path | None = None,
     structure_guidance_frame_offset: int = 0,
@@ -530,34 +307,30 @@ def apply_structure_motion_with_tracking(
     dprint: Callable = print
 ) -> List[np.ndarray]:
     """
-    Apply structure guidance to unguidanced frames.
-    
-    IMPORTANT: This function marks frames as guided on the tracker as it warps them.
-    In "clip" mode, only frames that actually receive warps are marked - frames left
-    unchanged when flows run out remain unguidanced.
-    
-    Two modes of operation:
-    1. Pre-warped video (FASTER): If structure_guidance_video_url is provided, downloads
-       and extracts pre-computed guidance frames directly (no GPU warping needed).
-    2. Legacy path: If only structure_video_path is provided, extracts flows and
-       applies warping per-segment (slower, more GPU work).
-    
+    Apply structure guidance to unguidanced frames (called by segment workers).
+
+    IMPORTANT: This function marks frames as guided on the tracker as it fills them.
+
+    The orchestrator pre-computes all structure guidance (flow/canny/depth visualizations)
+    with motion_strength/intensity/contrast already applied, then uploads to Supabase.
+    Segments download and insert their portion of the pre-computed guidance frames.
+
     Args:
         frames_for_guide_list: Current guide frames
         guidance_tracker: Tracks which frames have guidance (MUTATED by this function)
-        structure_video_path: Path to structure video (legacy path, optional if URL provided)
-        structure_video_treatment: "adjust" or "clip" (ignored for pre-warped video)
-        structure_type: Type of preprocessing ("flow", "canny", or "depth")
-        parsed_res_wh: Target resolution (width, height)
-        fps_helpers: Target FPS
-        motion_strength: Motion strength multiplier for flow (0.0=no motion, 1.0=full, >1.0=amplified)
-        canny_intensity: Edge intensity multiplier for canny
-        depth_contrast: Depth contrast adjustment for depth
-        structure_guidance_video_url: URL/path to pre-warped guidance video (faster path)
-        segment_processing_dir: Directory for downloads (required if using URL)
+        structure_video_path: Not used by segments (orchestrator uses it to create guidance video)
+        structure_video_treatment: Not used by segments (orchestrator applies treatment when creating guidance video)
+        parsed_res_wh: Target resolution - not used by segments (orchestrator uses it)
+        fps_helpers: Target FPS - not used by segments (orchestrator uses it)
+        structure_type: Type of preprocessing ("flow", "canny", or "depth") - for logging only
+        motion_strength: Not used by segments (orchestrator applies it when creating guidance video)
+        canny_intensity: Not used by segments (orchestrator applies it when creating guidance video)
+        depth_contrast: Not used by segments (orchestrator applies it when creating guidance video)
+        structure_guidance_video_url: URL/path to pre-computed guidance video from orchestrator (REQUIRED)
+        segment_processing_dir: Directory for downloads (required)
         structure_guidance_frame_offset: Starting frame offset in the guidance video
         dprint: Debug print function
-        
+
     Returns:
         Updated frames list with structure guidance applied
     """
@@ -626,134 +399,18 @@ def apply_structure_motion_with_tracking(
 
         except Exception as e:
             dprint(f"[ERROR] ✗ FAST PATH FAILED: {e}")
-            dprint(f"[ERROR] Falling back to legacy path (will process structure video per-segment)")
+            dprint(f"[ERROR] Structure guidance could not be applied")
             traceback.print_exc()
-            # Fall back to legacy path
-            dprint(f"[STRUCTURE_VIDEO] Continuing with legacy processing path...")
-    else:
-        dprint(f"[STRUCTURE_VIDEO] ========== FAST PATH SKIPPED ==========")
-        dprint(f"[STRUCTURE_VIDEO] structure_guidance_video_url is None or empty")
-        dprint(f"[STRUCTURE_VIDEO] Reason: Orchestrator didn't provide pre-computed guidance video")
-        dprint(f"[STRUCTURE_VIDEO] =========================================")
-    
-    # ===== LEGACY PATH: Extract flows and apply warping per-segment =====
-    if not structure_video_path:
-        dprint(f"[ERROR] Neither structure_guidance_video_url nor structure_video_path provided")
-        return frames_for_guide_list
-    
-    dprint(f"[STRUCTURE_VIDEO] Using legacy path: extracting flows and warping per-segment")
-    
-    try:
-        # --- Step 1: Load structure video frames ---
-        # Need N+1 frames to generate N optical flows
-        structure_frames = load_structure_video_frames(
-            structure_video_path,
-            target_frame_count=total_unguidanced,  # Function adds +1 internally
-            target_fps=fps_helpers,
-            target_resolution=parsed_res_wh,
-            crop_to_fit=True,  # Apply center cropping
-            dprint=dprint
-        )
-        
-        if len(structure_frames) < 2:
-            dprint(f"[WARNING] Structure video has insufficient frames ({len(structure_frames)}). Need at least 2.")
+            # Return original frames unchanged
             return frames_for_guide_list
-        
-        # --- Step 2: Extract optical flow ---
-        flow_fields, flow_vis = extract_optical_flow_from_frames(
-            structure_frames,
-            dprint=dprint
-        )
-        
-        # flow_fields contains N-1 flows for N frames
-        dprint(f"[STRUCTURE_VIDEO] Extracted {len(flow_fields)} flow fields from {len(structure_frames)} frames")
-        
-        # --- Step 3: Adjust flow count to match needed frames ---
-        flow_fields = adjust_flow_field_count(
-            flow_fields,
-            target_count=total_unguidanced,
-            treatment=structure_video_treatment,
-            dprint=dprint
-        )
-        
-        # Track how many flows we actually have (may be < target in "clip" mode)
-        available_flow_count = len(flow_fields)
-        flows_applied = 0
-        frames_skipped = 0
-        
-        # --- Step 4: Apply flow to unguidanced ranges ---
-        updated_frames = frames_for_guide_list.copy()
-        flow_idx = 0
-        
-        for range_idx, (start_idx, end_idx) in enumerate(unguidanced_ranges):
-            range_length = end_idx - start_idx + 1
-            
-            # Get anchor frame (last guided frame before this range)
-            anchor_idx = guidance_tracker.get_anchor_frame_index(start_idx)
-            
-            if anchor_idx is not None:
-                current_frame = updated_frames[anchor_idx].copy()
-                dprint(f"[STRUCTURE_VIDEO] Range {range_idx}: frames {start_idx}-{end_idx}, anchor=frame_{anchor_idx}")
-            else:
-                # No guided frame before - use gray
-                current_frame = np.full((parsed_res_wh[1], parsed_res_wh[0], 3), 128, dtype=np.uint8)
-                dprint(f"[STRUCTURE_VIDEO] Range {range_idx}: frames {start_idx}-{end_idx}, anchor=gray (no prior guidance)")
-            
-            # Apply motion progressively through range
-            for offset in range(range_length):
-                frame_idx = start_idx + offset
-                
-                # Check if we're out of flows
-                if flow_idx >= available_flow_count:
-                    if structure_video_treatment == "clip":
-                        # CRITICAL: In "clip" mode, STOP applying motion when out of flows
-                        # Leave remaining frames unchanged (gray/unguidanced)
-                        frames_skipped += 1
-                        dprint(f"[STRUCTURE_VIDEO] Clip mode: Out of flows at frame {frame_idx}, leaving unchanged")
-                        # Don't modify updated_frames[frame_idx] - leave it as is
-                        # Don't mark as guided - it remains unguidanced
-                        continue  # ← Skip to next frame
-                    else:
-                        # In "adjust" mode, this shouldn't happen (we interpolated to match)
-                        # But as safety fallback, repeat last flow
-                        dprint(f"[WARNING] Exhausted flows in adjust mode at frame {frame_idx} (shouldn't happen)")
-                        flow = flow_fields[-1]
-                else:
-                    flow = flow_fields[flow_idx]
-                    flow_idx += 1
-                
-                # Warp current frame using flow with specified motion strength
-                warped_frame = apply_optical_flow_warp(
-                    current_frame,
-                    flow,
-                    parsed_res_wh,
-                    motion_strength
-                )
-                
-                updated_frames[frame_idx] = warped_frame
-                current_frame = warped_frame  # Next warp uses this result
-                
-                # CRITICAL: Mark this frame as guided since we just warped it
-                guidance_tracker.mark_single_frame(frame_idx)
-                
-                flows_applied += 1
-        
-        # Summary logging
-        if structure_video_treatment == "clip" and frames_skipped > 0:
-            dprint(f"[STRUCTURE_VIDEO] Clip mode summary:")
-            dprint(f"  - Applied {flows_applied} flows to {flows_applied} frames")
-            dprint(f"  - Left {frames_skipped} frames unchanged (ran out of flows)")
-            dprint(f"  - Total unguidanced: {total_unguidanced} frames")
-        else:
-            dprint(f"[STRUCTURE_VIDEO] Applied {flows_applied} flows to {flows_applied} frames")
-        
-        return updated_frames
-    
-    except Exception as e:
-        dprint(f"[ERROR] Structure motion application failed: {e}")
-        traceback.print_exc()
-        # Return original frames unchanged
-        return frames_for_guide_list
+
+    # No pre-computed guidance video provided
+    dprint(f"[STRUCTURE_VIDEO] ========== NO GUIDANCE VIDEO ==========")
+    dprint(f"[STRUCTURE_VIDEO] structure_guidance_video_url is None or empty")
+    dprint(f"[STRUCTURE_VIDEO] Reason: Orchestrator didn't provide pre-computed guidance video")
+    dprint(f"[STRUCTURE_VIDEO] Cannot apply structure guidance - returning frames unchanged")
+    dprint(f"[STRUCTURE_VIDEO] =========================================")
+    return frames_for_guide_list
 
 
 def get_structure_preprocessor(
@@ -788,7 +445,7 @@ def get_structure_preprocessor(
         if str(wan_dir) not in sys.path:
             sys.path.insert(0, str(wan_dir))
 
-        from Wan2GP.preprocessing.flow import FlowVisAnnotator
+        from Wan2GP.preprocessing.flow import FlowAnnotator
 
         # Ensure RAFT model is downloaded
         flow_model_path = wan_dir / "ckpts" / "flow" / "raft-things.pth"
@@ -808,10 +465,29 @@ def get_structure_preprocessor(
                 raise RuntimeError(f"Failed to download RAFT model: {e}. Please manually download from https://huggingface.co/DeepBeepMeep/Wan2.1/tree/main/flow")
 
         cfg = {"PRETRAINED_MODEL": str(flow_model_path)}
-        annotator = FlowVisAnnotator(cfg)
-        # FlowVisAnnotator.forward() returns flow_visualizations directly (list of RGB images)
-        # Note: motion_strength is applied during frame warping in apply_structure_motion_with_tracking, not here
-        return lambda frames: annotator.forward(frames)
+        annotator = FlowAnnotator(cfg)
+
+        # Import flow_viz for visualization
+        from Wan2GP.preprocessing.raft.utils import flow_viz
+
+        def process_with_motion_strength(frames):
+            """Process frames with motion_strength applied to flow visualizations."""
+            # Get raw flow fields from RAFT
+            flow_fields, _ = annotator.forward(frames)
+
+            # Scale flow fields by motion_strength
+            scaled_flows = [flow * motion_strength for flow in flow_fields]
+
+            # Generate visualizations from scaled flows
+            flow_visualizations = [flow_viz.flow_to_image(flow) for flow in scaled_flows]
+
+            # Match FlowVisAnnotator behavior: duplicate first frame
+            return flow_visualizations[:1] + flow_visualizations
+
+        if abs(motion_strength - 1.0) > 1e-6:
+            dprint(f"[FLOW] Applying motion_strength={motion_strength} to flow visualizations")
+
+        return process_with_motion_strength
     
     elif structure_type == "canny":
         wan_dir = Path(__file__).parent.parent / "Wan2GP"
