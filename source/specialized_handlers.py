@@ -27,17 +27,18 @@ except ImportError:
 from . import db_operations as db_ops
 from .common_utils import sm_get_unique_target_path, parse_resolution as sm_parse_resolution, prepare_output_path, save_frame_from_video, report_orchestrator_failure, prepare_output_path_with_upload, upload_and_get_final_output_location
 from .video_utils import rife_interpolate_images_to_video as sm_rife_interpolate_images_to_video
+from .logging_utils import task_logger
 
 def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable):
     """Handles the 'generate_openpose' task."""
-    print(f"[Task ID: {task_id}] Handling 'generate_openpose' task.")
+    task_logger.essential("Starting OpenPose generation task", task_id=task_id)
     input_image_path_str = task_params_dict.get("input_image_path")
     input_image_task_id = task_params_dict.get("input_image_task_id")
     custom_output_dir = task_params_dict.get("output_dir")
 
     if PoseBodyFaceVideoAnnotator is None:
         msg = "PoseBodyFaceVideoAnnotator not imported. Cannot process 'generate_openpose' task."
-        print(f"[ERROR Task ID: {task_id}] {msg}")
+        task_logger.error(msg, task_id=task_id)
         report_orchestrator_failure(task_params_dict, msg, dprint)
         return False, "PoseBodyFaceVideoAnnotator module not available."
 
@@ -46,7 +47,7 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
         dprint(f"Task {task_id}: 'input_image_path' not found, trying 'input_image_task_id': {input_image_task_id}")
         if not input_image_task_id:
             msg = "Task requires either 'input_image_path' or 'input_image_task_id'."
-            print(f"[ERROR Task ID: {task_id}] {msg}")
+            task_logger.error(msg, task_id=task_id)
             report_orchestrator_failure(task_params_dict, msg, dprint)
             return False, msg
         
@@ -74,8 +75,8 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
     input_image_path = Path(input_image_path_str)
 
     if not input_image_path.is_file():
-        print(f"[ERROR Task ID: {task_id}] Input image file not found: {input_image_path}")
         msg = f"Input image not found: {input_image_path}"
+        task_logger.error(msg, task_id=task_id)
         report_orchestrator_failure(task_params_dict, msg, dprint)
         return False, msg
 
@@ -103,8 +104,8 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
         openpose_np_frames_bgr = pose_annotator.forward([pil_input_image])
 
         if not openpose_np_frames_bgr or openpose_np_frames_bgr[0] is None:
-            print(f"[ERROR Task ID: {task_id}] OpenPose generation failed or returned no frame.")
             msg = "OpenPose generation returned no data."
+            task_logger.error(msg, task_id=task_id)
             report_orchestrator_failure(task_params_dict, msg, dprint)
             return False, msg
 
@@ -118,31 +119,34 @@ def handle_generate_openpose_task(task_params_dict: dict, main_output_dir_base: 
             final_save_path, task_id, initial_db_location, dprint=dprint
         )
 
-        print(f"[Task ID: {task_id}] Successfully generated OpenPose image to: {final_save_path.resolve()}")
+        task_logger.info(f"Successfully generated OpenPose image", task_id=task_id)
         return True, final_db_location
 
     except ImportError as ie:
-        print(f"[ERROR Task ID: {task_id}] Import error during OpenPose generation: {ie}. Ensure 'preprocessing' module is in PYTHONPATH and dependencies are installed.")
+        msg = f"Import error: {ie}. Ensure 'preprocessing' module is in PYTHONPATH and dependencies are installed."
+        task_logger.error(msg, task_id=task_id)
+        task_logger.debug(traceback.format_exc(), task_id=task_id)
         traceback.print_exc()
-        msg = f"Import error: {ie}"
         report_orchestrator_failure(task_params_dict, msg, dprint)
         return False, msg
     except FileNotFoundError as fnfe:
-        print(f"[ERROR Task ID: {task_id}] ONNX model file not found for OpenPose: {fnfe}. Ensure 'ckpts/pose/*' models are present.")
+        msg = f"ONNX model not found: {fnfe}. Ensure 'ckpts/pose/*' models are present."
+        task_logger.error(msg, task_id=task_id)
+        task_logger.debug(traceback.format_exc(), task_id=task_id)
         traceback.print_exc()
-        msg = f"ONNX model not found: {fnfe}"
         report_orchestrator_failure(task_params_dict, msg, dprint)
         return False, msg
     except Exception as e:
-        print(f"[ERROR Task ID: {task_id}] Failed during OpenPose image generation: {e}")
-        traceback.print_exc()
         msg = f"OpenPose generation exception: {e}"
+        task_logger.error(msg, task_id=task_id)
+        task_logger.debug(traceback.format_exc(), task_id=task_id)
+        traceback.print_exc()
         report_orchestrator_failure(task_params_dict, msg, dprint)
         return False, msg
 
 def handle_extract_frame_task(task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable):
     """Handles the 'extract_frame' task."""
-    print(f"[Task ID: {task_id}] Handling 'extract_frame' task.")
+    task_logger.essential("Starting extract frame task", task_id=task_id)
     
     input_video_task_id = task_params_dict.get("input_video_task_id")
     frame_index = task_params_dict.get("frame_index", 0) # Default to first frame
@@ -219,7 +223,7 @@ def handle_extract_frame_task(task_params_dict: dict, main_output_dir_base: Path
 
 def handle_rife_interpolate_task(task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable, task_queue=None):
     """Handles the 'rife_interpolate_images' task."""
-    print(f"[Task ID: {task_id}] Handling 'rife_interpolate_images' task.")
+    task_logger.essential("Starting RIFE interpolation task", task_id=task_id)
 
     input_image_path1_str = task_params_dict.get("input_image_path1")
     input_image_path2_str = task_params_dict.get("input_image_path2")
@@ -323,7 +327,7 @@ def handle_rife_interpolate_task(task_params_dict: dict, main_output_dir_base: P
 
 def handle_generate_depth_task(task_params_dict: dict, main_output_dir_base: Path, task_id: str, dprint: callable):
     """Handles the 'generate_depth' task – produces a MiDaS depth‐map PNG from an image."""
-    print(f"[Task ID: {task_id}] Handling 'generate_depth' task.")
+    task_logger.essential("Starting depth map generation task", task_id=task_id)
 
     input_image_path_str = task_params_dict.get("input_image_path")
     input_image_task_id = task_params_dict.get("input_image_task_id")
