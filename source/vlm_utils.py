@@ -70,9 +70,14 @@ def generate_transition_prompt(
         combined_img.paste(end_img, (start_img.width, 0))
 
         # Initialize VLM with Qwen2.5-VL-7B
+        # Use direct path to ckpts directory to avoid re-downloading
+        # This matches how other models (Wan, VACE, Florence2, etc.) are loaded
         dprint(f"[VLM_TRANSITION] Initializing Qwen2.5-VL-7B-Instruct...")
+        # Use Wan2GP/ckpts path since model is inside Wan2GP directory
+        model_path = str(Path(__file__).parent.parent / "Wan2GP" / "ckpts" / "Qwen2.5-VL-7B-Instruct")
+        dprint(f"[VLM_TRANSITION] Model path resolved to: {model_path}")
         extender = QwenPromptExpander(
-            model_name="QwenVL2.5_7B",  # Use predefined name
+            model_name=model_path,  # Full path to local model
             device=device,
             is_vl=True  # CRITICAL: Enable VL mode
         )
@@ -181,8 +186,13 @@ def generate_transition_prompts_batch(
         dprint(f"[VLM_BATCH] Initializing Qwen2.5-VL-7B-Instruct for {len(image_pairs)} transitions...")
 
         # Initialize VLM ONCE for all pairs
+        # Use direct path to ckpts directory to avoid re-downloading
+        # This matches how other models (Wan, VACE, Florence2, etc.) are loaded
+        # Use Wan2GP/ckpts path since model is inside Wan2GP directory
+        model_path = str(Path(__file__).parent.parent / "Wan2GP" / "ckpts" / "Qwen2.5-VL-7B-Instruct")
+        dprint(f"[VLM_BATCH] Model path resolved to: {model_path}")
         extender = QwenPromptExpander(
-            model_name="QwenVL2.5_7B",  # Use predefined name
+            model_name=model_path,  # Full path to local model
             device=device,
             is_vl=True  # CRITICAL: Enable VL mode
         )

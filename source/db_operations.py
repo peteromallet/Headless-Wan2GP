@@ -809,7 +809,7 @@ def get_orchestrator_child_tasks(orchestrator_task_id: str) -> dict:
     try:
         # Query for child tasks referencing this orchestrator
         response = SUPABASE_CLIENT.table(PG_TABLE_NAME)\
-            .select("id, task_type, status, params")\
+            .select("id, task_type, status, params, output_location")\
             .contains("params", {"orchestrator_task_id_ref": orchestrator_task_id})\
             .order("created_at", desc=False)\
             .execute()
@@ -823,7 +823,8 @@ def get_orchestrator_child_tasks(orchestrator_task_id: str) -> dict:
                     'id': task['id'],
                     'task_type': task['task_type'],
                     'status': task['status'],
-                    'params': task.get('params', {})
+                    'params': task.get('params', {}),
+                    'output_location': task.get('output_location', '')
                 }
                 if task['task_type'] == 'travel_segment':
                     segments.append(task_data)
