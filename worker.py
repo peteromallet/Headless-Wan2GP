@@ -35,6 +35,14 @@ from pathlib import Path
 from dotenv import load_dotenv
 from supabase import create_client, Client as SupabaseClient
 
+# RAM monitoring
+try:
+    import psutil
+    _PSUTIL_AVAILABLE = True
+except ImportError:
+    _PSUTIL_AVAILABLE = False
+    print("[WORKER] psutil not available - RAM monitoring disabled")
+
 # Add the current directory to Python path so Wan2GP can be imported as a module
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Add the Wan2GP subdirectory to the path for its internal imports
@@ -88,11 +96,59 @@ from source.logging_utils import (
 
 debug_mode = False  # This will be toggled on via the --debug CLI flag in main()
 
-def dprint(msg: str):
+def dprint(msg: str, task_id: str = None):
     """Print a debug message if --debug flag is enabled."""
     if debug_mode:
         # Prefix with timestamp for easier tracing
-        print(f"[DEBUG {datetime.datetime.now().isoformat()}] {msg}")
+        if task_id:
+            print(f"[DEBUG {datetime.datetime.now().isoformat()}] [Task {task_id}] {msg}")
+        else:
+            print(f"[DEBUG {datetime.datetime.now().isoformat()}] {msg}")
+
+def make_task_dprint(task_id: str):
+    """Create a task-aware dprint function that automatically includes task_id."""
+    def task_dprint(msg: str):
+        dprint(msg, task_id=task_id)
+    return task_dprint
+
+def log_ram_usage(label: str, task_id: str = "unknown") -> dict:
+    """
+    Log current RAM usage with a descriptive label.
+    Returns dict with RAM metrics for programmatic use.
+    """
+    if not _PSUTIL_AVAILABLE:
+        return {"available": False}
+
+    try:
+        process = psutil.Process(os.getpid())
+        mem_info = process.memory_info()
+        rss_mb = mem_info.rss / 1024**2
+        rss_gb = rss_mb / 1024
+
+        # Get system-wide memory stats
+        sys_mem = psutil.virtual_memory()
+        sys_total_gb = sys_mem.total / 1024**3
+        sys_available_gb = sys_mem.available / 1024**3
+        sys_used_percent = sys_mem.percent
+
+        headless_logger.info(
+            f"[RAM] {label}: Process={rss_mb:.0f}MB ({rss_gb:.2f}GB) | "
+            f"System={sys_used_percent:.1f}% used, {sys_available_gb:.1f}GB/{sys_total_gb:.1f}GB available",
+            task_id=task_id
+        )
+
+        return {
+            "available": True,
+            "process_rss_mb": rss_mb,
+            "process_rss_gb": rss_gb,
+            "system_total_gb": sys_total_gb,
+            "system_available_gb": sys_available_gb,
+            "system_used_percent": sys_used_percent
+        }
+
+    except Exception as e:
+        headless_logger.warning(f"[RAM] Failed to get RAM usage: {e}", task_id=task_id)
+        return {"available": False, "error": str(e)}
 
 def cleanup_generated_files(output_location: str, task_id: str = "unknown") -> None:
     """
@@ -1329,12 +1385,13 @@ def parse_args():
 def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Path, task_id: str, apply_reward_lora: bool, colour_match_videos: bool, mask_active_frames: bool, task_queue: HeadlessTaskQueue, dprint):
     """
     Handle travel segment tasks via direct queue integration to eliminate blocking waits.
-    
+
     This replaces the complex blocking logic in travel_between_images.py with direct
     queue submission, maintaining model persistence and eliminating triple-queue inefficiency.
     """
     print(f"[SEGMENT_ROUTING_DEBUG] _handle_travel_segment_via_queue called for task_id={task_id}")
     headless_logger.debug(f"Starting travel segment queue processing", task_id=task_id)
+    log_ram_usage("Segment via queue - start", task_id=task_id)
     
     try:
         # Import required functions from travel_between_images
@@ -1679,6 +1736,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         )
         
         # Submit to queue
+        log_ram_usage("Before queue submission", task_id=task_id)
         submitted_task_id = task_queue.submit_task(generation_task)
         headless_logger.debug(f"Travel segment submitted to queue as {submitted_task_id}", task_id=task_id)
         
@@ -1718,11 +1776,14 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 )
                 
                 if chain_success and final_chained_path:
+                    log_ram_usage("Segment via queue - end (success with chain)", task_id=task_id)
                     return True, final_chained_path
                 else:
+                    log_ram_usage("Segment via queue - end (success, chain failed)", task_id=task_id)
                     return True, status.result_path  # Use raw output if chaining failed
-                    
+
             elif status.status == "failed":
+                log_ram_usage("Segment via queue - end (generation failed)", task_id=task_id)
                 return False, f"Travel segment {task_id}: Generation failed: {status.error_message}"
             
             # Still processing
@@ -1730,11 +1791,13 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             elapsed_time += wait_interval
         
         # Timeout
+        log_ram_usage("Segment via queue - end (timeout)", task_id=task_id)
         return False, f"Travel segment {task_id}: Generation timeout after {max_wait_time}s"
-        
+
     except Exception as e:
         headless_logger.error(f"Travel segment exception: {e}", task_id=task_id)
         traceback.print_exc()
+        log_ram_usage("Segment via queue - end (exception)", task_id=task_id)
         return False, f"Travel segment {task_id}: Exception: {str(e)}"
 
 # -----------------------------------------------------------------------------
@@ -1842,15 +1905,21 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
         task_params_dict["task_id"] = task_id
         if "orchestrator_details" in task_params_dict:
             task_params_dict["orchestrator_details"]["orchestrator_task_id"] = task_id
-        return tbi._handle_travel_orchestrator_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, orchestrator_task_id_str=task_id, orchestrator_project_id=project_id_for_task, dprint=dprint)
+        # Create task-aware dprint wrapper
+        task_dprint = make_task_dprint(task_id)
+        return tbi._handle_travel_orchestrator_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, orchestrator_task_id_str=task_id, orchestrator_project_id=project_id_for_task, dprint=task_dprint)
     elif task_type == "travel_segment":
         print(f"[ROUTING_DEBUG] Matched travel_segment for task_id={task_id}")
         headless_logger.debug("Using direct queue integration for travel segment", task_id=task_id)
         # NEW: Route travel segments directly to queue to eliminate blocking wait
-        return _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base, task_id, apply_reward_lora, colour_match_videos, mask_active_frames, task_queue=task_queue, dprint=dprint)
+        # Create task-aware dprint wrapper
+        task_dprint = make_task_dprint(task_id)
+        return _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base, task_id, apply_reward_lora, colour_match_videos, mask_active_frames, task_queue=task_queue, dprint=task_dprint)
     elif task_type == "travel_stitch":
         headless_logger.debug("Delegating to travel stitch handler", task_id=task_id)
-        return tbi._handle_travel_stitch_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, stitch_task_id_str=task_id, dprint=dprint)
+        # Create task-aware dprint wrapper
+        task_dprint = make_task_dprint(task_id)
+        return tbi._handle_travel_stitch_task(task_params_from_db=task_params_dict, main_output_dir_base=main_output_dir_base, stitch_task_id_str=task_id, dprint=task_dprint)
     elif task_type == "different_perspective_orchestrator":
         headless_logger.debug("Delegating to different perspective orchestrator handler", task_id=task_id)
         return dp._handle_different_perspective_orchestrator_task(
@@ -2462,22 +2531,36 @@ def main():
             if task_succeeded:
                 # Reset fatal error counter on successful task completion
                 reset_fatal_error_counter()
-                
+
                 # Orchestrator tasks stay "In Progress" until their children report back.
                 orchestrator_types_waiting = {"travel_orchestrator", "different_perspective_orchestrator"}
 
                 if current_task_type in orchestrator_types_waiting:
-                    # Keep status as IN_PROGRESS (already set when we claimed the task).
-                    # We still store the output message (if any) so operators can see it.
-                    db_ops.update_task_status(
-                        current_task_id_for_status_update,
-                        db_ops.STATUS_IN_PROGRESS,
-                        output_location,
-                    )
-                    headless_logger.status(
-                        f"Orchestrator task queued child tasks; awaiting completion", 
-                        task_id=current_task_id_for_status_update
-                    )
+                    # Check if orchestrator is signaling that all children are complete
+                    if output_location and output_location.startswith("[ORCHESTRATOR_COMPLETE]"):
+                        # All children complete! Mark orchestrator as COMPLETE
+                        actual_output = output_location.replace("[ORCHESTRATOR_COMPLETE]", "")
+                        db_ops.update_task_status_supabase(
+                            current_task_id_for_status_update,
+                            db_ops.STATUS_COMPLETE,
+                            actual_output,
+                        )
+                        headless_logger.success(
+                            f"Orchestrator completed: All child tasks finished. Output: {actual_output}",
+                            task_id=current_task_id_for_status_update
+                        )
+                    else:
+                        # Keep status as IN_PROGRESS (already set when we claimed the task).
+                        # We still store the output message (if any) so operators can see it.
+                        db_ops.update_task_status(
+                            current_task_id_for_status_update,
+                            db_ops.STATUS_IN_PROGRESS,
+                            output_location,
+                        )
+                        headless_logger.status(
+                            f"Orchestrator task queued child tasks; awaiting completion",
+                            task_id=current_task_id_for_status_update
+                        )
                 else:
                     db_ops.update_task_status_supabase(
                         current_task_id_for_status_update,

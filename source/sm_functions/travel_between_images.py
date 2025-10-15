@@ -7,9 +7,18 @@ import time
 import subprocess
 import uuid
 from datetime import datetime
+import os
 
 # Import structured logging
 from ..logging_utils import travel_logger
+
+# RAM monitoring
+try:
+    import psutil
+    _PSUTIL_AVAILABLE = True
+except ImportError:
+    _PSUTIL_AVAILABLE = False
+    travel_logger.warning("psutil not available - RAM monitoring disabled")
 
 try:
     import cv2
@@ -58,11 +67,11 @@ def debug_video_analysis(video_path: str | Path, label: str, task_id: str = "unk
         if not path_obj.exists():
             travel_logger.debug(f"{label}: FILE MISSING - {video_path}", task_id=task_id)
             return {"exists": False, "path": str(video_path)}
-        
+
         frame_count, fps = sm_get_video_frame_count_and_fps(str(path_obj))
         file_size = path_obj.stat().st_size
         duration = frame_count / fps if fps and fps > 0 else 0
-        
+
         debug_info = {
             "exists": True,
             "path": str(path_obj.resolve()),
@@ -72,18 +81,62 @@ def debug_video_analysis(video_path: str | Path, label: str, task_id: str = "unk
             "file_size_bytes": file_size,
             "file_size_mb": round(file_size / (1024*1024), 2)
         }
-        
+
         travel_logger.debug(f"{label}: {debug_info['frame_count']} frames, {debug_info['fps']} fps, {debug_info['duration_seconds']:.2f}s, {debug_info['file_size_mb']} MB", task_id=task_id)
-        
+
         return debug_info
-        
+
     except Exception as e:
         travel_logger.debug(f"{label}: ERROR analyzing video - {e}", task_id=task_id)
         return {"exists": False, "error": str(e), "path": str(video_path)}
 
+# RAM monitoring helper function
+def log_ram_usage(label: str, task_id: str = "unknown", logger=None) -> dict:
+    """
+    Log current RAM usage with a descriptive label.
+    Returns dict with RAM metrics for programmatic use.
+    """
+    if logger is None:
+        logger = travel_logger
+
+    if not _PSUTIL_AVAILABLE:
+        return {"available": False}
+
+    try:
+        process = psutil.Process(os.getpid())
+        mem_info = process.memory_info()
+        rss_mb = mem_info.rss / 1024**2
+        rss_gb = rss_mb / 1024
+
+        # Get system-wide memory stats
+        sys_mem = psutil.virtual_memory()
+        sys_total_gb = sys_mem.total / 1024**3
+        sys_available_gb = sys_mem.available / 1024**3
+        sys_used_percent = sys_mem.percent
+
+        logger.info(
+            f"[RAM] {label}: Process={rss_mb:.0f}MB ({rss_gb:.2f}GB) | "
+            f"System={sys_used_percent:.1f}% used, {sys_available_gb:.1f}GB/{sys_total_gb:.1f}GB available",
+            task_id=task_id
+        )
+
+        return {
+            "available": True,
+            "process_rss_mb": rss_mb,
+            "process_rss_gb": rss_gb,
+            "system_total_gb": sys_total_gb,
+            "system_available_gb": sys_available_gb,
+            "system_used_percent": sys_used_percent
+        }
+
+    except Exception as e:
+        logger.warning(f"[RAM] Failed to get RAM usage: {e}", task_id=task_id)
+        return {"available": False, "error": str(e)}
+
 # --- SM_RESTRUCTURE: New Handler Functions for Travel Tasks ---
 def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_base: Path, orchestrator_task_id_str: str, orchestrator_project_id: str | None, *, dprint):
     travel_logger.essential("Starting travel orchestrator task", task_id=orchestrator_task_id_str)
+    log_ram_usage("Orchestrator start", task_id=orchestrator_task_id_str)
     travel_logger.debug(f"Project ID: {orchestrator_project_id}", task_id=orchestrator_task_id_str)
     travel_logger.debug(f"Task params: {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...", task_id=orchestrator_task_id_str)
     generation_success = False # Represents success of orchestration step
@@ -166,14 +219,74 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             if len(existing_segments) >= expected_segments and len(existing_stitch) >= 1:
                 # Clean up any duplicates but don't create new tasks
                 cleanup_summary = db_ops.cleanup_duplicate_child_tasks(orchestrator_task_id_str, expected_segments)
-                
+
                 if cleanup_summary['duplicate_segments_removed'] > 0 or cleanup_summary['duplicate_stitch_removed'] > 0:
                     travel_logger.info(f"Cleaned up duplicates: {cleanup_summary['duplicate_segments_removed']} segments, {cleanup_summary['duplicate_stitch_removed']} stitch tasks", task_id=orchestrator_task_id_str)
-                
-                generation_success = True
-                output_message_for_orchestrator_db = f"[IDEMPOTENT] Child tasks already exist for orchestrator {orchestrator_task_id_str}. Found {len(existing_segments)} segments and {len(existing_stitch)} stitch tasks. Cleaned up {cleanup_summary['duplicate_segments_removed']} duplicate segments and {cleanup_summary['duplicate_stitch_removed']} duplicate stitch tasks."
-                travel_logger.info(output_message_for_orchestrator_db, task_id=orchestrator_task_id_str)
-                return generation_success, output_message_for_orchestrator_db
+
+                # CHECK: Are all child tasks actually complete?
+                # If they are, we should mark orchestrator as complete instead of leaving it IN_PROGRESS
+                # Also check for terminal failure states (failed/cancelled) that should mark orchestrator as failed
+
+                def is_complete(task):
+                    return task.get('status') == 'complete'
+
+                def is_terminal_failure(task):
+                    """Check if task is in a terminal failure state (failed, cancelled, etc.)"""
+                    status = task.get('status', '').lower()
+                    return status in ('failed', 'cancelled', 'canceled', 'error')
+
+                all_segments_complete = all(is_complete(seg) for seg in existing_segments) if existing_segments else False
+                all_stitch_complete = all(is_complete(st) for st in existing_stitch) if existing_stitch else False
+
+                any_segment_failed = any(is_terminal_failure(seg) for seg in existing_segments) if existing_segments else False
+                any_stitch_failed = any(is_terminal_failure(st) for st in existing_stitch) if existing_stitch else False
+
+                # Also ensure we have the minimum required tasks
+                has_required_segments = len(existing_segments) >= expected_segments
+                has_required_stitch = len(existing_stitch) >= 1
+
+                # If any child task failed/cancelled, mark orchestrator as failed
+                if (any_segment_failed or any_stitch_failed) and has_required_segments and has_required_stitch:
+                    failed_segments = [seg for seg in existing_segments if is_terminal_failure(seg)]
+                    failed_stitch = [st for st in existing_stitch if is_terminal_failure(st)]
+
+                    error_details = []
+                    if failed_segments:
+                        error_details.append(f"{len(failed_segments)} segment(s) failed/cancelled")
+                    if failed_stitch:
+                        error_details.append(f"{len(failed_stitch)} stitch task(s) failed/cancelled")
+
+                    dprint(f"[IDEMPOTENT_FAILED] Child tasks failed: {', '.join(error_details)}")
+                    travel_logger.error(f"Child tasks in terminal failure state: {', '.join(error_details)}", task_id=orchestrator_task_id_str)
+
+                    # Return failure so orchestrator is marked as failed
+                    generation_success = False
+                    output_message_for_orchestrator_db = f"[ORCHESTRATOR_FAILED] Child tasks failed: {', '.join(error_details)}"
+                    return generation_success, output_message_for_orchestrator_db
+
+                if all_segments_complete and all_stitch_complete and has_required_segments and has_required_stitch:
+                    # All children are done! Return with special "COMPLETE" marker
+                    dprint(f"[IDEMPOTENT_COMPLETE] All {len(existing_segments)} child segments and {len(existing_stitch)} stitch tasks are complete")
+                    travel_logger.info(f"All child tasks complete, orchestrator should be marked as complete", task_id=orchestrator_task_id_str)
+
+                    # Get the final output from the stitch task
+                    final_output = existing_stitch[0].get('output_location', 'Completed via idempotency')
+
+                    # Return with special marker so worker knows to mark as COMPLETE instead of IN_PROGRESS
+                    # We use a tuple with the marker to signal completion
+                    generation_success = True
+                    output_message_for_orchestrator_db = f"[ORCHESTRATOR_COMPLETE]{final_output}"  # Special prefix
+                    travel_logger.info(f"All child tasks complete. Returning final output: {final_output}", task_id=orchestrator_task_id_str)
+                    return generation_success, output_message_for_orchestrator_db
+                else:
+                    # Some children still in progress - report status and let worker keep waiting
+                    segments_complete_count = sum(1 for seg in existing_segments if seg['status'] == 'complete')
+                    stitch_complete_count = sum(1 for st in existing_stitch if st['status'] == 'complete')
+
+                    generation_success = True
+                    output_message_for_orchestrator_db = f"[IDEMPOTENT] Child tasks already exist but not all complete: {segments_complete_count}/{len(existing_segments)} segments complete, {stitch_complete_count}/{len(existing_stitch)} stitch complete. Cleaned up {cleanup_summary['duplicate_segments_removed']} duplicate segments and {cleanup_summary['duplicate_stitch_removed']} duplicate stitch tasks."
+                    travel_logger.info(output_message_for_orchestrator_db, task_id=orchestrator_task_id_str)
+                    return generation_success, output_message_for_orchestrator_db
             else:
                 # Partial completion - log and continue with missing tasks
                 dprint(f"[IDEMPOTENCY] Partial child tasks found: {len(existing_segments)}/{expected_segments} segments, {len(existing_stitch)}/1 stitch. Will continue with orchestration.")
@@ -881,6 +994,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         vlm_enhanced_prompts = {}  # Dict: segment_idx -> enhanced_prompt
         if orchestrator_payload.get("enhance_prompt", False):
             dprint(f"[VLM_BATCH] enhance_prompt enabled - generating transition prompts for all segments...")
+            log_ram_usage("Before VLM loading", task_id=orchestrator_task_id_str)
             try:
                 # Import VLM helper
                 from ..vlm_utils import generate_transition_prompts_batch
@@ -988,6 +1102,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                         dprint(f"[VLM_BATCH] Segment {idx}: {enhanced[:80]}...")
 
                 dprint(f"[VLM_BATCH] Generated {len(vlm_enhanced_prompts)} enhanced prompts")
+                log_ram_usage("After VLM cleanup", task_id=orchestrator_task_id_str)
 
                 # Call Supabase edge function to update shot_generations with newly enriched prompts
                 try:
@@ -1291,6 +1406,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         else:
             output_message_for_orchestrator_db = f"[IDEMPOTENT] All child tasks already exist for run {run_id}. No new tasks created."
         travel_logger.info(output_message_for_orchestrator_db, task_id=orchestrator_task_id_str)
+        log_ram_usage("Orchestrator end (success)", task_id=orchestrator_task_id_str)
 
     except Exception as e:
         msg = f"Failed during travel orchestration processing: {e}"
@@ -1300,11 +1416,13 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         traceback.print_exc()
         generation_success = False
         output_message_for_orchestrator_db = msg
-    
+        log_ram_usage("Orchestrator end (error)", task_id=orchestrator_task_id_str)
+
     return generation_success, output_message_for_orchestrator_db
 
 def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True, *, process_single_task, dprint, task_queue=None):
     travel_logger.essential(f"Starting travel segment task", task_id=segment_task_id_str)
+    log_ram_usage("Segment start", task_id=segment_task_id_str)
     dprint(f"_handle_travel_segment_task: Starting for {segment_task_id_str}")
     dprint(f"Segment task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
     # task_params_from_db contains what was enqueued for this specific segment,
@@ -1985,6 +2103,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         # The return value final_segment_video_output_path_str (if success) is the one that
         # process_single_task itself would have set as 'output_location' for the WGP task.
         # Now, it becomes the output_location for the parent travel_segment task.
+        log_ram_usage("Segment end (success)", task_id=segment_task_id_str)
         return generation_success, final_segment_video_output_path_str if generation_success else output_message_for_segment_task
 
     except Exception as e:
@@ -2004,8 +2123,9 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                 dprint(f"Segment: Marked orchestrator task {orchestrator_task_id_ref} as FAILED due to exception")
             except Exception as e_orch:
                 dprint(f"Segment: Warning - could not update orchestrator status: {e_orch}")
-        
+
         # return False, f"Unexpected error: {str(e)[:200]}"
+        log_ram_usage("Segment end (error)", task_id=segment_task_id_str)
         return False, f"Segment {segment_idx if 'segment_idx' in locals() else 'unknown'} failed: {str(e)[:200]}"
 
 # --- SM_RESTRUCTURE: New function to handle chaining after WGP/Comfy sub-task ---
@@ -2373,6 +2493,7 @@ def attempt_ffmpeg_crossfade_fallback(segment_video_paths: list[str], overlaps: 
 
 def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: Path, stitch_task_id_str: str, *, dprint):
     travel_logger.essential(f"Starting travel stitch task", task_id=stitch_task_id_str)
+    log_ram_usage("Stitch start", task_id=stitch_task_id_str)
     dprint(f"[IMMEDIATE DEBUG] _handle_travel_stitch_task: Starting for {stitch_task_id_str}")
     dprint(f"[IMMEDIATE DEBUG] task_params_from_db keys: {list(task_params_from_db.keys())}")
     dprint(f"_handle_travel_stitch_task: Starting for {stitch_task_id_str}")
@@ -3189,6 +3310,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         dprint(f"Stitch: Task complete. Orchestrator completion will be handled by Edge Function.")
 
         # Return the final video path so the stitch task itself gets uploaded via Edge Function
+        log_ram_usage("Stitch end (success)", task_id=stitch_task_id_str)
         return stitch_success, str(final_video_path.resolve())
 
     except Exception as e:
@@ -3207,5 +3329,6 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 dprint(f"Stitch: Marked orchestrator task {orchestrator_task_id_ref} as FAILED due to exception")
             except Exception as e_orch:
                 dprint(f"Stitch: Warning - could not update orchestrator status: {e_orch}")
-        
+
+        log_ram_usage("Stitch end (error)", task_id=stitch_task_id_str)
         return False, f"Stitch task failed: {str(e)[:200]}"
