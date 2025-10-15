@@ -56,11 +56,12 @@ def _verify_wgp_directory(logger, context: str = ""):
 class WanOrchestrator:
     """Thin adapter around `wgp.generate_video` for easier programmatic use."""
 
-    def __init__(self, wan_root: str):
+    def __init__(self, wan_root: str, profile_choice: int = 3):
         """Initialize orchestrator with WanGP directory.
 
         Args:
             wan_root: Path to WanGP repository root directory (MUST be absolute path to Wan2GP/)
+            profile_choice: Memory profile (1-5). Default 3 for RTX 3090/4090 with 32-64GB RAM
 
         IMPORTANT: Caller MUST have already changed to wan_root directory before calling this.
         wgp.py uses relative paths and expects to run from Wan2GP/.
@@ -70,6 +71,7 @@ class WanOrchestrator:
 
         # Store the wan_root (should match current directory)
         self.wan_root = os.path.abspath(wan_root)
+        self.profile_choice = profile_choice
         current_dir = os.getcwd()
 
         if debug_mode:
@@ -385,7 +387,7 @@ class WanOrchestrator:
                 image_save_path_choice=outputs_dir,
                 attention_choice="auto",
                 compile_choice=0,
-                profile_choice=4,
+                profile_choice=self.profile_choice,  # Use profile from initialization
                 vae_config_choice="default",
                 metadata_choice="none",
                 quantization_choice="int8",
@@ -1251,7 +1253,7 @@ class WanOrchestrator:
                 'cfg_zero_step': 0,
                 'prompt_enhancer': 0,
                 'min_frames_if_references': 9,
-                'override_profile': -1,
+                'override_profile': self.profile_choice,
 
                 # Mode and filename
                 'mode': 'generate',
@@ -1279,7 +1281,7 @@ class WanOrchestrator:
             guidance_phases_value = resolved_params.get("guidance_phases", 1)
             model_switch_phase_value = resolved_params.get("model_switch_phase", 1)
             image_refs_relative_size_value = resolved_params.get("image_refs_relative_size", 50)
-            override_profile_value = resolved_params.get("override_profile", -1)
+            override_profile_value = resolved_params.get("override_profile", self.profile_choice)
 
             wgp_params = {
                 # Core parameters (fixed, not overridable)

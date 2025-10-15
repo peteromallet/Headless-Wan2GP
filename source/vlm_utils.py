@@ -70,14 +70,14 @@ def generate_transition_prompt(
         combined_img.paste(end_img, (start_img.width, 0))
 
         # Initialize VLM with Qwen2.5-VL-7B
-        # Use direct path to ckpts directory to avoid re-downloading
-        # This matches how other models (Wan, VACE, Florence2, etc.) are loaded
-        dprint(f"[VLM_TRANSITION] Initializing Qwen2.5-VL-7B-Instruct...")
-        # Use Wan2GP/ckpts path since model is inside Wan2GP directory
-        model_path = str(Path(__file__).parent.parent / "Wan2GP" / "ckpts" / "Qwen2.5-VL-7B-Instruct")
-        dprint(f"[VLM_TRANSITION] Model path resolved to: {model_path}")
+        # Use HuggingFace model ID to enable auto-download and proper caching
+        # transformers from_pretrained() requires either:
+        #   1. HF model ID (e.g., "Qwen/Qwen2.5-VL-7B-Instruct") - will auto-download
+        #   2. Local directory with standard HF structure (config.json + model.safetensors)
+        # wgp's custom naming (Qwen2.5-VL-7B-Instruct_bf16.safetensors) is NOT compatible
+        dprint(f"[VLM_TRANSITION] Initializing Qwen2.5-VL-7B-Instruct from HuggingFace...")
         extender = QwenPromptExpander(
-            model_name=model_path,  # Full path to local model
+            model_name="Qwen/Qwen2.5-VL-7B-Instruct",  # HF model ID for auto-download/caching
             device=device,
             is_vl=True  # CRITICAL: Enable VL mode
         )
@@ -186,13 +186,14 @@ def generate_transition_prompts_batch(
         dprint(f"[VLM_BATCH] Initializing Qwen2.5-VL-7B-Instruct for {len(image_pairs)} transitions...")
 
         # Initialize VLM ONCE for all pairs
-        # Use direct path to ckpts directory to avoid re-downloading
-        # This matches how other models (Wan, VACE, Florence2, etc.) are loaded
-        # Use Wan2GP/ckpts path since model is inside Wan2GP directory
-        model_path = str(Path(__file__).parent.parent / "Wan2GP" / "ckpts" / "Qwen2.5-VL-7B-Instruct")
-        dprint(f"[VLM_BATCH] Model path resolved to: {model_path}")
+        # Use HuggingFace model ID to enable auto-download and proper caching
+        # transformers from_pretrained() requires either:
+        #   1. HF model ID (e.g., "Qwen/Qwen2.5-VL-7B-Instruct") - will auto-download
+        #   2. Local directory with standard HF structure (config.json + model.safetensors)
+        # wgp's custom naming (Qwen2.5-VL-7B-Instruct_bf16.safetensors) is NOT compatible
+        dprint(f"[VLM_BATCH] Using HuggingFace model ID 'Qwen/Qwen2.5-VL-7B-Instruct'...")
         extender = QwenPromptExpander(
-            model_name=model_path,  # Full path to local model
+            model_name="Qwen/Qwen2.5-VL-7B-Instruct",  # HF model ID for auto-download/caching
             device=device,
             is_vl=True  # CRITICAL: Enable VL mode
         )

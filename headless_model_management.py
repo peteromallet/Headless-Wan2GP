@@ -95,7 +95,7 @@ class HeadlessTaskQueue:
     while providing a clean API for headless operation.
     """
     
-    def __init__(self, wan_dir: str, max_workers: int = 1, debug_mode: bool = False):
+    def __init__(self, wan_dir: str, max_workers: int = 1, debug_mode: bool = False, profile_choice: int = 3):
         """
         Initialize the headless task queue.
 
@@ -103,12 +103,14 @@ class HeadlessTaskQueue:
             wan_dir: Path to WanGP directory
             max_workers: Number of concurrent generation workers (recommend 1 for GPU)
             debug_mode: Enable debug-level logging
+            profile_choice: Memory profile (1-5). Default 3 for RTX 3090/4090 with 32-64GB RAM
         """
         self.wan_dir = setup_wgp_path(wan_dir)
         self.max_workers = max_workers
         self.running = False
         self.start_time = time.time()
         self.debug_mode = debug_mode
+        self.profile_choice = profile_choice
         
         # Import wgp after path setup (protect sys.argv to prevent argument conflicts)
         _saved_argv = sys.argv[:]
@@ -322,7 +324,7 @@ class HeadlessTaskQueue:
                     self.logger.info(f"[LAZY_INIT] ✅ Now in Wan2GP directory, importing WanOrchestrator...")
 
                 from headless_wgp import WanOrchestrator
-                self.orchestrator = WanOrchestrator(self.wan_dir)
+                self.orchestrator = WanOrchestrator(self.wan_dir, profile_choice=self.profile_choice)
             finally:
                 sys.argv = _saved_argv_for_import  # Restore original arguments
                 # NOTE: We do NOT restore the working directory - WGP expects to stay in Wan2GP/
