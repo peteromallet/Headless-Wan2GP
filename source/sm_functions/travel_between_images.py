@@ -191,8 +191,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
         num_segments = orchestrator_payload.get("num_new_segments_to_generate", 0)
         if num_segments <= 0:
-            msg = f"[WARNING Task ID: {orchestrator_task_id_str}] No new segments to generate based on orchestrator payload. Orchestration complete (vacuously)."
-            print(msg)
+            msg = f"No new segments to generate based on orchestrator payload. Orchestration complete (vacuously)."
+            travel_logger.warning(msg, task_id=orchestrator_task_id_str)
             return True, msg
 
         # Track actual DB row IDs by segment index to avoid mixing logical IDs
@@ -408,7 +408,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 # This should never happen - consolidation split segments instead of combining them!
                 if dprint:
                     dprint(f"[CONSOLIDATION_ERROR] ❌ Consolidation increased segments from {original_num_segments} to {new_num_segments} - ABORTING optimization")
-                print(f"[FRAME_CONSOLIDATION] ❌ ERROR: Consolidation would increase segments ({original_num_segments} → {new_num_segments}) - keeping original allocation")
+                dprint(f"[FRAME_CONSOLIDATION] ❌ ERROR: Consolidation would increase segments ({original_num_segments} → {new_num_segments}) - keeping original allocation")
                 # Return early without modifying the payload
                 return orchestrator_payload
 
@@ -661,14 +661,14 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             num_segments = len(orchestrator_payload["segment_frames_expanded"])
             if num_segments <= 1:
                 dprint(f"[FRAME_CONSOLIDATION] ⏭️  Skipping optimization - only {num_segments} segment(s), nothing to consolidate")
-                print(f"[FRAME_CONSOLIDATION] ⏭️  Only {num_segments} segment(s) - no consolidation needed")
+                travel_logger.info(f"Frame consolidation: Only {num_segments} segment(s) - no consolidation needed", task_id=orchestrator_task_id_str)
             else:
                 # Run safety validation before optimization
                 safety_check = validate_consolidation_safety(orchestrator_payload, dprint)
 
                 if safety_check["is_safe"]:
                     dprint(f"[FRAME_CONSOLIDATION] ✅ Triggering optimization for identical parameters")
-                    print(f"[FRAME_CONSOLIDATION] ✅ All parameters identical - enabling frame consolidation optimization")
+                    travel_logger.info("Frame consolidation: All parameters identical - enabling optimization", task_id=orchestrator_task_id_str)
 
                     # Apply frame consolidation optimization
                     orchestrator_payload = optimize_frame_allocation_for_identical_params(
@@ -708,20 +708,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
                     # Summary logging for optimization results
                     segments_saved = original_num_segments - num_segments
-                    print(f"[FRAME_CONSOLIDATION] 🚀 OPTIMIZATION RESULTS:")
-                    print(f"[FRAME_CONSOLIDATION]   📊 Segments: {original_num_segments} → {num_segments} (saved {segments_saved} segments)")
-                    print(f"[FRAME_CONSOLIDATION]   📹 Original allocation: {original_segment_frames}")
-                    print(f"[FRAME_CONSOLIDATION]   📹 Optimized allocation: {expanded_segment_frames}")
-                    print(f"[FRAME_CONSOLIDATION]   🔗 Original overlaps: {original_frame_overlap}")
-                    print(f"[FRAME_CONSOLIDATION]   🔗 Optimized overlaps: {expanded_frame_overlap}")
-                    print(f"[FRAME_CONSOLIDATION]   ⚡ Efficiency gain: {segments_saved} fewer GPU model loads")
+                    travel_logger.info(f"Frame consolidation optimization: {original_num_segments} → {num_segments} segments (saved {segments_saved})", task_id=orchestrator_task_id_str)
+                    travel_logger.debug(f"Original allocation: {original_segment_frames}, Optimized: {expanded_segment_frames}", task_id=orchestrator_task_id_str)
+                    travel_logger.debug(f"Original overlaps: {original_frame_overlap}, Optimized: {expanded_frame_overlap}", task_id=orchestrator_task_id_str)
 
                     dprint(f"[FRAME_CONSOLIDATION] Successfully updated to {num_segments} optimized segments")
                 else:
-                    print(f"[FRAME_CONSOLIDATION] ❌ Safety validation failed - parameters not identical enough")
+                    travel_logger.warning("Frame consolidation: Safety validation failed - parameters not identical enough", task_id=orchestrator_task_id_str)
                     dprint(f"[FRAME_CONSOLIDATION] Safety check failed - keeping original allocation")
         else:
-            print(f"[FRAME_CONSOLIDATION] ℹ️  Parameters not identical - using standard allocation")
+            travel_logger.info("Frame consolidation: Parameters not identical - using standard allocation", task_id=orchestrator_task_id_str)
             dprint(f"[FRAME_CONSOLIDATION] Parameters not identical - keeping original allocation")
         # --- END FRAME CONSOLIDATION OPTIMIZATION ---
 
@@ -1294,11 +1290,12 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             output_message_for_orchestrator_db = f"Successfully enqueued {segments_created} new segment tasks and {stitch_created} new stitch task for run {run_id}. (Total expected: {num_segments} segments + 1 stitch)"
         else:
             output_message_for_orchestrator_db = f"[IDEMPOTENT] All child tasks already exist for run {run_id}. No new tasks created."
-        print(f"Orchestrator {orchestrator_task_id_str}: {output_message_for_orchestrator_db}")
+        travel_logger.info(output_message_for_orchestrator_db, task_id=orchestrator_task_id_str)
 
     except Exception as e:
-        msg = f"[ERROR Task ID: {orchestrator_task_id_str}] Failed during travel orchestration processing: {e}"
-        print(msg)
+        msg = f"Failed during travel orchestration processing: {e}"
+        travel_logger.error(msg, task_id=orchestrator_task_id_str)
+        travel_logger.debug(traceback.format_exc(), task_id=orchestrator_task_id_str)
         import traceback
         traceback.print_exc()
         generation_success = False
@@ -1307,6 +1304,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
     return generation_success, output_message_for_orchestrator_db
 
 def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True, *, process_single_task, dprint, task_queue=None):
+    travel_logger.essential(f"Starting travel segment task", task_id=segment_task_id_str)
     dprint(f"_handle_travel_segment_task: Starting for {segment_task_id_str}")
     dprint(f"Segment task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
     # task_params_from_db contains what was enqueued for this specific segment,
@@ -1698,25 +1696,25 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         # --- Invoke WGP Generation directly ---
         if actual_guide_video_path_for_wgp is None and not is_first_segment_from_scratch:
             # If guide creation failed AND it was essential (i.e., for any segment except the very first one from scratch)
-            msg = f"Task {segment_task_id_str}: Essential guide video failed to generate. Cannot proceed with WGP processing."
-            print(f"[ERROR] {msg}")
+            msg = f"Essential guide video failed to generate. Cannot proceed with WGP processing."
+            travel_logger.error(msg, task_id=segment_task_id_str)
             return False, msg
             
         final_frames_for_wgp_generation = total_frames_for_segment
         current_wgp_engine = "wgp" # Defaulting to WGP for travel segments
         
-        print(f"[WGP_DEBUG] Segment {segment_idx}: GENERATION PARAMETERS")
-        print(f"[WGP_DEBUG]   final_frames_for_wgp_generation: {final_frames_for_wgp_generation}")
-        print(f"[WGP_DEBUG]   parsed_res_wh: {parsed_res_wh}")
-        print(f"[WGP_DEBUG]   fps_helpers: {fps_helpers}")
-        print(f"[WGP_DEBUG]   model_name: {full_orchestrator_payload['model_name']}")
-        print(f"[WGP_DEBUG]   use_causvid_lora: {full_orchestrator_payload.get('apply_causvid', False)}")
-        
+        travel_logger.info(f"WGP generation: {final_frames_for_wgp_generation} frames, res={parsed_res_wh}, fps={fps_helpers}, model={full_orchestrator_payload['model_name']}", task_id=segment_task_id_str)
+        dprint(f"[WGP_DEBUG] Segment {segment_idx}: GENERATION PARAMETERS")
+        dprint(f"[WGP_DEBUG]   final_frames_for_wgp_generation: {final_frames_for_wgp_generation}")
+        dprint(f"[WGP_DEBUG]   parsed_res_wh: {parsed_res_wh}")
+        dprint(f"[WGP_DEBUG]   fps_helpers: {fps_helpers}")
+        dprint(f"[WGP_DEBUG]   model_name: {full_orchestrator_payload['model_name']}")
+        dprint(f"[WGP_DEBUG]   use_causvid_lora: {full_orchestrator_payload.get('apply_causvid', False)}")
         dprint(f"Task {segment_task_id_str}: Requesting WGP generation with {final_frames_for_wgp_generation} frames.")
 
         if final_frames_for_wgp_generation <= 0:
-            msg = f"Task {segment_task_id_str}: Calculated WGP frames {final_frames_for_wgp_generation}. Cannot generate. Check segment_frames_target and overlap."
-            print(f"[ERROR] {msg}")
+            msg = f"Calculated WGP frames {final_frames_for_wgp_generation}. Cannot generate. Check segment_frames_target and overlap."
+            travel_logger.error(msg, task_id=segment_task_id_str)
             return False, msg
 
         # The WGP task will run with a unique ID, but it's processed in-line now
@@ -1920,9 +1918,10 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             f"instead of using _handle_travel_segment_via_queue. Check task routing configuration."
         )
 
-        print(f"[WGP_DEBUG] Segment {segment_idx}: GENERATION RESULT")
-        print(f"[WGP_DEBUG]   generation_success: {generation_success}")
-        print(f"[WGP_DEBUG]   wgp_output_path_or_msg: {wgp_output_path_or_msg}")
+        travel_logger.debug(f"WGP generation result: success={generation_success}, output={wgp_output_path_or_msg}", task_id=segment_task_id_str)
+        dprint(f"[WGP_DEBUG] Segment {segment_idx}: GENERATION RESULT")
+        dprint(f"[WGP_DEBUG]   generation_success: {generation_success}")
+        dprint(f"[WGP_DEBUG]   wgp_output_path_or_msg: {wgp_output_path_or_msg}")
         
         # Analyze the WGP output if successful
         if generation_success and wgp_output_path_or_msg:
@@ -1944,6 +1943,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             if chain_success and final_chained_path:
                 final_segment_video_output_path_str = final_chained_path
                 output_message_for_segment_task = f"Segment {segment_idx} processing (WGP generation & chaining) completed. Final output: {final_segment_video_output_path_str}"
+                travel_logger.info(f"Segment processing completed successfully", task_id=segment_task_id_str)
                 
                 # Analyze final chained output
                 final_debug_info = debug_video_analysis(final_chained_path, f"FINAL_CHAINED_Seg{segment_idx}", segment_task_id_str)
@@ -1956,18 +1956,18 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                 # Use raw WGP output if chaining failed
                 final_segment_video_output_path_str = wgp_output_path_or_msg
                 output_message_for_segment_task = f"Segment {segment_idx} WGP completed but chaining failed: {chain_message}. Using raw output: {final_segment_video_output_path_str}"
-                print(f"[WARNING] {output_message_for_segment_task}")
+                travel_logger.warning(f"Chaining failed: {chain_message}. Using raw WGP output", task_id=segment_task_id_str)
                 
                 # Analyze raw output being used as final
                 if wgp_output_path_or_msg:
                     raw_debug_info = debug_video_analysis(wgp_output_path_or_msg, f"RAW_AS_FINAL_Seg{segment_idx}", segment_task_id_str)
             
-            print(f"Seg {segment_idx} (Task {segment_task_id_str}): {output_message_for_segment_task}")
+            dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): {output_message_for_segment_task}")
         else:
             # wgp_output_path_or_msg contains the error message if generation_success is False
             final_segment_video_output_path_str = None 
-            output_message_for_segment_task = f"Segment {segment_idx} (Task {segment_task_id_str}) processing (WGP generation) failed. Error: {wgp_output_path_or_msg}"
-            print(f"[ERROR] {output_message_for_segment_task}")
+            output_message_for_segment_task = f"Segment {segment_idx} processing (WGP generation) failed. Error: {wgp_output_path_or_msg}"
+            travel_logger.error(f"WGP generation failed: {wgp_output_path_or_msg}", task_id=segment_task_id_str)
             
             # Notify orchestrator of segment failure
             try:
@@ -1988,7 +1988,8 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         return generation_success, final_segment_video_output_path_str if generation_success else output_message_for_segment_task
 
     except Exception as e:
-        print(f"ERROR Task {segment_task_id_str}: Unexpected error during segment processing: {e}")
+        travel_logger.error(f"Unexpected error during segment processing: {e}", task_id=segment_task_id_str)
+        travel_logger.debug(traceback.format_exc(), task_id=segment_task_id_str)
         traceback.print_exc()
         
         # Notify orchestrator of segment failure
@@ -2371,9 +2372,9 @@ def attempt_ffmpeg_crossfade_fallback(segment_video_paths: list[str], overlaps: 
 
 
 def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: Path, stitch_task_id_str: str, *, dprint):
-    print(f"[IMMEDIATE DEBUG] _handle_travel_stitch_task: Starting for {stitch_task_id_str}")
-    print(f"[IMMEDIATE DEBUG] task_params_from_db keys: {list(task_params_from_db.keys())}")
-    
+    travel_logger.essential(f"Starting travel stitch task", task_id=stitch_task_id_str)
+    dprint(f"[IMMEDIATE DEBUG] _handle_travel_stitch_task: Starting for {stitch_task_id_str}")
+    dprint(f"[IMMEDIATE DEBUG] task_params_from_db keys: {list(task_params_from_db.keys())}")
     dprint(f"_handle_travel_stitch_task: Starting for {stitch_task_id_str}")
     dprint(f"Stitch task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
     stitch_params = task_params_from_db # This now contains full_orchestrator_payload
@@ -3104,7 +3105,8 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             dprint=dprint
         )
         
-        print(f"Stitch Task {stitch_task_id_str}: Final video saved to: {final_video_path} (DB location: {final_video_location_for_db})")
+        travel_logger.info(f"Stitch complete: Final video saved to {final_video_path}", task_id=stitch_task_id_str)
+        dprint(f"Stitch Task {stitch_task_id_str}: Final video saved to: {final_video_path} (DB location: {final_video_location_for_db})")
         
         # Analyze final result
         try:
