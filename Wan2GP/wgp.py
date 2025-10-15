@@ -2764,7 +2764,16 @@ def init_pipe(pipe, kwargs, override_profile):
 
     kwargs["extraModelsToQuantize"]=  None
     profile = override_profile if override_profile != -1 else default_profile
-    if profile in (2, 4, 5):
+    if profile == 1:
+        # Profile 1: HighRAM_HighVRAM - Force everything into VRAM, no RAM pinning
+        # Set very high VRAM budgets to prevent mmgp from pinning to RAM
+        budgets = { "transformer" : max(20000, preload), "text_encoder" : max(15000, preload), "vae" : max(2000, preload), "*" : max(25000, preload) }
+        if "transformer2" in pipe:
+            budgets["transformer2"] = max(20000, preload)
+        kwargs["budgets"] = budgets
+        # Explicitly disable RAM pinning for Profile 1
+        kwargs["pinnedMemory"] = []
+    elif profile in (2, 4, 5):
         budgets = { "transformer" : 100 if preload  == 0 else preload, "text_encoder" : 100 if preload  == 0 else preload, "*" : max(1000 if profile==5 else 3000 , preload) }
         if "transformer2" in pipe:
             budgets["transformer2"] = 100 if preload  == 0 else preload

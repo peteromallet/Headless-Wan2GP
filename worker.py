@@ -1358,7 +1358,10 @@ def parse_args():
     pgroup_wgp_globals.add_argument("--wgp-attention-mode", type=str, default=None,
                                 choices=["auto", "sdpa", "sage", "sage2", "flash", "xformers"])
     pgroup_wgp_globals.add_argument("--wgp-compile", type=str, default=None, choices=["", "transformer"])
-    pgroup_wgp_globals.add_argument("--wgp-profile", type=int, default=None)
+    pgroup_wgp_globals.add_argument("--wgp-profile", type=int, default=None, choices=[1, 2, 3, 4, 5],
+                                help="Memory profile: 1=HighRAM_HighVRAM (64GB+24GB, fastest), "
+                                     "2=HighRAM_LowVRAM (64GB+12GB), 3=LowRAM_HighVRAM (32GB+24GB, recommended for RTX 4090), "
+                                     "4=LowRAM_LowVRAM (32GB+12GB), 5=VeryLowRAM_LowVRAM (24GB+10GB). Default: 3")
     pgroup_wgp_globals.add_argument("--wgp-vae-config", type=int, default=None)
     pgroup_wgp_globals.add_argument("--wgp-boost", type=int, default=None)
     pgroup_wgp_globals.add_argument("--wgp-transformer-quantization", type=str, default=None, choices=["int8", "bf16"])
@@ -2440,7 +2443,16 @@ def main():
     wan_dir = str((Path(__file__).parent / "Wan2GP").resolve())
 
     try:
-        task_queue = HeadlessTaskQueue(wan_dir=wan_dir, max_workers=cli_args.queue_workers, debug_mode=cli_args.debug)
+        # Determine memory profile to use
+        profile_choice = cli_args.wgp_profile if cli_args.wgp_profile is not None else 3  # Default to Profile 3
+        headless_logger.essential(f"Initializing with Memory Profile {profile_choice}")
+
+        task_queue = HeadlessTaskQueue(
+            wan_dir=wan_dir,
+            max_workers=cli_args.queue_workers,
+            debug_mode=cli_args.debug,
+            profile_choice=profile_choice
+        )
         task_queue.start()
         headless_logger.success(f"Task queue initialized with {cli_args.queue_workers} workers")
         headless_logger.essential("Queue system will handle generation tasks efficiently with model reuse")
