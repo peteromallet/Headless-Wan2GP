@@ -309,61 +309,102 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                 import base64
                 import mimetypes
 
-                # Get file size to determine upload strategy
+                # Get file size for logging
                 file_size = output_path.stat().st_size
                 file_size_mb = file_size / (1024 * 1024)
                 dprint(f"[DEBUG] File size: {file_size_mb:.2f} MB")
-
-                # Check if this is a video file and extract first frame
-                first_frame_data = None
-                video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v'}
-                if output_path.suffix.lower() in video_extensions:
-                    try:
-                        import tempfile
-                        from .common_utils import save_frame_from_video
-                        import cv2
-
-                        # Create temporary file for first frame
-                        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_frame:
-                            temp_frame_path = Path(temp_frame.name)
-
-                        # Get video resolution for frame extraction
-                        cap = cv2.VideoCapture(str(output_path))
-                        if cap.isOpened():
-                            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                            cap.release()
-
-                            # Extract first frame (index 0)
-                            if save_frame_from_video(output_path, 0, temp_frame_path, (width, height)):
-                                # Read the first frame and encode as base64
-                                with open(temp_frame_path, 'rb') as f:
-                                    first_frame_data = base64.b64encode(f.read()).decode('utf-8')
-                                dprint(f"[DEBUG] Extracted first frame from video {output_path.name}")
-                            else:
-                                dprint(f"[WARNING] Failed to extract first frame from video {output_path.name}")
-                        else:
-                            dprint(f"[WARNING] Could not open video {output_path.name} for frame extraction")
-
-                        # Clean up temporary file
-                        try:
-                            temp_frame_path.unlink()
-                        except:
-                            pass
-
-                    except Exception as e:
-                        dprint(f"[WARNING] Error extracting first frame from {output_path.name}: {e}")
-                        # Continue without first frame if extraction fails
 
                 headers = {"Content-Type": "application/json"}
                 if SUPABASE_ACCESS_TOKEN:
                     headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
 
-                # Decision logic: use presigned URL for files over 50MB
-                if file_size > 50 * 1024 * 1024:
-                    dprint(f"[DEBUG] Large file detected ({file_size_mb:.2f} MB), using presigned upload")
+                # Check if this is a video file that needs thumbnail extraction
+                video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v'}
+                is_video = output_path.suffix.lower() in video_extensions
+                
+                # Use base64 encoding for files under 2MB (MODE 1), presigned URLs for larger files (MODE 3)
+                FILE_SIZE_THRESHOLD_MB = 2.0
+                use_base64 = file_size_mb < FILE_SIZE_THRESHOLD_MB
+                
+                if use_base64:
+                    dprint(f"[DEBUG] Using base64 upload for {output_path.name} ({file_size_mb:.2f} MB < {FILE_SIZE_THRESHOLD_MB} MB)")
+                    
+                    # MODE 1: Base64 upload (for files under 2MB)
+                    # Read and encode file
+                    with open(output_path, 'rb') as f:
+                        file_bytes = f.read()
+                        file_data_base64 = base64.b64encode(file_bytes).decode('utf-8')
+                    
+                    payload = {
+                        "task_id": task_id_str,
+                        "file_data": file_data_base64,
+                        "filename": output_path.name
+                    }
+                    
+                    # Extract and encode first frame for videos
+                    if is_video:
+                        try:
+                            import tempfile
+                            from .common_utils import save_frame_from_video
+                            import cv2
 
-                    # Step 1: Get signed upload URL
+                            dprint(f"[DEBUG] Extracting first frame from video {output_path.name}")
+
+                            # Create temporary file for first frame
+                            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_frame:
+                                temp_frame_path = Path(temp_frame.name)
+
+                            # Get video resolution for frame extraction
+                            cap = cv2.VideoCapture(str(output_path))
+                            if cap.isOpened():
+                                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                                cap.release()
+
+                                # Extract first frame (index 0)
+                                if save_frame_from_video(output_path, 0, temp_frame_path, (width, height)):
+                                    dprint(f"[DEBUG] Extracted first frame, encoding as base64")
+                                    
+                                    # Read and encode thumbnail
+                                    with open(temp_frame_path, 'rb') as thumb_file:
+                                        thumb_bytes = thumb_file.read()
+                                        first_frame_base64 = base64.b64encode(thumb_bytes).decode('utf-8')
+                                    
+                                    payload["first_frame_data"] = first_frame_base64
+                                    payload["first_frame_filename"] = "thumbnail.jpg"
+                                    dprint(f"[DEBUG] First frame encoded successfully")
+                                else:
+                                    dprint(f"[WARNING] Failed to extract first frame from video")
+                            else:
+                                dprint(f"[WARNING] Could not open video for frame extraction")
+
+                            # Clean up temporary file
+                            try:
+                                temp_frame_path.unlink()
+                            except:
+                                pass
+
+                        except Exception as e:
+                            dprint(f"[WARNING] Error extracting/encoding thumbnail: {e}")
+                            # Continue without thumbnail
+                    
+                    dprint(f"[DEBUG] Calling complete_task Edge Function with base64 data for task {task_id_str}")
+                    resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)
+                    
+                    if resp.status_code == 200:
+                        dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE with base64 upload")
+                        return
+                    else:
+                        error_msg = f"complete_task edge function failed: {resp.status_code} - {resp.text}"
+                        print(f"[ERROR] {error_msg}")
+                        _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
+                        return
+                    
+                else:
+                    dprint(f"[DEBUG] Using presigned upload for {output_path.name} ({file_size_mb:.2f} MB >= {FILE_SIZE_THRESHOLD_MB} MB)")
+                    
+                    # MODE 3: Presigned URL upload (for files 2MB or larger)
+                    # Step 1: Get signed upload URLs (request thumbnail URL for videos)
                     generate_url_edge = f"{SUPABASE_URL.rstrip('/')}/functions/v1/generate-upload-url"
                     content_type = mimetypes.guess_type(str(output_path))[0] or 'application/octet-stream'
 
@@ -373,7 +414,8 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                         json={
                             "task_id": task_id_str,
                             "filename": output_path.name,
-                            "content_type": content_type
+                            "content_type": content_type,
+                            "generate_thumbnail_url": is_video  # Request thumbnail URL for videos
                         },
                         timeout=30
                     )
@@ -386,7 +428,62 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
 
                     upload_data = upload_url_resp.json()
 
-                    # Step 2: Upload file directly to storage using presigned URL
+                    # Step 2: Extract and upload thumbnail for videos (if thumbnail URL was generated)
+                    thumbnail_storage_path = None
+                    if is_video and "thumbnail_upload_url" in upload_data:
+                        try:
+                            import tempfile
+                            from .common_utils import save_frame_from_video
+                            import cv2
+
+                            dprint(f"[DEBUG] Extracting first frame from video {output_path.name}")
+
+                            # Create temporary file for first frame
+                            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_frame:
+                                temp_frame_path = Path(temp_frame.name)
+
+                            # Get video resolution for frame extraction
+                            cap = cv2.VideoCapture(str(output_path))
+                            if cap.isOpened():
+                                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                                cap.release()
+
+                                # Extract first frame (index 0)
+                                if save_frame_from_video(output_path, 0, temp_frame_path, (width, height)):
+                                    dprint(f"[DEBUG] Extracted first frame, uploading via signed URL")
+                                    
+                                    # Upload thumbnail directly via signed URL
+                                    with open(temp_frame_path, 'rb') as thumb_file:
+                                        thumb_resp = httpx.put(
+                                            upload_data["thumbnail_upload_url"],
+                                            headers={"Content-Type": "image/jpeg"},
+                                            content=thumb_file,
+                                            timeout=60
+                                        )
+                                    
+                                    if thumb_resp.status_code in [200, 201]:
+                                        thumbnail_storage_path = upload_data["thumbnail_storage_path"]
+                                        dprint(f"[DEBUG] Thumbnail uploaded successfully via signed URL")
+                                    else:
+                                        dprint(f"[WARNING] Thumbnail upload failed: {thumb_resp.status_code}")
+                                else:
+                                    dprint(f"[WARNING] Failed to extract first frame from video")
+                            else:
+                                dprint(f"[WARNING] Could not open video for frame extraction")
+
+                            # Clean up temporary file
+                            try:
+                                temp_frame_path.unlink()
+                            except:
+                                pass
+
+                        except Exception as e:
+                            dprint(f"[WARNING] Error extracting/uploading thumbnail: {e}")
+                            # Continue without thumbnail
+
+                    # Step 3: Upload main file directly to storage using presigned URL
+                    dprint(f"[DEBUG] Uploading main file via signed URL")
                     with open(output_path, 'rb') as f:
                         put_resp = httpx.put(
                             upload_data["upload_url"],
@@ -401,51 +498,30 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                         _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
                         return
 
-                    dprint(f"[DEBUG] Large file uploaded successfully via presigned URL")
+                    dprint(f"[DEBUG] File uploaded successfully via presigned URL")
 
-                    # Step 3: Complete task with storage path
+                    # Step 4: Complete task with storage paths
                     payload = {
                         "task_id": task_id_str,
                         "storage_path": upload_data["storage_path"]
                     }
-
-                    # Add first frame data if available
-                    if first_frame_data:
-                        payload["first_frame_data"] = first_frame_data
-                        payload["first_frame_filename"] = f"{output_path.stem}_frame_0.jpg"
+                    
+                    # Add thumbnail storage path if available
+                    if thumbnail_storage_path:
+                        payload["thumbnail_storage_path"] = thumbnail_storage_path
 
                     dprint(f"[DEBUG] Calling complete_task Edge Function with storage_path for task {task_id_str}")
                     resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)
-                else:
-                    # Small file: use base64 encoding (existing path)
-                    dprint(f"[DEBUG] Small file ({file_size_mb:.2f} MB), using base64 upload")
-
-                    with open(output_path, 'rb') as f:
-                        file_data = base64.b64encode(f.read()).decode('utf-8')
-
-                    payload = {
-                        "task_id": task_id_str,
-                        "file_data": file_data,
-                        "filename": output_path.name
-                    }
-
-                    # Add first frame data if available
-                    if first_frame_data:
-                        payload["first_frame_data"] = first_frame_data
-                        payload["first_frame_filename"] = f"{output_path.stem}_frame_0.jpg"
-
-                    dprint(f"[DEBUG] Calling complete_task Edge Function with file upload for task {task_id_str}")
-                    resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)
-                
-                if resp.status_code == 200:
-                    dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE with file upload")
-                    return
-                else:
-                    error_msg = f"complete_task edge function failed: {resp.status_code} - {resp.text}"
-                    print(f"[ERROR] {error_msg}")
-                    # Use update-task-status edge function to mark as failed
-                    _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
-                    return
+                    
+                    if resp.status_code == 200:
+                        dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE with file upload")
+                        return
+                    else:
+                        error_msg = f"complete_task edge function failed: {resp.status_code} - {resp.text}"
+                        print(f"[ERROR] {error_msg}")
+                        # Use update-task-status edge function to mark as failed
+                        _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
+                        return
             else:
                 # Not a local file, treat as URL
                 payload = {"task_id": task_id_str, "output_location": output_location_val}

@@ -71,7 +71,14 @@ sys.argv = ["worker.py"]  # Prevent wgp.py from parsing our CLI args
 from headless_model_management import HeadlessTaskQueue, GenerationTask
 sys.argv = _original_argv  # Restore original arguments
 # --- Structured Logging ---
-from source.logging_utils import headless_logger, enable_debug_mode, disable_debug_mode
+from source.logging_utils import (
+    headless_logger, 
+    enable_debug_mode, 
+    disable_debug_mode,
+    LogBuffer,
+    CustomLogInterceptor,
+    set_log_interceptor
+)
 # --- End SM_RESTRUCTURE imports ---
 
 
@@ -2042,16 +2049,79 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
 # Heartbeat System
 # -----------------------------------------------------------------------------
 
-def send_worker_heartbeat(worker_id: str) -> bool:
-    """Send heartbeat with proper error handling."""
+# Global log buffer for centralized logging
+_global_log_buffer: LogBuffer = None
+_current_task_id: str = None
 
+def get_gpu_memory_usage():
+    """
+    Get GPU memory usage in MB.
+    
+    Returns:
+        Tuple of (total_mb, used_mb) or (None, None) if unavailable
+    """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            total = torch.cuda.get_device_properties(0).total_memory / (1024 * 1024)
+            allocated = torch.cuda.memory_allocated(0) / (1024 * 1024)
+            return int(total), int(allocated)
+    except Exception:
+        pass
+    
+    return None, None
+
+
+def send_worker_heartbeat(worker_id: str, log_buffer: LogBuffer = None, current_task_id: str = None) -> bool:
+    """
+    Send heartbeat with proper error handling and optional log batch.
+    
+    Args:
+        worker_id: Worker's unique ID
+        log_buffer: LogBuffer instance to flush logs from (optional)
+        current_task_id: Current task being processed (optional)
+    
+    Returns:
+        True if heartbeat successful
+    """
     if not db_ops.SUPABASE_CLIENT:
         headless_logger.debug(f"[HEARTBEAT] Supabase client not available")
         return True
 
-    # Direct table update - reliable and simple
     try:
         current_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        
+        # Get GPU metrics
+        vram_total, vram_used = get_gpu_memory_usage()
+        
+        # Flush log buffer if provided
+        logs = log_buffer.flush() if log_buffer else []
+        
+        # Try to use enhanced RPC function with logs first
+        if logs:
+            try:
+                result = db_ops.SUPABASE_CLIENT.rpc('func_worker_heartbeat_with_logs', {
+                    'worker_id_param': worker_id,
+                    'vram_total_mb_param': vram_total,
+                    'vram_used_mb_param': vram_used,
+                    'logs_param': logs,
+                    'current_task_id_param': current_task_id
+                }).execute()
+                
+                if result.data:
+                    logs_inserted = result.data.get('logs_inserted', 0)
+                    if logs_inserted > 0:
+                        headless_logger.debug(f"[HEARTBEAT] ✅ Sent for worker {worker_id} with {logs_inserted} logs")
+                    else:
+                        headless_logger.debug(f"[HEARTBEAT] ✅ Sent for worker {worker_id}")
+                    return True
+                    
+            except Exception as rpc_error:
+                # RPC function might not exist yet, fall back to direct table update
+                headless_logger.debug(f"[HEARTBEAT] RPC function not available, using direct table update: {rpc_error}")
+                # Continue to fallback below
+        
+        # Fallback: Direct table update (original behavior)
         response = db_ops.SUPABASE_CLIENT.table("workers").update({
             "last_heartbeat": current_time,
             "status": "active"
@@ -2071,7 +2141,7 @@ def send_worker_heartbeat(worker_id: str) -> bool:
 
 
 def heartbeat_worker_thread(worker_id: str, stop_event: threading.Event, interval: int = 20):
-    """Background thread that sends heartbeats every interval seconds."""
+    """Background thread that sends heartbeats every interval seconds with log batching."""
 
     headless_logger.essential(f"✅ Starting heartbeat thread for worker: {worker_id} (interval: {interval}s)")
     
@@ -2080,17 +2150,27 @@ def heartbeat_worker_thread(worker_id: str, stop_event: threading.Event, interva
 
     while not stop_event.wait(interval):
         try:
-            if send_worker_heartbeat(worker_id):
+            # Send heartbeat with logs from global buffer
+            if send_worker_heartbeat(worker_id, log_buffer=_global_log_buffer, current_task_id=_current_task_id):
                 heartbeat_count += 1
                 # Log status every 5 minutes (15 heartbeats at 20s intervals) to avoid spam
                 if heartbeat_count % 15 == 1:  # Log first, then every 15th
                     headless_logger.essential(f"✅ [HEARTBEAT] Worker {worker_id} active ({heartbeat_count} heartbeats sent)")
+                    # Log buffer stats for debugging
+                    if _global_log_buffer:
+                        stats = _global_log_buffer.get_stats()
+                        headless_logger.debug(f"[HEARTBEAT] Log buffer stats: {stats}")
             else:
                 headless_logger.error(f"❌ [HEARTBEAT] Failed for worker {worker_id} (attempt #{heartbeat_count + 1})")
         except Exception as e:
             headless_logger.error(f"[HEARTBEAT THREAD] Exception: {e}")
             headless_logger.error(f"[HEARTBEAT THREAD] Traceback: {traceback.format_exc()}")
 
+    # Final flush on thread stop
+    if _global_log_buffer:
+        headless_logger.essential(f"🛑 Heartbeat thread stopped for worker: {worker_id}, flushing remaining logs...")
+        send_worker_heartbeat(worker_id, log_buffer=_global_log_buffer, current_task_id=_current_task_id)
+    
     headless_logger.essential(f"🛑 Heartbeat thread stopped for worker: {worker_id} (sent {heartbeat_count} heartbeats)")
 
 
@@ -2240,6 +2320,22 @@ def main():
     main_output_dir = Path(cli_args.main_output_dir).resolve()  # Resolve to absolute path BEFORE chdir
     main_output_dir.mkdir(parents=True, exist_ok=True)
 
+    # --- Initialize Centralized Logging (Worker → Orchestrator) ---
+    global _global_log_buffer
+    if cli_args.worker:
+        # Create log buffer for collecting logs
+        _global_log_buffer = LogBuffer(max_size=100)
+        
+        # Create interceptor to capture custom logging function calls
+        log_interceptor = CustomLogInterceptor(_global_log_buffer)
+        set_log_interceptor(log_interceptor)
+        
+        headless_logger.essential(f"✅ Centralized logging enabled for worker: {cli_args.worker}")
+        headless_logger.debug(f"Log buffer initialized (max_size=100, will flush with heartbeats every 20s)")
+    else:
+        headless_logger.debug("No worker ID provided - centralized logging disabled")
+    # --- End Centralized Logging Initialization ---
+
     print(f"WanGP Headless Server Started.")
     if cli_args.worker:
         print(f"Worker ID: {cli_args.worker}")
@@ -2256,7 +2352,7 @@ def main():
             daemon=True
         )
         heartbeat_thread.start()
-        print(f"✅ Heartbeat thread started (20-second intervals)")
+        print(f"✅ Heartbeat thread started (20-second intervals with log batching)")
     else:
         print(f"⚠️  No worker ID provided - heartbeat disabled")
 
@@ -2298,6 +2394,10 @@ def main():
             if task_info:
                 current_task_id_for_status_update = task_info["task_id"]
                 # Status is already set to IN_PROGRESS by claim-next-task Edge Function
+                
+                # Set current task ID for centralized logging
+                global _current_task_id
+                _current_task_id = current_task_id_for_status_update
 
             if not task_info:
                 dprint("No queued tasks found. Sleeping...")
@@ -2397,6 +2497,9 @@ def main():
                     f"Task failed. Output: {output_location if output_location else 'N/A'}",
                     task_id=current_task_id_for_status_update
                 )
+            
+            # Clear current task ID for centralized logging
+            _current_task_id = None
             
             time.sleep(1) # Brief pause before checking for the next task
 
