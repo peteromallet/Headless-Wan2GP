@@ -489,7 +489,7 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                             upload_data["upload_url"],
                             headers={"Content-Type": content_type},
                             content=f,
-                            timeout=300  # 5 minute timeout for large files
+                            timeout=600  # 10 minute timeout for large files
                         )
 
                     if put_resp.status_code not in [200, 201]:
