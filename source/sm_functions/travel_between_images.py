@@ -10,7 +10,7 @@ from datetime import datetime
 import os
 
 # Import structured logging
-from ..logging_utils import travel_logger
+from ..logging_utils import travel_logger, safe_json_repr, safe_dict_repr
 
 # RAM monitoring
 try:
@@ -138,7 +138,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
     travel_logger.essential("Starting travel orchestrator task", task_id=orchestrator_task_id_str)
     log_ram_usage("Orchestrator start", task_id=orchestrator_task_id_str)
     travel_logger.debug(f"Project ID: {orchestrator_project_id}", task_id=orchestrator_task_id_str)
-    travel_logger.debug(f"Task params: {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...", task_id=orchestrator_task_id_str)
+    # Safe logging: Use safe_json_repr to prevent hangs on large nested structures
+    travel_logger.debug(f"Task params: {safe_json_repr(task_params_from_db)}", task_id=orchestrator_task_id_str)
     generation_success = False # Represents success of orchestration step
     output_message_for_orchestrator_db = f"Orchestration for {orchestrator_task_id_str} initiated."
 
@@ -148,7 +149,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             return False, "orchestrator_details missing"
         
         orchestrator_payload = task_params_from_db['orchestrator_details']
-        travel_logger.debug(f"Orchestrator payload: {json.dumps(orchestrator_payload, indent=2, default=str)[:500]}...", task_id=orchestrator_task_id_str)
+        # Safe logging: Use safe_dict_repr for better performance than JSON serialization
+        travel_logger.debug(f"Orchestrator payload: {safe_dict_repr(orchestrator_payload)}", task_id=orchestrator_task_id_str)
 
         # Parse phase_config if present and add parsed values to orchestrator_payload
         if "phase_config" in orchestrator_payload:
@@ -1424,7 +1426,8 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
     travel_logger.essential(f"Starting travel segment task", task_id=segment_task_id_str)
     log_ram_usage("Segment start", task_id=segment_task_id_str)
     dprint(f"_handle_travel_segment_task: Starting for {segment_task_id_str}")
-    dprint(f"Segment task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
+    # Safe logging: Use safe_json_repr to prevent hangs
+    dprint(f"Segment task_params_from_db: {safe_json_repr(task_params_from_db)}")
     # task_params_from_db contains what was enqueued for this specific segment,
     # including potentially 'full_orchestrator_payload'.
     segment_params = task_params_from_db 
@@ -2497,7 +2500,8 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
     dprint(f"[IMMEDIATE DEBUG] _handle_travel_stitch_task: Starting for {stitch_task_id_str}")
     dprint(f"[IMMEDIATE DEBUG] task_params_from_db keys: {list(task_params_from_db.keys())}")
     dprint(f"_handle_travel_stitch_task: Starting for {stitch_task_id_str}")
-    dprint(f"Stitch task_params_from_db (first 1000 chars): {json.dumps(task_params_from_db, default=str, indent=2)[:1000]}...")
+    # Safe logging: Use safe_json_repr to prevent hangs
+    dprint(f"Stitch task_params_from_db: {safe_json_repr(task_params_from_db)}")
     stitch_params = task_params_from_db # This now contains full_orchestrator_payload
     stitch_success = False
     final_video_location_for_db = None
