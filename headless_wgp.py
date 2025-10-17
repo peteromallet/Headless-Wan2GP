@@ -10,7 +10,10 @@ import sys
 from typing import Optional, List, Union
 
 # Import structured logging
-from source.logging_utils import orchestrator_logger, model_logger, generation_logger
+from source.logging_utils import (
+    orchestrator_logger, model_logger, generation_logger,
+    safe_repr, safe_dict_repr, safe_log_params, safe_log_change
+)
 
 # Import debug mode flag
 try:
@@ -742,20 +745,24 @@ class WanOrchestrator:
         try:
             import wgp
             model_defaults = wgp.get_default_settings(model_type)
-            generation_logger.debug(f"get_default_settings('{model_type}') returned: {model_defaults}")
+            # Safe logging: Use safe_dict_repr to prevent hanging
+            generation_logger.debug(f"get_default_settings('{model_type}') returned: {safe_dict_repr(model_defaults) if model_defaults else 'None'}")
             generation_logger.debug(f"Type: {type(model_defaults)}")
             
             if model_defaults:
-                generation_logger.debug(f"Before applying model config - resolved_params: {resolved_params}")
+                # Safe logging: Only show keys before applying model config
+                generation_logger.debug(f"Before applying model config - resolved_params keys: {list(resolved_params.keys())}")
 
                 for param, value in model_defaults.items():
                     # JSON passthrough mode: Allow activated_loras and loras_multipliers to pass directly
                     if param not in ["prompt"]:
                         old_value = resolved_params.get(param, "NOT_SET")
                         resolved_params[param] = value
-                        generation_logger.debug(f"Applied {param}: {old_value} → {value}")
+                        # Safe logging: Use safe_log_change to prevent hanging on large values
+                        generation_logger.debug(safe_log_change(param, old_value, value))
 
-                generation_logger.debug(f"After applying model config - resolved_params: {resolved_params}")
+                # Safe logging: Only show keys after applying model config
+                generation_logger.debug(f"After applying model config - resolved_params keys: {list(resolved_params.keys())}")
                 generation_logger.debug(f"Applied model config for '{model_type}': {len(model_defaults)} parameters")
             else:
                 generation_logger.warning(f"No model configuration found for '{model_type}'")
@@ -767,8 +774,9 @@ class WanOrchestrator:
             generation_logger.debug(f"Traceback: {traceback.format_exc()}")
         
         # 3. Apply task explicit parameters (highest priority)
-        generation_logger.debug(f"Task explicit parameters: {task_params}")
-        generation_logger.debug(f"Before applying task params - resolved_params: {resolved_params}")
+        # Safe logging: Use safe_dict_repr to prevent hanging on large nested structures
+        generation_logger.debug(safe_log_params(task_params, "Task explicit parameters"))
+        generation_logger.debug(f"Before applying task params - resolved_params keys: {list(resolved_params.keys())}")
 
         for param, value in task_params.items():
             if value is not None:  # Don't override with None values
