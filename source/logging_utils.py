@@ -231,7 +231,7 @@ class LogBuffer:
         """
         self.logs: List[Dict[str, Any]] = []
         self.max_size = max_size
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()  # Use RLock for reentrancy (flush() called from add())
         self.total_logs = 0
         self.total_flushes = 0
         self.shared_queue = shared_queue  # Queue to guardian process
