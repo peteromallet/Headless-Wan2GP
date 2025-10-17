@@ -95,22 +95,19 @@ class HeadlessTaskQueue:
     while providing a clean API for headless operation.
     """
     
-    def __init__(self, wan_dir: str, max_workers: int = 1, debug_mode: bool = False, profile_choice: int = 3):
+    def __init__(self, wan_dir: str, max_workers: int = 1):
         """
         Initialize the headless task queue.
 
         Args:
             wan_dir: Path to WanGP directory
             max_workers: Number of concurrent generation workers (recommend 1 for GPU)
-            debug_mode: Enable debug-level logging
-            profile_choice: Memory profile (1-5). Default 3 for RTX 3090/4090 with 32-64GB RAM
         """
         self.wan_dir = setup_wgp_path(wan_dir)
         self.max_workers = max_workers
         self.running = False
         self.start_time = time.time()
-        self.debug_mode = debug_mode
-        self.profile_choice = profile_choice
+        self.debug_mode = False  # Disabled to match October 2 baseline
         
         # Import wgp after path setup (protect sys.argv to prevent argument conflicts)
         _saved_argv = sys.argv[:]
@@ -324,7 +321,7 @@ class HeadlessTaskQueue:
                     self.logger.info(f"[LAZY_INIT] ✅ Now in Wan2GP directory, importing WanOrchestrator...")
 
                 from headless_wgp import WanOrchestrator
-                self.orchestrator = WanOrchestrator(self.wan_dir, profile_choice=self.profile_choice)
+                self.orchestrator = WanOrchestrator(self.wan_dir)
             finally:
                 sys.argv = _saved_argv_for_import  # Restore original arguments
                 # NOTE: We do NOT restore the working directory - WGP expects to stay in Wan2GP/
@@ -373,64 +370,7 @@ class HeadlessTaskQueue:
         # self.progress_callback = self._create_wgp_progress_callback()
         
         self.logger.info("WGP integration initialized")
-
-    def _cleanup_memory_after_task(self, task_id: str):
-        """
-        Clean up memory after task completion WITHOUT unloading models.
-
-        This clears PyTorch caches and Python garbage to prevent memory fragmentation
-        that can slow down subsequent generations. Models remain loaded in VRAM.
-
-        Args:
-            task_id: ID of the completed task (for logging)
-        """
-        import torch
-        import gc
-
-        try:
-            # Log memory BEFORE cleanup
-            if torch.cuda.is_available():
-                vram_allocated_before = torch.cuda.memory_allocated() / 1024**3
-                vram_reserved_before = torch.cuda.memory_reserved() / 1024**3
-                self.logger.info(
-                    f"[MEMORY_CLEANUP] Task {task_id}: "
-                    f"BEFORE - VRAM allocated: {vram_allocated_before:.2f}GB, "
-                    f"reserved: {vram_reserved_before:.2f}GB"
-                )
-
-            # Clear PyTorch's CUDA cache (frees unused reserved memory, keeps models)
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                self.logger.info(f"[MEMORY_CLEANUP] Task {task_id}: Cleared CUDA cache")
-
-            # Run Python garbage collection to free CPU memory
-            collected = gc.collect()
-            self.logger.info(f"[MEMORY_CLEANUP] Task {task_id}: Garbage collected {collected} objects")
-
-            # Log memory AFTER cleanup
-            if torch.cuda.is_available():
-                vram_allocated_after = torch.cuda.memory_allocated() / 1024**3
-                vram_reserved_after = torch.cuda.memory_reserved() / 1024**3
-                vram_freed = vram_reserved_before - vram_reserved_after
-
-                self.logger.info(
-                    f"[MEMORY_CLEANUP] Task {task_id}: "
-                    f"AFTER - VRAM allocated: {vram_allocated_after:.2f}GB, "
-                    f"reserved: {vram_reserved_after:.2f}GB"
-                )
-
-                if vram_freed > 0.01:  # Only log if freed >10MB
-                    self.logger.info(
-                        f"[MEMORY_CLEANUP] Task {task_id}: ✅ Freed {vram_freed:.2f}GB of reserved VRAM"
-                    )
-                else:
-                    self.logger.info(
-                        f"[MEMORY_CLEANUP] Task {task_id}: No significant VRAM freed (models still loaded)"
-                    )
-
-        except Exception as e:
-            self.logger.warning(f"[MEMORY_CLEANUP] Task {task_id}: Failed to cleanup memory: {e}")
-
+    
     def start(self):
         """Start the task queue processing service."""
         if self.running:
@@ -647,10 +587,6 @@ class HeadlessTaskQueue:
                     task.error_message = "No output generated"
                     self.stats["tasks_failed"] += 1
                     self.logger.error(f"Task {task.id} failed after {processing_time:.1f}s: No output generated")
-
-            # Memory cleanup after each task (does NOT unload models)
-            # This clears PyTorch's internal caches and Python garbage to prevent fragmentation
-            self._cleanup_memory_after_task(task.id)
 
         except Exception as e:
             # Handle task failure

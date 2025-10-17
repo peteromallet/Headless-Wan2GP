@@ -2443,16 +2443,7 @@ def main():
     wan_dir = str((Path(__file__).parent / "Wan2GP").resolve())
 
     try:
-        # Determine memory profile to use (hardcoded to Profile 4)
-        profile_choice = 4  # Profile 4: LowRAM_LowVRAM (32GB+12GB)
-        headless_logger.essential(f"Initializing with Memory Profile {profile_choice}")
-
-        task_queue = HeadlessTaskQueue(
-            wan_dir=wan_dir,
-            max_workers=cli_args.queue_workers,
-            debug_mode=cli_args.debug,
-            profile_choice=profile_choice
-        )
+        task_queue = HeadlessTaskQueue(wan_dir=wan_dir, max_workers=cli_args.queue_workers)
         task_queue.start()
         headless_logger.success(f"Task queue initialized with {cli_args.queue_workers} workers")
         headless_logger.essential("Queue system will handle generation tasks efficiently with model reuse")
