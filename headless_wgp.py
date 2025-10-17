@@ -506,6 +506,13 @@ class WanOrchestrator:
                 wgp.offloadobj = None
             gc.collect()
             
+            # CRITICAL: Clear CUDA cache after unloading to free reserved VRAM before loading new model
+            # Without this, old model's reserved memory persists and new model OOMs during loading
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                model_logger.debug("Cleared CUDA cache after model unload")
+            
             # Replicate WGP's exact loading pattern (lines 4255-4258)
             model_logger.debug(f"Loading model {wgp.get_model_name(model_key)}...")
             wgp.wan_model, wgp.offloadobj = wgp.load_models(model_key)
