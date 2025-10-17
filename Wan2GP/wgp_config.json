@@ -7,7 +7,7 @@
     "save_path": "outputs/",
     "image_save_path": "outputs/",
     "compile": 0,
-    "profile": 3,
+    "profile": 4,
     "vae_config": "default",
     "vae_precision": "fp32",
     "mixed_precision": 0,
