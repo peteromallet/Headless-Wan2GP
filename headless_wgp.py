@@ -750,16 +750,40 @@ class WanOrchestrator:
             generation_logger.debug(f"Type: {type(model_defaults)}")
             
             if model_defaults:
+                # DIAGNOSTIC: Log model_defaults structure before iteration
+                generation_logger.info(f"🔍 DIAGNOSTIC: model_defaults has {len(model_defaults)} parameters")
+                generation_logger.info(f"🔍 DIAGNOSTIC: model_defaults keys: {list(model_defaults.keys())}")
+                generation_logger.info(f"🔍 DIAGNOSTIC: model_defaults is type: {type(model_defaults)}")
+                generation_logger.info(f"🔍 DIAGNOSTIC: model_defaults id: {id(model_defaults)}")
+
                 # Safe logging: Only show keys before applying model config
                 generation_logger.debug(f"Before applying model config - resolved_params keys: {list(resolved_params.keys())}")
 
-                for param, value in model_defaults.items():
+                # DEFENSIVE: Create a snapshot of items to prevent iterator invalidation
+                model_items = list(model_defaults.items())
+                generation_logger.info(f"🔍 DIAGNOSTIC: Created snapshot of {len(model_items)} items for iteration")
+
+                for idx, (param, value) in enumerate(model_items):
+                    # DIAGNOSTIC: Log progress every item to pinpoint exact freeze location
+                    generation_logger.info(f"🔍 LOOP [{idx+1}/{len(model_items)}]: Processing param='{param}', value_type={type(value).__name__}")
+
                     # JSON passthrough mode: Allow activated_loras and loras_multipliers to pass directly
                     if param not in ["prompt"]:
+                        generation_logger.debug(f"🔍 LOOP [{idx+1}]: Getting old value for '{param}'")
                         old_value = resolved_params.get(param, "NOT_SET")
+
+                        generation_logger.debug(f"🔍 LOOP [{idx+1}]: Assigning new value for '{param}'")
                         resolved_params[param] = value
+
+                        generation_logger.debug(f"🔍 LOOP [{idx+1}]: Logging change for '{param}'")
                         # Safe logging: Use safe_log_change to prevent hanging on large values
                         generation_logger.debug(safe_log_change(param, old_value, value))
+
+                        generation_logger.debug(f"✅ LOOP [{idx+1}]: Completed '{param}'")
+                    else:
+                        generation_logger.info(f"⏭️  LOOP [{idx+1}]: Skipped '{param}' (excluded)")
+
+                generation_logger.info(f"✅ DIAGNOSTIC: Loop completed successfully, processed {len(model_items)} items")
 
                 # Safe logging: Only show keys after applying model config
                 generation_logger.debug(f"After applying model config - resolved_params keys: {list(resolved_params.keys())}")
