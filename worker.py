@@ -1354,23 +1354,23 @@ def parse_args():
                                help="Supabase anon (public) API key used to create the client when authenticating with a user JWT. If omitted, falls back to SUPABASE_ANON_KEY env var or service key.")
 
     # Advanced wgp.py Global Config Overrides (Optional) - Applied once at server start
-    pgroup_wgp_globals = parser.add_argument_group("WGP Global Config Overrides (Applied at Server Start)")
-    pgroup_wgp_globals.add_argument("--wgp-attention-mode", type=str, default=None,
-                                choices=["auto", "sdpa", "sage", "sage2", "flash", "xformers"])
-    pgroup_wgp_globals.add_argument("--wgp-compile", type=str, default=None, choices=["", "transformer"])
-    pgroup_wgp_globals.add_argument("--wgp-profile", type=int, default=None, choices=[1, 2, 3, 4, 5],
-                                help="Memory profile: 1=HighRAM_HighVRAM (64GB+24GB, fastest), "
-                                     "2=HighRAM_LowVRAM (64GB+12GB), 3=LowRAM_HighVRAM (32GB+24GB, recommended for RTX 4090), "
-                                     "4=LowRAM_LowVRAM (32GB+12GB), 5=VeryLowRAM_LowVRAM (24GB+10GB). Default: 4")
-    pgroup_wgp_globals.add_argument("--wgp-vae-config", type=int, default=None)
-    pgroup_wgp_globals.add_argument("--wgp-boost", type=int, default=None)
-    pgroup_wgp_globals.add_argument("--wgp-transformer-quantization", type=str, default=None, choices=["int8", "bf16"])
-    pgroup_wgp_globals.add_argument("--wgp-transformer-dtype-policy", type=str, default=None, choices=["", "fp16", "bf16"])
-    pgroup_wgp_globals.add_argument("--wgp-text-encoder-quantization", type=str, default=None, choices=["int8", "bf16"])
-    pgroup_wgp_globals.add_argument("--wgp-vae-precision", type=str, default=None, choices=["16", "32"])
-    pgroup_wgp_globals.add_argument("--wgp-mixed-precision", type=str, default=None, choices=["0", "1"])
-    pgroup_wgp_globals.add_argument("--wgp-preload-policy", type=str, default=None,
-                                help="Set wgp.py's preload_model_policy (e.g., 'P,S' or 'P'. Avoid 'U' to keep models loaded longer).")
+    # pgroup_wgp_globals = parser.add_argument_group("WGP Global Config Overrides (Applied at Server Start)")
+    # pgroup_wgp_globals.add_argument("--wgp-attention-mode", type=str, default=None,
+    #                             choices=["auto", "sdpa", "sage", "sage2", "flash", "xformers"])
+    # pgroup_wgp_globals.add_argument("--wgp-compile", type=str, default=None, choices=["", "transformer"])
+    # pgroup_wgp_globals.add_argument("--wgp-profile", type=int, default=None, choices=[1, 2, 3, 4, 5],
+    #                             help="Memory profile: 1=HighRAM_HighVRAM (64GB+24GB, fastest), "
+    #                                  "2=HighRAM_LowVRAM (64GB+12GB), 3=LowRAM_HighVRAM (32GB+24GB, recommended for RTX 4090), "
+    #                                  "4=LowRAM_LowVRAM (32GB+12GB), 5=VeryLowRAM_LowVRAM (24GB+10GB). Default: 4")
+    # pgroup_wgp_globals.add_argument("--wgp-vae-config", type=int, default=None)
+    # pgroup_wgp_globals.add_argument("--wgp-boost", type=int, default=None)
+    # pgroup_wgp_globals.add_argument("--wgp-transformer-quantization", type=str, default=None, choices=["int8", "bf16"])
+    # pgroup_wgp_globals.add_argument("--wgp-transformer-dtype-policy", type=str, default=None, choices=["", "fp16", "bf16"])
+    # pgroup_wgp_globals.add_argument("--wgp-text-encoder-quantization", type=str, default=None, choices=["int8", "bf16"])
+    # pgroup_wgp_globals.add_argument("--wgp-vae-precision", type=str, default=None, choices=["16", "32"])
+    # pgroup_wgp_globals.add_argument("--wgp-mixed-precision", type=str, default=None, choices=["0", "1"])
+    # pgroup_wgp_globals.add_argument("--wgp-preload-policy", type=str, default=None,
+    #                             help="Set wgp.py's preload_model_policy (e.g., 'P,S' or 'P'. Avoid 'U' to keep models loaded longer).")
 
     return parser.parse_args()
 
@@ -2443,8 +2443,8 @@ def main():
     wan_dir = str((Path(__file__).parent / "Wan2GP").resolve())
 
     try:
-        # Determine memory profile to use
-        profile_choice = cli_args.wgp_profile if cli_args.wgp_profile is not None else 4  # Default to Profile 4
+        # Determine memory profile to use (hardcoded to Profile 4)
+        profile_choice = 4  # Profile 4: LowRAM_LowVRAM (32GB+12GB)
         headless_logger.essential(f"Initializing with Memory Profile {profile_choice}")
 
         task_queue = HeadlessTaskQueue(
