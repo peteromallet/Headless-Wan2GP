@@ -81,12 +81,18 @@ from headless_model_management import HeadlessTaskQueue, GenerationTask
 sys.argv = _original_argv  # Restore original arguments
 # --- Structured Logging ---
 from source.logging_utils import (
-    headless_logger, 
-    enable_debug_mode, 
+    headless_logger,
+    enable_debug_mode,
     disable_debug_mode,
     LogBuffer,
     CustomLogInterceptor,
-    set_log_interceptor
+    set_log_interceptor,
+    # Safe logging utilities for large data structures
+    safe_repr,
+    safe_dict_repr,
+    safe_json_repr,
+    safe_log_params,
+    safe_log_change
 )
 # --- End SM_RESTRUCTURE imports ---
 
@@ -1815,7 +1821,8 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
     headless_logger.debug(f"Entering process_single_task", task_id=task_id)
     headless_logger.debug(f"Task Type: {task_type}", task_id=task_id)
     headless_logger.debug(f"Project ID: {project_id_for_task}", task_id=task_id)
-    headless_logger.debug(f"Task Params: {json.dumps(task_params_dict, default=str, indent=2)[:1000]}...", task_id=task_id)
+    # Safe logging: Use safe_json_repr to prevent hangs on large nested structures
+    headless_logger.debug(f"Task Params: {safe_json_repr(task_params_dict)}", task_id=task_id)
     
     headless_logger.essential(f"Processing {task_type} task", task_id=task_id)
     output_location_to_db = None # Will store the final path/URL for the DB
