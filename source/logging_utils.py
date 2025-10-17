@@ -213,23 +213,28 @@ from typing import List, Dict
 class LogBuffer:
     """
     Thread-safe buffer for collecting logs.
-    
+
     Logs are stored in memory and flushed periodically with heartbeat updates.
     This prevents excessive database calls while maintaining log history.
+
+    Can optionally send logs to a guardian process via multiprocessing.Queue
+    for bulletproof heartbeat delivery that cannot be blocked by GIL or I/O.
     """
-    
-    def __init__(self, max_size: int = 100):
+
+    def __init__(self, max_size: int = 100, shared_queue=None):
         """
         Initialize log buffer.
-        
+
         Args:
             max_size: Maximum logs to buffer before auto-flush (default: 100)
+            shared_queue: Optional multiprocessing.Queue to send logs to guardian process
         """
         self.logs: List[Dict[str, Any]] = []
         self.max_size = max_size
         self.lock = threading.Lock()
         self.total_logs = 0
         self.total_flushes = 0
+        self.shared_queue = shared_queue  # Queue to guardian process
     
     def add(
         self,
@@ -240,30 +245,40 @@ class LogBuffer:
     ) -> List[Dict[str, Any]]:
         """
         Add a log entry to buffer.
-        
+
         Args:
             level: Log level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
             message: Log message
             task_id: Optional task ID for context
             metadata: Optional additional metadata
-        
+
         Returns:
             List of logs if buffer is full and auto-flushed, otherwise []
         """
+        log_entry = {
+            'timestamp': datetime.datetime.now(timezone.utc).isoformat(),
+            'level': level,
+            'message': message,
+            'task_id': task_id,
+            'metadata': metadata or {}
+        }
+
+        # Send to guardian process if available (non-blocking)
+        if self.shared_queue:
+            try:
+                self.shared_queue.put_nowait(log_entry)
+            except:
+                # Queue full or not available - not critical, guardian will catch up
+                pass
+
         with self.lock:
-            self.logs.append({
-                'timestamp': datetime.datetime.now(timezone.utc).isoformat(),
-                'level': level,
-                'message': message,
-                'task_id': task_id,
-                'metadata': metadata or {}
-            })
+            self.logs.append(log_entry)
             self.total_logs += 1
-            
+
             # Auto-flush if buffer is full
             if len(self.logs) >= self.max_size:
                 return self.flush()
-        
+
         return []
     
     def flush(self) -> List[Dict[str, Any]]:
