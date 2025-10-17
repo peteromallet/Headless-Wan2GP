@@ -774,9 +774,25 @@ class WanOrchestrator:
             if value is not None:  # Don't override with None values
                 old_value = resolved_params.get(param, "NOT_SET")
                 resolved_params[param] = value
-                generation_logger.debug(f"Task override {param}: {old_value} → {value}")
+                # Avoid logging large nested dicts that can hang
+                if param in ["orchestrator_payload", "orchestrator_details", "full_orchestrator_payload"]:
+                    generation_logger.debug(f"Task override {param}: <large dict with {len(value) if isinstance(value, dict) else '?'} keys>")
+                else:
+                    # Limit string representation to prevent hanging on large values
+                    try:
+                        old_str = str(old_value)
+                        value_str = str(value)
+                        max_chars = 500
+                        if len(old_str) > max_chars:
+                            old_str = old_str[:max_chars] + "..."
+                        if len(value_str) > max_chars:
+                            value_str = value_str[:max_chars] + "..."
+                        generation_logger.debug(f"Task override {param}: {old_str} → {value_str}")
+                    except Exception as e:
+                        generation_logger.debug(f"Task override {param}: <repr failed: {e}>")
 
-        generation_logger.debug(f"FINAL resolved_params: {resolved_params}")
+        # Log keys only to avoid hanging on large nested structures
+        generation_logger.debug(f"FINAL resolved_params keys: {list(resolved_params.keys())}")
         generation_logger.debug(f"Parameter resolution for '{model_type}': {len(task_params)} task overrides applied")
         return resolved_params
 
