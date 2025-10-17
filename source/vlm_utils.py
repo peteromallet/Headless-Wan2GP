@@ -12,6 +12,52 @@ from PIL import Image
 import torch
 
 
+def download_qwen_vlm_if_needed(model_dir: Path) -> Path:
+    """
+    Download Qwen2.5-VL-7B-Instruct model if not already present.
+    Uses the same download pattern as WanGP's other models.
+
+    Args:
+        model_dir: Directory to download the model to (should be ckpts/Qwen2.5-VL-7B-Instruct)
+
+    Returns:
+        Path to the downloaded model directory
+    """
+    # Check if we have the standard HuggingFace format (multiple model files)
+    model_files = [
+        "model-00001-of-00005.safetensors",
+        "model-00002-of-00005.safetensors",
+        "model-00003-of-00005.safetensors",
+        "model-00004-of-00005.safetensors",
+        "model-00005-of-00005.safetensors",
+        "config.json",
+        "tokenizer_config.json"
+    ]
+
+    has_all_files = all((model_dir / f).exists() for f in model_files)
+
+    if not has_all_files:
+        print(f"[VLM_DOWNLOAD] Downloading Qwen2.5-VL-7B-Instruct to {model_dir}...")
+        print(f"[VLM_DOWNLOAD] This is a one-time download (~16GB). Future runs will use the cached model.")
+
+        try:
+            from huggingface_hub import snapshot_download
+
+            # Download the model in standard HuggingFace format
+            snapshot_download(
+                repo_id="Qwen/Qwen2.5-VL-7B-Instruct",
+                local_dir=str(model_dir),
+                local_dir_use_symlinks=False,
+                resume_download=True
+            )
+            print(f"[VLM_DOWNLOAD] ✅ Download complete: {model_dir}")
+        except Exception as e:
+            print(f"[VLM_DOWNLOAD] ❌ Download failed: {e}")
+            raise
+
+    return model_dir
+
+
 def generate_transition_prompt(
     start_image_path: str,
     end_image_path: str,
@@ -70,14 +116,16 @@ def generate_transition_prompt(
         combined_img.paste(end_img, (start_img.width, 0))
 
         # Initialize VLM with Qwen2.5-VL-7B
-        # Use HuggingFace model ID to enable auto-download and proper caching
-        # transformers from_pretrained() requires either:
-        #   1. HF model ID (e.g., "Qwen/Qwen2.5-VL-7B-Instruct") - will auto-download
-        #   2. Local directory with standard HF structure (config.json + model.safetensors)
-        # wgp's custom naming (Qwen2.5-VL-7B-Instruct_bf16.safetensors) is NOT compatible
-        dprint(f"[VLM_TRANSITION] Initializing Qwen2.5-VL-7B-Instruct from HuggingFace...")
+        # Use local model from ckpts directory, download if needed
+        local_model_path = wan_dir / "ckpts" / "Qwen2.5-VL-7B-Instruct"
+
+        # Ensure model is downloaded
+        dprint(f"[VLM_TRANSITION] Checking for model at {local_model_path}...")
+        download_qwen_vlm_if_needed(local_model_path)
+
+        dprint(f"[VLM_TRANSITION] Initializing Qwen2.5-VL-7B-Instruct from local path: {local_model_path}")
         extender = QwenPromptExpander(
-            model_name="Qwen/Qwen2.5-VL-7B-Instruct",  # HF model ID for auto-download/caching
+            model_name=str(local_model_path),
             device=device,
             is_vl=True  # CRITICAL: Enable VL mode
         )
@@ -186,14 +234,16 @@ def generate_transition_prompts_batch(
         dprint(f"[VLM_BATCH] Initializing Qwen2.5-VL-7B-Instruct for {len(image_pairs)} transitions...")
 
         # Initialize VLM ONCE for all pairs
-        # Use HuggingFace model ID to enable auto-download and proper caching
-        # transformers from_pretrained() requires either:
-        #   1. HF model ID (e.g., "Qwen/Qwen2.5-VL-7B-Instruct") - will auto-download
-        #   2. Local directory with standard HF structure (config.json + model.safetensors)
-        # wgp's custom naming (Qwen2.5-VL-7B-Instruct_bf16.safetensors) is NOT compatible
-        dprint(f"[VLM_BATCH] Using HuggingFace model ID 'Qwen/Qwen2.5-VL-7B-Instruct'...")
+        # Use local model from ckpts directory, download if needed
+        local_model_path = wan_dir / "ckpts" / "Qwen2.5-VL-7B-Instruct"
+
+        # Ensure model is downloaded
+        dprint(f"[VLM_BATCH] Checking for model at {local_model_path}...")
+        download_qwen_vlm_if_needed(local_model_path)
+
+        dprint(f"[VLM_BATCH] Using local model from: {local_model_path}")
         extender = QwenPromptExpander(
-            model_name="Qwen/Qwen2.5-VL-7B-Instruct",  # HF model ID for auto-download/caching
+            model_name=str(local_model_path),
             device=device,
             is_vl=True  # CRITICAL: Enable VL mode
         )
