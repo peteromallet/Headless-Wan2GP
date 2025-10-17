@@ -30,6 +30,7 @@ import time
 import datetime
 import traceback
 import threading
+from multiprocessing import Process, Queue
 
 from pathlib import Path
 from dotenv import load_dotenv
@@ -2213,10 +2214,15 @@ def send_worker_heartbeat(worker_id: str, log_buffer: LogBuffer = None, current_
 
 
 def heartbeat_worker_thread(worker_id: str, stop_event: threading.Event, interval: int = 20):
-    """Background thread that sends heartbeats every interval seconds with log batching."""
+    """
+    [DEPRECATED] Background thread that sends heartbeats - replaced by guardian process.
+
+    This function is kept for backwards compatibility but should not be used in production.
+    Use start_heartbeat_guardian_process() instead for bulletproof heartbeats.
+    """
 
     headless_logger.essential(f"✅ Starting heartbeat thread for worker: {worker_id} (interval: {interval}s)")
-    
+
     # Track heartbeat count for periodic status logging
     heartbeat_count = 0
 
@@ -2242,8 +2248,55 @@ def heartbeat_worker_thread(worker_id: str, stop_event: threading.Event, interva
     if _global_log_buffer:
         headless_logger.essential(f"🛑 Heartbeat thread stopped for worker: {worker_id}, flushing remaining logs...")
         send_worker_heartbeat(worker_id, log_buffer=_global_log_buffer, current_task_id=_current_task_id)
-    
+
     headless_logger.essential(f"🛑 Heartbeat thread stopped for worker: {worker_id} (sent {heartbeat_count} heartbeats)")
+
+
+def start_heartbeat_guardian_process(worker_id: str, supabase_url: str, supabase_key: str):
+    """
+    Start bulletproof heartbeat guardian as a separate process.
+
+    The guardian process:
+    - Runs completely independently with its own GIL
+    - Cannot be blocked by worker downloads, model loading, or I/O
+    - Receives logs from worker via multiprocessing.Queue
+    - Sends heartbeats using curl (no Python HTTP library conflicts)
+    - Only stops if machine crashes or worker process terminates
+
+    Args:
+        worker_id: Worker's unique ID
+        supabase_url: Supabase project URL
+        supabase_key: Supabase API key
+
+    Returns:
+        tuple: (guardian_process, log_queue) - Process handle and queue for sending logs
+    """
+    from heartbeat_guardian import guardian_main
+
+    # Create shared queue for logs (sized to handle bursts)
+    log_queue = Queue(maxsize=1000)
+
+    # Prepare config for guardian
+    config = {
+        'worker_id': worker_id,
+        'worker_pid': os.getpid(),
+        'db_url': supabase_url,
+        'api_key': supabase_key
+    }
+
+    # Start guardian as daemon process
+    guardian = Process(
+        target=guardian_main,
+        args=(worker_id, os.getpid(), log_queue, config),
+        name=f'guardian-{worker_id}',
+        daemon=True  # Dies when parent dies
+    )
+    guardian.start()
+
+    headless_logger.essential(f"✅ Heartbeat guardian started: PID {guardian.pid} monitoring worker PID {os.getpid()}")
+    headless_logger.essential(f"   Guardian uses separate process - immune to GIL, downloads, and blocking I/O")
+
+    return guardian, log_queue
 
 
 # -----------------------------------------------------------------------------
@@ -2394,16 +2447,29 @@ def main():
 
     # --- Initialize Centralized Logging (Worker → Orchestrator) ---
     global _global_log_buffer
+    guardian_process = None
+    log_queue = None
+
     if cli_args.worker:
-        # Create log buffer for collecting logs
-        _global_log_buffer = LogBuffer(max_size=100)
-        
+        # Start heartbeat guardian FIRST (before creating log buffer)
+        # This ensures guardian is running before any heavy operations
+        print(f"🔒 Starting bulletproof heartbeat guardian for worker: {cli_args.worker}")
+        guardian_process, log_queue = start_heartbeat_guardian_process(
+            worker_id=cli_args.worker,
+            supabase_url=cli_args.supabase_url,
+            supabase_key=client_key  # Use same key as main worker
+        )
+
+        # Create log buffer with shared queue to guardian
+        _global_log_buffer = LogBuffer(max_size=100, shared_queue=log_queue)
+
         # Create interceptor to capture custom logging function calls
         log_interceptor = CustomLogInterceptor(_global_log_buffer)
         set_log_interceptor(log_interceptor)
-        
+
         headless_logger.essential(f"✅ Centralized logging enabled for worker: {cli_args.worker}")
-        headless_logger.debug(f"Log buffer initialized (max_size=100, will flush with heartbeats every 20s)")
+        headless_logger.debug(f"Log buffer initialized (max_size=100, logs sent to guardian process)")
+        headless_logger.debug(f"Guardian process heartbeats every 20s - immune to GIL/download blocking")
     else:
         headless_logger.debug("No worker ID provided - centralized logging disabled")
     # --- End Centralized Logging Initialization ---
@@ -2414,19 +2480,6 @@ def main():
     print(f"Monitoring Supabase (PostgreSQL backend) table: {db_ops.PG_TABLE_NAME}")
     print(f"Outputs will be saved under: {main_output_dir}")
     print(f"Polling interval: {cli_args.poll_interval} seconds.")
-
-    # Start heartbeat thread if worker ID is provided
-    if cli_args.worker:
-        print(f"Starting heartbeat thread for worker: {cli_args.worker}")
-        heartbeat_thread = threading.Thread(
-            target=heartbeat_worker_thread,
-            args=(cli_args.worker, heartbeat_stop_event, 20),
-            daemon=True
-        )
-        heartbeat_thread.start()
-        print(f"✅ Heartbeat thread started (20-second intervals with log batching)")
-    else:
-        print(f"⚠️  No worker ID provided - heartbeat disabled")
 
     # Initialize database
     # Supabase table/schema assumed to exist; skip initialization RPC
