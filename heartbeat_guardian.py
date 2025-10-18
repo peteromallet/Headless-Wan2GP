@@ -82,8 +82,17 @@ def send_heartbeat_with_logs(
         # Show what we're about to send
         print(f"[GUARDIAN PAYLOAD] Sending {len(logs)} logs to database", flush=True)
         if logs:
-            print(f"[GUARDIAN PAYLOAD] First log: {logs[0].get('level')} - {logs[0].get('message', '')[:50]}", flush=True)
-            print(f"[GUARDIAN PAYLOAD] Last log: {logs[-1].get('level')} - {logs[-1].get('message', '')[:50]}", flush=True)
+            # Show first log in full detail to verify format
+            first_log = logs[0]
+            print(f"[GUARDIAN PAYLOAD] First log FULL FORMAT:", flush=True)
+            print(f"  timestamp: {first_log.get('timestamp')}", flush=True)
+            print(f"  level: {first_log.get('level')}", flush=True)
+            print(f"  message: {first_log.get('message', '')[:100]}", flush=True)
+            print(f"  task_id: {first_log.get('task_id')}", flush=True)
+            print(f"  metadata: {first_log.get('metadata')}", flush=True)
+
+            if len(logs) > 1:
+                print(f"[GUARDIAN PAYLOAD] Last log: {logs[-1].get('level')} - {logs[-1].get('message', '')[:50]}", flush=True)
 
         payload = json.dumps({
             'worker_id_param': worker_id,
@@ -92,6 +101,10 @@ def send_heartbeat_with_logs(
             'logs_param': logs,
             'current_task_id_param': None  # Could be enhanced to track current task
         })
+
+        # Show payload size and structure
+        print(f"[GUARDIAN PAYLOAD] Total payload size: {len(payload)} bytes", flush=True)
+        print(f"[GUARDIAN PAYLOAD] Payload preview (first 300 chars): {payload[:300]}...", flush=True)
 
         result = subprocess.run([
             'curl', '-s', '-X', 'POST',
