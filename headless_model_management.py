@@ -428,15 +428,23 @@ class HeadlessTaskQueue:
         except Exception as e:
             self.logger.warning(f"[MEMORY_CLEANUP] Task {task_id}: Failed to cleanup memory: {e}")
     
-    def start(self):
-        """Start the task queue processing service."""
+    def start(self, preload_model: Optional[str] = None):
+        """
+        Start the task queue processing service.
+
+        Args:
+            preload_model: Optional model to pre-load before processing tasks.
+                          If specified, the model will be loaded immediately after
+                          workers start, making the first task much faster.
+                          Example: "lightning_baseline_2_2_2"
+        """
         if self.running:
             self.logger.warning("Queue already running")
             return
-        
+
         self.running = True
         self.shutdown_event.clear()
-        
+
         # Start worker threads
         for i in range(self.max_workers):
             worker = threading.Thread(
@@ -446,17 +454,30 @@ class HeadlessTaskQueue:
             )
             worker.start()
             self.worker_threads.append(worker)
-        
+
         # Start monitoring thread
         monitor = threading.Thread(
             target=self._monitor_loop,
-            name="QueueMonitor", 
+            name="QueueMonitor",
             daemon=True
         )
         monitor.start()
         self.worker_threads.append(monitor)
-        
+
         self.logger.info(f"Task queue started with {self.max_workers} workers")
+
+        # Pre-load model if specified
+        if preload_model:
+            self.logger.info(f"Pre-loading model: {preload_model}")
+            try:
+                # Initialize orchestrator and load model in background
+                self._ensure_orchestrator()
+                self.orchestrator.load_model(preload_model)
+                self.current_model = preload_model
+                self.logger.info(f"✅ Model {preload_model} pre-loaded successfully")
+            except Exception as e:
+                self.logger.error(f"Failed to pre-load model {preload_model}: {e}")
+                self.logger.warning("Worker will continue without pre-loaded model")
     
     def stop(self, timeout: float = 30.0):
         """Stop the task queue processing service."""
