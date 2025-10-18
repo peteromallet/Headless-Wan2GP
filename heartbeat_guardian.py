@@ -145,15 +145,39 @@ def guardian_main(worker_id: str, worker_pid: int, log_queue, config: Dict[str, 
     the worker process.
     """
 
-    heartbeat_count = 0
-    consecutive_failures = 0
+    import traceback
 
-    # Log startup
-    startup_msg = f"{datetime.now(timezone.utc).isoformat()}: Guardian started for worker {worker_id} (PID {worker_pid})\n"
-    with open(f'/tmp/guardian_{worker_id}.log', 'w') as f:
-        f.write(startup_msg)
+    try:
+        print(f"[GUARDIAN DEBUG] Step 1: guardian_main called with worker_id={worker_id}, worker_pid={worker_pid}", flush=True)
+        print(f"[GUARDIAN DEBUG] Step 2: log_queue type={type(log_queue)}, config keys={list(config.keys())}", flush=True)
 
-    print(f"[GUARDIAN] Started for worker {worker_id}, monitoring PID {worker_pid}")
+        heartbeat_count = 0
+        consecutive_failures = 0
+
+        print(f"[GUARDIAN DEBUG] Step 3: Opening log file /tmp/guardian_{worker_id}.log", flush=True)
+
+        # Log startup
+        startup_msg = f"{datetime.now(timezone.utc).isoformat()}: Guardian started for worker {worker_id} (PID {worker_pid})\n"
+        startup_msg += f"Queue type: {type(log_queue)}\n"
+        startup_msg += f"Config: {config}\n"
+
+        with open(f'/tmp/guardian_{worker_id}.log', 'w') as f:
+            f.write(startup_msg)
+            f.flush()
+
+        print(f"[GUARDIAN DEBUG] Step 4: Log file written successfully", flush=True)
+        print(f"[GUARDIAN] Started for worker {worker_id}, monitoring PID {worker_pid}", flush=True)
+        print(f"[GUARDIAN DEBUG] Step 5: Entering main loop", flush=True)
+
+    except Exception as e:
+        error_msg = f"[GUARDIAN CRASH] Exception during startup: {e}\n{traceback.format_exc()}"
+        print(error_msg, flush=True)
+        try:
+            with open(f'/tmp/guardian_crash_{worker_id}.log', 'w') as f:
+                f.write(error_msg)
+        except:
+            pass
+        raise
 
     while True:
         try:
@@ -168,12 +192,15 @@ def guardian_main(worker_id: str, worker_pid: int, log_queue, config: Dict[str, 
                 break
 
             # Collect any available logs
+            print(f"[GUARDIAN DEBUG] Collecting logs from queue...", flush=True)
             logs = collect_logs_from_queue(log_queue, max_count=100)
+            print(f"[GUARDIAN DEBUG] Collected {len(logs)} logs from queue", flush=True)
 
             # Get VRAM metrics
             vram_total, vram_used = get_vram_info()
 
             # Send heartbeat
+            print(f"[GUARDIAN DEBUG] Sending heartbeat (with {len(logs)} logs)...", flush=True)
             success = False
             if logs:
                 success = send_heartbeat_with_logs(worker_id, vram_total, vram_used, logs, config)
@@ -183,6 +210,7 @@ def guardian_main(worker_id: str, worker_pid: int, log_queue, config: Dict[str, 
             if success:
                 heartbeat_count += 1
                 consecutive_failures = 0
+                print(f"[GUARDIAN DEBUG] Heartbeat #{heartbeat_count} sent successfully", flush=True)
 
                 # Log status every 5 minutes (15 heartbeats) to avoid spam
                 if heartbeat_count % 15 == 1:
@@ -194,6 +222,7 @@ def guardian_main(worker_id: str, worker_pid: int, log_queue, config: Dict[str, 
                         f.write(msg)
             else:
                 consecutive_failures += 1
+                print(f"[GUARDIAN DEBUG] Heartbeat failed (consecutive failures: {consecutive_failures})", flush=True)
                 if consecutive_failures >= 3:
                     # Log warning but continue trying
                     with open(f'/tmp/guardian_{worker_id}.log', 'a') as f:
@@ -201,10 +230,14 @@ def guardian_main(worker_id: str, worker_pid: int, log_queue, config: Dict[str, 
 
         except Exception as e:
             # Never crash on any error
+            import traceback
+            error_msg = f"{datetime.now(timezone.utc).isoformat()}: Exception in main loop: {e}\n{traceback.format_exc()}\n"
+            print(f"[GUARDIAN ERROR] {error_msg}", flush=True)
             with open(f'/tmp/guardian_{worker_id}_error.log', 'a') as f:
-                f.write(f"{datetime.now(timezone.utc).isoformat()}: Exception in main loop: {e}\n")
+                f.write(error_msg)
 
         # Sleep for interval
+        print(f"[GUARDIAN DEBUG] Sleeping for 20 seconds...", flush=True)
         time.sleep(20)
 
     print(f"[GUARDIAN] Exiting for worker {worker_id}")
