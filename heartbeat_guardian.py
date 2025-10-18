@@ -214,20 +214,13 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-    if len(sys.argv) < 2:
-        print("Usage: heartbeat_guardian.py <config_json_path> [log_queue_descriptor]")
-        sys.exit(1)
+    # NOTE: This script is designed to be launched via multiprocessing.Process()
+    # from worker.py, which passes arguments directly to guardian_main().
+    # If you need to run it standalone for testing, you would need to:
+    # 1. Create a multiprocessing.Queue() object
+    # 2. Pass it along with worker_id, worker_pid, and config dict
 
-    # Load configuration
-    config_path = sys.argv[1]
-    with open(config_path, 'r') as f:
-        config_data = json.load(f)
-
-    worker_id = config_data['worker_id']
-    worker_pid = config_data['worker_pid']
-
-    # The log_queue will be passed via multiprocessing spawn context
-    # For now, we'll receive it differently based on how we launch
-    log_queue = None  # Will be set by parent process
-
-    guardian_main(worker_id, worker_pid, log_queue, config_data)
+    print("ERROR: heartbeat_guardian.py should not be run directly.")
+    print("It is launched automatically by worker.py via multiprocessing.Process()")
+    print("with proper queue and config arguments.")
+    sys.exit(1)
