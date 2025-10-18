@@ -79,6 +79,12 @@ def send_heartbeat_with_logs(
     from worker process issues.
     """
     try:
+        # Show what we're about to send
+        print(f"[GUARDIAN PAYLOAD] Sending {len(logs)} logs to database", flush=True)
+        if logs:
+            print(f"[GUARDIAN PAYLOAD] First log: {logs[0].get('level')} - {logs[0].get('message', '')[:50]}", flush=True)
+            print(f"[GUARDIAN PAYLOAD] Last log: {logs[-1].get('level')} - {logs[-1].get('message', '')[:50]}", flush=True)
+
         payload = json.dumps({
             'worker_id_param': worker_id,
             'vram_total_mb_param': vram_total,
@@ -96,6 +102,12 @@ def send_heartbeat_with_logs(
             '-H', 'Prefer: return=representation',
             '-d', payload
         ], capture_output=True, timeout=15)
+
+        # Log the response for debugging
+        print(f"[GUARDIAN CURL] Return code: {result.returncode}", flush=True)
+        print(f"[GUARDIAN CURL] Response stdout: {result.stdout.decode()[:200]}", flush=True)
+        if result.stderr:
+            print(f"[GUARDIAN CURL] Response stderr: {result.stderr.decode()[:200]}", flush=True)
 
         return result.returncode == 0
 
@@ -121,6 +133,8 @@ def send_heartbeat_simple(
             "status": status
         })
 
+        print(f"[GUARDIAN SIMPLE] Sending simple heartbeat (no logs) for worker {worker_id}, status={status}", flush=True)
+
         result = subprocess.run([
             'curl', '-s', '-X', 'PATCH',
             '-m', '10',
@@ -129,6 +143,11 @@ def send_heartbeat_simple(
             '-H', 'Content-Type: application/json',
             '-d', payload
         ], capture_output=True, timeout=15)
+
+        print(f"[GUARDIAN SIMPLE] Return code: {result.returncode}", flush=True)
+        print(f"[GUARDIAN SIMPLE] Response: {result.stdout.decode()[:200]}", flush=True)
+        if result.stderr:
+            print(f"[GUARDIAN SIMPLE] Error: {result.stderr.decode()[:200]}", flush=True)
 
         return result.returncode == 0
 
