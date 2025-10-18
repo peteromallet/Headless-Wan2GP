@@ -2461,10 +2461,23 @@ def main():
         # Start heartbeat guardian FIRST (before creating log buffer)
         # This ensures guardian is running before any heavy operations
         print(f"🔒 Starting bulletproof heartbeat guardian for worker: {cli_args.worker}")
+
+        # CRITICAL: Guardian MUST use service role key to bypass RLS policies
+        # Service role key bypasses Row-Level Security on workers table
+        guardian_key = env_supabase_key  # This is the service role key from environment
+
+        if not guardian_key:
+            print(f"⚠️ WARNING: No service role key found in environment!")
+            print(f"⚠️ Guardian will use client_key but may fail due to RLS policies")
+            guardian_key = client_key
+
+        # Show which key we're using (first 20 chars only for security)
+        print(f"[WORKER DEBUG] Guardian using key: {guardian_key[:20]}... (service_role={guardian_key == env_supabase_key})")
+
         guardian_process, log_queue = start_heartbeat_guardian_process(
             worker_id=cli_args.worker,
             supabase_url=cli_args.supabase_url,
-            supabase_key=client_key  # Use same key as main worker
+            supabase_key=guardian_key  # Use service role key to bypass RLS
         )
 
         # Give guardian time to start and verify it's alive

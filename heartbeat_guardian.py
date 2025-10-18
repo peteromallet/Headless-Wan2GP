@@ -221,6 +221,24 @@ def guardian_main(worker_id: str, worker_pid: int, log_queue, config: Dict[str, 
     try:
         print(f"[GUARDIAN DEBUG] Step 1: guardian_main called with worker_id={worker_id}, worker_pid={worker_pid}", flush=True)
         print(f"[GUARDIAN DEBUG] Step 2: log_queue type={type(log_queue)}, config keys={list(config.keys())}", flush=True)
+        print(f"[GUARDIAN DEBUG] Step 2.5: API key (first 50 chars): {config.get('api_key', 'N/A')[:50]}...", flush=True)
+
+        # Check if this is a service role key by looking for "service_role" in the JWT payload
+        api_key = config.get('api_key', '')
+        if 'eyJ' in api_key:  # Looks like a JWT
+            try:
+                import base64
+                # JWT format: header.payload.signature
+                payload_part = api_key.split('.')[1]
+                # Add padding if needed
+                payload_part += '=' * (4 - len(payload_part) % 4)
+                decoded = base64.b64decode(payload_part).decode('utf-8')
+                if 'service_role' in decoded:
+                    print(f"[GUARDIAN DEBUG] ✅ Confirmed using SERVICE ROLE KEY (bypasses RLS)", flush=True)
+                else:
+                    print(f"[GUARDIAN DEBUG] ⚠️ WARNING: NOT using service_role key! Decoded: {decoded[:100]}", flush=True)
+            except Exception as e:
+                print(f"[GUARDIAN DEBUG] Could not decode JWT: {e}", flush=True)
 
         heartbeat_count = 0
         consecutive_failures = 0
