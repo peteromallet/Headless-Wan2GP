@@ -2467,6 +2467,18 @@ def main():
             supabase_key=client_key  # Use same key as main worker
         )
 
+        # Give guardian time to start and verify it's alive
+        import time
+        time.sleep(2)
+        print(f"[WORKER DEBUG] Guardian process alive: {guardian_process.is_alive()}")
+        print(f"[WORKER DEBUG] Guardian PID: {guardian_process.pid}")
+        print(f"[WORKER DEBUG] Queue object: {log_queue}")
+        print(f"[WORKER DEBUG] Queue type: {type(log_queue)}")
+
+        if not guardian_process.is_alive():
+            print(f"[WORKER ERROR] ❌ Guardian process died immediately after start!")
+            print(f"[WORKER ERROR] Check /tmp/guardian_crash_{cli_args.worker}.log for details")
+
         # Create log buffer with shared queue to guardian
         _global_log_buffer = LogBuffer(max_size=100, shared_queue=log_queue)
 
