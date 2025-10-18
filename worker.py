@@ -2529,7 +2529,10 @@ def main():
 
     try:
         task_queue = HeadlessTaskQueue(wan_dir=wan_dir, max_workers=cli_args.queue_workers)
-        task_queue.start()
+
+        # Pre-load lightning_baseline_2_2_2 for faster first task
+        task_queue.start(preload_model="lightning_baseline_2_2_2")
+
         headless_logger.success(f"Task queue initialized with {cli_args.queue_workers} workers")
         headless_logger.essential("Queue system will handle generation tasks efficiently with model reuse")
     except Exception as e_queue_init:
