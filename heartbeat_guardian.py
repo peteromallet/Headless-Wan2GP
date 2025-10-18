@@ -105,11 +105,32 @@ def send_heartbeat_with_logs(
 
         # Log the response for debugging
         print(f"[GUARDIAN CURL] Return code: {result.returncode}", flush=True)
-        print(f"[GUARDIAN CURL] Response stdout: {result.stdout.decode()[:200]}", flush=True)
+
+        response_text = result.stdout.decode()
+        print(f"[GUARDIAN CURL] Response stdout: {response_text[:500]}", flush=True)
         if result.stderr:
             print(f"[GUARDIAN CURL] Response stderr: {result.stderr.decode()[:200]}", flush=True)
 
-        return result.returncode == 0
+        # Parse and validate the response
+        if result.returncode != 0:
+            print(f"[GUARDIAN CURL] ❌ curl failed with exit code {result.returncode}", flush=True)
+            return False
+
+        try:
+            response_data = json.loads(response_text)
+            success = response_data.get('success', False)
+            logs_inserted = response_data.get('logs_inserted', 0)
+
+            if success:
+                print(f"[GUARDIAN CURL] ✅ Database confirmed: {logs_inserted} logs inserted", flush=True)
+            else:
+                print(f"[GUARDIAN CURL] ⚠️ Database returned success=false: {response_data}", flush=True)
+
+            return success
+        except json.JSONDecodeError as e:
+            print(f"[GUARDIAN CURL] ⚠️ Could not parse JSON response: {e}", flush=True)
+            print(f"[GUARDIAN CURL] ⚠️ Assuming success based on curl exit code", flush=True)
+            return True  # Assume success if we can't parse (backwards compatible)
 
     except Exception as e:
         # Log error but never crash
@@ -144,12 +165,30 @@ def send_heartbeat_simple(
             '-d', payload
         ], capture_output=True, timeout=15)
 
+        response_text = result.stdout.decode()
         print(f"[GUARDIAN SIMPLE] Return code: {result.returncode}", flush=True)
-        print(f"[GUARDIAN SIMPLE] Response: {result.stdout.decode()[:200]}", flush=True)
+        print(f"[GUARDIAN SIMPLE] Response: {response_text[:500]}", flush=True)
         if result.stderr:
             print(f"[GUARDIAN SIMPLE] Error: {result.stderr.decode()[:200]}", flush=True)
 
-        return result.returncode == 0
+        # For simple heartbeat, Supabase returns the updated row or empty array
+        # Success is indicated by returncode 0 and non-error response
+        if result.returncode != 0:
+            print(f"[GUARDIAN SIMPLE] ❌ curl failed with exit code {result.returncode}", flush=True)
+            return False
+
+        # Check if response looks like an error
+        if 'error' in response_text.lower() or 'message' in response_text.lower():
+            try:
+                response_data = json.loads(response_text)
+                if 'error' in response_data:
+                    print(f"[GUARDIAN SIMPLE] ❌ Database error: {response_data.get('error')}", flush=True)
+                    return False
+            except:
+                pass
+
+        print(f"[GUARDIAN SIMPLE] ✅ Simple heartbeat sent successfully", flush=True)
+        return True
 
     except Exception as e:
         with open(f'/tmp/guardian_{worker_id}_error.log', 'a') as f:
