@@ -70,7 +70,8 @@ def send_heartbeat_with_logs(
     vram_total: int,
     vram_used: int,
     logs: List[Dict[str, Any]],
-    config: Dict[str, str]
+    config: Dict[str, str],
+    status: str = "active"
 ) -> bool:
     """
     Send heartbeat with logs using curl subprocess.
@@ -84,7 +85,8 @@ def send_heartbeat_with_logs(
             'vram_total_mb_param': vram_total,
             'vram_used_mb_param': vram_used,
             'logs_param': logs,
-            'current_task_id_param': None  # Could be enhanced to track current task
+            'current_task_id_param': None,  # Could be enhanced to track current task
+            'status_param': status
         })
 
         result = subprocess.run([
@@ -120,56 +122,6 @@ def send_heartbeat_with_logs(
         # Log error but never crash
         with open(f'/tmp/guardian_{worker_id}_error.log', 'a') as f:
             f.write(f"{datetime.now(timezone.utc).isoformat()}: Error sending with logs: {e}\n")
-        return False
-
-def send_heartbeat_simple(
-    worker_id: str,
-    status: str,
-    config: Dict[str, str]
-) -> bool:
-    """
-    Send simple heartbeat without logs using curl.
-    Falls back to this when no logs are available.
-    """
-    try:
-        timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-        payload = json.dumps({
-            "last_heartbeat": timestamp,
-            "status": status
-        })
-
-        result = subprocess.run([
-            'curl', '-s', '-X', 'PATCH',
-            '-m', '10',
-            f'{config["db_url"]}/rest/v1/workers?id=eq.{worker_id}',
-            '-H', f'apikey: {config["api_key"]}',
-            '-H', 'Content-Type: application/json',
-            '-d', payload
-        ], capture_output=True, timeout=15)
-
-        response_text = result.stdout.decode()
-
-        # For simple heartbeat, Supabase returns the updated row or empty array
-        # Success is indicated by returncode 0 and non-error response
-        if result.returncode != 0:
-            print(f"[GUARDIAN] ❌ Simple heartbeat curl failed with exit code {result.returncode}", flush=True)
-            return False
-
-        # Check if response looks like an error
-        if 'error' in response_text.lower():
-            try:
-                response_data = json.loads(response_text)
-                if 'error' in response_data:
-                    print(f"[GUARDIAN] ❌ Simple heartbeat error: {response_data.get('error')}", flush=True)
-                    return False
-            except:
-                pass
-
-        return True
-
-    except Exception as e:
-        with open(f'/tmp/guardian_{worker_id}_error.log', 'a') as f:
-            f.write(f"{datetime.now(timezone.utc).isoformat()}: Error sending simple: {e}\n")
         return False
 
 def guardian_main(worker_id: str, worker_pid: int, log_queue, config: Dict[str, str]):
@@ -229,7 +181,8 @@ def guardian_main(worker_id: str, worker_pid: int, log_queue, config: Dict[str, 
             # If worker crashed, send one final heartbeat and exit
             if not worker_alive:
                 print(f"[GUARDIAN] Worker {worker_id} crashed (PID {worker_pid} no longer exists)")
-                send_heartbeat_simple(worker_id, "crashed", config)
+                vram_total, vram_used = get_vram_info()
+                send_heartbeat_with_logs(worker_id, vram_total, vram_used, [], config, status="crashed")
                 break
 
             # Collect any available logs
