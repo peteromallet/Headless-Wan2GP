@@ -840,9 +840,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         structure_video_path = orchestrator_payload.get("structure_video_path")
         structure_video_treatment = orchestrator_payload.get("structure_video_treatment", "adjust")
         structure_type = orchestrator_payload.get("structure_video_type", orchestrator_payload.get("structure_type", "flow"))  # Check both keys
-        dprint(f"[STRUCTURE_VIDEO_DEBUG] Extracted structure_type: {structure_type}")
-        dprint(f"[STRUCTURE_VIDEO_DEBUG] structure_video_type in payload: {orchestrator_payload.get('structure_video_type')}")
-        dprint(f"[STRUCTURE_VIDEO_DEBUG] structure_type in payload: {orchestrator_payload.get('structure_type')}")
+        travel_logger.info(f"Structure video config: type={structure_type}, treatment={structure_video_treatment}, path={'YES' if structure_video_path else 'NO'}", task_id=orchestrator_task_id_str)
 
         # Extract strength parameters for each type
         motion_strength = orchestrator_payload.get("structure_video_motion_strength", 1.0)
@@ -888,17 +886,18 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 if abs(canny_intensity - 1.0) > 1e-6:
                     dprint(f"[STRUCTURE_VIDEO] Warning: structure_canny_intensity={canny_intensity} ignored (structure_type is 'depth')")
             
-            dprint(f"[STRUCTURE_VIDEO] Using: {structure_video_path}")
-            dprint(f"[STRUCTURE_VIDEO] Type: {structure_type}")
-            dprint(f"[STRUCTURE_VIDEO] Treatment: {structure_video_treatment}")
-            
-            # Log active strength parameter
-            if structure_type == "flow":
-                dprint(f"[STRUCTURE_VIDEO] Motion strength: {motion_strength}")
-            elif structure_type == "canny":
-                dprint(f"[STRUCTURE_VIDEO] Canny intensity: {canny_intensity}")
-            elif structure_type == "depth":
-                dprint(f"[STRUCTURE_VIDEO] Depth contrast: {depth_contrast}")
+            # Log structure video configuration
+            strength_param = {
+                "flow": f"motion_strength={motion_strength}",
+                "canny": f"canny_intensity={canny_intensity}",
+                "depth": f"depth_contrast={depth_contrast}"
+            }.get(structure_type, "unknown")
+
+            travel_logger.info(
+                f"Structure video enabled: type={structure_type}, treatment={structure_video_treatment}, {strength_param}",
+                task_id=orchestrator_task_id_str
+            )
+            travel_logger.info(f"Structure video file: {structure_video_path}", task_id=orchestrator_task_id_str)
 
             # Calculate TOTAL flow frames needed across ALL segments
             # Flow visualizations are created for ALL frames INCLUDING anchors (even though anchors
@@ -928,10 +927,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 total_flow_frames += max(0, flows_needed)
                 dprint(f"[STRUCTURE_VIDEO] Segment {idx}: {flows_needed} flow frames needed, offset {segment_flow_offsets[-1]}")
 
-            dprint(f"[STRUCTURE_VIDEO] Total flow frames across all segments: {total_flow_frames}")
+            travel_logger.info(f"Structure video processing: {total_flow_frames} total frames needed across {num_segments} segments", task_id=orchestrator_task_id_str)
 
             # Create and upload pre-warped guidance video for segments to download
-            dprint(f"[STRUCTURE_VIDEO] Creating pre-warped guidance video...")
+            travel_logger.info("Creating structure guidance video...", task_id=orchestrator_task_id_str)
             try:
                 from source.structure_video_guidance import create_structure_guidance_video
                 
@@ -969,7 +968,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 )
                 
                 # Store path for segments (edge function will handle upload)
-                dprint(f"[STRUCTURE_VIDEO] Pre-warped guidance video ready for segments...")
                 structure_guidance_video_url = upload_and_get_final_output_location(
                     local_file_path=structure_guidance_video_path,
                     supabase_object_name=structure_guidance_filename,  # Unused but required for signature
@@ -977,17 +975,21 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     dprint=dprint
                 )
 
-                dprint(f"[STRUCTURE_VIDEO] Pre-warped guidance video path: {structure_guidance_video_url}")
-                
+                travel_logger.success(f"Structure guidance video created: {structure_guidance_video_url}", task_id=orchestrator_task_id_str)
+
+                # Get frame count for logging
+                guidance_frame_count, _ = sm_get_video_frame_count_and_fps(structure_guidance_video_path)
+                travel_logger.info(f"Structure guidance frames: {guidance_frame_count} (treatment: {structure_video_treatment})", task_id=orchestrator_task_id_str)
+
                 # Store URL and type in orchestrator payload for segments to use
                 orchestrator_payload["structure_guidance_video_url"] = structure_guidance_video_url
                 orchestrator_payload["structure_type"] = structure_type
-                
+
             except Exception as e:
-                dprint(f"[ERROR] Failed to create pre-warped guidance video: {e}")
+                travel_logger.error(f"Failed to create structure guidance video: {e}", task_id=orchestrator_task_id_str)
                 import traceback
                 traceback.print_exc()
-                dprint(f"[WARNING] Structure guidance will not be available for this generation")
+                travel_logger.warning("Structure guidance will not be available for this generation", task_id=orchestrator_task_id_str)
                 orchestrator_payload["structure_guidance_video_url"] = None
                 orchestrator_payload["structure_type"] = structure_type  # Still pass the type
 
