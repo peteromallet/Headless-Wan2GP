@@ -238,12 +238,8 @@ def guardian_main(worker_id: str, worker_pid: int, log_queue, config: Dict[str, 
             # Get VRAM metrics
             vram_total, vram_used = get_vram_info()
 
-            # Send heartbeat
-            success = False
-            if logs:
-                success = send_heartbeat_with_logs(worker_id, vram_total, vram_used, logs, config)
-            else:
-                success = send_heartbeat_simple(worker_id, status, config)
+            # Always use the same heartbeat function (just pass empty logs if none available)
+            success = send_heartbeat_with_logs(worker_id, vram_total, vram_used, logs, config)
 
             if success:
                 heartbeat_count += 1
