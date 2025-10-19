@@ -1252,6 +1252,21 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 segment_base_prompt = vlm_enhanced_prompts[idx]
                 dprint(f"[VLM_ENHANCE] Segment {idx}: Using pre-generated enhanced prompt")
 
+            # Apply text_before_prompts and text_after_prompts wrapping (after enrichment)
+            text_before = orchestrator_payload.get("text_before_prompts", "").strip()
+            text_after = orchestrator_payload.get("text_after_prompts", "").strip()
+
+            if text_before or text_after:
+                # Build the wrapped prompt, ensuring clean spacing
+                parts = []
+                if text_before:
+                    parts.append(text_before)
+                parts.append(segment_base_prompt)
+                if text_after:
+                    parts.append(text_after)
+                segment_base_prompt = " ".join(parts)
+                dprint(f"[TEXT_WRAP] Segment {idx}: Applied text_before/after wrapping")
+
             segment_payload = {
                 "orchestrator_task_id_ref": orchestrator_task_id_str,
                 "orchestrator_run_id": run_id,
@@ -1856,8 +1871,24 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
 
         current_segment_base_prompt = segment_params.get("base_prompt", " ")
         prompt_for_wgp = ensure_valid_prompt(current_segment_base_prompt)
+
+        # Apply text_before_prompts and text_after_prompts as fallback (if not already applied at orchestrator level)
+        text_before = full_orchestrator_payload.get("text_before_prompts", "").strip()
+        text_after = full_orchestrator_payload.get("text_after_prompts", "").strip()
+
+        # Only apply if the prompt doesn't already contain the wrapped text (avoid double-wrapping)
+        if (text_before or text_after) and not (text_before and prompt_for_wgp.startswith(text_before)):
+            parts = []
+            if text_before:
+                parts.append(text_before)
+            parts.append(prompt_for_wgp)
+            if text_after:
+                parts.append(text_after)
+            prompt_for_wgp = " ".join(parts)
+            dprint(f"Seg {segment_idx}: Applied text_before/after wrapping to prompt")
+
         negative_prompt_for_wgp = ensure_valid_negative_prompt(segment_params.get("negative_prompt", " "))
-        
+
         dprint(f"Seg {segment_idx} (Task {segment_task_id_str}): Effective prompt for WGP: '{prompt_for_wgp}'")
 
         # Get model name for JSON config loading
