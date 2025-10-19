@@ -21,10 +21,36 @@ import signal
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
-def check_process_alive(pid: int) -> bool:
-    """Check if process with given PID is alive."""
+def check_process_alive(pid: int, start_time: float = None) -> bool:
+    """
+    Check if process with given PID is alive and is the same process.
+
+    Args:
+        pid: Process ID to check
+        start_time: Expected process start time (from psutil) for verification
+
+    Returns:
+        True if process exists and matches expected start time (if provided)
+    """
     try:
+        # First check if PID exists at all
         os.kill(pid, 0)  # Signal 0 doesn't kill, just checks if process exists
+
+        # If start_time provided, verify it's the SAME process (not a reused PID)
+        if start_time is not None:
+            try:
+                import psutil
+                proc = psutil.Process(pid)
+                current_start_time = proc.create_time()
+
+                # Allow small tolerance for floating point comparison
+                if abs(current_start_time - start_time) > 0.1:
+                    # PID was reused by a different process
+                    return False
+            except (psutil.NoSuchProcess, psutil.AccessDenied, ImportError):
+                # If we can't verify, assume it's dead (fail-safe)
+                return False
+
         return True
     except (OSError, ProcessLookupError):
         return False
@@ -133,8 +159,20 @@ def guardian_main(worker_id: str, worker_pid: int, log_queue, config: Dict[str, 
 
     import traceback
 
+    worker_start_time = None
+
     try:
         heartbeat_count = 0
+
+        # Capture the worker process start time for PID reuse detection
+        try:
+            import psutil
+            proc = psutil.Process(worker_pid)
+            worker_start_time = proc.create_time()
+            print(f"[GUARDIAN] Captured worker start time: {worker_start_time}", flush=True)
+        except Exception as e:
+            print(f"[GUARDIAN] ⚠️ Could not capture worker start time: {e}", flush=True)
+            print(f"[GUARDIAN] Will monitor PID {worker_pid} without start time verification", flush=True)
 
         # Log startup
         startup_msg = f"{datetime.now(timezone.utc).isoformat()}: Guardian started for worker {worker_id} (PID {worker_pid})\n"
@@ -157,8 +195,8 @@ def guardian_main(worker_id: str, worker_pid: int, log_queue, config: Dict[str, 
 
     while True:
         try:
-            # Check if worker process is alive
-            worker_alive = check_process_alive(worker_pid)
+            # Check if worker process is alive (with start time verification to detect PID reuse)
+            worker_alive = check_process_alive(worker_pid, worker_start_time)
 
             # If worker crashed, send one final heartbeat and exit
             if not worker_alive:
