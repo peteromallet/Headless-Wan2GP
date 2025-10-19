@@ -2441,7 +2441,9 @@ def main():
         # Apply wgp.py global config overrides from CLI arguments
         if cli_args.wgp_attention_mode is not None: wgp_mod.attention_mode = cli_args.wgp_attention_mode
         if cli_args.wgp_compile is not None: wgp_mod.compile = cli_args.wgp_compile
-        if cli_args.wgp_profile is not None: wgp_mod.profile = cli_args.wgp_profile
+        if cli_args.wgp_profile is not None:
+            wgp_mod.force_profile_no = cli_args.wgp_profile
+            wgp_mod.default_profile = cli_args.wgp_profile
         if cli_args.wgp_vae_config is not None: wgp_mod.vae_config = cli_args.wgp_vae_config
         if cli_args.wgp_boost is not None: wgp_mod.boost = cli_args.wgp_boost
         if cli_args.wgp_transformer_quantization is not None: wgp_mod.transformer_quantization = cli_args.wgp_transformer_quantization
