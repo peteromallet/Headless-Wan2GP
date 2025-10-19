@@ -2152,113 +2152,6 @@ def get_gpu_memory_usage():
     return None, None
 
 
-def send_worker_heartbeat(worker_id: str, log_buffer: LogBuffer = None, current_task_id: str = None) -> bool:
-    """
-    Send heartbeat with proper error handling and optional log batch.
-    
-    Args:
-        worker_id: Worker's unique ID
-        log_buffer: LogBuffer instance to flush logs from (optional)
-        current_task_id: Current task being processed (optional)
-    
-    Returns:
-        True if heartbeat successful
-    """
-    if not db_ops.SUPABASE_CLIENT:
-        headless_logger.debug(f"[HEARTBEAT] Supabase client not available")
-        return True
-
-    try:
-        current_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        
-        # Get GPU metrics
-        vram_total, vram_used = get_gpu_memory_usage()
-        
-        # Flush log buffer if provided
-        logs = log_buffer.flush() if log_buffer else []
-        
-        # Try to use enhanced RPC function with logs first
-        if logs:
-            try:
-                result = db_ops.SUPABASE_CLIENT.rpc('func_worker_heartbeat_with_logs', {
-                    'worker_id_param': worker_id,
-                    'vram_total_mb_param': vram_total,
-                    'vram_used_mb_param': vram_used,
-                    'logs_param': logs,
-                    'current_task_id_param': current_task_id
-                }).execute()
-                
-                if result.data:
-                    logs_inserted = result.data.get('logs_inserted', 0)
-                    if logs_inserted > 0:
-                        headless_logger.debug(f"[HEARTBEAT] ✅ Sent for worker {worker_id} with {logs_inserted} logs")
-                    else:
-                        headless_logger.debug(f"[HEARTBEAT] ✅ Sent for worker {worker_id}")
-                    return True
-                    
-            except Exception as rpc_error:
-                # RPC function might not exist yet, fall back to direct table update
-                headless_logger.debug(f"[HEARTBEAT] RPC function not available, using direct table update: {rpc_error}")
-                # Continue to fallback below
-        
-        # Fallback: Direct table update (original behavior)
-        response = db_ops.SUPABASE_CLIENT.table("workers").update({
-            "last_heartbeat": current_time,
-            "status": "active"
-        }).eq("id", worker_id).execute()
-
-        if response.data:
-            headless_logger.debug(f"[HEARTBEAT] ✅ Sent for worker {worker_id}")
-            return True
-        else:
-            headless_logger.error(f"[HEARTBEAT] Worker {worker_id} not found in database - check workers table")
-            return False
-
-    except Exception as e:
-        headless_logger.error(f"[HEARTBEAT] ❌ Failed for {worker_id}: {e}")
-        headless_logger.error(f"[HEARTBEAT] Exception details: {traceback.format_exc()}")
-        return False
-
-
-def heartbeat_worker_thread(worker_id: str, stop_event: threading.Event, interval: int = 20):
-    """
-    [DEPRECATED] Background thread that sends heartbeats - replaced by guardian process.
-
-    This function is kept for backwards compatibility but should not be used in production.
-    Use start_heartbeat_guardian_process() instead for bulletproof heartbeats.
-    """
-
-    headless_logger.essential(f"✅ Starting heartbeat thread for worker: {worker_id} (interval: {interval}s)")
-
-    # Track heartbeat count for periodic status logging
-    heartbeat_count = 0
-
-    while not stop_event.wait(interval):
-        try:
-            # Send heartbeat with logs from global buffer
-            if send_worker_heartbeat(worker_id, log_buffer=_global_log_buffer, current_task_id=_current_task_id):
-                heartbeat_count += 1
-                # Log status every 5 minutes (15 heartbeats at 20s intervals) to avoid spam
-                if heartbeat_count % 15 == 1:  # Log first, then every 15th
-                    headless_logger.essential(f"✅ [HEARTBEAT] Worker {worker_id} active ({heartbeat_count} heartbeats sent)")
-                    # Log buffer stats for debugging
-                    if _global_log_buffer:
-                        stats = _global_log_buffer.get_stats()
-                        headless_logger.debug(f"[HEARTBEAT] Log buffer stats: {stats}")
-            else:
-                headless_logger.error(f"❌ [HEARTBEAT] Failed for worker {worker_id} (attempt #{heartbeat_count + 1})")
-        except Exception as e:
-            headless_logger.error(f"[HEARTBEAT THREAD] Exception: {e}")
-            headless_logger.error(f"[HEARTBEAT THREAD] Traceback: {traceback.format_exc()}")
-
-    # Final flush on thread stop
-    if _global_log_buffer:
-        headless_logger.essential(f"🛑 Heartbeat thread stopped for worker: {worker_id}, flushing remaining logs...")
-        send_worker_heartbeat(worker_id, log_buffer=_global_log_buffer, current_task_id=_current_task_id)
-
-    headless_logger.essential(f"🛑 Heartbeat thread stopped for worker: {worker_id} (sent {heartbeat_count} heartbeats)")
-
-
 def start_heartbeat_guardian_process(worker_id: str, supabase_url: str, supabase_key: str):
     """
     Start bulletproof heartbeat guardian as a separate process.
@@ -2471,26 +2364,11 @@ def main():
             print(f"⚠️ Guardian will use client_key but may fail due to RLS policies")
             guardian_key = client_key
 
-        # Show which key we're using (first 20 chars only for security)
-        print(f"[WORKER DEBUG] Guardian using key: {guardian_key[:20]}... (service_role={guardian_key == env_supabase_key})")
-
         guardian_process, log_queue = start_heartbeat_guardian_process(
             worker_id=cli_args.worker,
             supabase_url=cli_args.supabase_url,
             supabase_key=guardian_key  # Use service role key to bypass RLS
         )
-
-        # Give guardian time to start and verify it's alive
-        import time
-        time.sleep(2)
-        print(f"[WORKER DEBUG] Guardian process alive: {guardian_process.is_alive()}")
-        print(f"[WORKER DEBUG] Guardian PID: {guardian_process.pid}")
-        print(f"[WORKER DEBUG] Queue object: {log_queue}")
-        print(f"[WORKER DEBUG] Queue type: {type(log_queue)}")
-
-        if not guardian_process.is_alive():
-            print(f"[WORKER ERROR] ❌ Guardian process died immediately after start!")
-            print(f"[WORKER ERROR] Check /tmp/guardian_crash_{cli_args.worker}.log for details")
 
         # Create log buffer with shared queue to guardian
         _global_log_buffer = LogBuffer(max_size=100, shared_queue=log_queue)
