@@ -3309,8 +3309,6 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
 
         # Note: Orchestrator will be marked complete by worker.py after stitch upload completes
         # This ensures the orchestrator gets the final storage URL, not a local path
-        print(f"[ORCHESTRATOR_COMPLETION] Stitch task complete. Orchestrator {orchestrator_task_id_ref} will be marked complete by worker after upload.")
-        dprint(f"Stitch: Task complete. Orchestrator completion will be handled by worker.py with final storage URL.")
 
         # Return the final video path so the stitch task itself gets uploaded via Edge Function
         log_ram_usage("Stitch end (success)", task_id=stitch_task_id_str)
