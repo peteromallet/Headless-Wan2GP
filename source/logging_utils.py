@@ -266,14 +266,9 @@ class LogBuffer:
         # Send to guardian process if available (non-blocking)
         if self.shared_queue:
             try:
-                # Debug: Check queue size
-                qsize = self.shared_queue.qsize() if hasattr(self.shared_queue, 'qsize') else 'unknown'
-                print(f"[LOG_BUFFER DEBUG] Queue size before put: {qsize}", flush=True)
                 self.shared_queue.put_nowait(log_entry)
-                print(f"[LOG_BUFFER DEBUG] Successfully queued log: {level} - {message[:50]}", flush=True)
-            except Exception as e:
+            except Exception:
                 # Queue full or not available - not critical, guardian will catch up
-                print(f"[LOG_BUFFER ERROR] Queue put failed: {type(e).__name__}: {e}", flush=True)
                 pass
 
         with self.lock:
