@@ -2461,7 +2461,7 @@ def main():
                 wgp_mod.server_config["preload_model_policy"] = []
 
         if cli_args.wgp_preload is not None:
-            wgp_mod.args.preload = cli_args.wgp_preload
+            wgp_mod.server_config["preload_in_VRAM"] = cli_args.wgp_preload
             headless_logger.essential(f"Set text_encoder/transformer VRAM preload budget to {cli_args.wgp_preload}MB")
 
         # Ensure transformer_types is always a list to prevent character iteration
