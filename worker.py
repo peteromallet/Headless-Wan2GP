@@ -1349,6 +1349,8 @@ def parse_args():
                                help="Disable automatic mask video generation.")
     pgroup_server.add_argument("--queue-workers", type=int, default=1,
                                help="Number of queue workers for task processing (default: 1, recommended for GPU systems)")
+    pgroup_server.add_argument("--preload-model", type=str, default="lightning_baseline_2_2_2",
+                               help="Model to pre-load on worker startup for faster first task (default: lightning_baseline_2_2_2, set to empty string to disable)")
     pgroup_server.add_argument("--db-type", type=str, default="supabase",
                                help="Database type (accepted but not used, kept for compatibility)")
 
@@ -2414,10 +2416,13 @@ def main():
     try:
         task_queue = HeadlessTaskQueue(wan_dir=wan_dir, max_workers=cli_args.queue_workers)
 
-        # Pre-load lightning_baseline_2_2_2 for faster first task
-        task_queue.start(preload_model="lightning_baseline_2_2_2")
+        # Pre-load model for faster first task (if specified)
+        preload_model = cli_args.preload_model if cli_args.preload_model else None
+        task_queue.start(preload_model=preload_model)
 
         headless_logger.success(f"Task queue initialized with {cli_args.queue_workers} workers")
+        if preload_model:
+            headless_logger.essential(f"Queue will pre-load {preload_model} model for faster first task")
         headless_logger.essential("Queue system will handle generation tasks efficiently with model reuse")
     except Exception as e_queue_init:
         headless_logger.error(f"Failed to initialize task queue: {e_queue_init}")
