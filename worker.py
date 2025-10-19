@@ -30,11 +30,15 @@ import time
 import datetime
 import traceback
 import threading
+import logging
 from multiprocessing import Process, Queue
 
 from pathlib import Path
 from dotenv import load_dotenv
 from supabase import create_client, Client as SupabaseClient
+
+# Suppress httpx INFO logs (only show warnings/errors)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # RAM monitoring
 try:
@@ -2627,15 +2631,6 @@ def main():
                         orchestrator_id = current_task_params.get("orchestrator_task_id_ref")
                         if orchestrator_id:
                             try:
-                                headless_logger.info(
-                                    f"[ORCHESTRATOR_COMPLETION] Stitch task complete. Marking orchestrator {orchestrator_id} as complete.",
-                                    task_id=current_task_id_for_status_update
-                                )
-                                headless_logger.info(
-                                    f"[ORCHESTRATOR_COMPLETION] Using storage URL from stitch upload: {final_storage_url}",
-                                    task_id=current_task_id_for_status_update
-                                )
-
                                 orchestrator_storage_url = db_ops.update_task_status_supabase(
                                     orchestrator_id,
                                     db_ops.STATUS_COMPLETE,
@@ -2644,17 +2639,12 @@ def main():
 
                                 if orchestrator_storage_url:
                                     headless_logger.success(
-                                        f"[ORCHESTRATOR_COMPLETION] Orchestrator marked complete successfully: {orchestrator_storage_url}",
-                                        task_id=orchestrator_id
-                                    )
-                                else:
-                                    headless_logger.warning(
-                                        f"[ORCHESTRATOR_COMPLETION] Orchestrator marked complete but no storage URL returned",
-                                        task_id=orchestrator_id
+                                        f"Orchestrator complete (same file): {orchestrator_id[:8]}",
+                                        task_id=current_task_id_for_status_update
                                     )
                             except Exception as e_orch:
                                 headless_logger.error(
-                                    f"[ORCHESTRATOR_COMPLETION] Failed to mark orchestrator complete: {e_orch}",
+                                    f"Failed to mark orchestrator complete: {e_orch}",
                                     task_id=current_task_id_for_status_update
                                 )
 
