@@ -2428,10 +2428,15 @@ def main():
     # ALWAYS use the local Wan2GP under this directory
     wan_dir = str((Path(__file__).parent / "Wan2GP").resolve())
     original_cwd = os.getcwd()
+    original_argv = sys.argv[:]  # Save original argv
     try:
         os.chdir(wan_dir)
         sys.path.insert(0, wan_dir)
+
+        # Protect sys.argv from wgp.py's argparse
+        sys.argv = ["worker.py"]
         import wgp as wgp_mod
+        sys.argv = original_argv  # Restore immediately after import
 
         # Apply wgp.py global config overrides from CLI arguments
         if cli_args.wgp_attention_mode is not None: wgp_mod.attention_mode = cli_args.wgp_attention_mode
