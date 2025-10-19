@@ -3307,11 +3307,24 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         else:
             print(f"[STITCH_CLEANUP] Skipping cleanup (debug mode or cleanup disabled)")
 
-        # Note: The orchestrator will be marked as complete by the Edge Function
-        # when it processes the stitch task upload. This ensures atomic completion
-        # with the final video upload.
-        print(f"[ORCHESTRATOR_COMPLETION_DEBUG] Stitch task complete. Orchestrator {orchestrator_task_id_ref} will be marked complete by Edge Function.")
-        dprint(f"Stitch: Task complete. Orchestrator completion will be handled by Edge Function.")
+        # Mark orchestrator task as complete now that stitch is done
+        # This ensures the orchestrator follows the same completion path as other tasks
+        try:
+            print(f"[ORCHESTRATOR_COMPLETION] Stitch complete. Marking orchestrator {orchestrator_task_id_ref} as complete.")
+
+            # Reference the stitch task instead of uploading the same file twice
+            orchestrator_output = f"Completed - final video: {final_video_path.name} (see stitch task {stitch_task_id_str})"
+            dprint(f"Stitch: Marking orchestrator {orchestrator_task_id_ref} as complete with reference: {orchestrator_output}")
+
+            db_ops.update_task_status_supabase(
+                orchestrator_task_id_ref,
+                db_ops.STATUS_COMPLETE,
+                orchestrator_output
+            )
+            travel_logger.success(f"Orchestrator marked complete via stitch task completion", task_id=orchestrator_task_id_ref)
+        except Exception as e_orc_complete:
+            travel_logger.error(f"Failed to mark orchestrator complete: {e_orc_complete}", task_id=stitch_task_id_str)
+            # Don't fail the stitch task if orchestrator update fails - just log it
 
         # Return the final video path so the stitch task itself gets uploaded via Edge Function
         log_ram_usage("Stitch end (success)", task_id=stitch_task_id_str)
