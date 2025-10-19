@@ -542,26 +542,35 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                         return None
             else:
                 # Not a local file, could be a Supabase storage URL or external reference
-                # Check if it's a Supabase storage URL - if so, extract storage_path for MODE 3
+                # Check if it's a Supabase storage URL - if so, extract storage_path for MODE 3/4
                 storage_path = None
                 if "/storage/v1/object/public/image_uploads/" in output_location_val:
                     # Extract storage path from URL
                     # Format: https://xxx.supabase.co/storage/v1/object/public/image_uploads/{userId}/{filename}
+                    # MODE 3: userId/tasks/{task_id}/filename (pre-signed URL uploads)
+                    # MODE 4: userId/filename (orchestrator referencing child task upload)
                     try:
                         path_parts = output_location_val.split("/storage/v1/object/public/image_uploads/", 1)
                         if len(path_parts) == 2:
-                            storage_path = path_parts[1]  # e.g., "userId/filename.mp4"
+                            storage_path = path_parts[1]  # e.g., "userId/filename.mp4" or "userId/tasks/{task_id}/filename.mp4"
                             dprint(f"[DEBUG] Extracted storage_path from URL: {storage_path}")
+
+                            # Determine if this is MODE 3 or MODE 4 based on path structure
+                            path_components = storage_path.split('/')
+                            if len(path_components) >= 4 and path_components[1] == 'tasks':
+                                dprint(f"[DEBUG] MODE 3 path detected (pre-signed URL): {storage_path}")
+                            else:
+                                dprint(f"[DEBUG] MODE 4 path detected (orchestrator reference): {storage_path}")
                     except Exception as e_extract:
                         dprint(f"[DEBUG] Failed to extract storage_path: {e_extract}")
 
-                # Use MODE 3 if we have a storage path, otherwise use output_location
+                # Use MODE 3/4 if we have a storage path, otherwise use output_location (legacy)
                 if storage_path:
                     payload = {"task_id": task_id_str, "storage_path": storage_path}
-                    dprint(f"[DEBUG] Using MODE 3 (storage_path) for task {task_id_str}")
+                    dprint(f"[DEBUG] Using storage_path for task {task_id_str}")
                 else:
                     payload = {"task_id": task_id_str, "output_location": output_location_val}
-                    dprint(f"[DEBUG] Using output_location for task {task_id_str}")
+                    dprint(f"[DEBUG] Using output_location (legacy) for task {task_id_str}")
 
                 headers = {"Content-Type": "application/json"}
                 if SUPABASE_ACCESS_TOKEN:
