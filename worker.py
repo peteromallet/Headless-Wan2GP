@@ -2611,32 +2611,33 @@ def main():
                             task_id=current_task_id_for_status_update
                         )
                 else:
-                    db_ops.update_task_status_supabase(
+                    # update_task_status_supabase now returns the storage URL from Edge Function
+                    final_storage_url = db_ops.update_task_status_supabase(
                         current_task_id_for_status_update,
                         db_ops.STATUS_COMPLETE,
                         output_location,
                     )
                     headless_logger.success(
-                        f"Task completed successfully: {output_location}",
+                        f"Task completed successfully: {final_storage_url or output_location}",
                         task_id=current_task_id_for_status_update
                     )
 
-                    # If this is a stitch task, mark parent orchestrator as complete with same output
-                    if current_task_type == "travel_stitch":
+                    # If this is a stitch task, mark parent orchestrator as complete with same storage URL
+                    if current_task_type == "travel_stitch" and final_storage_url:
                         orchestrator_id = current_task_params.get("orchestrator_task_id_ref")
                         if orchestrator_id:
                             try:
                                 headless_logger.info(
-                                    f"Stitch task complete. Marking orchestrator {orchestrator_id} as complete with final output.",
+                                    f"Stitch task complete. Marking orchestrator {orchestrator_id} as complete with storage URL.",
                                     task_id=current_task_id_for_status_update
                                 )
                                 db_ops.update_task_status_supabase(
                                     orchestrator_id,
                                     db_ops.STATUS_COMPLETE,
-                                    output_location  # Use same storage URL as stitch task
+                                    final_storage_url  # Use storage URL returned from stitch upload
                                 )
                                 headless_logger.success(
-                                    f"Orchestrator marked complete with final video URL",
+                                    f"Orchestrator marked complete with same storage URL: {final_storage_url}",
                                     task_id=orchestrator_id
                                 )
                             except Exception as e_orch:

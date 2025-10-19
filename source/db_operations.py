@@ -390,15 +390,24 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                     
                     dprint(f"[DEBUG] Calling complete_task Edge Function with base64 data for task {task_id_str}")
                     resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)
-                    
+
                     if resp.status_code == 200:
                         dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE with base64 upload")
-                        return
+                        # Parse response to get storage URL
+                        try:
+                            resp_data = resp.json()
+                            storage_url = resp_data.get('public_url')
+                            if storage_url:
+                                dprint(f"[DEBUG] File uploaded to: {storage_url}")
+                                return storage_url
+                        except:
+                            pass
+                        return None
                     else:
                         error_msg = f"complete_task edge function failed: {resp.status_code} - {resp.text}"
                         print(f"[ERROR] {error_msg}")
                         _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
-                        return
+                        return None
                     
                 else:
                     dprint(f"[DEBUG] Using presigned upload for {output_path.name} ({file_size_mb:.2f} MB >= {FILE_SIZE_THRESHOLD_MB} MB)")
@@ -512,16 +521,25 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
 
                     dprint(f"[DEBUG] Calling complete_task Edge Function with storage_path for task {task_id_str}")
                     resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)
-                    
+
                     if resp.status_code == 200:
                         dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE with file upload")
-                        return
+                        # Parse response to get storage URL
+                        try:
+                            resp_data = resp.json()
+                            storage_url = resp_data.get('public_url')
+                            if storage_url:
+                                dprint(f"[DEBUG] File uploaded to: {storage_url}")
+                                return storage_url
+                        except:
+                            pass
+                        return None
                     else:
                         error_msg = f"complete_task edge function failed: {resp.status_code} - {resp.text}"
                         print(f"[ERROR] {error_msg}")
                         # Use update-task-status edge function to mark as failed
                         _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
-                        return
+                        return None
             else:
                 # Not a local file, treat as URL
                 payload = {"task_id": task_id_str, "output_location": output_location_val}
@@ -534,16 +552,26 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
 
                 if resp.status_code == 200:
                     dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE")
-                    return
+                    # Parse response to get storage URL (if applicable)
+                    try:
+                        resp_data = resp.json()
+                        storage_url = resp_data.get('public_url')
+                        if storage_url:
+                            dprint(f"[DEBUG] Storage URL: {storage_url}")
+                            return storage_url
+                        # If no URL in response, return the original output_location_val
+                        return output_location_val
+                    except:
+                        return output_location_val
                 else:
                     error_msg = f"complete_task edge function failed: {resp.status_code} - {resp.text}"
                     print(f"[ERROR] {error_msg}")
                     # Use update-task-status edge function to mark as failed
                     _mark_task_failed_via_edge_function(task_id_str, f"Completion failed: {error_msg}")
-                    return
+                    return None
         except Exception as e_edge:
             print(f"[ERROR] complete_task edge function exception: {e_edge}")
-            return
+            return None
     else:
         # Use update-task-status edge function for all other status updates
         edge_url = (
