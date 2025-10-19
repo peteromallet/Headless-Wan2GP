@@ -2370,6 +2370,12 @@ def main():
             supabase_key=guardian_key  # Use service role key to bypass RLS
         )
 
+        # Quick check if guardian started (should be immediate)
+        if not guardian_process.is_alive():
+            print(f"❌ ERROR: Guardian process failed to start!")
+            print(f"   Check /tmp/guardian_crash_{cli_args.worker}.log for details")
+            sys.exit(1)
+
         # Create log buffer with shared queue to guardian
         _global_log_buffer = LogBuffer(max_size=100, shared_queue=log_queue)
 
