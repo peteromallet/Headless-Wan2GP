@@ -1377,6 +1377,8 @@ def parse_args():
     pgroup_wgp_globals.add_argument("--wgp-mixed-precision", type=str, default=None, choices=["0", "1"])
     pgroup_wgp_globals.add_argument("--wgp-preload-policy", type=str, default=None,
                                 help="Set wgp.py's preload_model_policy (e.g., 'P,S' or 'P'. Avoid 'U' to keep models loaded longer).")
+    pgroup_wgp_globals.add_argument("--wgp-preload", type=int, default=None,
+                                help="VRAM budget (MB) for text_encoder/transformer preloading. Higher values keep more in VRAM. 0=minimal (default), 3000+=keep in VRAM")
 
     return parser.parse_args()
 
@@ -2457,6 +2459,10 @@ def main():
             # Ensure preload_model_policy is always a list, never None or int
             if "preload_model_policy" not in wgp_mod.server_config or not isinstance(wgp_mod.server_config.get("preload_model_policy"), list):
                 wgp_mod.server_config["preload_model_policy"] = []
+
+        if cli_args.wgp_preload is not None:
+            wgp_mod.args.preload = cli_args.wgp_preload
+            headless_logger.essential(f"Set text_encoder/transformer VRAM preload budget to {cli_args.wgp_preload}MB")
 
         # Ensure transformer_types is always a list to prevent character iteration
         if "transformer_types" not in wgp_mod.server_config or not isinstance(wgp_mod.server_config.get("transformer_types"), list):
