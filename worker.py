@@ -2621,6 +2621,30 @@ def main():
                         task_id=current_task_id_for_status_update
                     )
 
+                    # If this is a stitch task, mark parent orchestrator as complete with same output
+                    if current_task_type == "travel_stitch":
+                        orchestrator_id = current_task_params.get("orchestrator_task_id_ref")
+                        if orchestrator_id:
+                            try:
+                                headless_logger.info(
+                                    f"Stitch task complete. Marking orchestrator {orchestrator_id} as complete with final output.",
+                                    task_id=current_task_id_for_status_update
+                                )
+                                db_ops.update_task_status_supabase(
+                                    orchestrator_id,
+                                    db_ops.STATUS_COMPLETE,
+                                    output_location  # Use same storage URL as stitch task
+                                )
+                                headless_logger.success(
+                                    f"Orchestrator marked complete with final video URL",
+                                    task_id=orchestrator_id
+                                )
+                            except Exception as e_orch:
+                                headless_logger.error(
+                                    f"Failed to mark orchestrator complete: {e_orch}",
+                                    task_id=current_task_id_for_status_update
+                                )
+
                     # Clean up generated files unless debug mode is enabled
                     cleanup_generated_files(output_location, current_task_id_for_status_update)
             else:
