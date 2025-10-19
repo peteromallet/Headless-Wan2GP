@@ -1363,23 +1363,20 @@ def parse_args():
                                help="Supabase anon (public) API key used to create the client when authenticating with a user JWT. If omitted, falls back to SUPABASE_ANON_KEY env var or service key.")
 
     # Advanced wgp.py Global Config Overrides (Optional) - Applied once at server start
-    # pgroup_wgp_globals = parser.add_argument_group("WGP Global Config Overrides (Applied at Server Start)")
-    # pgroup_wgp_globals.add_argument("--wgp-attention-mode", type=str, default=None,
-    #                             choices=["auto", "sdpa", "sage", "sage2", "flash", "xformers"])
-    # pgroup_wgp_globals.add_argument("--wgp-compile", type=str, default=None, choices=["", "transformer"])
-    # pgroup_wgp_globals.add_argument("--wgp-profile", type=int, default=None, choices=[1, 2, 3, 4, 5],
-    #                             help="Memory profile: 1=HighRAM_HighVRAM (64GB+24GB, fastest), "
-    #                                  "2=HighRAM_LowVRAM (64GB+12GB), 3=LowRAM_HighVRAM (32GB+24GB, recommended for RTX 4090), "
-    #                                  "4=LowRAM_LowVRAM (32GB+12GB), 5=VeryLowRAM_LowVRAM (24GB+10GB). Default: 4")
-    # pgroup_wgp_globals.add_argument("--wgp-vae-config", type=int, default=None)
-    # pgroup_wgp_globals.add_argument("--wgp-boost", type=int, default=None)
-    # pgroup_wgp_globals.add_argument("--wgp-transformer-quantization", type=str, default=None, choices=["int8", "bf16"])
-    # pgroup_wgp_globals.add_argument("--wgp-transformer-dtype-policy", type=str, default=None, choices=["", "fp16", "bf16"])
-    # pgroup_wgp_globals.add_argument("--wgp-text-encoder-quantization", type=str, default=None, choices=["int8", "bf16"])
-    # pgroup_wgp_globals.add_argument("--wgp-vae-precision", type=str, default=None, choices=["16", "32"])
-    # pgroup_wgp_globals.add_argument("--wgp-mixed-precision", type=str, default=None, choices=["0", "1"])
-    # pgroup_wgp_globals.add_argument("--wgp-preload-policy", type=str, default=None,
-    #                             help="Set wgp.py's preload_model_policy (e.g., 'P,S' or 'P'. Avoid 'U' to keep models loaded longer).")
+    pgroup_wgp_globals = parser.add_argument_group("WGP Global Config Overrides (Applied at Server Start)")
+    pgroup_wgp_globals.add_argument("--wgp-attention-mode", type=str, default=None,
+                                choices=["auto", "sdpa", "sage", "sage2", "flash", "xformers"])
+    pgroup_wgp_globals.add_argument("--wgp-compile", type=str, default=None, choices=["", "transformer"])
+    pgroup_wgp_globals.add_argument("--wgp-profile", type=int, default=None)
+    pgroup_wgp_globals.add_argument("--wgp-vae-config", type=int, default=None)
+    pgroup_wgp_globals.add_argument("--wgp-boost", type=int, default=None)
+    pgroup_wgp_globals.add_argument("--wgp-transformer-quantization", type=str, default=None, choices=["int8", "bf16"])
+    pgroup_wgp_globals.add_argument("--wgp-transformer-dtype-policy", type=str, default=None, choices=["", "fp16", "bf16"])
+    pgroup_wgp_globals.add_argument("--wgp-text-encoder-quantization", type=str, default=None, choices=["int8", "bf16"])
+    pgroup_wgp_globals.add_argument("--wgp-vae-precision", type=str, default=None, choices=["16", "32"])
+    pgroup_wgp_globals.add_argument("--wgp-mixed-precision", type=str, default=None, choices=["0", "1"])
+    pgroup_wgp_globals.add_argument("--wgp-preload-policy", type=str, default=None,
+                                help="Set wgp.py's preload_model_policy (e.g., 'P,S' or 'P'. Avoid 'U' to keep models loaded longer).")
 
     return parser.parse_args()
 
@@ -2231,6 +2228,24 @@ def main():
     else:
         disable_debug_mode()
 
+    # Install global exception hook to capture uncaught exceptions
+    # This must be done AFTER logging is initialized but BEFORE guardian starts
+    def exception_hook(exc_type, exc_value, exc_traceback):
+        """Capture uncaught exceptions and log them through the logging system."""
+        if issubclass(exc_type, KeyboardInterrupt):
+            # Don't capture keyboard interrupt
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+
+        error_msg = ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        headless_logger.critical(f"Uncaught exception: {exc_type.__name__}: {exc_value}")
+        headless_logger.critical(f"Traceback:\n{error_msg}")
+
+        # Also print to stderr for startup script logs
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+    sys.excepthook = exception_hook
+
     # Read Supabase configuration from environment variables
     env_pg_table_name = os.getenv("POSTGRES_TABLE_NAME", "tasks")
     env_supabase_url = os.getenv("SUPABASE_URL")
@@ -2408,10 +2423,51 @@ def main():
     db_ops.debug_mode = cli_args.debug # Also set it in the db_ops module
     dprint("Verbose debug logging enabled.")
 
-    # --- Initialize Task Queue System (required) ---
-    headless_logger.essential("Initializing queue-based task processing system...")
+    # --- Apply WGP Global Config Overrides (before task queue initialization) ---
+    # Import wgp.py and apply CLI overrides to its global config variables
     # ALWAYS use the local Wan2GP under this directory
     wan_dir = str((Path(__file__).parent / "Wan2GP").resolve())
+    original_cwd = os.getcwd()
+    try:
+        os.chdir(wan_dir)
+        sys.path.insert(0, wan_dir)
+        import wgp as wgp_mod
+
+        # Apply wgp.py global config overrides from CLI arguments
+        if cli_args.wgp_attention_mode is not None: wgp_mod.attention_mode = cli_args.wgp_attention_mode
+        if cli_args.wgp_compile is not None: wgp_mod.compile = cli_args.wgp_compile
+        if cli_args.wgp_profile is not None: wgp_mod.profile = cli_args.wgp_profile
+        if cli_args.wgp_vae_config is not None: wgp_mod.vae_config = cli_args.wgp_vae_config
+        if cli_args.wgp_boost is not None: wgp_mod.boost = cli_args.wgp_boost
+        if cli_args.wgp_transformer_quantization is not None: wgp_mod.transformer_quantization = cli_args.wgp_transformer_quantization
+        if cli_args.wgp_transformer_dtype_policy is not None: wgp_mod.transformer_dtype_policy = cli_args.wgp_transformer_dtype_policy
+        if cli_args.wgp_text_encoder_quantization is not None: wgp_mod.text_encoder_quantization = cli_args.wgp_text_encoder_quantization
+        if cli_args.wgp_vae_precision is not None: wgp_mod.server_config["vae_precision"] = cli_args.wgp_vae_precision
+        if cli_args.wgp_mixed_precision is not None: wgp_mod.server_config["mixed_precision"] = cli_args.wgp_mixed_precision
+        if cli_args.wgp_preload_policy is not None:
+            wgp_mod.server_config["preload_model_policy"] = [flag.strip() for flag in cli_args.wgp_preload_policy.split(',')]
+        else:
+            # Ensure preload_model_policy is always a list, never None or int
+            if "preload_model_policy" not in wgp_mod.server_config or not isinstance(wgp_mod.server_config.get("preload_model_policy"), list):
+                wgp_mod.server_config["preload_model_policy"] = []
+
+        # Ensure transformer_types is always a list to prevent character iteration
+        if "transformer_types" not in wgp_mod.server_config or not isinstance(wgp_mod.server_config.get("transformer_types"), list):
+            wgp_mod.server_config["transformer_types"] = []
+
+        headless_logger.essential("WGP global config overrides applied successfully")
+    except Exception as e_wgp_import:
+        headless_logger.error(f"Failed to import wgp module: {e_wgp_import}")
+        headless_logger.error(f"Error type: {type(e_wgp_import).__name__}")
+        headless_logger.error(traceback.format_exc())
+        headless_logger.critical("Cannot continue without wgp module. Exiting.")
+        sys.exit(1)
+    finally:
+        os.chdir(original_cwd)
+    # --- End WGP Config Overrides ---
+
+    # --- Initialize Task Queue System (required) ---
+    headless_logger.essential("Initializing queue-based task processing system...")
 
     try:
         task_queue = HeadlessTaskQueue(wan_dir=wan_dir, max_workers=cli_args.queue_workers)
