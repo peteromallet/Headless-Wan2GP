@@ -46,7 +46,18 @@ def check_process_alive(pid: int, start_time: float = None) -> bool:
                 # Allow small tolerance for floating point comparison
                 if abs(current_start_time - start_time) > 0.1:
                     # PID was reused by a different process
+                    print(f"[GUARDIAN] PID {pid} was reused (start time mismatch: {current_start_time} vs {start_time})", flush=True)
                     return False
+
+                # Additional verification: check if it's still a Python process
+                try:
+                    cmdline = proc.cmdline()
+                    if not cmdline or 'python' not in cmdline[0].lower():
+                        print(f"[GUARDIAN] PID {pid} is not a Python process: {cmdline}", flush=True)
+                        return False
+                except:
+                    pass  # cmdline() can fail, don't fail the check for this
+
             except (psutil.NoSuchProcess, psutil.AccessDenied, ImportError):
                 # If we can't verify, assume it's dead (fail-safe)
                 return False
