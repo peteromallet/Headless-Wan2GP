@@ -541,13 +541,32 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                         _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
                         return None
             else:
-                # Not a local file, treat as URL
-                payload = {"task_id": task_id_str, "output_location": output_location_val}
-                
+                # Not a local file, could be a Supabase storage URL or external reference
+                # Check if it's a Supabase storage URL - if so, extract storage_path for MODE 3
+                storage_path = None
+                if "/storage/v1/object/public/image_uploads/" in output_location_val:
+                    # Extract storage path from URL
+                    # Format: https://xxx.supabase.co/storage/v1/object/public/image_uploads/{userId}/{filename}
+                    try:
+                        path_parts = output_location_val.split("/storage/v1/object/public/image_uploads/", 1)
+                        if len(path_parts) == 2:
+                            storage_path = path_parts[1]  # e.g., "userId/filename.mp4"
+                            dprint(f"[DEBUG] Extracted storage_path from URL: {storage_path}")
+                    except Exception as e_extract:
+                        dprint(f"[DEBUG] Failed to extract storage_path: {e_extract}")
+
+                # Use MODE 3 if we have a storage path, otherwise use output_location
+                if storage_path:
+                    payload = {"task_id": task_id_str, "storage_path": storage_path}
+                    dprint(f"[DEBUG] Using MODE 3 (storage_path) for task {task_id_str}")
+                else:
+                    payload = {"task_id": task_id_str, "output_location": output_location_val}
+                    dprint(f"[DEBUG] Using output_location for task {task_id_str}")
+
                 headers = {"Content-Type": "application/json"}
                 if SUPABASE_ACCESS_TOKEN:
                     headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
-                
+
                 resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
 
                 if resp.status_code == 200:
