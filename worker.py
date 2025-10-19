@@ -2628,21 +2628,33 @@ def main():
                         if orchestrator_id:
                             try:
                                 headless_logger.info(
-                                    f"Stitch task complete. Marking orchestrator {orchestrator_id} as complete with storage URL.",
+                                    f"[ORCHESTRATOR_COMPLETION] Stitch task complete. Marking orchestrator {orchestrator_id} as complete.",
                                     task_id=current_task_id_for_status_update
                                 )
-                                db_ops.update_task_status_supabase(
+                                headless_logger.info(
+                                    f"[ORCHESTRATOR_COMPLETION] Using storage URL from stitch upload: {final_storage_url}",
+                                    task_id=current_task_id_for_status_update
+                                )
+
+                                orchestrator_storage_url = db_ops.update_task_status_supabase(
                                     orchestrator_id,
                                     db_ops.STATUS_COMPLETE,
-                                    final_storage_url  # Use storage URL returned from stitch upload
+                                    final_storage_url  # Pass storage URL - will be sent as MODE 4 (storage_path)
                                 )
-                                headless_logger.success(
-                                    f"Orchestrator marked complete with same storage URL: {final_storage_url}",
-                                    task_id=orchestrator_id
-                                )
+
+                                if orchestrator_storage_url:
+                                    headless_logger.success(
+                                        f"[ORCHESTRATOR_COMPLETION] Orchestrator marked complete successfully: {orchestrator_storage_url}",
+                                        task_id=orchestrator_id
+                                    )
+                                else:
+                                    headless_logger.warning(
+                                        f"[ORCHESTRATOR_COMPLETION] Orchestrator marked complete but no storage URL returned",
+                                        task_id=orchestrator_id
+                                    )
                             except Exception as e_orch:
                                 headless_logger.error(
-                                    f"Failed to mark orchestrator complete: {e_orch}",
+                                    f"[ORCHESTRATOR_COMPLETION] Failed to mark orchestrator complete: {e_orch}",
                                     task_id=current_task_id_for_status_update
                                 )
 
