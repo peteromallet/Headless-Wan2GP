@@ -85,7 +85,6 @@ def send_heartbeat_with_logs(
             'vram_total_mb_param': vram_total,
             'vram_used_mb_param': vram_used,
             'logs_param': logs,
-            'current_task_id_param': None,  # Could be enhanced to track current task
             'status_param': status
         })
 
@@ -135,23 +134,7 @@ def guardian_main(worker_id: str, worker_pid: int, log_queue, config: Dict[str, 
     import traceback
 
     try:
-        # Check if this is a service role key by looking for "service_role" in the JWT payload
-        api_key = config.get('api_key', '')
-        if 'eyJ' in api_key:  # Looks like a JWT
-            try:
-                import base64
-                # JWT format: header.payload.signature
-                payload_part = api_key.split('.')[1]
-                # Add padding if needed
-                payload_part += '=' * (4 - len(payload_part) % 4)
-                decoded = base64.b64decode(payload_part).decode('utf-8')
-                if 'service_role' not in decoded:
-                    print(f"[GUARDIAN] ⚠️ WARNING: NOT using service_role key!", flush=True)
-            except Exception:
-                pass
-
         heartbeat_count = 0
-        consecutive_failures = 0
 
         # Log startup
         startup_msg = f"{datetime.now(timezone.utc).isoformat()}: Guardian started for worker {worker_id} (PID {worker_pid})\n"
@@ -176,13 +159,11 @@ def guardian_main(worker_id: str, worker_pid: int, log_queue, config: Dict[str, 
         try:
             # Check if worker process is alive
             worker_alive = check_process_alive(worker_pid)
-            status = "active" if worker_alive else "crashed"
 
             # If worker crashed, send one final heartbeat and exit
             if not worker_alive:
                 print(f"[GUARDIAN] Worker {worker_id} crashed (PID {worker_pid} no longer exists)")
-                vram_total, vram_used = get_vram_info()
-                send_heartbeat_with_logs(worker_id, vram_total, vram_used, [], config, status="crashed")
+                send_heartbeat_with_logs(worker_id, 0, 0, [], config, status="crashed")
                 break
 
             # Collect any available logs
@@ -196,7 +177,6 @@ def guardian_main(worker_id: str, worker_pid: int, log_queue, config: Dict[str, 
 
             if success:
                 heartbeat_count += 1
-                consecutive_failures = 0
 
                 # Log status every 5 minutes (15 heartbeats) to avoid spam
                 if heartbeat_count % 15 == 1:
@@ -206,12 +186,6 @@ def guardian_main(worker_id: str, worker_pid: int, log_queue, config: Dict[str, 
                     msg += "\n"
                     with open(f'/tmp/guardian_{worker_id}.log', 'a') as f:
                         f.write(msg)
-            else:
-                consecutive_failures += 1
-                if consecutive_failures >= 3:
-                    # Log warning but continue trying
-                    with open(f'/tmp/guardian_{worker_id}.log', 'a') as f:
-                        f.write(f"{datetime.now(timezone.utc).isoformat()}: WARNING - {consecutive_failures} consecutive heartbeat failures\n")
 
         except Exception as e:
             # Never crash on any error
