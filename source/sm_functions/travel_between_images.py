@@ -1253,6 +1253,12 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             if idx in vlm_enhanced_prompts:
                 segment_base_prompt = vlm_enhanced_prompts[idx]
                 dprint(f"[VLM_ENHANCE] Segment {idx}: Using pre-generated enhanced prompt")
+            
+            # Fallback to orchestrator's base_prompt if segment prompt is empty
+            if not segment_base_prompt or not segment_base_prompt.strip():
+                segment_base_prompt = orchestrator_payload.get("base_prompt", "")
+                if segment_base_prompt:
+                    dprint(f"[PROMPT_FALLBACK] Segment {idx}: Using orchestrator base_prompt (segment prompt was empty)")
 
             # Apply text_before_prompts and text_after_prompts wrapping (after enrichment)
             text_before = orchestrator_payload.get("text_before_prompts", "").strip()
