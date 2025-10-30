@@ -1275,6 +1275,13 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 segment_base_prompt = " ".join(parts)
                 dprint(f"[TEXT_WRAP] Segment {idx}: Applied text_before/after wrapping")
 
+            # Get negative prompt with fallback
+            segment_negative_prompt = expanded_negative_prompts[idx] if idx < len(expanded_negative_prompts) else ""
+            if not segment_negative_prompt or not segment_negative_prompt.strip():
+                segment_negative_prompt = orchestrator_payload.get("negative_prompt", "")
+                if segment_negative_prompt:
+                    dprint(f"[PROMPT_FALLBACK] Segment {idx}: Using orchestrator negative_prompt (segment negative_prompt was empty)")
+
             segment_payload = {
                 "orchestrator_task_id_ref": orchestrator_task_id_str,
                 "orchestrator_run_id": run_id,
@@ -1286,7 +1293,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "current_run_base_output_dir": str(current_run_output_dir.resolve()), # Base for segment's own output folder creation
 
                 "base_prompt": segment_base_prompt,
-                "negative_prompt": expanded_negative_prompts[idx],
+                "negative_prompt": segment_negative_prompt,
                 "segment_frames_target": expanded_segment_frames[idx],
                 "frame_overlap_from_previous": current_frame_overlap_from_previous,
                 "frame_overlap_with_next": expanded_frame_overlap[idx] if len(expanded_frame_overlap) > idx else 0,
