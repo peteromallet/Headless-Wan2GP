@@ -1230,80 +1230,83 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         generation_params["lora_multipliers"] = [1.0, 0.2]  # DetailEnhancer at reduced strength
         headless_logger.debug(f"Auto-enabled Wan 2.2 acceleration LoRAs (no parameter overrides)", task_id=task_id)
 
-    # Auto-add/update Lightning LoRA based on amount_of_motion parameter
-    # SKIP if phase_config was used (it already controls LoRAs completely)
-    amount_of_motion = db_task_params.get("amount_of_motion", None) if "phase_config" not in db_task_params else None
-
-    if amount_of_motion is not None and ("2_2" in model or "cocktail_2_2" in model):
-        try:
-            amount_of_motion = float(amount_of_motion)
-        except (ValueError, TypeError):
-            amount_of_motion = None
-
-    if amount_of_motion is not None and ("2_2" in model or "cocktail_2_2" in model):
-        # Calculate strength: input 0.0→0.5, input 1.0→1.0 (linear scaling from 0.5 to 1.0)
-        first_phase_strength = 0.5 + (amount_of_motion * 0.5)
-
-        lightning_lora_name = "high_noise_model.safetensors"
-
-        # Get current LoRA lists or initialize
-        current_lora_names = generation_params.get("lora_names", [])
-        current_lora_mults = generation_params.get("lora_multipliers", [])
-
-        # Ensure lists
-        if not isinstance(current_lora_names, list):
-            current_lora_names = [current_lora_names] if current_lora_names else []
-        if not isinstance(current_lora_mults, list):
-            current_lora_mults = [current_lora_mults] if current_lora_mults else []
-
-        # Make copies to avoid modifying references
-        current_lora_names = list(current_lora_names)
-        current_lora_mults = list(current_lora_mults)
-
-        # Check if Lightning LoRA already exists and update/add it
-        lightning_index = -1
-        for i, lora_name in enumerate(current_lora_names):
-            if "Lightning" in str(lora_name) or "lightning" in str(lora_name).lower():
-                lightning_index = i
-                break
-
-        if lightning_index >= 0:
-            # Update existing Lightning LoRA - preserve phases 2 and 3 if they exist
-            current_lora_names[lightning_index] = lightning_lora_name
-            if lightning_index < len(current_lora_mults):
-                existing_mult = str(current_lora_mults[lightning_index])
-                existing_phases = existing_mult.split(";")
-                # Keep existing phase 2 and 3 values, or default to 0.0
-                phase2 = existing_phases[1] if len(existing_phases) > 1 else "0.0"
-                phase3 = existing_phases[2] if len(existing_phases) > 2 else "0.0"
-                lightning_strength = f"{first_phase_strength:.2f};{phase2};{phase3}"
-                current_lora_mults[lightning_index] = lightning_strength
-            else:
-                lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
-                current_lora_mults.append(lightning_strength)
-            headless_logger.debug(f"Updated Lightning LoRA strength to {lightning_strength} based on amount_of_motion={amount_of_motion}", task_id=task_id)
-        else:
-            # Add new Lightning LoRA with default phase 2/3 values
-            lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
-            current_lora_names.append(lightning_lora_name)
-            current_lora_mults.append(lightning_strength)
-            headless_logger.debug(f"Added Lightning LoRA with strength {lightning_strength} based on amount_of_motion={amount_of_motion}", task_id=task_id)
-
-        # Ensure multipliers list matches names list length
-        while len(current_lora_mults) < len(current_lora_names):
-            current_lora_mults.append("1.0")
-
-        generation_params["lora_names"] = current_lora_names
-        generation_params["lora_multipliers"] = current_lora_mults
-
-        # Add to additional_loras for download handling
-        if "additional_loras" not in generation_params:
-            generation_params["additional_loras"] = {}
-
-        lightning_url = "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-T2V-A14B-4steps-lora-250928/high_noise_model.safetensors"
-        generation_params["additional_loras"][lightning_url] = first_phase_strength
-
-        headless_logger.info(f"Lightning LoRA configured: strength={lightning_strength}, amount_of_motion={amount_of_motion}", task_id=task_id)
+    # DISABLED: Auto-add/update Lightning LoRA based on amount_of_motion parameter
+    # The amount_of_motion parameter is no longer used and does nothing.
+    # Previously it controlled Lightning LoRA strength (0.0→0.5, 1.0→1.0)
+    # Commented out to prevent automatic LoRA adjustments.
+    
+    # amount_of_motion = db_task_params.get("amount_of_motion", None) if "phase_config" not in db_task_params else None
+    #
+    # if amount_of_motion is not None and ("2_2" in model or "cocktail_2_2" in model):
+    #     try:
+    #         amount_of_motion = float(amount_of_motion)
+    #     except (ValueError, TypeError):
+    #         amount_of_motion = None
+    #
+    # if amount_of_motion is not None and ("2_2" in model or "cocktail_2_2" in model):
+    #     # Calculate strength: input 0.0→0.5, input 1.0→1.0 (linear scaling from 0.5 to 1.0)
+    #     first_phase_strength = 0.5 + (amount_of_motion * 0.5)
+    #
+    #     lightning_lora_name = "high_noise_model.safetensors"
+    #
+    #     # Get current LoRA lists or initialize
+    #     current_lora_names = generation_params.get("lora_names", [])
+    #     current_lora_mults = generation_params.get("lora_multipliers", [])
+    #
+    #     # Ensure lists
+    #     if not isinstance(current_lora_names, list):
+    #         current_lora_names = [current_lora_names] if current_lora_names else []
+    #     if not isinstance(current_lora_mults, list):
+    #         current_lora_mults = [current_lora_mults] if current_lora_mults else []
+    #
+    #     # Make copies to avoid modifying references
+    #     current_lora_names = list(current_lora_names)
+    #     current_lora_mults = list(current_lora_mults)
+    #
+    #     # Check if Lightning LoRA already exists and update/add it
+    #     lightning_index = -1
+    #     for i, lora_name in enumerate(current_lora_names):
+    #         if "Lightning" in str(lora_name) or "lightning" in str(lora_name).lower():
+    #             lightning_index = i
+    #             break
+    #
+    #     if lightning_index >= 0:
+    #         # Update existing Lightning LoRA - preserve phases 2 and 3 if they exist
+    #         current_lora_names[lightning_index] = lightning_lora_name
+    #         if lightning_index < len(current_lora_mults):
+    #             existing_mult = str(current_lora_mults[lightning_index])
+    #             existing_phases = existing_mult.split(";")
+    #             # Keep existing phase 2 and 3 values, or default to 0.0
+    #             phase2 = existing_phases[1] if len(existing_phases) > 1 else "0.0"
+    #             phase3 = existing_phases[2] if len(existing_phases) > 2 else "0.0"
+    #             lightning_strength = f"{first_phase_strength:.2f};{phase2};{phase3}"
+    #             current_lora_mults[lightning_index] = lightning_strength
+    #         else:
+    #             lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
+    #             current_lora_mults.append(lightning_strength)
+    #         headless_logger.debug(f"Updated Lightning LoRA strength to {lightning_strength} based on amount_of_motion={amount_of_motion}", task_id=task_id)
+    #     else:
+    #         # Add new Lightning LoRA with default phase 2/3 values
+    #         lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
+    #         current_lora_names.append(lightning_lora_name)
+    #         current_lora_mults.append(lightning_strength)
+    #         headless_logger.debug(f"Added Lightning LoRA with strength {lightning_strength} based on amount_of_motion={amount_of_motion}", task_id=task_id)
+    #
+    #     # Ensure multipliers list matches names list length
+    #     while len(current_lora_mults) < len(current_lora_names):
+    #         current_lora_mults.append("1.0")
+    #
+    #     generation_params["lora_names"] = current_lora_names
+    #     generation_params["lora_multipliers"] = current_lora_mults
+    #
+    #     # Add to additional_loras for download handling
+    #     if "additional_loras" not in generation_params:
+    #         generation_params["additional_loras"] = {}
+    #
+    #     lightning_url = "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-T2V-A14B-4steps-lora-250928/high_noise_model.safetensors"
+    #     generation_params["additional_loras"][lightning_url] = first_phase_strength
+    #
+    #     headless_logger.info(f"Lightning LoRA configured: strength={lightning_strength}, amount_of_motion={amount_of_motion}", task_id=task_id)
     
     # Determine task priority (orchestrator tasks get higher priority)
     priority = db_task_params.get("priority", 0)
@@ -1533,79 +1536,82 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             generation_params["additional_loras"] = additional_loras
             dprint(f"[QUEUE_PARAMS] Added {len(additional_loras)} additional LoRAs from orchestrator payload")
 
-        # Auto-add Lightning LoRA based on amount_of_motion from orchestrator
-        # SKIP if phase_config is present (it will handle all LoRAs)
-        amount_of_motion = full_orchestrator_payload.get("amount_of_motion", None)
-
-        if amount_of_motion is not None and ("2_2" in model_name or "lightning" in model_name.lower()) and "phase_config" not in full_orchestrator_payload:
-            try:
-                amount_of_motion = float(amount_of_motion)
-            except (ValueError, TypeError):
-                amount_of_motion = None
-
-            # Only proceed if amount_of_motion is still valid after conversion
-            if amount_of_motion is not None:
-                # Calculate strength: input 0.0→0.5, input 1.0→1.0 (linear scaling from 0.5 to 1.0)
-                first_phase_strength = 0.5 + (amount_of_motion * 0.5)
-
-                lightning_lora_name = "high_noise_model.safetensors"
-
-                # Get or initialize LoRA lists
-                current_lora_names = generation_params.get("lora_names", [])
-                current_lora_mults = generation_params.get("lora_multipliers", [])
-
-                if not isinstance(current_lora_names, list):
-                    current_lora_names = [current_lora_names] if current_lora_names else []
-                if not isinstance(current_lora_mults, list):
-                    current_lora_mults = [current_lora_mults] if current_lora_mults else []
-
-                current_lora_names = list(current_lora_names)
-                current_lora_mults = list(current_lora_mults)
-
-                # Check if Lightning LoRA already exists and update/add it
-                lightning_index = -1
-                for i, lora_name in enumerate(current_lora_names):
-                    if "Lightning" in str(lora_name) or "lightning" in str(lora_name).lower():
-                        lightning_index = i
-                        break
-
-                if lightning_index >= 0:
-                    # Update existing Lightning LoRA - preserve phases 2 and 3 if they exist
-                    current_lora_names[lightning_index] = lightning_lora_name
-                    if lightning_index < len(current_lora_mults):
-                        existing_mult = str(current_lora_mults[lightning_index])
-                        existing_phases = existing_mult.split(";")
-                        # Keep existing phase 2 and 3 values, or default to 0.0
-                        phase2 = existing_phases[1] if len(existing_phases) > 1 else "0.0"
-                        phase3 = existing_phases[2] if len(existing_phases) > 2 else "0.0"
-                        lightning_strength = f"{first_phase_strength:.2f};{phase2};{phase3}"
-                        current_lora_mults[lightning_index] = lightning_strength
-                    else:
-                        lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
-                        current_lora_mults.append(lightning_strength)
-                    dprint(f"[LIGHTNING_LORA] Travel segment {task_id}: Updated Lightning LoRA strength to {lightning_strength} based on amount_of_motion={amount_of_motion}")
-                else:
-                    # Add new Lightning LoRA with default phase 2/3 values
-                    lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
-                    current_lora_names.append(lightning_lora_name)
-                    current_lora_mults.append(lightning_strength)
-                    dprint(f"[LIGHTNING_LORA] Travel segment {task_id}: Added Lightning LoRA with strength {lightning_strength} based on amount_of_motion={amount_of_motion}")
-
-                # Ensure multipliers list matches names list length
-                while len(current_lora_mults) < len(current_lora_names):
-                    current_lora_mults.append("1.0")
-
-                generation_params["lora_names"] = current_lora_names
-                generation_params["lora_multipliers"] = current_lora_mults
-
-                # Add to additional_loras for download handling
-                if "additional_loras" not in generation_params:
-                    generation_params["additional_loras"] = {}
-
-                lightning_url = "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-T2V-A14B-4steps-lora-250928/high_noise_model.safetensors"
-                generation_params["additional_loras"][lightning_url] = first_phase_strength
-
-                headless_logger.info(f"Travel segment Lightning LoRA configured: strength={lightning_strength}, amount_of_motion={amount_of_motion}", task_id=task_id)
+        # DISABLED: Auto-add Lightning LoRA based on amount_of_motion from orchestrator
+        # The amount_of_motion parameter is no longer used and does nothing.
+        # Previously it controlled Lightning LoRA strength (0.0→0.5, 1.0→1.0) for travel segments
+        # Commented out to prevent automatic LoRA adjustments.
+        
+        # amount_of_motion = full_orchestrator_payload.get("amount_of_motion", None)
+        #
+        # if amount_of_motion is not None and ("2_2" in model_name or "lightning" in model_name.lower()) and "phase_config" not in full_orchestrator_payload:
+        #     try:
+        #         amount_of_motion = float(amount_of_motion)
+        #     except (ValueError, TypeError):
+        #         amount_of_motion = None
+        #
+        #     # Only proceed if amount_of_motion is still valid after conversion
+        #     if amount_of_motion is not None:
+        #         # Calculate strength: input 0.0→0.5, input 1.0→1.0 (linear scaling from 0.5 to 1.0)
+        #         first_phase_strength = 0.5 + (amount_of_motion * 0.5)
+        #
+        #         lightning_lora_name = "high_noise_model.safetensors"
+        #
+        #         # Get or initialize LoRA lists
+        #         current_lora_names = generation_params.get("lora_names", [])
+        #         current_lora_mults = generation_params.get("lora_multipliers", [])
+        #
+        #         if not isinstance(current_lora_names, list):
+        #             current_lora_names = [current_lora_names] if current_lora_names else []
+        #         if not isinstance(current_lora_mults, list):
+        #             current_lora_mults = [current_lora_mults] if current_lora_mults else []
+        #
+        #         current_lora_names = list(current_lora_names)
+        #         current_lora_mults = list(current_lora_mults)
+        #
+        #         # Check if Lightning LoRA already exists and update/add it
+        #         lightning_index = -1
+        #         for i, lora_name in enumerate(current_lora_names):
+        #             if "Lightning" in str(lora_name) or "lightning" in str(lora_name).lower():
+        #                 lightning_index = i
+        #                 break
+        #
+        #         if lightning_index >= 0:
+        #             # Update existing Lightning LoRA - preserve phases 2 and 3 if they exist
+        #             current_lora_names[lightning_index] = lightning_lora_name
+        #             if lightning_index < len(current_lora_mults):
+        #                 existing_mult = str(current_lora_mults[lightning_index])
+        #                 existing_phases = existing_mult.split(";")
+        #                 # Keep existing phase 2 and 3 values, or default to 0.0
+        #                 phase2 = existing_phases[1] if len(existing_phases) > 1 else "0.0"
+        #                 phase3 = existing_phases[2] if len(existing_phases) > 2 else "0.0"
+        #                 lightning_strength = f"{first_phase_strength:.2f};{phase2};{phase3}"
+        #                 current_lora_mults[lightning_index] = lightning_strength
+        #             else:
+        #                 lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
+        #                 current_lora_mults.append(lightning_strength)
+        #             dprint(f"[LIGHTNING_LORA] Travel segment {task_id}: Updated Lightning LoRA strength to {lightning_strength} based on amount_of_motion={amount_of_motion}")
+        #         else:
+        #             # Add new Lightning LoRA with default phase 2/3 values
+        #             lightning_strength = f"{first_phase_strength:.2f};0.0;0.0"
+        #             current_lora_names.append(lightning_lora_name)
+        #             current_lora_mults.append(lightning_strength)
+        #             dprint(f"[LIGHTNING_LORA] Travel segment {task_id}: Added Lightning LoRA with strength {lightning_strength} based on amount_of_motion={amount_of_motion}")
+        #
+        #         # Ensure multipliers list matches names list length
+        #         while len(current_lora_mults) < len(current_lora_names):
+        #             current_lora_mults.append("1.0")
+        #
+        #         generation_params["lora_names"] = current_lora_names
+        #         generation_params["lora_multipliers"] = current_lora_mults
+        #
+        #         # Add to additional_loras for download handling
+        #         if "additional_loras" not in generation_params:
+        #             generation_params["additional_loras"] = {}
+        #
+        #         lightning_url = "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-T2V-A14B-4steps-lora-250928/high_noise_model.safetensors"
+        #         generation_params["additional_loras"][lightning_url] = first_phase_strength
+        #
+        #         headless_logger.info(f"Travel segment Lightning LoRA configured: strength={lightning_strength}, amount_of_motion={amount_of_motion}", task_id=task_id)
         
         # Only add explicit parameters if they're provided (let model preset handle defaults)
         # Check both 'steps' and 'num_inference_steps' from orchestrator payload
