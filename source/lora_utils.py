@@ -470,6 +470,11 @@ def _download_lora_auto(lora_filename: str, lora_type: str, dprint=None) -> bool
         # CausVid LoRA (14B)
         "Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors":
             "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/loras_accelerators/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors",
+        # Lightning LoRAs (Wan2.2 T2V 14B 4-steps)
+        "high_noise_model.safetensors":
+            "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-T2V-A14B-4steps-lora-250928/high_noise_model.safetensors",
+        "low_noise_model.safetensors":
+            "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-T2V-A14B-4steps-lora-250928/low_noise_model.safetensors",
         # Fractal Concept LoRA
         "246838-wan22_14B-high-fractal_concept-e459.safetensors":
             "https://huggingface.co/Cseti/wan2.2-14B-Kinestasis_concept-lora-v1/resolve/main/246838-wan22_14B-high-fractal_concept-e459.safetensors",
@@ -774,25 +779,15 @@ def process_all_loras(params: Dict[str, Any], task_params: Dict[str, Any], model
         for lora_name in lora_names[:]:  # Copy list to avoid modification during iteration
             if not _check_lora_exists(lora_name):
                 if dprint:
-                    dprint(f"[LORA_DOWNLOAD] Task {task_id}: LoRA not found, attempting auto-download: {lora_name}")
+                    dprint(f"[LORA_DOWNLOAD] Task {task_id}: LoRA not found locally, attempting auto-download: {lora_name}")
 
                 download_success = _download_lora_auto(lora_name, "required", dprint)
                 if not download_success:
                     if dprint:
-                        dprint(f"[LORA_DOWNLOAD] Task {task_id}: Warning - Could not download required LoRA: {lora_name}")
-                        dprint(f"[LORA_PROCESS] Task {task_id}: Dropping missing LoRA '{lora_name}' to avoid generation failure")
-                    # Remove missing LoRA to avoid downstream loader errors
-                    try:
-                        idx = lora_names.index(lora_name)
-                        lora_names.pop(idx)
-                        # Keep multipliers list in sync if already present
-                        lora_multipliers = params.get("lora_multipliers", [])
-                        if isinstance(lora_multipliers, list) and idx < len(lora_multipliers):
-                            lora_multipliers.pop(idx)
-                            params["lora_multipliers"] = lora_multipliers
-                    except Exception:
-                        pass
-        # Store potentially pruned list back
+                        dprint(f"[LORA_DOWNLOAD] Task {task_id}: Auto-download not available for '{lora_name}'")
+                        dprint(f"[LORA_PROCESS] Task {task_id}: Passing through '{lora_name}' - may be URL or model JSON entry that WGP will handle")
+                    # ✅ DON'T DROP IT - let WGP handle URLs, model JSON entries, or error appropriately
+        # No pruning - keep all LoRAs in the list
         params["lora_names"] = lora_names
     
     # Step 5: Ensure multipliers list matches LoRA names list
