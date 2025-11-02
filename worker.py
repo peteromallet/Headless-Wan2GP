@@ -513,6 +513,11 @@ def parse_phase_config(phase_config: dict, num_inference_steps: int, task_id: st
     """
     Parse phase_config override block and return computed parameters.
 
+    STAGE 2: PARSE - See source/lora_utils.py module docstring for full pipeline overview
+
+    This function handles phase_config LoRAs by creating an additional_loras dict
+    that will be processed downstream by lora_utils.normalize_lora_format().
+
     Args:
         phase_config: Phase configuration dict with structure:
             {
