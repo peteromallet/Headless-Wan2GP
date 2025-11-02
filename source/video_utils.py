@@ -886,12 +886,26 @@ def create_guide_video_for_travel_segment(
                 dprint(f"GuideBuilder: WARNING - File stability check failed, proceeding anyway")
 
             # Get the expected frame count for the previous segment from orchestrator data
+            # IMPORTANT: Account for context frames that were added to segments after the first
             expected_prev_segment_frames = None
             if segment_idx_for_logging > 0 and full_orchestrator_payload:
                 segment_frames_expanded = full_orchestrator_payload.get("segment_frames_expanded", [])
+                frame_overlap_expanded = full_orchestrator_payload.get("frame_overlap_expanded", [])
                 if segment_idx_for_logging - 1 < len(segment_frames_expanded):
-                    expected_prev_segment_frames = segment_frames_expanded[segment_idx_for_logging - 1]
-                    dprint(f"GuideBuilder: Previous segment expected to have {expected_prev_segment_frames} frames based on orchestrator data")
+                    base_frames = segment_frames_expanded[segment_idx_for_logging - 1]
+                    # For segments after the first, they generate extra context frames
+                    # Previous segment index is segment_idx_for_logging - 1
+                    prev_seg_idx = segment_idx_for_logging - 1
+                    if prev_seg_idx > 0 and prev_seg_idx - 1 < len(frame_overlap_expanded):
+                        # Previous segment had context frames added
+                        prev_seg_context = frame_overlap_expanded[prev_seg_idx - 1]
+                        expected_prev_segment_frames = base_frames + prev_seg_context
+                        dprint(f"GuideBuilder: Previous segment (idx {prev_seg_idx}) expected to have {expected_prev_segment_frames} frames ({base_frames} base + {prev_seg_context} context)")
+                    else:
+                        # Previous segment was segment 0, no context added
+                        expected_prev_segment_frames = base_frames
+                        dprint(f"GuideBuilder: Previous segment (idx {prev_seg_idx}) expected to have {expected_prev_segment_frames} frames (no context)")
+
 
             # If we have the expected frame count, use it directly
             if expected_prev_segment_frames and expected_prev_segment_frames > 0:
