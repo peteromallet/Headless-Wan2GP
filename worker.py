@@ -832,9 +832,9 @@ def parse_phase_config(phase_config: dict, num_inference_steps: int, task_id: st
             import traceback
             headless_logger.debug(f"Patch prep error traceback: {traceback.format_exc()}", task_id=task_id)
 
-    # Don't set lora_names here - let lora_utils.py populate it from additional_loras
+    # Initialize lora_names as empty - let lora_utils.py populate it from additional_loras
     # to avoid duplication of URLs and filenames
-    # result["lora_names"] = all_lora_urls
+    result["lora_names"] = []
     result["lora_multipliers"] = lora_multipliers
     result["additional_loras"] = additional_loras
 
@@ -844,7 +844,7 @@ def parse_phase_config(phase_config: dict, num_inference_steps: int, task_id: st
         f"phase_config parsed: {num_phases} phases, "
         f"steps={steps_per_phase}, "
         f"thresholds=[{switch_threshold}, {switch_threshold2}], "
-        f"{len(all_lora_urls)} LoRAs, "
+        f"{len(additional_loras)} LoRAs, "
         f"lora_multipliers={lora_multipliers}",
         task_id=task_id
     )

@@ -195,7 +195,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 travel_logger.info(
                     f"phase_config parsed: {parsed['guidance_phases']} phases, "
                     f"steps={total_steps}, "
-                    f"{len(parsed['lora_names'])} LoRAs, "
+                    f"{len(parsed.get('additional_loras', {}))} LoRAs, "
                     f"lora_multipliers={parsed['lora_multipliers']}",
                     task_id=orchestrator_task_id_str
                 )
