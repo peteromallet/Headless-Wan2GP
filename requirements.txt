@@ -9,16 +9,17 @@ safetensors>=0.4.0  # For LoRA integrity verification
 # opencv-python-headless  # REMOVED: Conflicts with Wan2GP's opencv-python
 # librosa  # REMOVED: Conflicts with Wan2GP's librosa==0.11.0
 # Pillow  # REMOVED: Usually included with other packages
-mediapipe
+mediapipe>=0.10.0
 
 # ===== Web UI and API =====
-fastapi  # Often needed for gradio apps
-python-multipart  # For file uploads
+fastapi>=0.120.0  # Often needed for gradio apps
+python-multipart>=0.0.20  # For file uploads
 
 # ===== Database and Storage =====
-supabase>=2.0.0  # For Supabase DB (via RPC) and Storage - specify minimum version
-python-dotenv  # For .env file management
+supabase>=2.23.0  # For Supabase DB (via RPC) and Storage
+pydantic>=2.12.0,<3.0  # Required for supabase-auth compatibility (must be v2.x)
+python-dotenv>=1.0.0  # For .env file management
 
 # ===== Utilities =====
 # requests  # REMOVED: Usually included with other packages
-replicate  # For magic edit tasks via Replicate API
+replicate>=1.0.0  # For magic edit tasks via Replicate API
