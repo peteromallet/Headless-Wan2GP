@@ -1084,14 +1084,19 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         generation_params.setdefault("guidance_scale", 1)
         generation_params.setdefault("num_inference_steps", 12)
         generation_params.setdefault("video_length", 1)  # Single image output
-        
+
+        # Optional custom system prompt
+        if "system_prompt" in db_task_params and db_task_params["system_prompt"]:
+            generation_params["system_prompt"] = db_task_params["system_prompt"]
+            headless_logger.info(f"[QWEN_EDIT] Using custom system prompt: {db_task_params['system_prompt'][:100]}...", task_id=task_id)
+
         headless_logger.info(
             f"[QWEN_EDIT] Configuration: resolution={generation_params.get('resolution')}, "
             f"steps={generation_params.get('num_inference_steps')}",
             task_id=task_id
         )
 
-        # Add Lightning LoRA at 0.6 strength
+        # Add Lightning LoRA at 0.75 strength
         try:
             base_wan2gp_dir = Path(wan2gp_path)
         except Exception:
@@ -1504,6 +1509,11 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         generation_params.setdefault("guidance_scale", 1)
         generation_params.setdefault("num_inference_steps", 12)
         generation_params.setdefault("video_length", 1)  # Single image output
+
+        # Optional custom system prompt
+        if "system_prompt" in db_task_params and db_task_params["system_prompt"]:
+            generation_params["system_prompt"] = db_task_params["system_prompt"]
+            headless_logger.info(f"[QWEN_STYLE] Using custom system prompt: {db_task_params['system_prompt'][:100]}...", task_id=task_id)
 
         # Resolve LoRA directory for Qwen using absolute path (CWD may be changed to Wan2GP)
         try:

@@ -222,14 +222,25 @@ class QwenImagePipeline(): #DiffusionPipeline
         image: Optional[torch.Tensor] = None,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
+        system_prompt: Optional[str] = None,
     ):
         device = device or self._execution_device
         dtype = dtype or self.text_encoder.dtype
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
 
-        template = self.prompt_template_encode
-        drop_idx = self.prompt_template_encode_start_idx
+        # Use custom system prompt if provided, otherwise use default
+        if system_prompt is not None:
+            if self.processor is not None:
+                template = f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>{{}}<|im_end|>\n<|im_start|>assistant\n"
+                drop_idx = len(self.tokenizer.encode(f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n"))
+            else:
+                template = f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{{}}<|im_end|>\n<|im_start|>assistant\n"
+                drop_idx = len(self.tokenizer.encode(f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n"))
+        else:
+            template = self.prompt_template_encode
+            drop_idx = self.prompt_template_encode_start_idx
+
         txt = [template.format(e) for e in prompt]
 
         if self.processor is not None and image is not None:
@@ -306,7 +317,7 @@ class QwenImagePipeline(): #DiffusionPipeline
         batch_size = len(prompt) if prompt_embeds is None else prompt_embeds.shape[0]
 
         if prompt_embeds is None:
-            prompt_embeds, prompt_embeds_mask = self._get_qwen_prompt_embeds(prompt, image, device)
+            prompt_embeds, prompt_embeds_mask = self._get_qwen_prompt_embeds(prompt, image, device, system_prompt=system_prompt)
 
         _, seq_len, _ = prompt_embeds.shape
         prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
@@ -567,6 +578,7 @@ class QwenImagePipeline(): #DiffusionPipeline
         denoising_strength = 0,
         callback=None,
         pipeline=None,
+        system_prompt: Optional[str] = None,
         loras_slists=None,
         joint_pass= True,
         lora_inpaint = False,
