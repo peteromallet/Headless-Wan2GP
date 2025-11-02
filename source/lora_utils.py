@@ -4,6 +4,62 @@ Shared utilities for LoRA detection and parameter optimization.
 This module provides consistent CausVid and LightI2X LoRA detection across
 headless_model_management.py and travel_between_images.py, ensuring both
 use the same sophisticated parameter precedence logic.
+
+═══════════════════════════════════════════════════════════════════════════
+                         LoRA Processing Pipeline
+═══════════════════════════════════════════════════════════════════════════
+
+DATA FLOW:
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 1. INPUT SOURCES (multiple entry points)                                │
+│    - Model preset JSON: model.loras, model.loras_multipliers            │
+│    - Task params: activated_loras, loras_multipliers                    │
+│    - Phase config: phases[].loras (URLs with multipliers)               │
+│    - Direct task setup: qwen_image_edit, qwen_image_style, etc.         │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 2. PARSE STAGE (worker.py)                                              │
+│    - parse_phase_config() → additional_loras dict {url: multiplier}     │
+│    - Task handlers → lora_names list (local filenames or URLs)          │
+│    OUTPUT: lora_names=[], additional_loras={urls}                       │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 3. NORMALIZE STAGE (lora_utils.normalize_lora_format)                   │
+│    - Convert all formats → standard internal format                     │
+│    - activated_loras → lora_names (list of filenames)                   │
+│    - loras_multipliers → lora_multipliers (list)                        │
+│    OUTPUT: lora_names=[], lora_multipliers=[], additional_loras={}      │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 4. DOWNLOAD STAGE (lora_utils._process_additional_loras)                │
+│    - Download URLs → local filenames                                    │
+│    - Merge downloaded files into lora_names                             │
+│    OUTPUT: lora_names=[filenames], additional_loras deleted             │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 5. WGP FORMAT STAGE (headless_wgp.py)                                   │
+│    - lora_names → activated_loras (list for WGP)                        │
+│    - lora_multipliers → loras_multipliers (space-separated string)      │
+│    OUTPUT: WGP-compatible format                                        │
+└─────────────────────────────────────────────────────────────────────────┘
+
+CRITICAL INVARIANTS:
+- After stage 2: lora_names should be EMPTY, additional_loras has URLs
+- After stage 4: lora_names has ONLY local filenames, NO URLs
+- After stage 5: activated_loras is WGP format (list), loras_multipliers is string
+
+MAIN ENTRY POINT: process_all_loras() - coordinates stages 3-4
+
+TERMINOLOGY:
+- lora_names: Internal list format (local filenames)
+- activated_loras: WGP format (list, may contain URLs before normalize)
+- additional_loras: Download queue dict {url: multiplier}
+- lora_multipliers: Internal format (list of floats or phase strings)
+- loras_multipliers: WGP format (space-separated string, with 's')
 """
 
 import os
@@ -264,20 +320,26 @@ def apply_lora_parameter_optimization(
 def normalize_lora_format(params: Dict[str, Any], task_id: str = "unknown", dprint=None) -> Dict[str, Any]:
     """
     Normalize LoRA parameters from various input formats to standard format.
-    
+
+    STAGE: 3 - NORMALIZE (see module docstring for pipeline overview)
+
     Handles:
     - activated_loras (string/list) → lora_names (list)
     - loras_multipliers (string) → lora_multipliers (list of floats)
     - additional_loras (dict) → processed and downloaded
-    
+
     Args:
         params: Parameters dict to normalize
         task_id: Task ID for logging
         dprint: Optional debug print function
-        
+
     Returns:
         Updated parameters dict with normalized LoRA format
+
+    POSTCONDITION: lora_names contains only local filenames (no URLs)
     """
+    if dprint:
+        dprint(f"[LORA_NORMALIZE] Task {task_id}: INPUT - lora_names={params.get('lora_names', [])}, additional_loras={list(params.get('additional_loras', {}).keys())}")
     # Convert activated_loras to lora_names
     if "activated_loras" in params:
         loras = params["activated_loras"]
@@ -379,10 +441,18 @@ def normalize_lora_format(params: Dict[str, Any], task_id: str = "unknown", dpri
         
         params["lora_names"] = current_loras
         params["lora_multipliers"] = current_multipliers
-        
+
         # Remove processed additional_loras
         del params["additional_loras"]
-    
+
+    # VALIDATION: Check postconditions
+    final_lora_names = params.get("lora_names", [])
+    if dprint and final_lora_names:
+        urls_found = [name for name in final_lora_names if isinstance(name, str) and name.startswith("http")]
+        if urls_found:
+            dprint(f"[LORA_NORMALIZE] ⚠️  Task {task_id}: WARNING - URLs still in lora_names after normalize (should be filenames): {urls_found}")
+        dprint(f"[LORA_NORMALIZE] Task {task_id}: OUTPUT - lora_names={final_lora_names}")
+
     return params
 
 
