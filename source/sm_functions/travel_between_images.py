@@ -1314,8 +1314,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "cfg_zero_step": orchestrator_payload.get("cfg_zero_step", -1),
                 "params_json_str_override": orchestrator_payload.get("params_json_str_override"),
                 "fps_helpers": orchestrator_payload.get("fps_helpers", 16),
-                "fade_in_params_json_str": orchestrator_payload.get("fade_in_params_json_str", '{"low_point":0.0,"high_point":1.0,"curve_type":"ease_in_out","duration_factor":0.0}'),
-                "fade_out_params_json_str": orchestrator_payload.get("fade_out_params_json_str", '{"low_point":0.0,"high_point":1.0,"curve_type":"ease_in_out","duration_factor":0.0}'),
                 "subsequent_starting_strength_adjustment": orchestrator_payload.get("subsequent_starting_strength_adjustment", 0.0),
                 "desaturate_subsequent_starting_frames": orchestrator_payload.get("desaturate_subsequent_starting_frames", 0.0),
                 "adjust_brightness_subsequent_starting_frames": orchestrator_payload.get("adjust_brightness_subsequent_starting_frames", 0.0),
@@ -1693,26 +1691,13 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         dprint(f"[SEGMENT_DEBUG]   use_causvid_lora: {full_orchestrator_payload.get('apply_causvid', False)}")
 
         fps_helpers = full_orchestrator_payload.get("fps_helpers", 16)
-        fade_in_duration_str = full_orchestrator_payload["fade_in_params_json_str"]
-        fade_out_duration_str = full_orchestrator_payload["fade_out_params_json_str"]
-        
+
         # Define gray_frame_bgr here for use in subsequent segment strength adjustment
         gray_frame_bgr = sm_create_color_frame(parsed_res_wh, (128, 128, 128))
 
-
-
-        try: # Parsing fade params
-            fade_in_p = json.loads(fade_in_duration_str)
-            fi_low, fi_high, fi_curve, fi_factor = float(fade_in_p.get("low_point",0)), float(fade_in_p.get("high_point",1)), str(fade_in_p.get("curve_type","ease_in_out")), float(fade_in_p.get("duration_factor",0))
-        except Exception as e_fade_in:
-            fi_low, fi_high, fi_curve, fi_factor = 0.0,1.0,"ease_in_out",0.0
-            dprint(f"Seg {segment_idx} Warn: Using default fade-in params due to parse error on '{fade_in_duration_str}': {e_fade_in}")
-        try:
-            fade_out_p = json.loads(fade_out_duration_str)
-            fo_low, fo_high, fo_curve, fo_factor = float(fade_out_p.get("low_point",0)), float(fade_out_p.get("high_point",1)), str(fade_out_p.get("curve_type","ease_in_out")), float(fade_out_p.get("duration_factor",0))
-        except Exception as e_fade_out:
-            fo_low, fo_high, fo_curve, fo_factor = 0.0,1.0,"ease_in_out",0.0
-            dprint(f"Seg {segment_idx} Warn: Using default fade-out params due to parse error on '{fade_out_duration_str}': {e_fade_out}")
+        # Hardcoded fade parameters (duration_factor=0.0 means no fading)
+        fi_low, fi_high, fi_curve, fi_factor = 0.0, 1.0, "ease_in_out", 0.0
+        fo_low, fo_high, fo_curve, fo_factor = 0.0, 1.0, "ease_in_out", 0.0
 
         if is_first_new_segment_after_continue:
             path_to_previous_segment_video_output_for_guide = full_orchestrator_payload.get("continue_from_video_resolved_path")
