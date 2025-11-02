@@ -113,12 +113,13 @@ class model_factory():
         loras_slists = None,
         batch_size = 1,
         video_prompt_type = "",
-        VAE_tile_size = None, 
+        VAE_tile_size = None,
         joint_pass = True,
         sample_solver='default',
         denoising_strength = 1.,
         model_mode = 0,
         outpainting_dims = None,
+        system_prompt = None,
         **bbargs
     ):
         # Generate with different aspect ratios
@@ -210,6 +211,7 @@ class model_factory():
             generator=torch.Generator(device="cuda").manual_seed(seed),
             lora_inpaint = image_mask is not None and model_mode == 1,
             outpainting_dims = outpainting_dims,
+            system_prompt = system_prompt,
         )        
         if image is None: return None
         return image.transpose(0, 1)
