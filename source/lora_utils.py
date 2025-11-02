@@ -621,7 +621,13 @@ def _download_lora_from_url(url: str, task_id: str, dprint=None) -> str:
     
     if dprint:
         dprint(f"[LORA_DOWNLOAD] Task {task_id}: Downloading {local_filename} to {lora_dir} from {url}")
-    
+
+    # Normalize HuggingFace URLs: convert /blob/ to /resolve/ for direct downloads
+    if "huggingface.co/" in url and "/blob/" in url:
+        url = url.replace("/blob/", "/resolve/")
+        if dprint:
+            dprint(f"[LORA_DOWNLOAD] Task {task_id}: Normalized HuggingFace URL from /blob/ to /resolve/")
+
     # Check if file already exists
     if not os.path.isfile(local_path):
         if url.startswith("https://huggingface.co/") and "/resolve/main/" in url:
@@ -839,6 +845,8 @@ def process_all_loras(params: Dict[str, Any], task_params: Dict[str, Any], model
                 params["additional_loras"] = parsed["additional_loras"]
                 if dprint:
                     dprint(f"[LORA_PROCESS] Task {task_id}: Using phase_config additional_loras: {len(parsed['additional_loras'])} LoRAs")
+                # Re-normalize to download URLs from phase_config additional_loras
+                params = normalize_lora_format(params, task_id, dprint)
 
         except Exception as e:
             if dprint:
