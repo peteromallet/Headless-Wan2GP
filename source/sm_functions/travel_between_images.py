@@ -916,16 +916,20 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 segment_total_frames = expanded_segment_frames[idx]
 
                 if idx == 0 and not orchestrator_payload.get("continue_from_video_resolved_path"):
-                    # First segment: all frames (including both anchor frames)
-                    flows_needed = segment_total_frames
+                    # First segment: all frames
+                    segment_flow_offsets.append(0)
+                    total_flow_frames = segment_total_frames
+                    dprint(f"[STRUCTURE_VIDEO] Segment {idx}: offset=0, adds {segment_total_frames} frames, total={total_flow_frames}")
                 else:
-                    # Subsequent segments: exclude overlap frames (they reuse previous segment's flows)
+                    # Subsequent segments: Structure frames are REUSED in overlap region
+                    # Segment generates (segment_total_frames + overlap) frames but reads structure
+                    # starting from (current_position - overlap) to reuse overlap structure frames
                     overlap = expanded_frame_overlap[idx - 1] if idx > 0 else 0
-                    flows_needed = segment_total_frames - overlap
-
-                segment_flow_offsets.append(total_flow_frames)
-                total_flow_frames += max(0, flows_needed)
-                dprint(f"[STRUCTURE_VIDEO] Segment {idx}: {flows_needed} flow frames needed, offset {segment_flow_offsets[-1]}")
+                    segment_offset = total_flow_frames - overlap
+                    segment_flow_offsets.append(segment_offset)
+                    # Add only non-overlapping frames to total structure length
+                    total_flow_frames += segment_total_frames
+                    dprint(f"[STRUCTURE_VIDEO] Segment {idx}: offset={segment_offset}, overlap={overlap}, adds {segment_total_frames} new frames, total={total_flow_frames}")
 
             travel_logger.info(f"Structure video processing: {total_flow_frames} total frames needed across {num_segments} segments", task_id=orchestrator_task_id_str)
 
@@ -1672,9 +1676,14 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         # Calculate total frames for this segment once and reuse
         base_duration = segment_params.get("segment_frames_target", full_orchestrator_payload["segment_frames_expanded"][segment_idx])
         frame_overlap_from_previous = segment_params.get("frame_overlap_from_previous", 0)
-        # The user-facing 'segment_frames_target' should represent the total length of the segment,
-        # not just the new content. The overlap is handled internally for transition.
-        total_frames_for_segment = base_duration
+
+        # For segments after the first, add context frames from previous segment
+        # This allows the model to see the end of the previous segment during generation
+        # providing true temporal continuity rather than post-generation crossfading
+        if frame_overlap_from_previous > 0:
+            total_frames_for_segment = base_duration + frame_overlap_from_previous
+        else:
+            total_frames_for_segment = base_duration
 
         dprint(f"[SEGMENT_DEBUG] Segment {segment_idx} (Task {segment_task_id_str}): FRAME ANALYSIS")
         dprint(f"[SEGMENT_DEBUG]   base_duration (segment_frames_target): {base_duration}")
