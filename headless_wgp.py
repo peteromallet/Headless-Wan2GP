@@ -1181,8 +1181,8 @@ class WanOrchestrator:
                     # Phase-config format: ["1.0;0", "0;1.0"] → space-separated "1.0;0 0;1.0"
                     loras_multipliers_str = " ".join(str(m) for m in multipliers_to_convert)
                 else:
-                    # Regular format: [1.0, 0.8] → comma-separated "1.0,0.8"
-                    loras_multipliers_str = ",".join(str(m) for m in multipliers_to_convert)
+                    # Regular format: [1.0, 0.8] → space-separated "1.0 0.8"
+                    loras_multipliers_str = " ".join(str(m) for m in multipliers_to_convert)
             else:
                 loras_multipliers_str = ""
 
