@@ -236,6 +236,139 @@ def _cleanup_temporary_files(task_id: str = "unknown") -> None:
     headless_logger.debug(f"Temporary file cleanup completed (most temp files auto-cleaned by their creators)", task_id=task_id)
 
 # -----------------------------------------------------------------------------
+# Qwen Image Edit Helper Functions
+# -----------------------------------------------------------------------------
+
+def cap_qwen_resolution(resolution_str: str, task_id: str) -> str:
+    """
+    Cap resolution to 1200px max dimension while maintaining aspect ratio.
+    
+    This ensures Qwen tasks stay within the 1200px limit documented in QWEN_EDIT_TASKS.md.
+    
+    Args:
+        resolution_str: Input resolution (e.g., "2048x1536")
+        task_id: Task ID for logging
+        
+    Returns:
+        Capped resolution string (e.g., "1200x900") or None if invalid input
+    """
+    max_dimension = 1200
+    
+    if not resolution_str or 'x' not in resolution_str:
+        return None
+    
+    try:
+        width, height = map(int, resolution_str.split('x'))
+    except ValueError:
+        headless_logger.warning(f"Invalid resolution format: {resolution_str}", task_id=task_id)
+        return None
+    
+    if width > max_dimension or height > max_dimension:
+        ratio = min(max_dimension / width, max_dimension / height)
+        width = int(width * ratio)
+        height = int(height * ratio)
+        capped = f"{width}x{height}"
+        headless_logger.info(
+            f"Resolution capped from {resolution_str} to {capped} (max 1200px)",
+            task_id=task_id
+        )
+        return capped
+    
+    return resolution_str
+
+
+def create_qwen_masked_composite(
+    image_url: str,
+    mask_url: str,
+    task_id: str,
+    output_dir: Path
+) -> str:
+    """
+    Create composite image with green overlay for Qwen inpainting/annotation tasks.
+    
+    Process (matches QWEN_EDIT_TASKS.md exactly):
+    1. Download image and mask
+    2. Resize image to max 1200px (maintain aspect ratio)
+    3. Resize mask to match image size
+    4. Apply binary threshold to mask (0 or 255) for crisp edges
+    5. Create pure green (#00FF00) overlay
+    6. Composite: green where mask is white, original where mask is black
+    7. Save as JPEG (95% quality)
+    8. Return local path
+    
+    Args:
+        image_url: URL of original image
+        mask_url: URL of mask (white=edit areas, black=preserve areas)
+        task_id: Task ID for logging
+        output_dir: Directory to save composite
+        
+    Returns:
+        Local path to composite image
+    """
+    from PIL import Image
+    import requests
+    from io import BytesIO
+    
+    try:
+        # Download original image
+        headless_logger.debug(f"Downloading image from {image_url}", task_id=task_id)
+        img_response = requests.get(image_url, timeout=30)
+        img_response.raise_for_status()
+        image = Image.open(BytesIO(img_response.content)).convert('RGB')
+        
+        # Resize image to max 1200px (maintain aspect ratio)
+        max_dimension = 1200
+        width, height = image.size
+        if width > max_dimension or height > max_dimension:
+            ratio = min(max_dimension / width, max_dimension / height)
+            new_width = int(width * ratio)
+            new_height = int(height * ratio)
+            image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            headless_logger.debug(
+                f"Resized image from {width}x{height} to {new_width}x{new_height}",
+                task_id=task_id
+            )
+            width, height = new_width, new_height
+        
+        # Download mask
+        headless_logger.debug(f"Downloading mask from {mask_url}", task_id=task_id)
+        mask_response = requests.get(mask_url, timeout=30)
+        mask_response.raise_for_status()
+        mask = Image.open(BytesIO(mask_response.content)).convert('L')
+        
+        # Resize mask to match image size
+        if mask.size != (width, height):
+            mask = mask.resize((width, height), Image.Resampling.LANCZOS)
+            headless_logger.debug(f"Resized mask to match image: {width}x{height}", task_id=task_id)
+        
+        # Apply binary threshold to mask (prevents graininess on edges)
+        # White (255) = areas to edit, Black (0) = areas to preserve
+        mask = mask.point(lambda x: 0 if x < 128 else 255)
+        
+        # Create pure green overlay (#00FF00)
+        green_overlay = Image.new('RGB', (width, height), (0, 255, 0))
+        
+        # Composite: green where mask is white, original where mask is black
+        composite = Image.composite(green_overlay, image, mask)
+        
+        # Save as JPEG with 95% quality
+        output_dir.mkdir(parents=True, exist_ok=True)
+        composite_filename = f"inpaint_composite_{task_id}.jpg"
+        composite_path = output_dir / composite_filename
+        composite.save(composite_path, 'JPEG', quality=95)
+        
+        headless_logger.info(
+            f"Created green mask composite: {composite_path} ({width}x{height})",
+            task_id=task_id
+        )
+        
+        return str(composite_path)
+        
+    except Exception as e:
+        headless_logger.error(f"Failed to create masked composite: {e}", task_id=task_id)
+        raise ValueError(f"Composite image creation failed: {e}")
+
+# -----------------------------------------------------------------------------
 # Phase Config Model Patching Functions
 # -----------------------------------------------------------------------------
 
@@ -757,14 +890,14 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             "hunyuan": "hunyuan",
             "ltxv": "ltxv_13B",
             "join_clips": "lightning_baseline_2_2_2",  # Join clips uses Lightning baseline for fast generation
-            "inpaint_frames": "lightning_baseline_2_2_2"  # Inpaint frames uses Lightning baseline for fast generation
+            "inpaint_frames": "lightning_baseline_2_2_2",  # Inpaint frames uses Lightning baseline for fast generation
+            # Qwen Image Edit task types (all use qwen_image_edit_20B model)
+            "qwen_image_edit": "qwen_image_edit_20B",  # Basic image editing with optional LoRAs
+            "qwen_image_style": "qwen_image_edit_20B",  # Style transfer between images
+            "image_inpaint": "qwen_image_edit_20B",  # Inpainting with green mask overlay
+            "annotated_image_edit": "qwen_image_edit_20B"  # Scene annotation editing
         }
-        # Custom mapping for Qwen image style tasks
-        if task_type == "qwen_image_style":
-            # Use Qwen Image Edit base for style transfer via image guide
-            model = "qwen_image_edit_20B"
-        else:
-            model = task_type_to_model.get(task_type, "t2v")  # Default to T2V
+        model = task_type_to_model.get(task_type, "t2v")  # Default to T2V
     
     # Create clean parameters dict for generation
     generation_params = {}
@@ -815,6 +948,13 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         # Special flags
         "apply_reward_lora",
         "override_profile",
+        
+        # Qwen Image Edit parameters (QWEN_EDIT_TASKS.md)
+        "image", "image_url", "mask_url",
+        "style_reference_image", "subject_reference_image",
+        "style_reference_strength", "subject_strength", 
+        "subject_description", "in_this_scene",
+        "output_format", "enable_base64_output", "enable_sync_mode",
     }
     
     # Copy whitelisted parameters with field name mapping
@@ -893,8 +1033,258 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
                 generation_params["lora_multipliers"] = [float(x.strip()) for x in multipliers.split(",") if x.strip()]
         # Keep as-is if already a list
 
-    # Specialized handling for Qwen Image Style tasks
-    if task_type == "qwen_image_style":
+    # =========================================================================
+    # QWEN IMAGE EDIT TASK HANDLERS (QWEN_EDIT_TASKS.md)
+    # =========================================================================
+    # All Qwen tasks use qwen_image_edit_20B model with these common settings:
+    # - video_prompt_type="KI"
+    # - sample_solver="lightning"
+    # - guidance_scale=1
+    # - num_inference_steps=12
+    # - video_length=1 (single image output)
+    # - Resolution capped at 1200px max dimension
+    
+    # -------------------------------------------------------------------------
+    # 1. qwen_image_edit - Basic image editing with optional LoRAs
+    # -------------------------------------------------------------------------
+    if task_type == "qwen_image_edit":
+        headless_logger.info(f"[QWEN_EDIT] Processing qwen_image_edit task", task_id=task_id)
+        
+        # Download image to image_guide
+        image_url = db_task_params.get("image") or db_task_params.get("image_url")
+        if not image_url:
+            raise ValueError(f"Task {task_id}: 'image' or 'image_url' parameter is required for qwen_image_edit")
+        
+        downloads_dir = Path("outputs/qwen_edit_images")
+        downloads_dir.mkdir(parents=True, exist_ok=True)
+        local_image_path = sm_download_image_if_url(
+            image_url, downloads_dir, 
+            task_id_for_logging=task_id, 
+            debug_mode=debug_mode, 
+            descriptive_name="edit_image"
+        )
+        generation_params["image_guide"] = str(local_image_path)
+        headless_logger.info(f"[QWEN_EDIT] Using image_guide: {local_image_path}", task_id=task_id)
+        
+        # Cap resolution to 1200px max dimension
+        if "resolution" in db_task_params:
+            capped_res = cap_qwen_resolution(db_task_params["resolution"], task_id)
+            if capped_res:
+                generation_params["resolution"] = capped_res
+        
+        # Default Qwen settings (let model config handle solver)
+        generation_params.setdefault("video_prompt_type", "KI")
+        generation_params.setdefault("guidance_scale", 1)
+        generation_params.setdefault("num_inference_steps", 12)
+        generation_params.setdefault("video_length", 1)  # Single image output
+        
+        headless_logger.info(
+            f"[QWEN_EDIT] Configuration: resolution={generation_params.get('resolution')}, "
+            f"steps={generation_params.get('num_inference_steps')}",
+            task_id=task_id
+        )
+        
+        # LoRAs handled via additional_loras (already processed by whitelist)
+        # Format: db_task_params["loras"] = [{"url": "...", "strength": 1.0}]
+    
+    # -------------------------------------------------------------------------
+    # 3. image_inpaint - Inpainting with green mask overlay
+    # -------------------------------------------------------------------------
+    elif task_type == "image_inpaint":
+        headless_logger.info(f"[QWEN_INPAINT] Processing image_inpaint task", task_id=task_id)
+        
+        # Get image and mask URLs (support both 'image_url' and 'image' params)
+        image_url = db_task_params.get("image_url") or db_task_params.get("image")
+        mask_url = db_task_params.get("mask_url")
+        
+        if not image_url:
+            raise ValueError(f"Task {task_id}: 'image_url' or 'image' parameter is required for image_inpaint")
+        if not mask_url:
+            raise ValueError(f"Task {task_id}: 'mask_url' parameter is required for image_inpaint")
+        
+        # Create composite image with green overlay
+        composite_dir = Path("outputs/qwen_inpaint_composites")
+        composite_dir.mkdir(parents=True, exist_ok=True)
+        
+        headless_logger.info(f"[QWEN_INPAINT] Creating green mask composite", task_id=task_id)
+        composite_path = create_qwen_masked_composite(
+            image_url=image_url,
+            mask_url=mask_url,
+            task_id=task_id,
+            output_dir=composite_dir
+        )
+        
+        generation_params["image_guide"] = str(composite_path)
+        headless_logger.info(f"[QWEN_INPAINT] Using composite as image_guide: {composite_path}", task_id=task_id)
+        
+        # Cap resolution
+        if "resolution" in db_task_params:
+            capped_res = cap_qwen_resolution(db_task_params["resolution"], task_id)
+            if capped_res:
+                generation_params["resolution"] = capped_res
+        
+        # Default Qwen settings (let model config handle solver)
+        generation_params.setdefault("video_prompt_type", "KI")
+        generation_params.setdefault("guidance_scale", 1)
+        generation_params.setdefault("num_inference_steps", 12)
+        generation_params.setdefault("video_length", 1)
+        
+        # Add default inpainting LoRA
+        try:
+            base_wan2gp_dir = Path(wan2gp_path)
+        except Exception:
+            base_wan2gp_dir = Path(__file__).parent / "Wan2GP"
+        qwen_lora_dir = base_wan2gp_dir / "loras_qwen"
+        qwen_lora_dir.mkdir(parents=True, exist_ok=True)
+        
+        inpaint_repo = "ostris/qwen_image_edit_inpainting"
+        inpaint_fname = "qwen_image_edit_inpainting.safetensors"
+        inpaint_target = qwen_lora_dir / inpaint_fname
+        
+        if not inpaint_target.exists():
+            try:
+                from huggingface_hub import hf_hub_download
+                headless_logger.info(f"[QWEN_INPAINT] Downloading inpainting LoRA: {inpaint_fname}", task_id=task_id)
+                dl_path = hf_hub_download(
+                    repo_id=inpaint_repo, 
+                    filename=inpaint_fname, 
+                    revision="main", 
+                    local_dir=str(qwen_lora_dir)
+                )
+                # Ensure file is at target location
+                from pathlib import Path as _P
+                _p = _P(dl_path)
+                if _p.exists() and _p.resolve() != inpaint_target.resolve():
+                    _p.replace(inpaint_target)
+            except Exception as e:
+                headless_logger.warning(f"[QWEN_INPAINT] Inpainting LoRA download failed: {e}", task_id=task_id)
+        
+        # Build LoRA configuration
+        lora_names = [inpaint_fname]
+        lora_mults = [1.0]
+        
+        # Add any additional LoRAs from params
+        additional_loras_param = db_task_params.get("loras", [])
+        if additional_loras_param:
+            for lora in additional_loras_param:
+                if isinstance(lora, dict):
+                    lora_path = lora.get("path") or lora.get("url")
+                    lora_scale = lora.get("scale") or lora.get("strength", 1.0)
+                    if lora_path:
+                        lora_filename = Path(lora_path).name
+                        if lora_filename not in lora_names:
+                            lora_names.append(lora_filename)
+                            lora_mults.append(float(lora_scale))
+        
+        generation_params["lora_names"] = lora_names
+        generation_params["lora_multipliers"] = lora_mults
+        headless_logger.info(
+            f"[QWEN_INPAINT] LoRA configuration: {lora_names} with multipliers {lora_mults}",
+            task_id=task_id
+        )
+    
+    # -------------------------------------------------------------------------
+    # 4. annotated_image_edit - Scene annotation editing
+    # -------------------------------------------------------------------------
+    elif task_type == "annotated_image_edit":
+        headless_logger.info(f"[QWEN_ANNOTATE] Processing annotated_image_edit task", task_id=task_id)
+        
+        # Get image and mask URLs (support both 'image_url' and 'image' params)
+        image_url = db_task_params.get("image_url") or db_task_params.get("image")
+        mask_url = db_task_params.get("mask_url")
+        
+        if not image_url:
+            raise ValueError(f"Task {task_id}: 'image_url' or 'image' parameter is required for annotated_image_edit")
+        if not mask_url:
+            raise ValueError(f"Task {task_id}: 'mask_url' parameter is required for annotated_image_edit")
+        
+        # Create composite image with green overlay
+        composite_dir = Path("outputs/qwen_annotate_composites")
+        composite_dir.mkdir(parents=True, exist_ok=True)
+        
+        headless_logger.info(f"[QWEN_ANNOTATE] Creating green mask composite", task_id=task_id)
+        composite_path = create_qwen_masked_composite(
+            image_url=image_url,
+            mask_url=mask_url,
+            task_id=task_id,
+            output_dir=composite_dir
+        )
+        
+        generation_params["image_guide"] = str(composite_path)
+        headless_logger.info(f"[QWEN_ANNOTATE] Using composite as image_guide: {composite_path}", task_id=task_id)
+        
+        # Cap resolution
+        if "resolution" in db_task_params:
+            capped_res = cap_qwen_resolution(db_task_params["resolution"], task_id)
+            if capped_res:
+                generation_params["resolution"] = capped_res
+        
+        # Default Qwen settings (let model config handle solver)
+        generation_params.setdefault("video_prompt_type", "KI")
+        generation_params.setdefault("guidance_scale", 1)
+        generation_params.setdefault("num_inference_steps", 12)
+        generation_params.setdefault("video_length", 1)
+        
+        # Add default annotation LoRA
+        try:
+            base_wan2gp_dir = Path(wan2gp_path)
+        except Exception:
+            base_wan2gp_dir = Path(__file__).parent / "Wan2GP"
+        qwen_lora_dir = base_wan2gp_dir / "loras_qwen"
+        qwen_lora_dir.mkdir(parents=True, exist_ok=True)
+        
+        annotate_repo = "peteromallet/random_junk"
+        annotate_fname = "in_scene_pure_squares_flipped_450_lr_000006700.safetensors"
+        annotate_target = qwen_lora_dir / annotate_fname
+        
+        if not annotate_target.exists():
+            try:
+                from huggingface_hub import hf_hub_download
+                headless_logger.info(f"[QWEN_ANNOTATE] Downloading annotation LoRA: {annotate_fname}", task_id=task_id)
+                dl_path = hf_hub_download(
+                    repo_id=annotate_repo, 
+                    filename=annotate_fname, 
+                    revision="main", 
+                    local_dir=str(qwen_lora_dir)
+                )
+                # Ensure file is at target location
+                from pathlib import Path as _P
+                _p = _P(dl_path)
+                if _p.exists() and _p.resolve() != annotate_target.resolve():
+                    _p.replace(annotate_target)
+            except Exception as e:
+                headless_logger.warning(f"[QWEN_ANNOTATE] Annotation LoRA download failed: {e}", task_id=task_id)
+        
+        # Build LoRA configuration
+        lora_names = [annotate_fname]
+        lora_mults = [1.0]
+        
+        # Add any additional LoRAs from params
+        additional_loras_param = db_task_params.get("loras", [])
+        if additional_loras_param:
+            for lora in additional_loras_param:
+                if isinstance(lora, dict):
+                    lora_path = lora.get("path") or lora.get("url")
+                    lora_scale = lora.get("scale") or lora.get("strength", 1.0)
+                    if lora_path:
+                        lora_filename = Path(lora_path).name
+                        if lora_filename not in lora_names:
+                            lora_names.append(lora_filename)
+                            lora_mults.append(float(lora_scale))
+        
+        generation_params["lora_names"] = lora_names
+        generation_params["lora_multipliers"] = lora_mults
+        headless_logger.info(
+            f"[QWEN_ANNOTATE] LoRA configuration: {lora_names} with multipliers {lora_mults}",
+            task_id=task_id
+        )
+    
+    # -------------------------------------------------------------------------
+    # 2. qwen_image_style - Style transfer between images
+    # -------------------------------------------------------------------------
+    elif task_type == "qwen_image_style":
+        headless_logger.info(f"[QWEN_STYLE] Processing qwen_image_style task", task_id=task_id)
+        
         # Ensure model is Qwen Image Edit
         model = "qwen_image_edit_20B"
 
@@ -956,11 +1346,17 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             except Exception as e:
                 dprint(f"[QWEN_STYLE] Failed to process reference image: {e}")
 
-        # Default settings tuned for Qwen style transfer
+        # Cap resolution to 1200px max dimension
+        if "resolution" in db_task_params:
+            capped_res = cap_qwen_resolution(db_task_params["resolution"], task_id)
+            if capped_res:
+                generation_params["resolution"] = capped_res
+
+        # Default settings tuned for Qwen style transfer (let model config handle solver)
         generation_params.setdefault("video_prompt_type", "KI")
-        generation_params.setdefault("sample_solver", "lightning")
         generation_params.setdefault("guidance_scale", 1)
         generation_params.setdefault("num_inference_steps", 12)
+        generation_params.setdefault("video_length", 1)  # Single image output
 
         # Resolve LoRA directory for Qwen using absolute path (CWD may be changed to Wan2GP)
         try:
@@ -1014,26 +1410,27 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         else:
             dprint(f"[QWEN_STYLE] Using local Lightning LoRA: {selected_lightning}")
 
-        # Ensure InStyle LoRA present in loras_qwen and attach at provided strength
-        instyle_repo = "peteromallet/Qwen-Image-Edit-InStyle"
-        instyle_fname = "InStyle-0.5.safetensors"
-        instyle_target = qwen_lora_dir / instyle_fname
-        if not instyle_target.exists():
+        # Ensure Style Transfer LoRA present in loras_qwen and attach at provided strength
+        # QWEN_EDIT_TASKS.md: https://huggingface.co/peteromallet/ad_motion_loras/style_transfer_qwen_edit_2_000011250.safetensors
+        style_repo = "peteromallet/ad_motion_loras"
+        style_fname = "style_transfer_qwen_edit_2_000011250.safetensors"
+        style_target = qwen_lora_dir / style_fname
+        if not style_target.exists():
             try:
                 from huggingface_hub import hf_hub_download  # type: ignore
-                dprint(f"[QWEN_STYLE] Fetching {instyle_fname} from {instyle_repo} into {qwen_lora_dir}")
-                dl_path2 = hf_hub_download(repo_id=instyle_repo, filename=instyle_fname, revision="main", local_dir=str(qwen_lora_dir))
+                headless_logger.info(f"[QWEN_STYLE] Fetching {style_fname} from {style_repo}", task_id=task_id)
+                dl_path2 = hf_hub_download(repo_id=style_repo, filename=style_fname, revision="main", local_dir=str(qwen_lora_dir))
                 try:
                     from pathlib import Path as _P
                     _p2 = _P(dl_path2)
-                    if _p2.exists() and _p2.resolve() != instyle_target.resolve():
-                        _p2.replace(instyle_target)
+                    if _p2.exists() and _p2.resolve() != style_target.resolve():
+                        _p2.replace(style_target)
                 except Exception:
                     pass
             except Exception as e:
-                dprint(f"[QWEN_STYLE] InStyle LoRA download failed: {e}")
+                headless_logger.warning(f"[QWEN_STYLE] Style Transfer LoRA download failed: {e}", task_id=task_id)
         else:
-            dprint(f"[QWEN_STYLE] InStyle LoRA already present at {instyle_target}")
+            headless_logger.debug(f"[QWEN_STYLE] Style Transfer LoRA already present at {style_target}", task_id=task_id)
 
         # Build LoRA lists
         lora_names = generation_params.get("lora_names", []) or []
@@ -1051,11 +1448,11 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
 
         # Add style transfer LoRA if style_strength > 0
         if style_strength > 0.0:
-            # Use InStyle LoRA for style transfer
-            if instyle_fname not in lora_names:
-                lora_names.append(instyle_fname)
+            # Use Style Transfer LoRA from ad_motion_loras
+            if style_fname not in lora_names:
+                lora_names.append(style_fname)
                 lora_mults.append(style_strength)
-                headless_logger.info(f"[QWEN_STYLE] Added style transfer LoRA: {instyle_fname} with strength {style_strength}", task_id=task_id)
+                headless_logger.info(f"[QWEN_STYLE] Added style transfer LoRA: {style_fname} with strength {style_strength}", task_id=task_id)
 
         # Add subject LoRA if subject_strength > 0
         if subject_strength > 0.0:
@@ -1843,7 +2240,9 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
     # Route simple generation tasks directly to HeadlessTaskQueue to eliminate blocking waits
     direct_queue_task_types = {
         "wan_2_2_t2i", "vace", "vace_21", "vace_22", "flux", "t2v", "t2v_22", 
-        "i2v", "i2v_22", "hunyuan", "ltxv", "generate_video"
+        "i2v", "i2v_22", "hunyuan", "ltxv", "generate_video",
+        # Qwen Image Edit tasks (QWEN_EDIT_TASKS.md)
+        "qwen_image_edit", "qwen_image_style", "image_inpaint", "annotated_image_edit"
     }
     
     if task_type in direct_queue_task_types and task_queue is not None:
