@@ -88,13 +88,36 @@ class model_factory():
         # offload.save_model(text_encoder, "text_encoder_quanto_fp16.safetensors", do_quantize= True)
 
         vae = offload.fast_load_transformers_model( os.path.join(checkpoint_dir,"qwen_vae.safetensors"), writable_tensors= True , modelClass=AutoencoderKLQwenImage, defaultConfigPath=os.path.join(checkpoint_dir,"qwen_vae_config.json"))
-        
+
         self.pipeline = QwenImagePipeline(vae, text_encoder, tokenizer, transformer, processor)
         self.vae=vae
         self.text_encoder=text_encoder
         self.tokenizer=tokenizer
         self.transformer=transformer
         self.processor = processor
+
+        # Warmup pass to pre-compile CUDA kernels and trigger cuDNN auto-tuning
+        # This prevents the ~100 second delay on the first real generation
+        print("🔥 Warming up Qwen model (compiling CUDA kernels)...")
+        try:
+            import time
+            warmup_start = time.time()
+            warmup_image = Image.new('RGB', (1200, 675), color='black')
+            _ = self.pipeline(
+                prompt="warmup",
+                image=[warmup_image],
+                width=1200,
+                height=675,
+                num_inference_steps=1,
+                num_images_per_prompt=1,
+                true_cfg_scale=1.0,
+                generator=torch.Generator(device="cuda").manual_seed(42),
+            )
+            warmup_time = time.time() - warmup_start
+            print(f"✅ Warmup completed in {warmup_time:.1f}s - subsequent generations will be fast!")
+        except Exception as e:
+            print(f"⚠️ Warmup failed (non-critical): {e}")
+            # Non-critical - first real generation will just be slower
 
     def generate(
         self,

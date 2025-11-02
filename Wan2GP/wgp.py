@@ -4549,6 +4549,7 @@ def generate_video(
     model_type,
     model_filename,
     mode,
+    system_prompt=None,
 ):
 
 
@@ -5289,6 +5290,7 @@ def generate_video(
                     image_guide= new_image_guide,
                     image_mask= new_image_mask,
                     outpainting_dims = outpainting_dims,
+                    system_prompt = system_prompt,
                 )
             except Exception as e:
                 if len(control_audio_tracks) > 0 or len(source_audio_tracks) > 0:
