@@ -339,7 +339,9 @@ def normalize_lora_format(params: Dict[str, Any], task_id: str = "unknown", dpri
     POSTCONDITION: lora_names contains only local filenames (no URLs)
     """
     if dprint:
-        dprint(f"[LORA_NORMALIZE] Task {task_id}: INPUT - lora_names={params.get('lora_names', [])}, additional_loras={list(params.get('additional_loras', {}).keys())}")
+        additional = params.get('additional_loras', {})
+        additional_keys = list(additional.keys()) if isinstance(additional, dict) else f"<non-dict: {type(additional).__name__}>"
+        dprint(f"[LORA_NORMALIZE] Task {task_id}: INPUT - lora_names={params.get('lora_names', [])}, additional_loras={additional_keys}")
     # Convert activated_loras to lora_names
     if "activated_loras" in params:
         loras = params["activated_loras"]
@@ -448,10 +450,14 @@ def normalize_lora_format(params: Dict[str, Any], task_id: str = "unknown", dpri
     # VALIDATION: Check postconditions
     final_lora_names = params.get("lora_names", [])
     if dprint and final_lora_names:
-        urls_found = [name for name in final_lora_names if isinstance(name, str) and name.startswith("http")]
+        urls_found = [name for name in final_lora_names if isinstance(name, str) and name.startswith(("http://", "https://", "ftp://"))]
         if urls_found:
-            dprint(f"[LORA_NORMALIZE] ⚠️  Task {task_id}: WARNING - URLs still in lora_names after normalize (should be filenames): {urls_found}")
-        dprint(f"[LORA_NORMALIZE] Task {task_id}: OUTPUT - lora_names={final_lora_names}")
+            dprint(f"[LORA_NORMALIZE] ⚠️  Task {task_id}: Note - URLs in lora_names after normalize (may indicate download failure or WGP-handled URLs): {urls_found}")
+        # Truncate long lists to avoid log spam
+        if len(final_lora_names) > 10:
+            dprint(f"[LORA_NORMALIZE] Task {task_id}: OUTPUT - lora_names=[{len(final_lora_names)} LoRAs, showing first 10: {final_lora_names[:10]}]")
+        else:
+            dprint(f"[LORA_NORMALIZE] Task {task_id}: OUTPUT - lora_names={final_lora_names}")
 
     return params
 
