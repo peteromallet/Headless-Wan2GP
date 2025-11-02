@@ -1314,8 +1314,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "cfg_zero_step": orchestrator_payload.get("cfg_zero_step", -1),
                 "params_json_str_override": orchestrator_payload.get("params_json_str_override"),
                 "fps_helpers": orchestrator_payload.get("fps_helpers", 16),
-                "fade_in_params_json_str": orchestrator_payload["fade_in_params_json_str"],
-                "fade_out_params_json_str": orchestrator_payload["fade_out_params_json_str"],
+                "fade_in_params_json_str": orchestrator_payload.get("fade_in_params_json_str", '{"low_point":0.0,"high_point":1.0,"curve_type":"ease_in_out","duration_factor":0.0}'),
+                "fade_out_params_json_str": orchestrator_payload.get("fade_out_params_json_str", '{"low_point":0.0,"high_point":1.0,"curve_type":"ease_in_out","duration_factor":0.0}'),
                 "subsequent_starting_strength_adjustment": orchestrator_payload.get("subsequent_starting_strength_adjustment", 0.0),
                 "desaturate_subsequent_starting_frames": orchestrator_payload.get("desaturate_subsequent_starting_frames", 0.0),
                 "adjust_brightness_subsequent_starting_frames": orchestrator_payload.get("adjust_brightness_subsequent_starting_frames", 0.0),
@@ -1448,7 +1448,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         msg = f"Failed during travel orchestration processing: {e}"
         travel_logger.error(msg, task_id=orchestrator_task_id_str)
         travel_logger.debug(traceback.format_exc(), task_id=orchestrator_task_id_str)
-        import traceback
         traceback.print_exc()
         generation_success = False
         output_message_for_orchestrator_db = msg
