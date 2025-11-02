@@ -1587,11 +1587,11 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         if not isinstance(lora_mults, list):
             lora_mults = [lora_mults]
 
-        # Attach Lightning LoRA first at 0.75 if available
+        # Attach Lightning LoRA first at 0.85 if available
         if selected_lightning and (qwen_lora_dir / selected_lightning).exists() and selected_lightning not in lora_names:
             lora_names.append(selected_lightning)
-            lora_mults.append(0.75)
-            headless_logger.info(f"[QWEN_STYLE] Added Lightning LoRA: {selected_lightning} with strength 0.75", task_id=task_id)
+            lora_mults.append(0.85)
+            headless_logger.info(f"[QWEN_STYLE] Added Lightning LoRA: {selected_lightning} with strength 0.85", task_id=task_id)
 
         # Add style transfer LoRA if style_strength > 0
         if style_strength > 0.0:
