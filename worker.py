@@ -1085,10 +1085,13 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         generation_params.setdefault("num_inference_steps", 12)
         generation_params.setdefault("video_length", 1)  # Single image output
 
-        # Optional custom system prompt
+        # Set system prompt (allow override via task params)
         if "system_prompt" in db_task_params and db_task_params["system_prompt"]:
             generation_params["system_prompt"] = db_task_params["system_prompt"]
             headless_logger.info(f"[QWEN_EDIT] Using custom system prompt: {db_task_params['system_prompt'][:100]}...", task_id=task_id)
+        else:
+            generation_params["system_prompt"] = "You are a professional image editor. Analyze the input image carefully, then apply the requested modifications precisely while maintaining visual coherence and image quality. Ensure edits blend naturally with the original content."
+            headless_logger.info(f"[QWEN_EDIT] Using default editing system prompt", task_id=task_id)
 
         headless_logger.info(
             f"[QWEN_EDIT] Configuration: resolution={generation_params.get('resolution')}, "
@@ -1200,7 +1203,15 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         generation_params.setdefault("guidance_scale", 1)
         generation_params.setdefault("num_inference_steps", 12)
         generation_params.setdefault("video_length", 1)
-        
+
+        # Set system prompt for inpainting task (allow override via task params)
+        if "system_prompt" in db_task_params and db_task_params["system_prompt"]:
+            generation_params["system_prompt"] = db_task_params["system_prompt"]
+            headless_logger.info(f"[QWEN_INPAINT] Using custom system prompt: {db_task_params['system_prompt'][:100]}...", task_id=task_id)
+        else:
+            generation_params["system_prompt"] = "You are an expert at inpainting. The green areas in the input image indicate regions to fill. Analyze the surrounding context carefully and generate natural, coherent content to fill the masked green spaces based on the user's description, ensuring seamless blending with the existing image."
+            headless_logger.info(f"[QWEN_INPAINT] Using default inpainting system prompt", task_id=task_id)
+
         # Add default inpainting LoRA
         try:
             base_wan2gp_dir = Path(wan2gp_path)
@@ -1333,7 +1344,15 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         generation_params.setdefault("guidance_scale", 1)
         generation_params.setdefault("num_inference_steps", 12)
         generation_params.setdefault("video_length", 1)
-        
+
+        # Set system prompt for annotated image edit task (allow override via task params)
+        if "system_prompt" in db_task_params and db_task_params["system_prompt"]:
+            generation_params["system_prompt"] = db_task_params["system_prompt"]
+            headless_logger.info(f"[QWEN_ANNOTATE] Using custom system prompt: {db_task_params['system_prompt'][:100]}...", task_id=task_id)
+        else:
+            generation_params["system_prompt"] = "You are an expert at interpreting visual annotations. Analyze the input image with its green rectangle/arrow annotations indicating specific regions. Generate or modify the content within these marked areas according to the user's instructions, maintaining consistency with the overall image."
+            headless_logger.info(f"[QWEN_ANNOTATE] Using default annotation system prompt", task_id=task_id)
+
         # Add default annotation LoRA
         try:
             base_wan2gp_dir = Path(wan2gp_path)
@@ -1510,10 +1529,48 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         generation_params.setdefault("num_inference_steps", 12)
         generation_params.setdefault("video_length", 1)  # Single image output
 
-        # Optional custom system prompt
+        # Set system prompt intelligently based on active parameters (allow override via task params)
         if "system_prompt" in db_task_params and db_task_params["system_prompt"]:
             generation_params["system_prompt"] = db_task_params["system_prompt"]
             headless_logger.info(f"[QWEN_STYLE] Using custom system prompt: {db_task_params['system_prompt'][:100]}...", task_id=task_id)
+        else:
+            # Determine which system prompt to use based on active strength parameters
+            has_subject = subject_strength > 0
+            has_style = style_strength > 0
+            has_scene = scene_strength > 0
+
+            if has_subject and has_style and has_scene:
+                # All three active
+                generation_params["system_prompt"] = "You are an expert at creating images with consistent subjects, styles, and scenes. Analyze all reference elements and synthesize them to create a new image that maintains consistency across subject identity, visual style, and scene characteristics as specified."
+                headless_logger.info(f"[QWEN_STYLE] Using combined (subject+style+scene) system prompt", task_id=task_id)
+            elif has_subject and has_style:
+                # Subject + Style
+                generation_params["system_prompt"] = "You are an expert at creating images with consistent subjects and styles. Analyze the reference subject's appearance and the reference style's visual characteristics, then synthesize them to create a new image maintaining both subject identity and stylistic coherence."
+                headless_logger.info(f"[QWEN_STYLE] Using subject+style system prompt", task_id=task_id)
+            elif has_subject and has_scene:
+                # Subject + Scene
+                generation_params["system_prompt"] = "You are an expert at placing consistent subjects in specific scenes. Analyze the reference subject's appearance and the reference scene's characteristics, then place the subject naturally within the scene context while maintaining subject identity."
+                headless_logger.info(f"[QWEN_STYLE] Using subject+scene system prompt", task_id=task_id)
+            elif has_style and has_scene:
+                # Style + Scene
+                generation_params["system_prompt"] = "You are an expert at applying consistent styles within specific scenes. Analyze the reference style's visual characteristics and the reference scene's context, then create a new image that maintains both stylistic coherence and scene consistency."
+                headless_logger.info(f"[QWEN_STYLE] Using style+scene system prompt", task_id=task_id)
+            elif has_subject:
+                # Subject only
+                generation_params["system_prompt"] = "You are an expert at creating consistent subjects across different images and scenes. Analyze the reference subject's key features (appearance, clothing, distinctive characteristics) and recreate this exact subject in the new context described by the user, maintaining perfect consistency."
+                headless_logger.info(f"[QWEN_STYLE] Using subject-only system prompt", task_id=task_id)
+            elif has_style:
+                # Style only
+                generation_params["system_prompt"] = "You are an expert at applying artistic styles consistently. Analyze the reference image's visual style (color palette, lighting, artistic technique, mood, texture) and apply this exact style to create a new image based on the user's description, ensuring stylistic coherence."
+                headless_logger.info(f"[QWEN_STYLE] Using style-only system prompt", task_id=task_id)
+            elif has_scene:
+                # Scene only
+                generation_params["system_prompt"] = "You are an expert at maintaining scene consistency. Analyze the reference scene's characteristics (environment, lighting, atmosphere, spatial layout) and place the described subject naturally within this scene context, ensuring seamless integration."
+                headless_logger.info(f"[QWEN_STYLE] Using scene-only system prompt", task_id=task_id)
+            else:
+                # No parameters set - fallback to general style transfer
+                generation_params["system_prompt"] = "You are an expert at image-to-image generation. Analyze the reference image and create a new image based on the user's description, maintaining visual coherence and quality."
+                headless_logger.info(f"[QWEN_STYLE] Using fallback system prompt (no strength parameters set)", task_id=task_id)
 
         # Resolve LoRA directory for Qwen using absolute path (CWD may be changed to Wan2GP)
         try:
