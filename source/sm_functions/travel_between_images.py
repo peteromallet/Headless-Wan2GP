@@ -1286,6 +1286,17 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 if segment_negative_prompt:
                     dprint(f"[PROMPT_FALLBACK] Segment {idx}: Using orchestrator negative_prompt (segment negative_prompt was empty)")
 
+            # Calculate segment_frames_target with context frames for segments after the first
+            base_segment_frames = expanded_segment_frames[idx]
+            if idx > 0 and current_frame_overlap_from_previous > 0:
+                # For segments after the first, add context frames from previous segment
+                segment_frames_target_with_context = base_segment_frames + current_frame_overlap_from_previous
+                dprint(f"[CONTEXT_FRAMES] Segment {idx}: base={base_segment_frames}, context={current_frame_overlap_from_previous}, total={segment_frames_target_with_context}")
+            else:
+                # First segment doesn't need context frames
+                segment_frames_target_with_context = base_segment_frames
+                dprint(f"[CONTEXT_FRAMES] Segment {idx}: base={base_segment_frames}, no context needed")
+
             segment_payload = {
                 "orchestrator_task_id_ref": orchestrator_task_id_str,
                 "orchestrator_run_id": run_id,
@@ -1298,7 +1309,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
                 "base_prompt": segment_base_prompt,
                 "negative_prompt": segment_negative_prompt,
-                "segment_frames_target": expanded_segment_frames[idx],
+                "segment_frames_target": segment_frames_target_with_context,
                 "frame_overlap_from_previous": current_frame_overlap_from_previous,
                 "frame_overlap_with_next": expanded_frame_overlap[idx] if len(expanded_frame_overlap) > idx else 0,
                 
