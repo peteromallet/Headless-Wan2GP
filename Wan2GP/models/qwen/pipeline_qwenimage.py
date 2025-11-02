@@ -295,6 +295,7 @@ class QwenImagePipeline(): #DiffusionPipeline
         prompt_embeds: Optional[torch.Tensor] = None,
         prompt_embeds_mask: Optional[torch.Tensor] = None,
         max_sequence_length: int = 1024,
+        system_prompt: Optional[str] = None,
     ):
         r"""
 
@@ -758,6 +759,7 @@ class QwenImagePipeline(): #DiffusionPipeline
             device=device,
             num_images_per_prompt=num_images_per_prompt,
             max_sequence_length=max_sequence_length,
+            system_prompt=system_prompt,
         )
         if do_true_cfg:
             negative_prompt_embeds, negative_prompt_embeds_mask = self.encode_prompt(

@@ -204,7 +204,7 @@ class QwenEmbedRope(nn.Module):
             frame, height, width = fhw
             rope_key = f"{idx}_{height}_{width}"
 
-            if not torch.compiler.is_compiling() and False:
+            if not torch.compiler.is_compiling():
                 if rope_key not in self.rope_cache:
                     self.rope_cache[rope_key] = self._compute_video_freqs(frame, height, width, idx)
                 video_freq = self.rope_cache[rope_key]
