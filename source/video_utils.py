@@ -690,15 +690,14 @@ def create_guide_video_for_travel_segment(
         
         gray_frame_bgr = sm_create_color_frame(parsed_res_wh, (128, 128, 128))
 
-        fade_in_p = json.loads(full_orchestrator_payload["fade_in_params_json_str"])
-        fade_out_p = json.loads(full_orchestrator_payload["fade_out_params_json_str"])
+        # Hardcoded fade parameters (duration_factor=0.0 means no fading)
+        fi_low, fi_high, fi_curve, fi_factor = 0.0, 1.0, "ease_in_out", 0.0
+        fo_low, fo_high, fo_curve, fo_factor = 0.0, 1.0, "ease_in_out", 0.0
+
         strength_adj = segment_params.get("subsequent_starting_strength_adjustment", 0.0)
         desat_factor = segment_params.get("desaturate_subsequent_starting_frames", 0.0)
         bright_adj = segment_params.get("adjust_brightness_subsequent_starting_frames", 0.0)
         frame_overlap_from_previous = segment_params.get("frame_overlap_from_previous", 0)
-
-        fi_low, fi_high, fi_curve, fi_factor = float(fade_in_p.get("low_point",0)), float(fade_in_p.get("high_point",1)), str(fade_in_p.get("curve_type","ease_in_out")), float(fade_in_p.get("duration_factor",0))
-        fo_low, fo_high, fo_curve, fo_factor = float(fade_out_p.get("low_point",0)), float(fade_out_p.get("high_point",1)), str(fade_out_p.get("curve_type","ease_in_out")), float(fade_out_p.get("duration_factor",0))
 
         if total_frames_for_segment <= 0:
             dprint(f"Task {task_id_for_logging}: Guide video has 0 frames. Skipping creation.")
