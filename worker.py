@@ -1083,9 +1083,69 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             f"steps={generation_params.get('num_inference_steps')}",
             task_id=task_id
         )
-        
-        # LoRAs handled via additional_loras (already processed by whitelist)
-        # Format: db_task_params["loras"] = [{"url": "...", "strength": 1.0}]
+
+        # Add Lightning LoRA at 0.6 strength
+        try:
+            base_wan2gp_dir = Path(wan2gp_path)
+        except Exception:
+            base_wan2gp_dir = Path(__file__).parent / "Wan2GP"
+        qwen_lora_dir = base_wan2gp_dir / "loras_qwen"
+        qwen_lora_dir.mkdir(parents=True, exist_ok=True)
+
+        lightning_repo = "lightx2v/Qwen-Image-Lightning"
+        # Prefer the Edit V1.0 bf16 first, then fp16, then 8-step
+        lightning_candidates = [
+            "Qwen-VL-Image-Edit-Lora-V1.0-bf16.safetensors",
+            "Qwen-VL-Image-Edit-Lora-V1.0-fp16.safetensors",
+            "Qwen-VL-8step-Lightning-bf16.safetensors"
+        ]
+        selected_lightning = None
+        for fname in lightning_candidates:
+            if (qwen_lora_dir / fname).exists():
+                selected_lightning = fname
+                break
+        if not selected_lightning:
+            selected_lightning = lightning_candidates[0]
+            target = qwen_lora_dir / selected_lightning
+            if not target.exists():
+                try:
+                    from huggingface_hub import hf_hub_download
+                    headless_logger.info(f"[QWEN_EDIT] Downloading Lightning LoRA: {selected_lightning}", task_id=task_id)
+                    dl_path = hf_hub_download(repo_id=lightning_repo, filename=selected_lightning, revision="main", local_dir=str(qwen_lora_dir))
+                    from pathlib import Path as _P
+                    _p = _P(dl_path)
+                    if _p.exists() and _p.resolve() != target.resolve():
+                        _p.replace(target)
+                except Exception as e:
+                    headless_logger.warning(f"[QWEN_EDIT] Lightning LoRA download failed: {e}", task_id=task_id)
+
+        # Build LoRA configuration
+        lora_names = generation_params.get("lora_names", []) or []
+        lora_mults = generation_params.get("lora_multipliers", []) or []
+        if not isinstance(lora_names, list):
+            lora_names = [lora_names]
+        if not isinstance(lora_mults, list):
+            lora_mults = [lora_mults]
+
+        # Attach Lightning LoRA at 0.75 if available
+        if selected_lightning and (qwen_lora_dir / selected_lightning).exists() and selected_lightning not in lora_names:
+            lora_names.append(selected_lightning)
+            lora_mults.append(0.75)
+            headless_logger.info(f"[QWEN_EDIT] Added Lightning LoRA: {selected_lightning} with strength 0.75", task_id=task_id)
+
+        # Add any additional LoRAs from params
+        additional_loras = db_task_params.get("loras", [])
+        if additional_loras:
+            for lora in additional_loras:
+                if isinstance(lora, dict) and "path" in lora and "scale" in lora:
+                    lora_filename = Path(lora["path"]).name
+                    if lora_filename not in lora_names:
+                        lora_names.append(lora_filename)
+                        lora_mults.append(float(lora["scale"]))
+            headless_logger.info(f"[QWEN_EDIT] Added {len(additional_loras)} additional LoRAs", task_id=task_id)
+
+        generation_params["lora_names"] = lora_names
+        generation_params["lora_multipliers"] = lora_mults
     
     # -------------------------------------------------------------------------
     # 3. image_inpaint - Inpainting with green mask overlay
@@ -1158,10 +1218,47 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
                     _p.replace(inpaint_target)
             except Exception as e:
                 headless_logger.warning(f"[QWEN_INPAINT] Inpainting LoRA download failed: {e}", task_id=task_id)
-        
-        # Build LoRA configuration
-        lora_names = [inpaint_fname]
-        lora_mults = [1.0]
+
+        # Download Lightning LoRA
+        lightning_repo = "lightx2v/Qwen-Image-Lightning"
+        lightning_candidates = [
+            "Qwen-VL-Image-Edit-Lora-V1.0-bf16.safetensors",
+            "Qwen-VL-Image-Edit-Lora-V1.0-fp16.safetensors",
+            "Qwen-VL-8step-Lightning-bf16.safetensors"
+        ]
+        selected_lightning = None
+        for fname in lightning_candidates:
+            if (qwen_lora_dir / fname).exists():
+                selected_lightning = fname
+                break
+        if not selected_lightning:
+            selected_lightning = lightning_candidates[0]
+            target = qwen_lora_dir / selected_lightning
+            if not target.exists():
+                try:
+                    from huggingface_hub import hf_hub_download
+                    headless_logger.info(f"[QWEN_INPAINT] Downloading Lightning LoRA: {selected_lightning}", task_id=task_id)
+                    dl_path = hf_hub_download(repo_id=lightning_repo, filename=selected_lightning, revision="main", local_dir=str(qwen_lora_dir))
+                    from pathlib import Path as _P
+                    _p = _P(dl_path)
+                    if _p.exists() and _p.resolve() != target.resolve():
+                        _p.replace(target)
+                except Exception as e:
+                    headless_logger.warning(f"[QWEN_INPAINT] Lightning LoRA download failed: {e}", task_id=task_id)
+
+        # Build LoRA configuration (Lightning first at 0.75, then inpainting at 1.0)
+        lora_names = []
+        lora_mults = []
+
+        # Add Lightning LoRA first at 0.75 if available
+        if selected_lightning and (qwen_lora_dir / selected_lightning).exists():
+            lora_names.append(selected_lightning)
+            lora_mults.append(0.75)
+            headless_logger.info(f"[QWEN_INPAINT] Added Lightning LoRA: {selected_lightning} with strength 0.75", task_id=task_id)
+
+        # Add inpainting LoRA
+        lora_names.append(inpaint_fname)
+        lora_mults.append(1.0)
         
         # Add any additional LoRAs from params
         additional_loras_param = db_task_params.get("loras", [])
@@ -1254,10 +1351,47 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
                     _p.replace(annotate_target)
             except Exception as e:
                 headless_logger.warning(f"[QWEN_ANNOTATE] Annotation LoRA download failed: {e}", task_id=task_id)
-        
-        # Build LoRA configuration
-        lora_names = [annotate_fname]
-        lora_mults = [1.0]
+
+        # Download Lightning LoRA
+        lightning_repo = "lightx2v/Qwen-Image-Lightning"
+        lightning_candidates = [
+            "Qwen-VL-Image-Edit-Lora-V1.0-bf16.safetensors",
+            "Qwen-VL-Image-Edit-Lora-V1.0-fp16.safetensors",
+            "Qwen-VL-8step-Lightning-bf16.safetensors"
+        ]
+        selected_lightning = None
+        for fname in lightning_candidates:
+            if (qwen_lora_dir / fname).exists():
+                selected_lightning = fname
+                break
+        if not selected_lightning:
+            selected_lightning = lightning_candidates[0]
+            target = qwen_lora_dir / selected_lightning
+            if not target.exists():
+                try:
+                    from huggingface_hub import hf_hub_download
+                    headless_logger.info(f"[QWEN_ANNOTATE] Downloading Lightning LoRA: {selected_lightning}", task_id=task_id)
+                    dl_path = hf_hub_download(repo_id=lightning_repo, filename=selected_lightning, revision="main", local_dir=str(qwen_lora_dir))
+                    from pathlib import Path as _P
+                    _p = _P(dl_path)
+                    if _p.exists() and _p.resolve() != target.resolve():
+                        _p.replace(target)
+                except Exception as e:
+                    headless_logger.warning(f"[QWEN_ANNOTATE] Lightning LoRA download failed: {e}", task_id=task_id)
+
+        # Build LoRA configuration (Lightning first at 0.75, then annotation at 1.0)
+        lora_names = []
+        lora_mults = []
+
+        # Add Lightning LoRA first at 0.75 if available
+        if selected_lightning and (qwen_lora_dir / selected_lightning).exists():
+            lora_names.append(selected_lightning)
+            lora_mults.append(0.75)
+            headless_logger.info(f"[QWEN_ANNOTATE] Added Lightning LoRA: {selected_lightning} with strength 0.75", task_id=task_id)
+
+        # Add annotation LoRA
+        lora_names.append(annotate_fname)
+        lora_mults.append(1.0)
         
         # Add any additional LoRAs from params
         additional_loras_param = db_task_params.get("loras", [])
@@ -1295,6 +1429,7 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         # Get style and subject parameters
         style_strength = db_task_params.get("style_reference_strength", 0.0)
         subject_strength = db_task_params.get("subject_strength", 0.0)
+        scene_strength = db_task_params.get("scene_reference_strength", 0.0)
         subject_description = db_task_params.get("subject_description", "")
         in_this_scene = db_task_params.get("in_this_scene", False)
 
@@ -1307,6 +1442,11 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             subject_strength = float(subject_strength) if subject_strength is not None else 0.0
         except Exception:
             subject_strength = 0.0
+
+        try:
+            scene_strength = float(scene_strength) if scene_strength is not None else 0.0
+        except Exception:
+            scene_strength = 0.0
 
         # Build prompt modifications
         prompt_parts = []
@@ -1440,11 +1580,11 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         if not isinstance(lora_mults, list):
             lora_mults = [lora_mults]
 
-        # Attach Lightning LoRA first at 1.0 if available
+        # Attach Lightning LoRA first at 0.75 if available
         if selected_lightning and (qwen_lora_dir / selected_lightning).exists() and selected_lightning not in lora_names:
             lora_names.append(selected_lightning)
-            lora_mults.append(1.0)
-            headless_logger.info(f"[QWEN_STYLE] Added Lightning LoRA: {selected_lightning} with strength 1.0", task_id=task_id)
+            lora_mults.append(0.75)
+            headless_logger.info(f"[QWEN_STYLE] Added Lightning LoRA: {selected_lightning} with strength 0.75", task_id=task_id)
 
         # Add style transfer LoRA if style_strength > 0
         if style_strength > 0.0:
@@ -1483,6 +1623,36 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
                 lora_names.append(subject_lora_fname)
                 lora_mults.append(subject_strength)
                 headless_logger.info(f"[QWEN_STYLE] Added subject LoRA: {subject_lora_fname} with strength {subject_strength}", task_id=task_id)
+
+        # Add scene reference LoRA if scene_strength > 0
+        if scene_strength > 0.0:
+            # Download and add scene reference LoRA
+            scene_lora_fname = "in_scene_different_object_000010500.safetensors"
+            scene_lora_target = qwen_lora_dir / scene_lora_fname
+
+            if not scene_lora_target.exists():
+                try:
+                    from huggingface_hub import hf_hub_download  # type: ignore
+                    scene_repo = "peteromallet/random_junk"
+                    headless_logger.info(f"[QWEN_STYLE] Fetching {scene_lora_fname} from {scene_repo} into {qwen_lora_dir}", task_id=task_id)
+                    dl_path = hf_hub_download(repo_id=scene_repo, filename=scene_lora_fname, revision="main", local_dir=str(qwen_lora_dir))
+                    try:
+                        from pathlib import Path as _P
+                        _p = _P(dl_path)
+                        if _p.exists() and _p.resolve() != scene_lora_target.resolve():
+                            _p.replace(scene_lora_target)
+                    except Exception:
+                        pass
+                except Exception as e:
+                    headless_logger.warning(f"[QWEN_STYLE] Scene reference LoRA download failed: {e}", task_id=task_id)
+            else:
+                headless_logger.debug(f"[QWEN_STYLE] Scene reference LoRA already present at {scene_lora_target}", task_id=task_id)
+
+            # Add scene reference LoRA to the list
+            if scene_lora_fname not in lora_names:
+                lora_names.append(scene_lora_fname)
+                lora_mults.append(scene_strength)
+                headless_logger.info(f"[QWEN_STYLE] Added scene reference LoRA: {scene_lora_fname} with strength {scene_strength}", task_id=task_id)
 
         # Add any additional LoRAs from params
         additional_loras = db_task_params.get("loras", [])
