@@ -450,8 +450,10 @@ def _handle_join_clips_task(
                         import tempfile
 
                         # --- Calculate blend_frames for crossfade transitions ---
-                        # Default: context_frame_count / 4 (e.g., 10 context → 2 blend, 20 context → 5 blend)
-                        default_blend_frames = context_frame_count // 4
+                        # Default: num_anchor_frames (matches the regeneration strategy)
+                        # Logic: We regenerate N anchor frames as critical transition zones,
+                        # so we blend over those same N frames to complete the smoothing
+                        default_blend_frames = num_anchor_frames if regenerate_anchors else (context_frame_count // 3)
                         blend_frames = task_params_from_db.get("blend_frames", default_blend_frames)
 
                         # Calculate maximum safe blend
