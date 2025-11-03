@@ -449,9 +449,27 @@ def _handle_join_clips_task(
                         import subprocess
                         import tempfile
 
+                        # --- Calculate blend_frames for crossfade transitions ---
+                        # Default: context_frame_count / 4 (e.g., 10 context → 2 blend, 20 context → 5 blend)
+                        default_blend_frames = context_frame_count // 4
+                        blend_frames = task_params_from_db.get("blend_frames", default_blend_frames)
+
+                        # Calculate maximum safe blend
+                        if regenerate_anchors:
+                            max_safe_blend = context_frame_count - num_anchor_frames
+                        else:
+                            max_safe_blend = context_frame_count
+
+                        # Clamp blend_frames to safe range [0, max_safe_blend]
+                        blend_frames = max(0, min(blend_frames, max_safe_blend))
+
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: Blend frames: {blend_frames} (default: {default_blend_frames}, max safe: {max_safe_blend})")
+
                         # Create trimmed versions of the original clips
-                        # Clip1: Remove last context_frame_count frames (already in transition)
-                        # Clip2: Remove first context_frame_count frames (already in transition)
+                        # With blend_frames:
+                        #   Clip1: Keep extra blend_frames for crossfade with transition
+                        #   Clip2: Start earlier by blend_frames for crossfade with transition
+                        # Without blend (blend_frames=0): Original hard cut behavior
 
                         with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False, dir=join_clips_dir) as clip1_trimmed_file:
                             clip1_trimmed_path = Path(clip1_trimmed_file.name)
@@ -459,9 +477,9 @@ def _handle_join_clips_task(
                         with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False, dir=join_clips_dir) as clip2_trimmed_file:
                             clip2_trimmed_path = Path(clip2_trimmed_file.name)
 
-                        # Trim clip1: keep all frames except last context_frame_count
-                        # Use frame-accurate selection to avoid keyframe issues
-                        frames_to_keep_clip1 = start_frame_count - context_frame_count
+                        # Trim clip1: keep all frames except last (context_frame_count - blend_frames)
+                        # This leaves blend_frames overlap for crossfade with transition
+                        frames_to_keep_clip1 = start_frame_count - (context_frame_count - blend_frames)
 
                         dprint(f"[JOIN_CLIPS] Task {task_id}: Trimming clip1 - keeping {frames_to_keep_clip1}/{start_frame_count} frames")
 
@@ -478,9 +496,9 @@ def _handle_join_clips_task(
                         if result.returncode != 0:
                             raise ValueError(f"Failed to trim clip1: {result.stderr}")
 
-                        # Trim clip2: skip first context_frame_count frames
-                        # Use frame-accurate selection: frames context_frame_count to end
-                        frames_to_skip_clip2 = context_frame_count
+                        # Trim clip2: skip first (context_frame_count - blend_frames) frames
+                        # This starts earlier by blend_frames for crossfade with transition
+                        frames_to_skip_clip2 = context_frame_count - blend_frames
                         frames_remaining_clip2 = end_frame_count - frames_to_skip_clip2
 
                         dprint(f"[JOIN_CLIPS] Task {task_id}: Trimming clip2 - skipping first {frames_to_skip_clip2}/{end_frame_count} frames, keeping {frames_remaining_clip2}")
@@ -497,35 +515,82 @@ def _handle_join_clips_task(
                         if result.returncode != 0:
                             raise ValueError(f"Failed to trim clip2: {result.stderr}")
 
-                        # Create concat list file
-                        concat_list_path = join_clips_dir / f"concat_list_{task_id}.txt"
-                        with open(concat_list_path, 'w') as f:
-                            f.write(f"file '{clip1_trimmed_path.absolute()}'\n")
-                            f.write(f"file '{Path(transition_video_path).absolute()}'\n")
-                            f.write(f"file '{clip2_trimmed_path.absolute()}'\n")
-
                         # Final concatenated output
                         final_output_path = join_clips_dir / f"joined_{task_id}.mp4"
 
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: Concatenating: clip1_trimmed + transition + clip2_trimmed")
+                        if blend_frames > 0:
+                            # Use xfade filter for smooth crossfade transitions
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: Using xfade with {blend_frames}-frame blend at each boundary")
 
-                        # Re-encode to ensure consistent encoding and smooth playback
-                        # This prevents glitches at clip boundaries from codec/parameter mismatches
-                        concat_cmd = [
-                            'ffmpeg', '-y', '-f', 'concat', '-safe', '0',
-                            '-i', str(concat_list_path),
-                            '-c:v', 'libx264',
-                            '-preset', 'medium',
-                            '-crf', '18',
-                            '-pix_fmt', 'yuv420p',
-                            '-r', str(target_fps),
-                            '-an',  # Remove audio (generated videos typically have no audio)
-                            str(final_output_path)
-                        ]
+                            # Calculate blend duration and offsets
+                            blend_duration = blend_frames / target_fps
 
-                        result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=120)
-                        if result.returncode != 0:
-                            raise ValueError(f"Failed to concatenate clips: {result.stderr}")
+                            # Get frame counts for each clip to calculate offsets
+                            transition_frame_count = context_frame_count * 2 + gap_frame_count  # Total frames in transition video
+
+                            # Duration calculations
+                            clip1_duration = frames_to_keep_clip1 / target_fps
+                            transition_duration = transition_frame_count / target_fps
+
+                            # First xfade offset: end of clip1 minus blend_duration
+                            offset1 = clip1_duration - blend_duration
+
+                            # Second xfade offset: after clip1 + transition - 2*blend (because first blend removes blend_frames)
+                            offset2 = clip1_duration + transition_duration - 2 * blend_duration
+
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: Blend durations - clip1: {clip1_duration:.3f}s, transition: {transition_duration:.3f}s, blend: {blend_duration:.3f}s")
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: Xfade offsets - offset1: {offset1:.3f}s, offset2: {offset2:.3f}s")
+
+                            # Build xfade filter complex command
+                            xfade_cmd = [
+                                'ffmpeg', '-y',
+                                '-i', str(clip1_trimmed_path),
+                                '-i', str(transition_video_path),
+                                '-i', str(clip2_trimmed_path),
+                                '-filter_complex',
+                                f'[0:v][1:v]xfade=transition=fade:duration={blend_duration}:offset={offset1}[v01];'
+                                f'[v01][2:v]xfade=transition=fade:duration={blend_duration}:offset={offset2}[vout]',
+                                '-map', '[vout]',
+                                '-c:v', 'libx264',
+                                '-preset', 'medium',
+                                '-crf', '18',
+                                '-pix_fmt', 'yuv420p',
+                                '-r', str(target_fps),
+                                '-an',
+                                str(final_output_path)
+                            ]
+
+                            result = subprocess.run(xfade_cmd, capture_output=True, text=True, timeout=120)
+                            if result.returncode != 0:
+                                raise ValueError(f"Failed to create xfade transition: {result.stderr}")
+
+                        else:
+                            # No blend - use original concat method with hard cuts
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: Using hard cuts (no blend)")
+
+                            # Create concat list file
+                            concat_list_path = join_clips_dir / f"concat_list_{task_id}.txt"
+                            with open(concat_list_path, 'w') as f:
+                                f.write(f"file '{clip1_trimmed_path.absolute()}'\n")
+                                f.write(f"file '{Path(transition_video_path).absolute()}'\n")
+                                f.write(f"file '{clip2_trimmed_path.absolute()}'\n")
+
+                            # Re-encode to ensure consistent encoding and smooth playback
+                            concat_cmd = [
+                                'ffmpeg', '-y', '-f', 'concat', '-safe', '0',
+                                '-i', str(concat_list_path),
+                                '-c:v', 'libx264',
+                                '-preset', 'medium',
+                                '-crf', '18',
+                                '-pix_fmt', 'yuv420p',
+                                '-r', str(target_fps),
+                                '-an',
+                                str(final_output_path)
+                            ]
+
+                            result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=120)
+                            if result.returncode != 0:
+                                raise ValueError(f"Failed to concatenate clips: {result.stderr}")
 
                         # Verify final output exists
                         if not final_output_path.exists() or final_output_path.stat().st_size == 0:
