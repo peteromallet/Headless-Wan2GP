@@ -289,84 +289,100 @@ def visualize_join_clips(
     print(f"    First 5: {clip2_trimmed[:5]}")
 
     # ========================================
-    # PHASE 6: CROSSFADE STITCHING
+    # PHASE 6: CROSSFADE STITCHING (CORRECTED)
     # ========================================
     print("\n" + "=" * 100)
-    print("PHASE 6: CROSSFADE STITCHING")
+    print("PHASE 6: CROSSFADE STITCHING (CORRECTED)")
     print("=" * 100)
 
     final_frames = []
+    overlap_frames_for_next_blend = []  # Track overlap frames from previous video
     stitch_log = []
 
     # Video 0: Clip1 trimmed
     print(f"\n1. Processing Clip1 (video 0, {len(clip1_trimmed)} frames)")
     blend_with_next = blend_frames
-    frames_to_add = clip1_trimmed[:-blend_with_next] if blend_with_next > 0 else clip1_trimmed
+    if blend_with_next > 0:
+        frames_to_add = clip1_trimmed[:-blend_with_next]
+        overlap_frames_for_next_blend = clip1_trimmed[-blend_with_next:]
+    else:
+        frames_to_add = clip1_trimmed
+        overlap_frames_for_next_blend = []
+
     final_frames.extend(frames_to_add)
     print(f"   Added {len(frames_to_add)} frames (keeping {blend_with_next} for blend)")
     print(f"   Last 3 added: {frames_to_add[-3:]}")
-    print(f"   Kept for blend: {clip1_trimmed[-blend_with_next:]}")
+    print(f"   Kept for blend: {overlap_frames_for_next_blend}")
     stitch_log.append(f"Clip1: added {len(frames_to_add)} frames, total={len(final_frames)}")
 
     # Video 1: Transition
     print(f"\n2. Processing Transition (video 1, {len(transition_trimmed)} frames)")
     blend_count = blend_frames
 
-    # Remove last blend_count from accumulated
-    frames_to_remove = min(blend_count, len(final_frames))
-    frames_prev_for_fade = final_frames[-frames_to_remove:]
-    del final_frames[-frames_to_remove:]
-    print(f"   Removed {frames_to_remove} frames before crossfade")
-    print(f"   Removed: {frames_prev_for_fade}")
+    if blend_count > 0 and overlap_frames_for_next_blend:
+        # Use the overlap frames we saved from previous video (CORRECTED)
+        frames_prev_for_fade = overlap_frames_for_next_blend
+        print(f"   Using saved overlap frames for fade: {frames_prev_for_fade}")
 
-    # Get frames for crossfade from current
-    frames_curr_for_fade = transition_trimmed[:blend_count]
-    print(f"   Current frames for fade: {frames_curr_for_fade}")
+        # Get frames for crossfade from current
+        frames_curr_for_fade = transition_trimmed[:blend_count]
+        print(f"   Current frames for fade: {frames_curr_for_fade}")
 
-    # Crossfade (simulated)
-    faded_frames = [f"BLEND({pf}⊕{cf})" for pf, cf in zip(frames_prev_for_fade, frames_curr_for_fade)]
-    final_frames.extend(faded_frames)
-    print(f"   Added {len(faded_frames)} crossfaded frames")
-    print(f"   Blended: {faded_frames}")
-    stitch_log.append(f"Blend1: removed {frames_to_remove}, added {len(faded_frames)} blended, total={len(final_frames)}")
+        # Crossfade (simulated)
+        faded_frames = [f"BLEND({pf}⊕{cf})" for pf, cf in zip(frames_prev_for_fade, frames_curr_for_fade)]
+        final_frames.extend(faded_frames)
+        print(f"   Added {len(faded_frames)} crossfaded frames")
+        print(f"   Blended: {faded_frames}")
+        stitch_log.append(f"Blend1: added {len(faded_frames)} blended, total={len(final_frames)}")
+
+        start_idx = blend_count
+    else:
+        start_idx = 0
 
     # Add remaining from transition
     blend_with_next = blend_frames
-    start_idx = blend_count
     end_idx = len(transition_trimmed) - blend_with_next if blend_with_next > 0 else len(transition_trimmed)
     frames_to_add = transition_trimmed[start_idx:end_idx]
     final_frames.extend(frames_to_add)
+
+    # Save overlap frames for next blend
+    if blend_with_next > 0:
+        overlap_frames_for_next_blend = transition_trimmed[-blend_with_next:]
+    else:
+        overlap_frames_for_next_blend = []
+
     print(f"   Added {len(frames_to_add)} non-overlapping frames (keeping {blend_with_next} for next blend)")
     if len(frames_to_add) > 0:
         print(f"   First 3: {frames_to_add[:3]}")
         print(f"   Last 3: {frames_to_add[-3:]}")
-    print(f"   Kept for blend: {transition_trimmed[-blend_with_next:]}")
+    print(f"   Kept for blend: {overlap_frames_for_next_blend}")
     stitch_log.append(f"Transition: added {len(frames_to_add)} frames, total={len(final_frames)}")
 
     # Video 2: Clip2
     print(f"\n3. Processing Clip2 (video 2, {len(clip2_trimmed)} frames)")
     blend_count = blend_frames
 
-    # Remove last blend_count from accumulated
-    frames_to_remove = min(blend_count, len(final_frames))
-    frames_prev_for_fade = final_frames[-frames_to_remove:]
-    del final_frames[-frames_to_remove:]
-    print(f"   Removed {frames_to_remove} frames before crossfade")
-    print(f"   Removed: {frames_prev_for_fade}")
+    if blend_count > 0 and overlap_frames_for_next_blend:
+        # Use the overlap frames we saved from previous video (CORRECTED)
+        frames_prev_for_fade = overlap_frames_for_next_blend
+        print(f"   Using saved overlap frames for fade: {frames_prev_for_fade}")
 
-    # Get frames for crossfade from current
-    frames_curr_for_fade = clip2_trimmed[:blend_count]
-    print(f"   Current frames for fade: {frames_curr_for_fade}")
+        # Get frames for crossfade from current
+        frames_curr_for_fade = clip2_trimmed[:blend_count]
+        print(f"   Current frames for fade: {frames_curr_for_fade}")
 
-    # Crossfade (simulated)
-    faded_frames = [f"BLEND({pf}⊕{cf})" for pf, cf in zip(frames_prev_for_fade, frames_curr_for_fade)]
-    final_frames.extend(faded_frames)
-    print(f"   Added {len(faded_frames)} crossfaded frames")
-    print(f"   Blended: {faded_frames}")
-    stitch_log.append(f"Blend2: removed {frames_to_remove}, added {len(faded_frames)} blended, total={len(final_frames)}")
+        # Crossfade (simulated)
+        faded_frames = [f"BLEND({pf}⊕{cf})" for pf, cf in zip(frames_prev_for_fade, frames_curr_for_fade)]
+        final_frames.extend(faded_frames)
+        print(f"   Added {len(faded_frames)} crossfaded frames")
+        print(f"   Blended: {faded_frames}")
+        stitch_log.append(f"Blend2: added {len(faded_frames)} blended, total={len(final_frames)}")
+
+        start_idx = blend_count
+    else:
+        start_idx = 0
 
     # Add remaining from clip2
-    start_idx = blend_count
     frames_to_add = clip2_trimmed[start_idx:]
     final_frames.extend(frames_to_add)
     print(f"   Added {len(frames_to_add)} remaining frames")
@@ -390,11 +406,15 @@ def visualize_join_clips(
     print(f"  Clip2 trimmed: {len(clip2_trimmed)} frames")
     print(f"  Final output: {len(final_frames)} frames")
 
-    print(f"\nExpected without blend: {clip1_frames - context_frame_count} + {len(transition_frames)} + {clip2_frames - context_frame_count} = {clip1_frames - context_frame_count + len(transition_frames) + clip2_frames - context_frame_count}")
-    print(f"Expected with {blend_frames}-frame blends: {clip1_frames - context_frame_count + len(transition_frames) + clip2_frames - context_frame_count} - {blend_frames * 2} = {clip1_frames - context_frame_count + len(transition_frames) + clip2_frames - context_frame_count - blend_frames * 2}")
+    # With the corrected crossfade logic, we keep all frames but use overlap frames for blending
+    # The blended frames represent the overlapping regions, so they're included in the count
+    expected_trimmed_sum = (clip1_frames - context_frame_count) + len(transition_frames) + (clip2_frames - context_frame_count)
+    print(f"\nSum of trimmed videos: {clip1_frames - context_frame_count} + {len(transition_frames)} + {clip2_frames - context_frame_count} = {expected_trimmed_sum}")
+    print(f"Expected with corrected crossfade: {expected_trimmed_sum} frames")
+    print(f"  (Crossfaded frames are included, representing the blended overlapping regions)")
     print(f"Actual: {len(final_frames)}")
 
-    expected = clip1_frames - context_frame_count + len(transition_frames) + clip2_frames - context_frame_count - blend_frames * 2
+    expected = expected_trimmed_sum
     if len(final_frames) == expected:
         print(f"\n✅ Frame count matches expected!")
     else:
