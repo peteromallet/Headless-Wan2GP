@@ -330,7 +330,9 @@ def _handle_join_clips_task(
         # --- 5. Build Guide and Mask Videos (using shared helper) ---
         # Get regenerate_anchors setting (default True - regenerate anchor frames for smoother transitions)
         regenerate_anchors = task_params_from_db.get("regenerate_anchors", True)
-        dprint(f"[JOIN_CLIPS] Task {task_id}: regenerate_anchors={regenerate_anchors}")
+        # Number of anchor frames to regenerate on each side (default 3 for smooth blending)
+        num_anchor_frames = task_params_from_db.get("num_anchor_frames", 3)
+        dprint(f"[JOIN_CLIPS] Task {task_id}: regenerate_anchors={regenerate_anchors}, num_anchor_frames={num_anchor_frames}")
 
         try:
             created_guide_video, created_mask_video = create_guide_and_mask_for_generation(
@@ -343,6 +345,7 @@ def _handle_join_clips_task(
                 task_id=task_id,
                 filename_prefix="join",
                 regenerate_anchors=regenerate_anchors,
+                num_anchor_frames=num_anchor_frames,
                 dprint=dprint
             )
         except Exception as e:
