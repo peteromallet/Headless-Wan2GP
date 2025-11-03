@@ -37,6 +37,7 @@ def create_guide_and_mask_for_generation(
     task_id: str,
     filename_prefix: str = "vace_gen",
     regenerate_anchors: bool = False,
+    num_anchor_frames: int = 3,
     *,
     dprint=print
 ) -> Tuple[Path, Path]:
@@ -56,6 +57,7 @@ def create_guide_and_mask_for_generation(
         task_id: Task ID for logging
         filename_prefix: Prefix for output filenames (default: "vace_gen")
         regenerate_anchors: If True, exclude anchor frames from guide and regenerate them
+        num_anchor_frames: Number of anchor frames to regenerate on each side (default: 3)
         dprint: Print function for logging
 
     Returns:
@@ -79,14 +81,15 @@ def create_guide_and_mask_for_generation(
     num_context_before = len(context_frames_before)
     num_context_after = len(context_frames_after)
 
-    # If regenerate_anchors, we'll exclude the last frame from before and first frame from after
+    # If regenerate_anchors, we'll exclude N anchor frames from each side
     # and add them as gray placeholders to be generated
-    num_anchors_to_regenerate = 0
+    num_anchor_frames_before = 0
+    num_anchor_frames_after = 0
     if regenerate_anchors:
         if num_context_before > 0:
-            num_anchors_to_regenerate += 1
+            num_anchor_frames_before = min(num_anchor_frames, num_context_before)
         if num_context_after > 0:
-            num_anchors_to_regenerate += 1
+            num_anchor_frames_after = min(num_anchor_frames, num_context_after)
 
     total_frames = num_context_before + gap_frame_count + num_context_after
 
@@ -96,7 +99,7 @@ def create_guide_and_mask_for_generation(
     dprint(f"[VACE_UTILS]   Context after: {num_context_after} frames")
     dprint(f"[VACE_UTILS]   Total: {total_frames} frames")
     if regenerate_anchors:
-        dprint(f"[VACE_UTILS]   Regenerate anchors: {num_anchors_to_regenerate} anchor frames will be generated")
+        dprint(f"[VACE_UTILS]   Regenerate anchors: {num_anchor_frames_before} frames at end of before context, {num_anchor_frames_after} frames at start of after context")
 
     # Ensure output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -117,34 +120,37 @@ def create_guide_and_mask_for_generation(
     gray_frame = sm_create_color_frame(resolution_wh, (128, 128, 128))
 
     # Add context frames before gap
-    if regenerate_anchors and num_context_before > 0:
-        # Exclude the last frame (anchor) and add it as gray placeholder later
-        guide_frames.extend(context_frames_before[:-1])
-        dprint(f"[VACE_UTILS]   Added {len(context_frames_before) - 1} context frames (before, excluding anchor)")
+    if regenerate_anchors and num_anchor_frames_before > 0:
+        # Exclude the last N anchor frames and add them as gray placeholders later
+        num_preserved_before = num_context_before - num_anchor_frames_before
+        guide_frames.extend(context_frames_before[:num_preserved_before])
+        dprint(f"[VACE_UTILS]   Added {num_preserved_before} context frames (before, excluding {num_anchor_frames_before} anchors)")
     else:
         guide_frames.extend(context_frames_before)
         dprint(f"[VACE_UTILS]   Added {len(context_frames_before)} context frames (before)")
 
-    # Add gray placeholder for regenerated anchor (last frame of before context)
-    if regenerate_anchors and num_context_before > 0:
-        guide_frames.append(gray_frame.copy())
-        dprint(f"[VACE_UTILS]   Added 1 gray placeholder for regenerated anchor (end of before context)")
+    # Add gray placeholders for regenerated anchors (last N frames of before context)
+    if regenerate_anchors and num_anchor_frames_before > 0:
+        for _ in range(num_anchor_frames_before):
+            guide_frames.append(gray_frame.copy())
+        dprint(f"[VACE_UTILS]   Added {num_anchor_frames_before} gray placeholders for regenerated anchors (end of before context)")
 
     # Add gray placeholder frames for the gap
     for _ in range(gap_frame_count):
         guide_frames.append(gray_frame.copy())
     dprint(f"[VACE_UTILS]   Added {gap_frame_count} gray placeholder frames (gap)")
 
-    # Add gray placeholder for regenerated anchor (first frame of after context)
-    if regenerate_anchors and num_context_after > 0:
-        guide_frames.append(gray_frame.copy())
-        dprint(f"[VACE_UTILS]   Added 1 gray placeholder for regenerated anchor (start of after context)")
+    # Add gray placeholders for regenerated anchors (first N frames of after context)
+    if regenerate_anchors and num_anchor_frames_after > 0:
+        for _ in range(num_anchor_frames_after):
+            guide_frames.append(gray_frame.copy())
+        dprint(f"[VACE_UTILS]   Added {num_anchor_frames_after} gray placeholders for regenerated anchors (start of after context)")
 
     # Add context frames after gap
-    if regenerate_anchors and num_context_after > 0:
-        # Exclude the first frame (anchor) since we added it as gray placeholder above
-        guide_frames.extend(context_frames_after[1:])
-        dprint(f"[VACE_UTILS]   Added {len(context_frames_after) - 1} context frames (after, excluding anchor)")
+    if regenerate_anchors and num_anchor_frames_after > 0:
+        # Exclude the first N anchor frames since we added them as gray placeholders above
+        guide_frames.extend(context_frames_after[num_anchor_frames_after:])
+        dprint(f"[VACE_UTILS]   Added {len(context_frames_after) - num_anchor_frames_after} context frames (after, excluding {num_anchor_frames_after} anchors)")
     else:
         guide_frames.extend(context_frames_after)
         dprint(f"[VACE_UTILS]   Added {len(context_frames_after)} context frames (after)")
@@ -174,12 +180,13 @@ def create_guide_and_mask_for_generation(
     # Active (white) = gap frames + anchor frames (if regenerate_anchors) we want to generate
     inactive_indices = set()
 
-    # Mark context frames before gap as inactive (0 to num_context_before-1)
-    if regenerate_anchors and num_context_before > 0:
-        # Exclude the last frame (anchor) - it should be white/generate
-        for i in range(num_context_before - 1):
+    # Mark context frames before gap as inactive
+    if regenerate_anchors and num_anchor_frames_before > 0:
+        # Exclude the last N anchor frames - they should be white/generate
+        num_inactive_before = num_context_before - num_anchor_frames_before
+        for i in range(num_inactive_before):
             inactive_indices.add(i)
-        dprint(f"[VACE_UTILS]   Marked {num_context_before - 1} frames as inactive (before context, excluding anchor)")
+        dprint(f"[VACE_UTILS]   Marked {num_inactive_before} frames as inactive (before context, excluding {num_anchor_frames_before} anchors)")
     else:
         for i in range(num_context_before):
             inactive_indices.add(i)
@@ -187,12 +194,13 @@ def create_guide_and_mask_for_generation(
 
     # Mark context frames after gap as inactive
     start_of_after_context = num_context_before + gap_frame_count
-    if regenerate_anchors and num_context_after > 0:
-        # Exclude the first frame (anchor) - it should be white/generate
-        # The anchor is at index start_of_after_context, so start from start_of_after_context + 1
-        for i in range(start_of_after_context + 1, total_frames):
+    if regenerate_anchors and num_anchor_frames_after > 0:
+        # Exclude the first N anchor frames - they should be white/generate
+        # The anchors start at index start_of_after_context, so start marking inactive from start_of_after_context + num_anchor_frames_after
+        for i in range(start_of_after_context + num_anchor_frames_after, total_frames):
             inactive_indices.add(i)
-        dprint(f"[VACE_UTILS]   Marked {total_frames - start_of_after_context - 1} frames as inactive (after context, excluding anchor)")
+        num_inactive_after = total_frames - (start_of_after_context + num_anchor_frames_after)
+        dprint(f"[VACE_UTILS]   Marked {num_inactive_after} frames as inactive (after context, excluding {num_anchor_frames_after} anchors)")
     else:
         for i in range(start_of_after_context, total_frames):
             inactive_indices.add(i)
