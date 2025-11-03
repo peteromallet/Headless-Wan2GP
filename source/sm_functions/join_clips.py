@@ -328,6 +328,10 @@ def _handle_join_clips_task(
             dprint(f"[JOIN_CLIPS] Task {task_id}: Using detected resolution: {parsed_res_wh}")
 
         # --- 5. Build Guide and Mask Videos (using shared helper) ---
+        # Get regenerate_anchors setting (default True - regenerate anchor frames for smoother transitions)
+        regenerate_anchors = task_params_from_db.get("regenerate_anchors", True)
+        dprint(f"[JOIN_CLIPS] Task {task_id}: regenerate_anchors={regenerate_anchors}")
+
         try:
             created_guide_video, created_mask_video = create_guide_and_mask_for_generation(
                 context_frames_before=start_context_frames,
@@ -338,6 +342,7 @@ def _handle_join_clips_task(
                 output_dir=join_clips_dir,
                 task_id=task_id,
                 filename_prefix="join",
+                regenerate_anchors=regenerate_anchors,
                 dprint=dprint
             )
         except Exception as e:
