@@ -3095,20 +3095,55 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                         pass
 
                     if current_overlap_val > 0:
-                        # Remove the overlap frames already appended from the previous segment so that
-                        # they can be replaced by the blended cross-fade frames for this stitch point.
-                        if i > 0:
-                            frames_to_remove = min(current_overlap_val, len(final_stitched_frames))
-                            if frames_to_remove > 0:
-                                del final_stitched_frames[-frames_to_remove:]
-                                print(f"[CRITICAL DEBUG] Removed {frames_to_remove} duplicate overlap frames before cross-fade (stitch point {i})")
-                        # Blend the overlapping frames
-                        faded_frames = sm_cross_fade_overlap_frames(frames_prev_segment, frames_curr_segment, current_overlap_val, "linear_sharp", crossfade_sharp_amt)
-                        final_stitched_frames.extend(faded_frames)
-                        print(f"[CRITICAL DEBUG] Added {len(faded_frames)} cross-faded frames")
-                    
+                        # Check if we should regenerate anchor frames (skip blending the anchor)
+                        regenerate_anchors = full_orchestrator_payload.get("regenerate_anchors", False)
+
+                        if regenerate_anchors and current_overlap_val > 1:
+                            # Regenerate anchor mode: crossfade all but the last frame (anchor)
+                            # The anchor frame will be taken directly from current segment
+                            crossfade_count = current_overlap_val - 1
+
+                            # Remove the overlap frames (minus 1 for anchor) from accumulated
+                            if i > 0:
+                                frames_to_remove = min(crossfade_count, len(final_stitched_frames))
+                                if frames_to_remove > 0:
+                                    del final_stitched_frames[-frames_to_remove:]
+                                    print(f"[CRITICAL DEBUG] [REGENERATE_ANCHORS] Removed {frames_to_remove} frames before cross-fade (keeping previous anchor)")
+
+                            # Blend the non-anchor overlapping frames
+                            frames_prev_for_fade = frames_prev_segment[-crossfade_count:] if crossfade_count > 0 else []
+                            frames_curr_for_fade = frames_curr_segment[:crossfade_count]
+                            faded_frames = sm_cross_fade_overlap_frames(frames_prev_for_fade, frames_curr_for_fade, crossfade_count, "linear_sharp", crossfade_sharp_amt)
+                            final_stitched_frames.extend(faded_frames)
+                            print(f"[CRITICAL DEBUG] [REGENERATE_ANCHORS] Added {len(faded_frames)} cross-faded frames (skipping anchor)")
+
+                            # Add the regenerated anchor frame directly (no blend)
+                            anchor_frame = frames_curr_segment[crossfade_count]
+                            final_stitched_frames.append(anchor_frame)
+                            print(f"[CRITICAL DEBUG] [REGENERATE_ANCHORS] Added regenerated anchor frame directly (no blend)")
+
+                            # Adjust start index for remaining frames
+                            start_index_for_curr_tail = current_overlap_val
+                        else:
+                            # Normal crossfade mode: blend all overlap frames
+                            # Remove the overlap frames already appended from the previous segment so that
+                            # they can be replaced by the blended cross-fade frames for this stitch point.
+                            if i > 0:
+                                frames_to_remove = min(current_overlap_val, len(final_stitched_frames))
+                                if frames_to_remove > 0:
+                                    del final_stitched_frames[-frames_to_remove:]
+                                    print(f"[CRITICAL DEBUG] Removed {frames_to_remove} duplicate overlap frames before cross-fade (stitch point {i})")
+                            # Blend the overlapping frames
+                            faded_frames = sm_cross_fade_overlap_frames(frames_prev_segment, frames_curr_segment, current_overlap_val, "linear_sharp", crossfade_sharp_amt)
+                            final_stitched_frames.extend(faded_frames)
+                            print(f"[CRITICAL DEBUG] Added {len(faded_frames)} cross-faded frames")
+
+                            # Normal start index for remaining frames
+                            start_index_for_curr_tail = current_overlap_val
+                    else:
+                        start_index_for_curr_tail = 0
+
                     # Add the non-overlapping part of the current segment
-                    start_index_for_curr_tail = current_overlap_val
                     if len(frames_curr_segment) > start_index_for_curr_tail:
                         frames_to_add = frames_curr_segment[start_index_for_curr_tail:]
                         final_stitched_frames.extend(frames_to_add)
