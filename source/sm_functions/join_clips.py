@@ -29,6 +29,7 @@ from ..common_utils import (
 from ..video_utils import (
     extract_frames_from_video as sm_extract_frames_from_video,
     standardize_video_aspect_ratio,
+    stitch_videos_with_crossfade as sm_stitch_videos_with_crossfade,
 )
 from ..vace_frame_utils import (
     create_guide_and_mask_for_generation,
@@ -520,79 +521,32 @@ def _handle_join_clips_task(
                         # Final concatenated output
                         final_output_path = join_clips_dir / f"joined_{task_id}.mp4"
 
-                        if blend_frames > 0:
-                            # Use xfade filter for smooth crossfade transitions
-                            dprint(f"[JOIN_CLIPS] Task {task_id}: Using xfade with {blend_frames}-frame blend at each boundary")
+                        # Use generalized stitch function with frame-level crossfade blending
+                        # This matches the approach used in travel_between_images.py
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: Stitching videos with {blend_frames}-frame crossfade at each boundary")
 
-                            # Calculate blend duration and offsets
-                            blend_duration = blend_frames / target_fps
+                        video_paths = [
+                            clip1_trimmed_path,
+                            Path(transition_video_path),
+                            clip2_trimmed_path
+                        ]
 
-                            # Get frame counts for each clip to calculate offsets
-                            transition_frame_count = context_frame_count * 2 + gap_frame_count  # Total frames in transition video
+                        # Blend between clip1→transition and transition→clip2
+                        blend_frame_counts = [blend_frames, blend_frames]
 
-                            # Duration calculations
-                            clip1_duration = frames_to_keep_clip1 / target_fps
-                            transition_duration = transition_frame_count / target_fps
-
-                            # First xfade offset: end of clip1 minus blend_duration
-                            offset1 = clip1_duration - blend_duration
-
-                            # Second xfade offset: after clip1 + transition - 2*blend (because first blend removes blend_frames)
-                            offset2 = clip1_duration + transition_duration - 2 * blend_duration
-
-                            dprint(f"[JOIN_CLIPS] Task {task_id}: Blend durations - clip1: {clip1_duration:.3f}s, transition: {transition_duration:.3f}s, blend: {blend_duration:.3f}s")
-                            dprint(f"[JOIN_CLIPS] Task {task_id}: Xfade offsets - offset1: {offset1:.3f}s, offset2: {offset2:.3f}s")
-
-                            # Build xfade filter complex command
-                            xfade_cmd = [
-                                'ffmpeg', '-y',
-                                '-i', str(clip1_trimmed_path),
-                                '-i', str(transition_video_path),
-                                '-i', str(clip2_trimmed_path),
-                                '-filter_complex',
-                                f'[0:v][1:v]xfade=transition=fade:duration={blend_duration}:offset={offset1}[v01];'
-                                f'[v01][2:v]xfade=transition=fade:duration={blend_duration}:offset={offset2}[vout]',
-                                '-map', '[vout]',
-                                '-c:v', 'libx264',
-                                '-preset', 'medium',
-                                '-crf', '18',
-                                '-pix_fmt', 'yuv420p',
-                                '-r', str(target_fps),
-                                '-an',
-                                str(final_output_path)
-                            ]
-
-                            result = subprocess.run(xfade_cmd, capture_output=True, text=True, timeout=120)
-                            if result.returncode != 0:
-                                raise ValueError(f"Failed to create xfade transition: {result.stderr}")
-
-                        else:
-                            # No blend - use original concat method with hard cuts
-                            dprint(f"[JOIN_CLIPS] Task {task_id}: Using hard cuts (no blend)")
-
-                            # Create concat list file
-                            concat_list_path = join_clips_dir / f"concat_list_{task_id}.txt"
-                            with open(concat_list_path, 'w') as f:
-                                f.write(f"file '{clip1_trimmed_path.absolute()}'\n")
-                                f.write(f"file '{Path(transition_video_path).absolute()}'\n")
-                                f.write(f"file '{clip2_trimmed_path.absolute()}'\n")
-
-                            # Re-encode to ensure consistent encoding and smooth playback
-                            concat_cmd = [
-                                'ffmpeg', '-y', '-f', 'concat', '-safe', '0',
-                                '-i', str(concat_list_path),
-                                '-c:v', 'libx264',
-                                '-preset', 'medium',
-                                '-crf', '18',
-                                '-pix_fmt', 'yuv420p',
-                                '-r', str(target_fps),
-                                '-an',
-                                str(final_output_path)
-                            ]
-
-                            result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=120)
-                            if result.returncode != 0:
-                                raise ValueError(f"Failed to concatenate clips: {result.stderr}")
+                        try:
+                            created_video = sm_stitch_videos_with_crossfade(
+                                video_paths=video_paths,
+                                blend_frame_counts=blend_frame_counts,
+                                output_path=final_output_path,
+                                fps=target_fps,
+                                crossfade_mode="linear_sharp",
+                                crossfade_sharp_amt=0.3,
+                                dprint=dprint
+                            )
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: Successfully stitched videos with crossfade blending")
+                        except Exception as e:
+                            raise ValueError(f"Failed to stitch videos with crossfade: {e}") from e
 
                         # Verify final output exists
                         if not final_output_path.exists() or final_output_path.stat().st_size == 0:

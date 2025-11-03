@@ -132,6 +132,141 @@ def cross_fade_overlap_frames(
     
     return out_frames
 
+def stitch_videos_with_crossfade(
+    video_paths: list[Path | str],
+    blend_frame_counts: list[int],
+    output_path: Path | str,
+    fps: float,
+    crossfade_mode: str = "linear_sharp",
+    crossfade_sharp_amt: float = 0.3,
+    *,
+    dprint=print
+) -> Path:
+    """
+    Stitch multiple videos together with crossfade blending at boundaries.
+
+    This is a generalized version of the stitching logic from travel_between_images.py
+    that can be used for any video concatenation with smooth crossfades.
+
+    Args:
+        video_paths: List of video file paths to stitch (in order)
+        blend_frame_counts: List of blend frame counts between each pair of videos
+                           Length must be len(video_paths) - 1
+                           blend_frame_counts[0] = blend between video 0 and video 1
+        output_path: Path for the output stitched video
+        fps: Frames per second for output video
+        crossfade_mode: Blending mode for crossfade ("linear_sharp" or "linear")
+        crossfade_sharp_amt: Sharpening amount for linear_sharp mode (0-1)
+        dprint: Print function for logging
+
+    Returns:
+        Path to the created output video
+
+    Example:
+        # Stitch 3 videos with 3-frame blends between each
+        stitch_videos_with_crossfade(
+            video_paths=[clip1, transition, clip2],
+            blend_frame_counts=[3, 3],  # 3 frames blend between clip1→transition, transition→clip2
+            output_path=output.mp4,
+            fps=16
+        )
+    """
+    import cv2
+
+    if len(video_paths) < 2:
+        raise ValueError("Need at least 2 videos to stitch")
+
+    if len(blend_frame_counts) != len(video_paths) - 1:
+        raise ValueError(f"blend_frame_counts must have length {len(video_paths) - 1}, got {len(blend_frame_counts)}")
+
+    dprint(f"[STITCH_VIDEOS] Stitching {len(video_paths)} videos with crossfade blending")
+
+    # Extract frames from all videos
+    all_video_frames = []
+    for i, video_path in enumerate(video_paths):
+        frames = extract_frames_from_video(str(video_path), dprint_func=dprint)
+        if not frames:
+            raise ValueError(f"Failed to extract frames from video {i}: {video_path}")
+        dprint(f"[STITCH_VIDEOS] Video {i}: {len(frames)} frames extracted")
+        all_video_frames.append(frames)
+
+    # Stitch videos together with crossfading
+    final_stitched_frames = []
+
+    for i, frames_curr_segment in enumerate(all_video_frames):
+        if i == 0:
+            # First video: add all frames except those that will be blended with next video
+            blend_with_next = blend_frame_counts[0] if i < len(blend_frame_counts) else 0
+            frames_to_add = frames_curr_segment[:-blend_with_next] if blend_with_next > 0 else frames_curr_segment
+            final_stitched_frames.extend(frames_to_add)
+            dprint(f"[STITCH_VIDEOS] Video 0: Added {len(frames_to_add)} frames (keeping {blend_with_next} for blend)")
+        else:
+            # Subsequent videos: crossfade with previous, then add remaining
+            blend_count = blend_frame_counts[i - 1]
+
+            if blend_count > 0:
+                # Remove the last blend_count frames from accumulated (they'll be replaced by crossfaded versions)
+                frames_to_remove = min(blend_count, len(final_stitched_frames))
+                if frames_to_remove > 0:
+                    frames_prev_for_fade = final_stitched_frames[-frames_to_remove:]
+                    del final_stitched_frames[-frames_to_remove:]
+                    dprint(f"[STITCH_VIDEOS] Removed {frames_to_remove} frames before crossfade at boundary {i-1}→{i}")
+                else:
+                    frames_prev_for_fade = []
+
+                # Get frames for crossfade from current segment
+                frames_curr_for_fade = frames_curr_segment[:blend_count]
+
+                # Perform crossfade
+                faded_frames = cross_fade_overlap_frames(
+                    frames_prev_for_fade,
+                    frames_curr_for_fade,
+                    blend_count,
+                    crossfade_mode,
+                    crossfade_sharp_amt
+                )
+                final_stitched_frames.extend(faded_frames)
+                dprint(f"[STITCH_VIDEOS] Added {len(faded_frames)} crossfaded frames at boundary {i-1}→{i}")
+
+                # Calculate remaining frames to add from current segment
+                # Skip the blended frames and also frames that will be blended with next video (if any)
+                blend_with_next = blend_frame_counts[i] if i < len(blend_frame_counts) else 0
+                start_idx = blend_count
+                end_idx = len(frames_curr_segment) - blend_with_next if blend_with_next > 0 else len(frames_curr_segment)
+
+                if end_idx > start_idx:
+                    frames_to_add = frames_curr_segment[start_idx:end_idx]
+                    final_stitched_frames.extend(frames_to_add)
+                    dprint(f"[STITCH_VIDEOS] Video {i}: Added {len(frames_to_add)} non-overlapping frames (keeping {blend_with_next} for next blend)")
+            else:
+                # No blend: just add all frames (minus those for next blend if any)
+                blend_with_next = blend_frame_counts[i] if i < len(blend_frame_counts) else 0
+                frames_to_add = frames_curr_segment[:-blend_with_next] if blend_with_next > 0 else frames_curr_segment
+                final_stitched_frames.extend(frames_to_add)
+                dprint(f"[STITCH_VIDEOS] Video {i}: Added {len(frames_to_add)} frames (no blend, keeping {blend_with_next} for next)")
+
+    if not final_stitched_frames:
+        raise ValueError("No frames produced after stitching")
+
+    dprint(f"[STITCH_VIDEOS] Total stitched frames: {len(final_stitched_frames)}")
+
+    # Create output video
+    output_path = Path(output_path)
+    height, width = final_stitched_frames[0].shape[:2]
+    resolution_wh = (width, height)
+
+    created_video = create_video_from_frames_list(
+        final_stitched_frames,
+        output_path,
+        fps,
+        resolution_wh
+    )
+
+    dprint(f"[STITCH_VIDEOS] Created stitched video: {created_video}")
+
+    return created_video
+
+
 def extract_frames_from_video(video_path: str | Path, start_frame: int = 0, num_frames: int = None, *, dprint_func=print) -> list[np.ndarray]:
     """
     Extracts frames from a video file as numpy arrays with retry logic for recently encoded videos.
