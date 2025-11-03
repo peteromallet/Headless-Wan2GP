@@ -290,6 +290,9 @@ def _handle_join_clips_task(
 
             start_context_frames = start_all_frames[-context_frame_count:]
             dprint(f"[JOIN_CLIPS] Task {task_id}: Extracted {len(start_context_frames)} frames from end of starting video")
+            dprint(f"[JOIN_CLIPS_ALIGNMENT] Start context frame indices in original video: [{start_frame_count - context_frame_count}:{start_frame_count}]")
+            dprint(f"[JOIN_CLIPS_ALIGNMENT]   Example: frame index {start_frame_count - context_frame_count} → position 0 in context")
+            dprint(f"[JOIN_CLIPS_ALIGNMENT]   Example: frame index {start_frame_count - 1} → position {context_frame_count - 1} in context")
 
             # Extract all frames from ending video, take first N
             end_all_frames = sm_extract_frames_from_video(str(ending_video), dprint_func=dprint)
@@ -300,6 +303,9 @@ def _handle_join_clips_task(
 
             end_context_frames = end_all_frames[:context_frame_count]
             dprint(f"[JOIN_CLIPS] Task {task_id}: Extracted {len(end_context_frames)} frames from beginning of ending video")
+            dprint(f"[JOIN_CLIPS_ALIGNMENT] End context frame indices in original video: [0:{context_frame_count}]")
+            dprint(f"[JOIN_CLIPS_ALIGNMENT]   Example: frame index 0 → position 0 in context")
+            dprint(f"[JOIN_CLIPS_ALIGNMENT]   Example: frame index {context_frame_count - 1} → position {context_frame_count - 1} in context")
 
         except Exception as e:
             error_msg = f"Failed to extract context frames: {e}"
