@@ -192,27 +192,29 @@ def stitch_videos_with_crossfade(
 
     # Stitch videos together with crossfading
     final_stitched_frames = []
+    overlap_frames_for_next_blend = []  # Store overlap frames from previous video for blending
 
     for i, frames_curr_segment in enumerate(all_video_frames):
         if i == 0:
             # First video: add all frames except those that will be blended with next video
             blend_with_next = blend_frame_counts[0] if i < len(blend_frame_counts) else 0
-            frames_to_add = frames_curr_segment[:-blend_with_next] if blend_with_next > 0 else frames_curr_segment
-            final_stitched_frames.extend(frames_to_add)
-            dprint(f"[STITCH_VIDEOS] Video 0: Added {len(frames_to_add)} frames (keeping {blend_with_next} for blend)")
+
+            if blend_with_next > 0:
+                frames_to_add = frames_curr_segment[:-blend_with_next]
+                overlap_frames_for_next_blend = frames_curr_segment[-blend_with_next:]
+                final_stitched_frames.extend(frames_to_add)
+                dprint(f"[STITCH_VIDEOS] Video 0: Added {len(frames_to_add)} frames (keeping {blend_with_next} for blend)")
+            else:
+                final_stitched_frames.extend(frames_curr_segment)
+                dprint(f"[STITCH_VIDEOS] Video 0: Added {len(frames_curr_segment)} frames (no blend)")
         else:
             # Subsequent videos: crossfade with previous, then add remaining
             blend_count = blend_frame_counts[i - 1]
 
-            if blend_count > 0:
-                # Remove the last blend_count frames from accumulated (they'll be replaced by crossfaded versions)
-                frames_to_remove = min(blend_count, len(final_stitched_frames))
-                if frames_to_remove > 0:
-                    frames_prev_for_fade = final_stitched_frames[-frames_to_remove:]
-                    del final_stitched_frames[-frames_to_remove:]
-                    dprint(f"[STITCH_VIDEOS] Removed {frames_to_remove} frames before crossfade at boundary {i-1}→{i}")
-                else:
-                    frames_prev_for_fade = []
+            if blend_count > 0 and overlap_frames_for_next_blend:
+                # Use the overlap frames we saved from previous video
+                frames_prev_for_fade = overlap_frames_for_next_blend
+                dprint(f"[STITCH_VIDEOS] Using {len(frames_prev_for_fade)} overlap frames from previous video for blend")
 
                 # Get frames for crossfade from current segment
                 frames_curr_for_fade = frames_curr_segment[:blend_count]
@@ -232,7 +234,13 @@ def stitch_videos_with_crossfade(
                 # Skip the blended frames and also frames that will be blended with next video (if any)
                 blend_with_next = blend_frame_counts[i] if i < len(blend_frame_counts) else 0
                 start_idx = blend_count
-                end_idx = len(frames_curr_segment) - blend_with_next if blend_with_next > 0 else len(frames_curr_segment)
+
+                if blend_with_next > 0:
+                    end_idx = len(frames_curr_segment) - blend_with_next
+                    overlap_frames_for_next_blend = frames_curr_segment[-blend_with_next:]
+                else:
+                    end_idx = len(frames_curr_segment)
+                    overlap_frames_for_next_blend = []
 
                 if end_idx > start_idx:
                     frames_to_add = frames_curr_segment[start_idx:end_idx]
@@ -241,9 +249,15 @@ def stitch_videos_with_crossfade(
             else:
                 # No blend: just add all frames (minus those for next blend if any)
                 blend_with_next = blend_frame_counts[i] if i < len(blend_frame_counts) else 0
-                frames_to_add = frames_curr_segment[:-blend_with_next] if blend_with_next > 0 else frames_curr_segment
-                final_stitched_frames.extend(frames_to_add)
-                dprint(f"[STITCH_VIDEOS] Video {i}: Added {len(frames_to_add)} frames (no blend, keeping {blend_with_next} for next)")
+
+                if blend_with_next > 0:
+                    frames_to_add = frames_curr_segment[:-blend_with_next]
+                    overlap_frames_for_next_blend = frames_curr_segment[-blend_with_next:]
+                    final_stitched_frames.extend(frames_to_add)
+                    dprint(f"[STITCH_VIDEOS] Video {i}: Added {len(frames_to_add)} frames (no blend, keeping {blend_with_next} for next)")
+                else:
+                    final_stitched_frames.extend(frames_curr_segment)
+                    dprint(f"[STITCH_VIDEOS] Video {i}: Added {len(frames_curr_segment)} frames (no blend)")
 
     if not final_stitched_frames:
         raise ValueError("No frames produced after stitching")
