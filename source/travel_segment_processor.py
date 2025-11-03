@@ -154,6 +154,9 @@ class TravelSegmentProcessor:
             if structure_video_path or structure_guidance_video_url:
                 ctx.dprint(f"[STRUCTURE_VIDEO] Segment {ctx.segment_idx} using structure type: {structure_type}")
             
+            # Detect if this is a single image journey (1 image, no continuation)
+            is_single_image_journey = self._detect_single_image_journey()
+
             # Create guide video using shared function
             guide_video_path = sm_create_guide_video_for_travel_segment(
                 segment_idx_for_logging=ctx.segment_idx,
@@ -170,7 +173,7 @@ class TravelSegmentProcessor:
                 task_id_for_logging=ctx.task_id,
                 full_orchestrator_payload=ctx.full_orchestrator_payload,
                 segment_params=ctx.segment_params,
-                single_image_journey=False,  # Travel segments are not single image journeys
+                single_image_journey=is_single_image_journey,  # Detect single image journeys correctly
                 predefined_output_path=guide_video_final_path,
                 structure_video_path=structure_video_path,
                 structure_video_treatment=structure_video_treatment,
