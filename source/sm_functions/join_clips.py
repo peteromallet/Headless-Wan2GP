@@ -53,7 +53,8 @@ def _handle_join_clips_task(
             - starting_video_path: Path to first video clip
             - ending_video_path: Path to second video clip
             - context_frame_count: Number of frames to extract from each clip
-            - gap_frame_count: Number of frames to generate between clips
+            - gap_frame_count: Number of frames to generate between clips (INSERT mode) or replace (REPLACE mode)
+            - replace_mode: Optional bool (default False). If True, gap frames REPLACE boundary frames instead of being inserted
             - prompt: Generation prompt for the transition
             - aspect_ratio: Optional aspect ratio (e.g., "16:9", "9:16", "1:1") to standardize both videos
             - model: Optional model override (defaults to lightning_baseline_2_2_2)
@@ -81,8 +82,13 @@ def _handle_join_clips_task(
         ending_video_path = task_params_from_db.get("ending_video_path")
         context_frame_count = task_params_from_db.get("context_frame_count", 8)
         gap_frame_count = task_params_from_db.get("gap_frame_count", 53)
+        replace_mode = task_params_from_db.get("replace_mode", False)  # If True, gap REPLACES frames instead of inserting
         prompt = task_params_from_db.get("prompt", "")
         aspect_ratio = task_params_from_db.get("aspect_ratio")  # Optional: e.g., "16:9", "9:16", "1:1"
+
+        dprint(f"[JOIN_CLIPS] Task {task_id}: Mode: {'REPLACE' if replace_mode else 'INSERT'}")
+        if replace_mode:
+            dprint(f"[JOIN_CLIPS] Task {task_id}: gap_frame_count={gap_frame_count} frames will REPLACE boundary frames (no insertion)")
 
         # Validate required parameters
         if not starting_video_path:
@@ -347,6 +353,7 @@ def _handle_join_clips_task(
                 filename_prefix="join",
                 regenerate_anchors=regenerate_anchors,
                 num_anchor_frames=num_anchor_frames,
+                replace_mode=replace_mode,
                 dprint=dprint
             )
         except Exception as e:
@@ -356,7 +363,13 @@ def _handle_join_clips_task(
             traceback.print_exc()
             return False, error_msg
 
-        total_frames = context_frame_count * 2 + gap_frame_count
+        # Calculate total frames based on mode
+        if replace_mode:
+            # REPLACE mode: gap doesn't add frames, total = sum of contexts
+            total_frames = context_frame_count * 2
+        else:
+            # INSERT mode: gap adds frames between contexts
+            total_frames = context_frame_count * 2 + gap_frame_count
 
         # --- 6. Prepare Generation Parameters (using shared helper) ---
         dprint(f"[JOIN_CLIPS] Task {task_id}: Preparing generation parameters...")
@@ -469,10 +482,12 @@ def _handle_join_clips_task(
                         dprint(f"[JOIN_CLIPS] Task {task_id}: Blend frames: {blend_frames} (default: {default_blend_frames}, max safe: {max_safe_blend})")
 
                         # Create trimmed versions of the original clips
-                        # With blend_frames:
+                        # INSERT mode:
                         #   Clip1: Keep extra blend_frames for crossfade with transition
                         #   Clip2: Start earlier by blend_frames for crossfade with transition
-                        # Without blend (blend_frames=0): Original hard cut behavior
+                        # REPLACE mode:
+                        #   Clip1: Remove more frames (context + replaced frames - blend)
+                        #   Clip2: Skip more frames (context + replaced frames - blend)
 
                         with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False, dir=join_clips_dir) as clip1_trimmed_file:
                             clip1_trimmed_path = Path(clip1_trimmed_file.name)
@@ -480,11 +495,17 @@ def _handle_join_clips_task(
                         with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False, dir=join_clips_dir) as clip2_trimmed_file:
                             clip2_trimmed_path = Path(clip2_trimmed_file.name)
 
-                        # Trim clip1: keep all frames except last (context_frame_count - blend_frames)
-                        # This leaves blend_frames overlap for crossfade with transition
-                        frames_to_keep_clip1 = start_frame_count - (context_frame_count - blend_frames)
-
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: Trimming clip1 - keeping {frames_to_keep_clip1}/{start_frame_count} frames")
+                        if replace_mode:
+                            # REPLACE MODE: Remove frames that will be replaced by the generated section
+                            frames_to_replace_from_before = gap_frame_count // 2
+                            frames_to_remove_clip1 = context_frame_count + frames_to_replace_from_before - blend_frames
+                            frames_to_keep_clip1 = start_frame_count - frames_to_remove_clip1
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode trimming clip1 - removing last {frames_to_remove_clip1} frames, keeping {frames_to_keep_clip1}/{start_frame_count}")
+                        else:
+                            # INSERT MODE (original): keep all frames except last (context_frame_count - blend_frames)
+                            # This leaves blend_frames overlap for crossfade with transition
+                            frames_to_keep_clip1 = start_frame_count - (context_frame_count - blend_frames)
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode trimming clip1 - keeping {frames_to_keep_clip1}/{start_frame_count} frames")
 
                         # Use select filter for frame-accurate trimming: frames 0 to (frames_to_keep_clip1 - 1)
                         # setpts resets timestamps for smooth concatenation
@@ -499,12 +520,18 @@ def _handle_join_clips_task(
                         if result.returncode != 0:
                             raise ValueError(f"Failed to trim clip1: {result.stderr}")
 
-                        # Trim clip2: skip first (context_frame_count - blend_frames) frames
-                        # This starts earlier by blend_frames for crossfade with transition
-                        frames_to_skip_clip2 = context_frame_count - blend_frames
-                        frames_remaining_clip2 = end_frame_count - frames_to_skip_clip2
-
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: Trimming clip2 - skipping first {frames_to_skip_clip2}/{end_frame_count} frames, keeping {frames_remaining_clip2}")
+                        if replace_mode:
+                            # REPLACE MODE: Skip frames that will be replaced by the generated section
+                            frames_to_replace_from_after = gap_frame_count - (gap_frame_count // 2)
+                            frames_to_skip_clip2 = context_frame_count + frames_to_replace_from_after - blend_frames
+                            frames_remaining_clip2 = end_frame_count - frames_to_skip_clip2
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode trimming clip2 - skipping first {frames_to_skip_clip2}/{end_frame_count} frames, keeping {frames_remaining_clip2}")
+                        else:
+                            # INSERT MODE (original): skip first (context_frame_count - blend_frames) frames
+                            # This starts earlier by blend_frames for crossfade with transition
+                            frames_to_skip_clip2 = context_frame_count - blend_frames
+                            frames_remaining_clip2 = end_frame_count - frames_to_skip_clip2
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode trimming clip2 - skipping first {frames_to_skip_clip2}/{end_frame_count} frames, keeping {frames_remaining_clip2}")
 
                         # Select frames from context_frame_count onwards and reset PTS for smooth concatenation
                         trim_clip2_cmd = [
