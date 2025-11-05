@@ -38,6 +38,7 @@ def create_guide_and_mask_for_generation(
     filename_prefix: str = "vace_gen",
     regenerate_anchors: bool = False,
     num_anchor_frames: int = 3,
+    replace_mode: bool = False,
     *,
     dprint=print
 ) -> Tuple[Path, Path]:
@@ -50,7 +51,7 @@ def create_guide_and_mask_for_generation(
     Args:
         context_frames_before: Frames to preserve before the gap (numpy arrays)
         context_frames_after: Frames to preserve after the gap (numpy arrays)
-        gap_frame_count: Number of frames to generate in the gap
+        gap_frame_count: Number of frames to generate in the gap (INSERT mode) or replace (REPLACE mode)
         resolution_wh: (width, height) tuple for video resolution
         fps: Target frames per second
         output_dir: Directory to save guide and mask videos
@@ -58,6 +59,7 @@ def create_guide_and_mask_for_generation(
         filename_prefix: Prefix for output filenames (default: "vace_gen")
         regenerate_anchors: If True, exclude anchor frames from guide and regenerate them
         num_anchor_frames: Number of anchor frames to regenerate on each side (default: 3)
+        replace_mode: If True, gap frames REPLACE boundary frames instead of being inserted (default: False)
         dprint: Print function for logging
 
     Returns:
@@ -77,29 +79,50 @@ def create_guide_and_mask_for_generation(
     if resolution_wh[0] <= 0 or resolution_wh[1] <= 0:
         raise ValueError(f"Invalid resolution: {resolution_wh}")
 
-    # Calculate total frames accounting for regenerate_anchors
+    # Calculate total frames accounting for regenerate_anchors and replace_mode
     num_context_before = len(context_frames_before)
     num_context_after = len(context_frames_after)
 
-    # If regenerate_anchors, we'll exclude N anchor frames from each side
-    # and add them as gray placeholders to be generated
-    num_anchor_frames_before = 0
-    num_anchor_frames_after = 0
-    if regenerate_anchors:
-        if num_context_before > 0:
-            num_anchor_frames_before = min(num_anchor_frames, num_context_before)
-        if num_context_after > 0:
-            num_anchor_frames_after = min(num_anchor_frames, num_context_after)
+    # REPLACE MODE: gap frames REPLACE boundary frames instead of being inserted
+    if replace_mode:
+        # In replace mode, gap_frame_count determines how many boundary frames to regenerate
+        # Split the regeneration across the boundary
+        frames_to_replace_from_before = gap_frame_count // 2
+        frames_to_replace_from_after = gap_frame_count - frames_to_replace_from_before
 
-    total_frames = num_context_before + gap_frame_count + num_context_after
+        # Total frames = sum of contexts (gap doesn't add frames, it replaces them)
+        total_frames = num_context_before + num_context_after
 
-    dprint(f"[VACE_UTILS] Task {task_id}: Creating guide and mask videos")
-    dprint(f"[VACE_UTILS]   Context before: {num_context_before} frames")
-    dprint(f"[VACE_UTILS]   Gap: {gap_frame_count} frames")
-    dprint(f"[VACE_UTILS]   Context after: {num_context_after} frames")
-    dprint(f"[VACE_UTILS]   Total: {total_frames} frames")
-    if regenerate_anchors:
-        dprint(f"[VACE_UTILS]   Regenerate anchors: {num_anchor_frames_before} frames at end of before context, {num_anchor_frames_after} frames at start of after context")
+        dprint(f"[VACE_UTILS] Task {task_id}: Creating guide and mask videos (REPLACE MODE)")
+        dprint(f"[VACE_UTILS]   Context before: {num_context_before} frames")
+        dprint(f"[VACE_UTILS]   Context after: {num_context_after} frames")
+        dprint(f"[VACE_UTILS]   Regenerating: {gap_frame_count} boundary frames (replacing {frames_to_replace_from_before} from before, {frames_to_replace_from_after} from after)")
+        dprint(f"[VACE_UTILS]   Total: {total_frames} frames")
+
+        # In replace mode, regenerate_anchors is effectively ignored - gap_frame_count controls regeneration
+        num_anchor_frames_before = 0
+        num_anchor_frames_after = 0
+    else:
+        # INSERT MODE (original behavior)
+        # If regenerate_anchors, we'll exclude N anchor frames from each side
+        # and add them as gray placeholders to be generated
+        num_anchor_frames_before = 0
+        num_anchor_frames_after = 0
+        if regenerate_anchors:
+            if num_context_before > 0:
+                num_anchor_frames_before = min(num_anchor_frames, num_context_before)
+            if num_context_after > 0:
+                num_anchor_frames_after = min(num_anchor_frames, num_context_after)
+
+        total_frames = num_context_before + gap_frame_count + num_context_after
+
+        dprint(f"[VACE_UTILS] Task {task_id}: Creating guide and mask videos (INSERT MODE)")
+        dprint(f"[VACE_UTILS]   Context before: {num_context_before} frames")
+        dprint(f"[VACE_UTILS]   Gap: {gap_frame_count} frames")
+        dprint(f"[VACE_UTILS]   Context after: {num_context_after} frames")
+        dprint(f"[VACE_UTILS]   Total: {total_frames} frames")
+        if regenerate_anchors:
+            dprint(f"[VACE_UTILS]   Regenerate anchors: {num_anchor_frames_before} frames at end of before context, {num_anchor_frames_after} frames at start of after context")
 
     # Ensure output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -119,41 +142,62 @@ def create_guide_and_mask_for_generation(
     guide_frames = []
     gray_frame = sm_create_color_frame(resolution_wh, (128, 128, 128))
 
-    # Add context frames before gap
-    if regenerate_anchors and num_anchor_frames_before > 0:
-        # Exclude the last N anchor frames and add them as gray placeholders later
-        num_preserved_before = num_context_before - num_anchor_frames_before
+    if replace_mode:
+        # REPLACE MODE: Build guide with boundary regeneration
+        # Preserve early frames from context_before, regenerate boundary, preserve late frames from context_after
+        num_preserved_before = num_context_before - frames_to_replace_from_before
+        num_preserved_after = num_context_after - frames_to_replace_from_after
+
+        # Add preserved frames from context_before
         guide_frames.extend(context_frames_before[:num_preserved_before])
-        dprint(f"[VACE_UTILS]   Added {num_preserved_before} context frames (before, excluding {num_anchor_frames_before} anchors)")
-    else:
-        guide_frames.extend(context_frames_before)
-        dprint(f"[VACE_UTILS]   Added {len(context_frames_before)} context frames (before)")
+        dprint(f"[VACE_UTILS]   Added {num_preserved_before} preserved frames from before context")
 
-    # Add gray placeholders for regenerated anchors (last N frames of before context)
-    if regenerate_anchors and num_anchor_frames_before > 0:
-        for _ in range(num_anchor_frames_before):
+        # Add gray placeholders for regenerated boundary frames
+        for _ in range(gap_frame_count):
             guide_frames.append(gray_frame.copy())
-        dprint(f"[VACE_UTILS]   Added {num_anchor_frames_before} gray placeholders for regenerated anchors (end of before context)")
+        dprint(f"[VACE_UTILS]   Added {gap_frame_count} gray placeholders (replacing boundary frames)")
 
-    # Add gray placeholder frames for the gap
-    for _ in range(gap_frame_count):
-        guide_frames.append(gray_frame.copy())
-    dprint(f"[VACE_UTILS]   Added {gap_frame_count} gray placeholder frames (gap)")
+        # Add preserved frames from context_after
+        guide_frames.extend(context_frames_after[frames_to_replace_from_after:])
+        dprint(f"[VACE_UTILS]   Added {num_preserved_after} preserved frames from after context")
 
-    # Add gray placeholders for regenerated anchors (first N frames of after context)
-    if regenerate_anchors and num_anchor_frames_after > 0:
-        for _ in range(num_anchor_frames_after):
-            guide_frames.append(gray_frame.copy())
-        dprint(f"[VACE_UTILS]   Added {num_anchor_frames_after} gray placeholders for regenerated anchors (start of after context)")
-
-    # Add context frames after gap
-    if regenerate_anchors and num_anchor_frames_after > 0:
-        # Exclude the first N anchor frames since we added them as gray placeholders above
-        guide_frames.extend(context_frames_after[num_anchor_frames_after:])
-        dprint(f"[VACE_UTILS]   Added {len(context_frames_after) - num_anchor_frames_after} context frames (after, excluding {num_anchor_frames_after} anchors)")
     else:
-        guide_frames.extend(context_frames_after)
-        dprint(f"[VACE_UTILS]   Added {len(context_frames_after)} context frames (after)")
+        # INSERT MODE (original behavior)
+        # Add context frames before gap
+        if regenerate_anchors and num_anchor_frames_before > 0:
+            # Exclude the last N anchor frames and add them as gray placeholders later
+            num_preserved_before = num_context_before - num_anchor_frames_before
+            guide_frames.extend(context_frames_before[:num_preserved_before])
+            dprint(f"[VACE_UTILS]   Added {num_preserved_before} context frames (before, excluding {num_anchor_frames_before} anchors)")
+        else:
+            guide_frames.extend(context_frames_before)
+            dprint(f"[VACE_UTILS]   Added {len(context_frames_before)} context frames (before)")
+
+        # Add gray placeholders for regenerated anchors (last N frames of before context)
+        if regenerate_anchors and num_anchor_frames_before > 0:
+            for _ in range(num_anchor_frames_before):
+                guide_frames.append(gray_frame.copy())
+            dprint(f"[VACE_UTILS]   Added {num_anchor_frames_before} gray placeholders for regenerated anchors (end of before context)")
+
+        # Add gray placeholder frames for the gap
+        for _ in range(gap_frame_count):
+            guide_frames.append(gray_frame.copy())
+        dprint(f"[VACE_UTILS]   Added {gap_frame_count} gray placeholder frames (gap)")
+
+        # Add gray placeholders for regenerated anchors (first N frames of after context)
+        if regenerate_anchors and num_anchor_frames_after > 0:
+            for _ in range(num_anchor_frames_after):
+                guide_frames.append(gray_frame.copy())
+            dprint(f"[VACE_UTILS]   Added {num_anchor_frames_after} gray placeholders for regenerated anchors (start of after context)")
+
+        # Add context frames after gap
+        if regenerate_anchors and num_anchor_frames_after > 0:
+            # Exclude the first N anchor frames since we added them as gray placeholders above
+            guide_frames.extend(context_frames_after[num_anchor_frames_after:])
+            dprint(f"[VACE_UTILS]   Added {len(context_frames_after) - num_anchor_frames_after} context frames (after, excluding {num_anchor_frames_after} anchors)")
+        else:
+            guide_frames.extend(context_frames_after)
+            dprint(f"[VACE_UTILS]   Added {len(context_frames_after)} context frames (after)")
 
     # Create guide video
     try:
@@ -180,31 +224,49 @@ def create_guide_and_mask_for_generation(
     # Active (white) = gap frames + anchor frames (if regenerate_anchors) we want to generate
     inactive_indices = set()
 
-    # Mark context frames before gap as inactive
-    if regenerate_anchors and num_anchor_frames_before > 0:
-        # Exclude the last N anchor frames - they should be white/generate
-        num_inactive_before = num_context_before - num_anchor_frames_before
-        for i in range(num_inactive_before):
+    if replace_mode:
+        # REPLACE MODE: Mark preserved frames as inactive (black), boundary frames as active (white)
+        # BLACK: first num_preserved_before frames
+        for i in range(num_preserved_before):
             inactive_indices.add(i)
-        dprint(f"[VACE_UTILS]   Marked {num_inactive_before} frames as inactive (before context, excluding {num_anchor_frames_before} anchors)")
-    else:
-        for i in range(num_context_before):
-            inactive_indices.add(i)
-        dprint(f"[VACE_UTILS]   Marked {num_context_before} frames as inactive (before context)")
+        dprint(f"[VACE_UTILS]   Marked {num_preserved_before} frames as inactive (preserved from before context)")
 
-    # Mark context frames after gap as inactive
-    start_of_after_context = num_context_before + gap_frame_count
-    if regenerate_anchors and num_anchor_frames_after > 0:
-        # Exclude the first N anchor frames - they should be white/generate
-        # The anchors start at index start_of_after_context, so start marking inactive from start_of_after_context + num_anchor_frames_after
-        for i in range(start_of_after_context + num_anchor_frames_after, total_frames):
+        # WHITE: next gap_frame_count frames (the boundary region to regenerate)
+        # These are automatically active (not added to inactive_indices)
+
+        # BLACK: last num_preserved_after frames
+        start_of_preserved_after = num_preserved_before + gap_frame_count
+        for i in range(start_of_preserved_after, total_frames):
             inactive_indices.add(i)
-        num_inactive_after = total_frames - (start_of_after_context + num_anchor_frames_after)
-        dprint(f"[VACE_UTILS]   Marked {num_inactive_after} frames as inactive (after context, excluding {num_anchor_frames_after} anchors)")
+        dprint(f"[VACE_UTILS]   Marked {num_preserved_after} frames as inactive (preserved from after context)")
+
     else:
-        for i in range(start_of_after_context, total_frames):
-            inactive_indices.add(i)
-        dprint(f"[VACE_UTILS]   Marked {total_frames - start_of_after_context} frames as inactive (after context)")
+        # INSERT MODE (original behavior)
+        # Mark context frames before gap as inactive
+        if regenerate_anchors and num_anchor_frames_before > 0:
+            # Exclude the last N anchor frames - they should be white/generate
+            num_inactive_before = num_context_before - num_anchor_frames_before
+            for i in range(num_inactive_before):
+                inactive_indices.add(i)
+            dprint(f"[VACE_UTILS]   Marked {num_inactive_before} frames as inactive (before context, excluding {num_anchor_frames_before} anchors)")
+        else:
+            for i in range(num_context_before):
+                inactive_indices.add(i)
+            dprint(f"[VACE_UTILS]   Marked {num_context_before} frames as inactive (before context)")
+
+        # Mark context frames after gap as inactive
+        start_of_after_context = num_context_before + gap_frame_count
+        if regenerate_anchors and num_anchor_frames_after > 0:
+            # Exclude the first N anchor frames - they should be white/generate
+            # The anchors start at index start_of_after_context, so start marking inactive from start_of_after_context + num_anchor_frames_after
+            for i in range(start_of_after_context + num_anchor_frames_after, total_frames):
+                inactive_indices.add(i)
+            num_inactive_after = total_frames - (start_of_after_context + num_anchor_frames_after)
+            dprint(f"[VACE_UTILS]   Marked {num_inactive_after} frames as inactive (after context, excluding {num_anchor_frames_after} anchors)")
+        else:
+            for i in range(start_of_after_context, total_frames):
+                inactive_indices.add(i)
+            dprint(f"[VACE_UTILS]   Marked {total_frames - start_of_after_context} frames as inactive (after context)")
 
     # Active frames are everything not in inactive_indices
     active_indices = [i for i in range(total_frames) if i not in inactive_indices]
