@@ -496,11 +496,14 @@ def _handle_join_clips_task(
                             clip2_trimmed_path = Path(clip2_trimmed_file.name)
 
                         if replace_mode:
-                            # REPLACE MODE: Remove frames that will be replaced by the generated section
-                            frames_to_replace_from_before = gap_frame_count // 2
-                            frames_to_remove_clip1 = context_frame_count + frames_to_replace_from_before - blend_frames
+                            # REPLACE MODE: Trim to blend with transition's preserved section
+                            # Transition starts with preserved frames from Clip1 context
+                            # Keep Clip1 up to (but not including) where transition's preserved section starts, plus blend overlap
+                            # This ensures we blend Clip1[n] with Transition[0] which contains Clip1[n]' (VACE processed)
+                            frames_to_remove_clip1 = context_frame_count - blend_frames
                             frames_to_keep_clip1 = start_frame_count - frames_to_remove_clip1
                             dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode trimming clip1 - removing last {frames_to_remove_clip1} frames, keeping {frames_to_keep_clip1}/{start_frame_count}")
+                            dprint(f"[JOIN_CLIPS] Task {task_id}:   This keeps blend overlap with transition's preserved section")
                         else:
                             # INSERT MODE (original): keep all frames except last (context_frame_count - blend_frames)
                             # This leaves blend_frames overlap for crossfade with transition
@@ -521,11 +524,14 @@ def _handle_join_clips_task(
                             raise ValueError(f"Failed to trim clip1: {result.stderr}")
 
                         if replace_mode:
-                            # REPLACE MODE: Skip frames that will be replaced by the generated section
-                            frames_to_replace_from_after = gap_frame_count - (gap_frame_count // 2)
-                            frames_to_skip_clip2 = context_frame_count + frames_to_replace_from_after - blend_frames
+                            # REPLACE MODE: Skip to blend with transition's preserved section
+                            # Transition ends with preserved frames from Clip2 context
+                            # Skip to where transition's preserved section ends, minus blend overlap
+                            # This ensures we blend Transition[-blend] with Clip2[n] which contains Clip2[n]' (VACE processed)
+                            frames_to_skip_clip2 = context_frame_count - blend_frames
                             frames_remaining_clip2 = end_frame_count - frames_to_skip_clip2
                             dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode trimming clip2 - skipping first {frames_to_skip_clip2}/{end_frame_count} frames, keeping {frames_remaining_clip2}")
+                            dprint(f"[JOIN_CLIPS] Task {task_id}:   This keeps blend overlap with transition's preserved section")
                         else:
                             # INSERT MODE (original): skip first (context_frame_count - blend_frames) frames
                             # This starts earlier by blend_frames for crossfade with transition
