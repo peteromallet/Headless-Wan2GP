@@ -3363,23 +3363,38 @@ def main():
                                         task_id=current_task_id_for_status_update
                                     )
 
-                                    # Copy thumbnail from final join to orchestrator
-                                    thumbnail_url = current_task_params.get("thumbnail_url")
-                                    if thumbnail_url:
-                                        try:
+                                    # Construct thumbnail URL from video URL
+                                    # Pattern: video = "project_id/joined_xxx.mp4" -> thumbnail = "project_id/thumbnails/thumbnail.jpg"
+                                    try:
+                                        # Extract storage path from URL (e.g., "702a2ebf-xxx/joined_xxx.mp4")
+                                        if orchestrator_storage_url.startswith("http"):
+                                            # Full URL - extract the path after bucket name
+                                            storage_path = orchestrator_storage_url.split("/image_uploads/")[-1]
+                                        else:
+                                            storage_path = orchestrator_storage_url
+
+                                        # Get project folder (first part of path)
+                                        project_folder = storage_path.split("/")[0] if "/" in storage_path else None
+
+                                        if project_folder:
+                                            # Construct thumbnail URL
+                                            thumbnail_url = f"https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/{project_folder}/thumbnails/thumbnail.jpg"
+
+                                            # Update orchestrator with thumbnail
                                             db_ops.SUPABASE_CLIENT.table(db_ops.PG_TABLE_NAME)\
                                                 .update({"params": {"thumbnail_url": thumbnail_url}})\
                                                 .eq("id", orchestrator_id)\
                                                 .execute()
+
                                             headless_logger.info(
                                                 f"Set orchestrator thumbnail: {thumbnail_url}",
                                                 task_id=orchestrator_id
                                             )
-                                        except Exception as e_thumb:
-                                            headless_logger.warning(
-                                                f"Failed to set orchestrator thumbnail: {e_thumb}",
-                                                task_id=orchestrator_id
-                                            )
+                                    except Exception as e_thumb:
+                                        headless_logger.warning(
+                                            f"Failed to set orchestrator thumbnail: {e_thumb}",
+                                            task_id=orchestrator_id
+                                        )
                             except Exception as e_orch:
                                 headless_logger.error(
                                     f"Failed to mark join orchestrator complete: {e_orch}",
