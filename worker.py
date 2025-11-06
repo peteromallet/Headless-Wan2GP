@@ -3362,6 +3362,24 @@ def main():
                                         f"Join orchestrator complete (final join): {orchestrator_id[:8]}",
                                         task_id=current_task_id_for_status_update
                                     )
+
+                                    # Copy thumbnail from final join to orchestrator
+                                    thumbnail_url = current_task_params.get("thumbnail_url")
+                                    if thumbnail_url:
+                                        try:
+                                            db_ops.SUPABASE_CLIENT.table(db_ops.PG_TABLE_NAME)\
+                                                .update({"params": {"thumbnail_url": thumbnail_url}})\
+                                                .eq("id", orchestrator_id)\
+                                                .execute()
+                                            headless_logger.info(
+                                                f"Set orchestrator thumbnail: {thumbnail_url}",
+                                                task_id=orchestrator_id
+                                            )
+                                        except Exception as e_thumb:
+                                            headless_logger.warning(
+                                                f"Failed to set orchestrator thumbnail: {e_thumb}",
+                                                task_id=orchestrator_id
+                                            )
                             except Exception as e_orch:
                                 headless_logger.error(
                                     f"Failed to mark join orchestrator complete: {e_orch}",
