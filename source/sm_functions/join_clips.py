@@ -24,7 +24,8 @@ from ..common_utils import (
     ensure_valid_prompt,
     ensure_valid_negative_prompt,
     get_video_frame_count_and_fps,
-    download_video_if_url
+    download_video_if_url,
+    save_frame_from_video
 )
 from ..video_utils import (
     extract_frames_from_video as sm_extract_frames_from_video,
@@ -699,6 +700,29 @@ def _handle_join_clips_task(
                         # Verify final output exists
                         if not final_output_path.exists() or final_output_path.stat().st_size == 0:
                             raise ValueError(f"Final concatenated video is missing or empty")
+
+                        # Extract poster image/thumbnail from the final video
+                        poster_output_path = final_output_path.with_suffix('.jpg')
+                        try:
+                            # Get total frame count for the final video
+                            final_frame_count, _ = get_video_frame_count_and_fps(final_output_path)
+
+                            # Extract middle frame as poster
+                            poster_frame_index = final_frame_count // 2
+
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: Extracting poster image (frame {poster_frame_index}/{final_frame_count})")
+
+                            if save_frame_from_video(
+                                final_output_path,
+                                poster_frame_index,
+                                poster_output_path,
+                                parsed_res_wh
+                            ):
+                                dprint(f"[JOIN_CLIPS] Task {task_id}: Poster image saved: {poster_output_path}")
+                            else:
+                                dprint(f"[JOIN_CLIPS] Task {task_id}: Warning: Failed to extract poster image")
+                        except Exception as poster_error:
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: Warning: Poster extraction failed: {poster_error}")
 
                         # Clean up temporary files (unless debug mode is enabled)
                         debug_mode = task_params_from_db.get("debug", False)
