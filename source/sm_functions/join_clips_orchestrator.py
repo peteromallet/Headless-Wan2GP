@@ -96,7 +96,7 @@ def _handle_join_clips_orchestrator_task(
         # === 2. IDEMPOTENCY CHECK ===
         dprint(f"[JOIN_ORCHESTRATOR] Checking for existing child tasks")
         existing_child_tasks = db_ops.get_orchestrator_child_tasks(orchestrator_task_id_str)
-        existing_joins = existing_child_tasks.get('join_clips_child', [])
+        existing_joins = existing_child_tasks.get('join_clips', [])
 
         if existing_joins:
             dprint(f"[JOIN_ORCHESTRATOR] Found {len(existing_joins)} existing join tasks")
@@ -184,7 +184,7 @@ def _handle_join_clips_orchestrator_task(
             # Create task with dependency chain
             actual_db_row_id = db_ops.add_task_to_db(
                 task_payload=join_payload,
-                task_type_str="join_clips_child",
+                task_type_str="join_clips",
                 dependant_on=previous_join_task_id
             )
 

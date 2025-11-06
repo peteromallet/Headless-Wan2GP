@@ -175,11 +175,35 @@ def _handle_join_clips_task(
         if replace_mode:
             dprint(f"[JOIN_CLIPS] Task {task_id}: gap_frame_count={gap_frame_count} frames will REPLACE boundary frames (no insertion)")
 
-        # Validate required parameters
+        # Check if this is part of an orchestrator and starting_video_path needs to be fetched
+        orchestrator_task_id_ref = task_params_from_db.get("orchestrator_task_id_ref")
+        is_first_join = task_params_from_db.get("is_first_join", False)
+
         if not starting_video_path:
-            error_msg = "starting_video_path is required"
-            dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
-            return False, error_msg
+            # Check if this is an orchestrator child task that needs to fetch predecessor output
+            if orchestrator_task_id_ref:
+                if is_first_join:
+                    error_msg = "First join in orchestrator must have starting_video_path explicitly set"
+                    dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
+                    return False, error_msg
+
+                dprint(f"[JOIN_CLIPS] Task {task_id}: Part of orchestrator {orchestrator_task_id_ref}, fetching predecessor output")
+
+                # Fetch predecessor output using edge function
+                predecessor_id, predecessor_output = db_ops.get_predecessor_output_via_edge_function(task_id)
+
+                if not predecessor_output:
+                    error_msg = f"Failed to fetch predecessor output (predecessor_id={predecessor_id})"
+                    dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
+                    return False, error_msg
+
+                starting_video_path = predecessor_output
+                dprint(f"[JOIN_CLIPS] Task {task_id}: Fetched predecessor output: {predecessor_output}")
+            else:
+                # Standalone join_clips task without starting_video_path
+                error_msg = "starting_video_path is required"
+                dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
+                return False, error_msg
 
         if not ending_video_path:
             error_msg = "ending_video_path is required"
@@ -192,8 +216,13 @@ def _handle_join_clips_task(
             dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
             return False, error_msg
 
-        # Create working directory early so we can use it for downloads
-        join_clips_dir = main_output_dir_base / "join_clips" / task_id
+        # Create working directory - use custom dir if provided by orchestrator
+        if "join_output_dir" in task_params_from_db:
+            join_clips_dir = Path(task_params_from_db["join_output_dir"])
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Using orchestrator output dir: {join_clips_dir}")
+        else:
+            join_clips_dir = main_output_dir_base / "join_clips" / task_id
+
         join_clips_dir.mkdir(parents=True, exist_ok=True)
 
         # Download videos if they are URLs (e.g., Supabase storage URLs)
@@ -776,100 +805,6 @@ def _handle_join_clips_task(
     except Exception as e:
         error_msg = f"Unexpected error in join_clips handler: {e}"
         dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
-        import traceback
-        traceback.print_exc()
-        return False, error_msg
-
-
-def _handle_join_clips_child_task(
-    task_params_from_db: dict,
-    main_output_dir_base: Path,
-    task_id: str,
-    task_queue = None,
-    *, dprint
-) -> Tuple[bool, str]:
-    """
-    Handle join_clips_child task - part of join_clips_orchestrator workflow.
-
-    This is a wrapper around _handle_join_clips_task() that adds orchestrator-specific logic:
-    - Fetches starting_video_path from predecessor task if not provided
-    - Uses custom output directory structure for orchestrator runs
-
-    Args:
-        task_params_from_db: Task parameters (same as join_clips, but starting_video_path may be None)
-        main_output_dir_base: Base output directory
-        task_id: Task ID for logging
-        task_queue: HeadlessTaskQueue instance
-        dprint: Print function for logging
-
-    Returns:
-        Tuple of (success: bool, output_path_or_message: str)
-    """
-    dprint(f"[JOIN_CLIPS_CHILD] Task {task_id}: Starting child task handler")
-
-    try:
-        # Extract orchestrator context
-        orchestrator_task_id_ref = task_params_from_db.get("orchestrator_task_id_ref")
-        orchestrator_run_id = task_params_from_db.get("orchestrator_run_id")
-        join_index = task_params_from_db.get("join_index", 0)
-        is_first_join = task_params_from_db.get("is_first_join", False)
-
-        dprint(f"[JOIN_CLIPS_CHILD] Task {task_id}: Orchestrator={orchestrator_task_id_ref}, Run={orchestrator_run_id}, Index={join_index}")
-
-        # Check if starting_video_path needs to be fetched from predecessor
-        starting_video_path = task_params_from_db.get("starting_video_path")
-
-        if starting_video_path is None:
-            if is_first_join:
-                error_msg = "First join must have starting_video_path explicitly set"
-                dprint(f"[JOIN_CLIPS_CHILD_ERROR] Task {task_id}: {error_msg}")
-                return False, error_msg
-
-            dprint(f"[JOIN_CLIPS_CHILD] Task {task_id}: starting_video_path is None, fetching from predecessor")
-
-            # Fetch predecessor output
-            predecessor_id, predecessor_output = db_ops.get_predecessor_output_via_edge_function(task_id)
-
-            if not predecessor_output:
-                error_msg = f"Failed to fetch predecessor output (predecessor_id={predecessor_id})"
-                dprint(f"[JOIN_CLIPS_CHILD_ERROR] Task {task_id}: {error_msg}")
-                return False, error_msg
-
-            starting_video_path = predecessor_output
-            dprint(f"[JOIN_CLIPS_CHILD] Task {task_id}: Fetched predecessor output: {predecessor_output}")
-
-        # Update task params with resolved starting_video_path
-        task_params_with_resolved_path = task_params_from_db.copy()
-        task_params_with_resolved_path["starting_video_path"] = starting_video_path
-
-        # Use custom output directory if specified by orchestrator
-        if "join_output_dir" in task_params_from_db:
-            custom_output_dir = Path(task_params_from_db["join_output_dir"])
-            custom_output_dir.mkdir(parents=True, exist_ok=True)
-            dprint(f"[JOIN_CLIPS_CHILD] Task {task_id}: Using custom output dir: {custom_output_dir}")
-        else:
-            custom_output_dir = main_output_dir_base
-
-        # Delegate to existing join_clips handler
-        dprint(f"[JOIN_CLIPS_CHILD] Task {task_id}: Delegating to _handle_join_clips_task()")
-        success, result = _handle_join_clips_task(
-            task_params_from_db=task_params_with_resolved_path,
-            main_output_dir_base=custom_output_dir,
-            task_id=task_id,
-            task_queue=task_queue,
-            dprint=dprint
-        )
-
-        if success:
-            dprint(f"[JOIN_CLIPS_CHILD] Task {task_id}: Successfully completed join {join_index}")
-        else:
-            dprint(f"[JOIN_CLIPS_CHILD] Task {task_id}: Join {join_index} failed: {result}")
-
-        return success, result
-
-    except Exception as e:
-        error_msg = f"Unexpected error in join_clips_child handler: {e}"
-        dprint(f"[JOIN_CLIPS_CHILD_ERROR] Task {task_id}: {error_msg}")
         import traceback
         traceback.print_exc()
         return False, error_msg
