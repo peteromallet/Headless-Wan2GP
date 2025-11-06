@@ -189,6 +189,10 @@ python test_join_clips_orchestrator.py \
 | `negative_prompt` | `str` | No | "" | Negative prompt |
 | `model` | `str` | No | "lightning_baseline_2_2_2" | Model for generation |
 | `aspect_ratio` | `str` | No | None | Standardize clips (e.g., "16:9") |
+| `use_causvid_lora` | `bool` | No | False | Enable CausVid LoRA |
+| `use_lighti2x_lora` | `bool` | No | False | Enable LightI2X LoRA |
+| `apply_reward_lora` | `bool` | No | False | Enable Reward LoRA |
+| `additional_loras` | `dict` | No | {} | Additional LoRAs {name: weight} |
 | `output_base_dir` | `str` | No | "./outputs/" | Base output directory |
 | `per_join_settings` | `list[dict]` | No | [] | Per-join overrides (see below) |
 
@@ -203,6 +207,34 @@ orchestrator_payload = {
     "per_join_settings": [
         {"prompt": "fade to sunset", "gap_frame_count": 30},  # Override for join 0
         {"prompt": "night falls"},  # Override for join 1
+    ]
+}
+```
+
+### LoRA Usage
+
+Apply LoRAs to all transitions:
+
+```python
+orchestrator_payload = {
+    "clip_list": [...],
+    "prompt": "cinematic transition",
+    "use_causvid_lora": True,  # Apply to all joins
+    "additional_loras": {
+        "film_grain": 0.8,
+        "vintage_style": 0.5
+    }
+}
+```
+
+Or override per join:
+
+```python
+orchestrator_payload = {
+    "clip_list": [...],
+    "per_join_settings": [
+        {"additional_loras": {"slow_motion": 1.0}},  # Join 0: slow motion
+        {"additional_loras": {"fast_cut": 0.7}}      # Join 1: fast cut
     ]
 }
 ```
