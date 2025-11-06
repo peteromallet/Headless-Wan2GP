@@ -39,6 +39,7 @@ def create_guide_and_mask_for_generation(
     regenerate_anchors: bool = False,
     num_anchor_frames: int = 3,
     replace_mode: bool = False,
+    total_frames: int = None,
     *,
     dprint=print
 ) -> Tuple[Path, Path]:
@@ -90,8 +91,9 @@ def create_guide_and_mask_for_generation(
         frames_to_replace_from_before = gap_frame_count // 2
         frames_to_replace_from_after = gap_frame_count - frames_to_replace_from_before
 
-        # Total frames = sum of contexts (gap doesn't add frames, it replaces them)
-        total_frames = num_context_before + num_context_after
+        # Total frames: use provided total_frames (for quantization) or default to sum of contexts
+        if total_frames is None:
+            total_frames = num_context_before + num_context_after
 
         dprint(f"[VACE_UTILS] Task {task_id}: Creating guide and mask videos (REPLACE MODE)")
         dprint(f"[VACE_UTILS]   Context before: {num_context_before} frames")
