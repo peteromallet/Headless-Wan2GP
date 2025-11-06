@@ -897,7 +897,7 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             "i2v_22": "i2v_2_2",  # Wan 2.2 I2V
             "hunyuan": "hunyuan",
             "ltxv": "ltxv_13B",
-            "join_clips": "lightning_baseline_2_2_2",  # Join clips uses Lightning baseline for fast generation
+            "join_clips_segment": "lightning_baseline_2_2_2",  # Join clips segment uses Lightning baseline for fast generation
             "inpaint_frames": "lightning_baseline_2_2_2",  # Inpaint frames uses Lightning baseline for fast generation
             # Qwen Image Edit task types (all use qwen_image_edit_20B model)
             "qwen_image_edit": "qwen_image_edit_20B",  # Basic image editing with optional LoRAs
@@ -2611,18 +2611,6 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
             task_id=task_id,
             dprint=dprint
         )
-    elif task_type == "join_clips":
-        headless_logger.debug("Delegating to join clips handler", task_id=task_id)
-        # Inject debug_mode from CLI args if not already set in task params
-        if "debug" not in task_params_dict and debug_mode:
-            task_params_dict["debug"] = True
-        return _handle_join_clips_task(
-            task_params_from_db=task_params_dict,
-            main_output_dir_base=main_output_dir_base,
-            task_id=task_id,
-            task_queue=task_queue,
-            dprint=dprint
-        )
     elif task_type == "join_clips_orchestrator":
         headless_logger.debug("Delegating to join clips orchestrator handler", task_id=task_id)
         # Ensure the orchestrator uses the DB row ID as its canonical task_id
@@ -2639,8 +2627,11 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
             dprint=task_dprint
         )
     elif task_type == "join_clips_segment":
-        headless_logger.debug("Delegating to join clips segment handler (orchestrator child)", task_id=task_id)
-        # Reuse join_clips handler - it auto-detects orchestrator context
+        headless_logger.debug("Delegating to join clips segment handler", task_id=task_id)
+        # Inject debug_mode from CLI args if not already set in task params
+        if "debug" not in task_params_dict and debug_mode:
+            task_params_dict["debug"] = True
+        # Handler auto-detects orchestrator context vs standalone
         return _handle_join_clips_task(
             task_params_from_db=task_params_dict,
             main_output_dir_base=main_output_dir_base,
