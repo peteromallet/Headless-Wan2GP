@@ -38,6 +38,90 @@ from ..vace_frame_utils import (
 from .. import db_operations as db_ops
 
 
+def _calculate_vace_quantization(context_frame_count: int, gap_frame_count: int, replace_mode: bool) -> dict:
+    """
+    Calculate VACE quantization adjustments for frame counts.
+
+    VACE requires frame counts to match the pattern 4n+1 (e.g., 45, 49, 53).
+    When we request a frame count that doesn't match this pattern, VACE will
+    quantize down to the nearest valid count.
+
+    Args:
+        context_frame_count: Number of frames from each clip's boundary
+        gap_frame_count: Number of frames to insert/replace
+        replace_mode: Whether gap replaces frames (True) or inserts between (False)
+
+    Returns:
+        dict with:
+            - total_frames: Actual frame count VACE will generate
+            - gap_for_guide: Adjusted gap to use in guide/mask creation
+            - quantization_shift: Number of frames dropped by VACE (0 if no quantization)
+    """
+    # Calculate desired total
+    if replace_mode:
+        desired_total = context_frame_count * 2
+    else:
+        desired_total = context_frame_count * 2 + gap_frame_count
+
+    # Apply VACE quantization (4n + 1)
+    actual_total = ((desired_total - 1) // 4) * 4 + 1
+    quantization_shift = desired_total - actual_total
+
+    # Adjust gap to account for dropped frames
+    gap_for_guide = gap_frame_count - quantization_shift
+
+    return {
+        'total_frames': actual_total,
+        'gap_for_guide': gap_for_guide,
+        'quantization_shift': quantization_shift,
+    }
+
+
+def _calculate_replace_mode_clip2_skip(
+    context_frame_count: int,
+    gap_for_guide: int,
+    blend_frames: int,
+    quantization_shift: int
+) -> int:
+    """
+    Calculate how many frames to skip from clip2 start in REPLACE mode.
+
+    REPLACE mode preserves portions of both clip boundaries in the bridge.
+    Due to VACE quantization, the preserved section gets SHIFTED earlier in
+    the original clip by exactly quantization_shift frames.
+
+    Example: context=24, gap=16, blend=3
+        - Guide requests: 48 frames total (24 + 24)
+        - VACE generates: 45 frames (quantization_shift = 3)
+        - Guide specifies: preserve clip2[7:24] (17 frames)
+        - VACE actually preserves: clip2[4:21] (shifted by -3)
+        - To align crossfade, clip2 must start at frame 18 (not 21)
+
+    Args:
+        context_frame_count: Number of frames in original context extraction
+        gap_for_guide: Adjusted gap used in guide/mask (after quantization)
+        blend_frames: Number of frames to blend in crossfade
+        quantization_shift: Frames dropped by VACE quantization
+
+    Returns:
+        Number of frames to skip from start of clip2
+    """
+    # How the gap is split between before/after contexts
+    frames_replaced_from_after = gap_for_guide - (gap_for_guide // 2)
+
+    # How many frames are preserved from the clip2 context
+    preserved_frame_count = context_frame_count - frames_replaced_from_after
+
+    # Base calculation: skip replaced frames + preserved frames - blend overlap
+    base_skip = frames_replaced_from_after + (preserved_frame_count - blend_frames)
+
+    # CRITICAL: VACE shifts the preserved section by quantization_shift
+    # The bridge actually contains earlier frames than the guide specified
+    actual_skip = base_skip - quantization_shift
+
+    return actual_skip
+
+
 def _handle_join_clips_task(
     task_params_from_db: dict,
     main_output_dir_base: Path,
@@ -341,11 +425,32 @@ def _handle_join_clips_task(
         num_anchor_frames = task_params_from_db.get("num_anchor_frames", 3)
         dprint(f"[JOIN_CLIPS] Task {task_id}: regenerate_anchors={regenerate_anchors}, num_anchor_frames={num_anchor_frames}")
 
+        # Calculate VACE quantization adjustments
+        quantization_result = _calculate_vace_quantization(
+            context_frame_count=context_frame_count,
+            gap_frame_count=gap_frame_count,
+            replace_mode=replace_mode
+        )
+
+        total_frames = quantization_result['total_frames']
+        gap_for_guide = quantization_result['gap_for_guide']
+        quantization_shift = quantization_result['quantization_shift']
+
+        if quantization_shift > 0:
+            dprint(f"[JOIN_CLIPS] Task {task_id}: VACE quantization: {gap_frame_count + quantization_shift} → {total_frames} frames")
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Gap adjusted: {gap_frame_count} → {gap_for_guide} for guide/mask")
+
+            if replace_mode:
+                dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - quantization will shift preserved section by -{quantization_shift} frames")
+            else:
+                dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode - gap reduced to {gap_for_guide} frames")
+
+        # Create guide/mask with adjusted gap
         try:
             created_guide_video, created_mask_video = create_guide_and_mask_for_generation(
                 context_frames_before=start_context_frames,
                 context_frames_after=end_context_frames,
-                gap_frame_count=gap_frame_count,
+                gap_frame_count=gap_for_guide,  # Use quantization-adjusted gap
                 resolution_wh=parsed_res_wh,
                 fps=target_fps,
                 output_dir=join_clips_dir,
@@ -362,14 +467,6 @@ def _handle_join_clips_task(
             import traceback
             traceback.print_exc()
             return False, error_msg
-
-        # Calculate total frames based on mode
-        if replace_mode:
-            # REPLACE mode: gap doesn't add frames, total = sum of contexts
-            total_frames = context_frame_count * 2
-        else:
-            # INSERT mode: gap adds frames between contexts
-            total_frames = context_frame_count * 2 + gap_frame_count
 
         # --- 6. Prepare Generation Parameters (using shared helper) ---
         dprint(f"[JOIN_CLIPS] Task {task_id}: Preparing generation parameters...")
@@ -456,6 +553,14 @@ def _handle_join_clips_task(
                     dprint(f"[JOIN_CLIPS] Task {task_id}: Generation completed successfully in {processing_time:.1f}s")
                     dprint(f"[JOIN_CLIPS] Task {task_id}: Transition video: {transition_video_path}")
 
+                    # IMPORTANT: Check actual frame count vs expected
+                    # VACE may generate fewer frames than requested (e.g., 45 instead of 48)
+                    actual_transition_frames, _ = get_video_frame_count_and_fps(transition_video_path)
+                    if actual_transition_frames != total_frames:
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: ⚠️  Frame count mismatch! Expected {total_frames}, got {actual_transition_frames}")
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: Adjusting calculations for actual frame count")
+                        total_frames = actual_transition_frames  # Use actual count for subsequent calculations
+
                     # --- 8. Concatenate Full Clips with Transition ---
                     dprint(f"[JOIN_CLIPS] Task {task_id}: Concatenating full clips with transition...")
 
@@ -524,17 +629,22 @@ def _handle_join_clips_task(
                             raise ValueError(f"Failed to trim clip1: {result.stderr}")
 
                         if replace_mode:
-                            # REPLACE MODE: Skip to blend with transition's preserved section
-                            # Transition ends with preserved frames from Clip2 context
-                            # Skip to where transition's preserved section ends, minus blend overlap
-                            # This ensures we blend Transition[-blend] with Clip2[n] which contains Clip2[n]' (VACE processed)
-                            frames_to_skip_clip2 = context_frame_count - blend_frames
+                            # REPLACE MODE: Calculate clip2 skip accounting for VACE quantization shift
+                            frames_to_skip_clip2 = _calculate_replace_mode_clip2_skip(
+                                context_frame_count=context_frame_count,
+                                gap_for_guide=gap_for_guide,
+                                blend_frames=blend_frames,
+                                quantization_shift=quantization_shift
+                            )
                             frames_remaining_clip2 = end_frame_count - frames_to_skip_clip2
-                            dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode trimming clip2 - skipping first {frames_to_skip_clip2}/{end_frame_count} frames, keeping {frames_remaining_clip2}")
-                            dprint(f"[JOIN_CLIPS] Task {task_id}:   This keeps blend overlap with transition's preserved section")
+
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode trimming clip2")
+                            dprint(f"[JOIN_CLIPS] Task {task_id}:   Skipping first {frames_to_skip_clip2}/{end_frame_count} frames")
+                            dprint(f"[JOIN_CLIPS] Task {task_id}:   Keeping {frames_remaining_clip2} frames")
+                            dprint(f"[JOIN_CLIPS] Task {task_id}:   Quantization shift applied: -{quantization_shift} frames")
+                            dprint(f"[JOIN_CLIPS] Task {task_id}:   Crossfade: {blend_frames} frames starting at clip2[{frames_to_skip_clip2}]")
                         else:
-                            # INSERT MODE (original): skip first (context_frame_count - blend_frames) frames
-                            # This starts earlier by blend_frames for crossfade with transition
+                            # INSERT MODE: Standard calculation
                             frames_to_skip_clip2 = context_frame_count - blend_frames
                             frames_remaining_clip2 = end_frame_count - frames_to_skip_clip2
                             dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode trimming clip2 - skipping first {frames_to_skip_clip2}/{end_frame_count} frames, keeping {frames_remaining_clip2}")
@@ -557,6 +667,11 @@ def _handle_join_clips_task(
                         # Use generalized stitch function with frame-level crossfade blending
                         # This matches the approach used in travel_between_images.py
                         dprint(f"[JOIN_CLIPS] Task {task_id}: Stitching videos with {blend_frames}-frame crossfade at each boundary")
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: === FRAME ALIGNMENT DEBUG ===")
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: Transition video has {total_frames} frames")
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: Transition last {blend_frames} frames: [{total_frames - blend_frames}:{total_frames}]")
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: Clip2 trimmed starts at original frame {frames_to_skip_clip2}")
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: Clip2 trimmed first {blend_frames} frames = clip2[{frames_to_skip_clip2}:{frames_to_skip_clip2 + blend_frames}]")
 
                         video_paths = [
                             clip1_trimmed_path,
@@ -585,14 +700,21 @@ def _handle_join_clips_task(
                         if not final_output_path.exists() or final_output_path.stat().st_size == 0:
                             raise ValueError(f"Final concatenated video is missing or empty")
 
-                        # Clean up temporary files
-                        try:
-                            clip1_trimmed_path.unlink()
-                            clip2_trimmed_path.unlink()
-                            concat_list_path.unlink()
-                            Path(transition_video_path).unlink()  # Remove transition-only video
-                        except Exception as cleanup_error:
-                            dprint(f"[JOIN_CLIPS] Warning: Cleanup failed: {cleanup_error}")
+                        # Clean up temporary files (unless debug mode is enabled)
+                        debug_mode = task_params_from_db.get("debug", False)
+                        if debug_mode:
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: Debug mode enabled - preserving intermediate files:")
+                            dprint(f"[JOIN_CLIPS]   Clip1 trimmed: {clip1_trimmed_path}")
+                            dprint(f"[JOIN_CLIPS]   Transition: {transition_video_path}")
+                            dprint(f"[JOIN_CLIPS]   Clip2 trimmed: {clip2_trimmed_path}")
+                        else:
+                            try:
+                                clip1_trimmed_path.unlink()
+                                clip2_trimmed_path.unlink()
+                                Path(transition_video_path).unlink()  # Remove transition-only video
+                                dprint(f"[JOIN_CLIPS] Task {task_id}: Cleaned up temporary files")
+                            except Exception as cleanup_error:
+                                dprint(f"[JOIN_CLIPS] Warning: Cleanup failed: {cleanup_error}")
 
                         dprint(f"[JOIN_CLIPS] Task {task_id}: Successfully created final joined video")
                         dprint(f"[JOIN_CLIPS] Task {task_id}: Output: {final_output_path}")
