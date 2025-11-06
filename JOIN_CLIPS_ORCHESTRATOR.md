@@ -6,7 +6,7 @@ A task orchestration system for progressively joining multiple video clips with 
 
 The `join_clips_orchestrator` takes a list of video clips and creates a dependency chain of `join_clips_segment` tasks that progressively build them into a single seamless video.
 
-**Design Note:** The orchestrator creates `join_clips_segment` child tasks which reuse the existing `join_clips` handler logic. The `join_clips` handler automatically detects orchestrator context and fetches the predecessor's output when needed. This requires **TWO new task types**: `join_clips_orchestrator` (parent) and `join_clips_segment` (child), while reusing the existing `join_clips` implementation.
+**Design Note:** `join_clips_segment` is THE unified task type for all clip joining operations - both standalone (user-submitted) and orchestrated (created by orchestrator). The handler automatically detects orchestrator context via `orchestrator_task_id_ref` and fetches predecessor output when needed. This requires **TWO task types**: `join_clips_orchestrator` (parent) and `join_clips_segment` (for all joins).
 
 ### Sequential Join Pattern
 
@@ -37,9 +37,10 @@ Final output: ABCD.mp4 (seamless video with transitions)
    - Handler detects orchestrator context automatically
    - Fetches predecessor output via `get_predecessor_output_via_edge_function()` when needed
 
-3. **join_clips** (`source/sm_functions/join_clips.py`)
+3. **join_clips handler** (`source/sm_functions/join_clips.py`)
+   - Implementation shared by all `join_clips_segment` tasks
    - Extended to detect orchestrator context via `orchestrator_task_id_ref`
-   - Works standalone (user-submitted) OR as segment (orchestrator-submitted)
+   - Handles both standalone and orchestrated joins seamlessly
 
 4. **Edge Function** (`supabase/functions/get-predecessor-output/`)
    - Queries task's `dependant_on` field
@@ -89,6 +90,43 @@ Final output: ABCD.mp4 (seamless video with transitions)
   }
 }
 ```
+
+## Task Types
+
+### `join_clips_segment` - Unified Join Task
+
+**Both standalone and orchestrated** joins use this task type:
+
+**Standalone (User submits directly):**
+```json
+{
+  "task_type": "join_clips_segment",
+  "starting_video_path": "s3://clip1.mp4",  // Explicit
+  "ending_video_path": "s3://clip2.mp4",
+  "context_frame_count": 8,
+  "gap_frame_count": 53,
+  "prompt": "smooth transition"
+}
+```
+
+**Orchestrated (Created by orchestrator):**
+```json
+{
+  "task_type": "join_clips_segment",
+  "orchestrator_task_id_ref": "orch_uuid",  // Triggers auto-fetch
+  "starting_video_path": null,  // Fetched from predecessor
+  "ending_video_path": "s3://clip3.mp4",
+  "context_frame_count": 8
+}
+```
+
+The handler detects orchestrator context and fetches predecessor output automatically.
+
+### `join_clips_orchestrator` - Multi-Clip Orchestration
+
+Submits multiple `join_clips_segment` tasks in a dependency chain.
+
+---
 
 ## Usage
 
@@ -307,6 +345,6 @@ python test_join_clips_orchestrator.py \
 - Orchestrator handler: `source/sm_functions/join_clips_orchestrator.py:27`
 - Join clips handler (extended): `source/sm_functions/join_clips.py:126`
 - Predecessor fetching logic: `source/sm_functions/join_clips.py:178-206`
-- Worker integration: `worker.py:2626` (orchestrator), `worker.py:2641` (join_clips_segment), `worker.py:2614` (join_clips)
+- Worker integration: `worker.py:2614` (orchestrator), `worker.py:2629` (join_clips_segment)
 - Database helper: `source/db_operations.py:856` (get child tasks)
 - Edge function: `supabase/functions/get-predecessor-output/index.ts:22`
