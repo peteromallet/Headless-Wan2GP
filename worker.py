@@ -3265,11 +3265,36 @@ def main():
                     if output_location and output_location.startswith("[ORCHESTRATOR_COMPLETE]"):
                         # All children complete! Mark orchestrator as COMPLETE
                         actual_output = output_location.replace("[ORCHESTRATOR_COMPLETE]", "")
+
+                        # Try to parse JSON data for output_location and thumbnail_url
+                        thumbnail_url = None
+                        try:
+                            import json
+                            completion_data = json.loads(actual_output)
+                            if isinstance(completion_data, dict):
+                                actual_output = completion_data.get("output_location", actual_output)
+                                thumbnail_url = completion_data.get("thumbnail_url")
+                        except (json.JSONDecodeError, ValueError):
+                            # Not JSON, use as-is (backward compatibility)
+                            pass
+
                         db_ops.update_task_status_supabase(
                             current_task_id_for_status_update,
                             db_ops.STATUS_COMPLETE,
                             actual_output,
                         )
+
+                        # Set thumbnail if available
+                        if thumbnail_url:
+                            try:
+                                db_ops.SUPABASE_CLIENT.table(db_ops.PG_TABLE_NAME)\
+                                    .update({"params": {"thumbnail_url": thumbnail_url}})\
+                                    .eq("id", current_task_id_for_status_update)\
+                                    .execute()
+                                headless_logger.info(f"Set orchestrator thumbnail: {thumbnail_url}", task_id=current_task_id_for_status_update)
+                            except Exception as e:
+                                headless_logger.warning(f"Failed to set orchestrator thumbnail: {e}", task_id=current_task_id_for_status_update)
+
                         headless_logger.success(
                             f"Orchestrator completed: All child tasks finished. Output: {actual_output}",
                             task_id=current_task_id_for_status_update

@@ -132,9 +132,19 @@ def _handle_join_clips_orchestrator_task(
                 if all_joins_complete:
                     # Sort by join_index to get the last one
                     sorted_joins = sorted(existing_joins, key=lambda x: x.get('task_params', {}).get('join_index', 0))
-                    final_output = sorted_joins[-1].get('output_location', 'Completed via idempotency')
+                    final_join = sorted_joins[-1]
+                    final_output = final_join.get('output_location', 'Completed via idempotency')
+
+                    # Extract thumbnail from final join's params
+                    final_thumbnail = final_join.get('task_params', {}).get('thumbnail_url', '')
+
                     dprint(f"[JOIN_ORCHESTRATOR] COMPLETE: All joins finished, final output: {final_output}")
-                    return True, f"[ORCHESTRATOR_COMPLETE]{final_output}"
+                    dprint(f"[JOIN_ORCHESTRATOR] Final thumbnail: {final_thumbnail}")
+
+                    # Include thumbnail in completion message using JSON format
+                    import json
+                    completion_data = json.dumps({"output_location": final_output, "thumbnail_url": final_thumbnail})
+                    return True, f"[ORCHESTRATOR_COMPLETE]{completion_data}"
 
                 # Still in progress
                 complete_count = sum(1 for j in existing_joins if is_complete(j))
