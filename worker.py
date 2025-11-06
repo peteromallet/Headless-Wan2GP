@@ -3239,7 +3239,7 @@ def main():
             segment_image_download_dir = current_task_params.get("segment_image_download_dir")
             
             # Ensure orchestrator tasks and travel segments propagate the DB row ID as their canonical task_id *before* processing
-            if current_task_type in {"travel_orchestrator", "different_perspective_orchestrator", "travel_segment"}:
+            if current_task_type in {"travel_orchestrator", "different_perspective_orchestrator", "join_clips_orchestrator", "travel_segment"}:
                 current_task_params["task_id"] = current_task_id_for_status_update
                 if "orchestrator_details" in current_task_params:
                     current_task_params["orchestrator_details"]["orchestrator_task_id"] = current_task_id_for_status_update
