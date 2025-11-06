@@ -704,13 +704,10 @@ def _handle_join_clips_task(
                         # Extract poster image/thumbnail from the final video
                         poster_output_path = final_output_path.with_suffix('.jpg')
                         try:
-                            # Get total frame count for the final video
-                            final_frame_count, _ = get_video_frame_count_and_fps(final_output_path)
+                            # Extract first frame as poster
+                            poster_frame_index = 0
 
-                            # Extract middle frame as poster
-                            poster_frame_index = final_frame_count // 2
-
-                            dprint(f"[JOIN_CLIPS] Task {task_id}: Extracting poster image (frame {poster_frame_index}/{final_frame_count})")
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: Extracting poster image (first frame)")
 
                             if save_frame_from_video(
                                 final_output_path,
