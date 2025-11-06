@@ -2612,6 +2612,9 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
         )
     elif task_type == "join_clips":
         headless_logger.debug("Delegating to join clips handler", task_id=task_id)
+        # Inject debug_mode from CLI args if not already set in task params
+        if "debug" not in task_params_dict and debug_mode:
+            task_params_dict["debug"] = True
         return _handle_join_clips_task(
             task_params_from_db=task_params_dict,
             main_output_dir_base=main_output_dir_base,
@@ -2621,6 +2624,9 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
         )
     elif task_type == "inpaint_frames":
         headless_logger.debug("Delegating to inpaint frames handler", task_id=task_id)
+        # Inject debug_mode from CLI args if not already set in task params
+        if "debug" not in task_params_dict and debug_mode:
+            task_params_dict["debug"] = True
         return _handle_inpaint_frames_task(
             task_params_from_db=task_params_dict,
             main_output_dir_base=main_output_dir_base,
