@@ -132,7 +132,7 @@ def _handle_join_clips_orchestrator_task(
                 if all_joins_complete:
                     import json
 
-                    # Sort by join_index
+                    # Sort by join_index to get the last one
                     # Parse task_params if it's a JSON string
                     def get_join_index(task):
                         params = task.get('task_params', {})
@@ -144,24 +144,21 @@ def _handle_join_clips_orchestrator_task(
                         return params.get('join_index', 0)
 
                     sorted_joins = sorted(existing_joins, key=get_join_index)
-
-                    # Get output from LAST join (final result)
                     final_join = sorted_joins[-1]
                     final_output = final_join.get('output_location', 'Completed via idempotency')
 
-                    # Get thumbnail from FIRST join (starting frame of sequence)
-                    first_join = sorted_joins[0]
-                    first_params = first_join.get('task_params', {})
-                    if isinstance(first_params, str):
+                    # Extract thumbnail from final join's params (parse JSON string if needed)
+                    final_params = final_join.get('task_params', {})
+                    if isinstance(final_params, str):
                         try:
-                            first_params = json.loads(first_params)
+                            final_params = json.loads(final_params)
                         except (json.JSONDecodeError, ValueError):
-                            first_params = {}
+                            final_params = {}
 
-                    final_thumbnail = first_params.get('thumbnail_url', '')
+                    final_thumbnail = final_params.get('thumbnail_url', '')
 
                     dprint(f"[JOIN_ORCHESTRATOR] COMPLETE: All joins finished, final output: {final_output}")
-                    dprint(f"[JOIN_ORCHESTRATOR] Thumbnail from first join: {final_thumbnail}")
+                    dprint(f"[JOIN_ORCHESTRATOR] Final thumbnail: {final_thumbnail}")
 
                     # Include thumbnail in completion message using JSON format
                     completion_data = json.dumps({"output_location": final_output, "thumbnail_url": final_thumbnail})
