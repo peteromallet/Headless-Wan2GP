@@ -4,9 +4,9 @@ A task orchestration system for progressively joining multiple video clips with 
 
 ## Overview
 
-The `join_clips_orchestrator` takes a list of video clips and creates a dependency chain of `join_clips` tasks that progressively build them into a single seamless video.
+The `join_clips_orchestrator` takes a list of video clips and creates a dependency chain of `join_clips_segment` tasks that progressively build them into a single seamless video.
 
-**Design Note:** The orchestrator reuses the existing `join_clips` task type for all child tasks. The `join_clips` handler has been extended to automatically detect when it's part of an orchestrator chain and fetch the predecessor's output when needed. This keeps the system simple with only **ONE new task type** (`join_clips_orchestrator`) instead of introducing a separate child task type.
+**Design Note:** The orchestrator creates `join_clips_segment` child tasks which reuse the existing `join_clips` handler logic. The `join_clips` handler automatically detects orchestrator context and fetches the predecessor's output when needed. This requires **TWO new task types**: `join_clips_orchestrator` (parent) and `join_clips_segment` (child), while reusing the existing `join_clips` implementation.
 
 ### Sequential Join Pattern
 
@@ -26,17 +26,22 @@ Final output: ABCD.mp4 (seamless video with transitions)
 ### Components
 
 1. **join_clips_orchestrator** (`source/sm_functions/join_clips_orchestrator.py`)
-   - Creates chained `join_clips` tasks with dependencies
+   - Creates chained `join_clips_segment` tasks with dependencies
    - Implements idempotency checking
    - Monitors child task completion
    - Returns `[ORCHESTRATOR_COMPLETE]` when all joins finish
 
-2. **join_clips** (`source/sm_functions/join_clips.py`)
-   - Extended to detect orchestrator context
+2. **join_clips_segment** (task type)
+   - Created by orchestrator for each join operation
+   - Reuses `join_clips` handler implementation
+   - Handler detects orchestrator context automatically
    - Fetches predecessor output via `get_predecessor_output_via_edge_function()` when needed
-   - Works standalone OR as part of orchestrator chain
 
-3. **Edge Function** (`supabase/functions/get-predecessor-output/`)
+3. **join_clips** (`source/sm_functions/join_clips.py`)
+   - Extended to detect orchestrator context via `orchestrator_task_id_ref`
+   - Works standalone (user-submitted) OR as segment (orchestrator-submitted)
+
+4. **Edge Function** (`supabase/functions/get-predecessor-output/`)
    - Queries task's `dependant_on` field
    - Returns predecessor's `output_location`
    - Already existed - no new edge function needed!
@@ -65,10 +70,10 @@ Final output: ABCD.mp4 (seamless video with transitions)
 }
 ```
 
-**Child Task:**
+**Child Task (Segment):**
 ```json
 {
-  "task_type": "join_clips",
+  "task_type": "join_clips_segment",
   "dependant_on": "previous_join_task_id",  // DB field, not in params
   "params": {
     "orchestrator_task_id_ref": "orchestrator_uuid",
@@ -168,17 +173,18 @@ orchestrator_payload = {
 
 1. **Orchestrator Creation**
    - Worker claims `join_clips_orchestrator` task
-   - Orchestrator handler creates `join_clips` tasks in dependency chain
+   - Orchestrator handler creates `join_clips_segment` tasks in dependency chain
    - Task status: `In Progress` (waiting for children)
 
-2. **Child Task Execution** (sequential due to dependencies)
-   - Worker claims `join_clips` task when dependency satisfied
-   - `join_clips` handler detects orchestrator context
+2. **Segment Task Execution** (sequential due to dependencies)
+   - Worker claims `join_clips_segment` task when dependency satisfied
+   - Routed to `_handle_join_clips_task()` handler
+   - Handler detects orchestrator context via `orchestrator_task_id_ref`
    - If `starting_video_path` is `None`, fetch from predecessor automatically
    - Performs join operation and saves output
 
 3. **Orchestrator Completion**
-   - When last child completes, orchestrator polls and detects completion
+   - When last segment completes, orchestrator polls and detects completion
    - Returns `[ORCHESTRATOR_COMPLETE]<final_output_path>`
    - Worker marks orchestrator as `Complete`
 
@@ -195,11 +201,11 @@ This prevents duplicate task creation on retries.
 
 ## Error Handling
 
-### Child Task Failure
+### Segment Task Failure
 
-If a `join_clips` task fails:
+If a `join_clips_segment` task fails:
 - Task marked as `Failed` in database
-- Subsequent child tasks blocked (due to dependency)
+- Subsequent segment tasks blocked (due to dependency)
 - Orchestrator detects failure and marks itself as `Failed`
 
 ### Orchestrator Failure
@@ -227,10 +233,10 @@ If orchestrator creation fails:
 | Feature | Travel Orchestrator | Join Clips Orchestrator |
 |---------|---------------------|-------------------------|
 | Purpose | Generate video segments between images | Join existing video clips |
-| Child Tasks | `travel_segment` + `travel_stitch` | `join_clips` only |
+| Child Tasks | `travel_segment` + `travel_stitch` | `join_clips_segment` only |
 | Pattern | Parallel segments → stitch | Sequential joins |
 | Stitch Task | Yes (combines all segments) | No (progressive joining) |
-| Final Output | From stitch task | From last child join |
+| Final Output | From stitch task | From last segment join |
 
 ## Future Enhancements
 
@@ -301,6 +307,6 @@ python test_join_clips_orchestrator.py \
 - Orchestrator handler: `source/sm_functions/join_clips_orchestrator.py:27`
 - Join clips handler (extended): `source/sm_functions/join_clips.py:126`
 - Predecessor fetching logic: `source/sm_functions/join_clips.py:178-206`
-- Worker integration: `worker.py:2626` (orchestrator), `worker.py:2614` (join_clips)
+- Worker integration: `worker.py:2626` (orchestrator), `worker.py:2641` (join_clips_segment), `worker.py:2614` (join_clips)
 - Database helper: `source/db_operations.py:856` (get child tasks)
 - Edge function: `supabase/functions/get-predecessor-output/index.ts:22`

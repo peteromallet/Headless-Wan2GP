@@ -856,11 +856,11 @@ def get_task_dependency(task_id: str) -> str | None:
 def get_orchestrator_child_tasks(orchestrator_task_id: str) -> dict:
     """
     Gets all child tasks for a given orchestrator task ID from Supabase.
-    Returns dict with 'segments', 'stitch', and 'join_clips' lists.
+    Returns dict with 'segments', 'stitch', and 'join_clips_segment' lists.
     """
     if not SUPABASE_CLIENT:
         print(f"[ERROR] Supabase client not initialized. Cannot get orchestrator child tasks for {orchestrator_task_id}")
-        return {'segments': [], 'stitch': [], 'join_clips': []}
+        return {'segments': [], 'stitch': [], 'join_clips_segment': []}
 
     try:
         # Query for child tasks referencing this orchestrator
@@ -872,7 +872,7 @@ def get_orchestrator_child_tasks(orchestrator_task_id: str) -> dict:
 
         segments = []
         stitch = []
-        join_clips = []
+        join_clips_segment = []
 
         if response.data:
             for task in response.data:
@@ -888,15 +888,15 @@ def get_orchestrator_child_tasks(orchestrator_task_id: str) -> dict:
                     segments.append(task_data)
                 elif task['task_type'] == 'travel_stitch':
                     stitch.append(task_data)
-                elif task['task_type'] == 'join_clips':
-                    join_clips.append(task_data)
+                elif task['task_type'] == 'join_clips_segment':
+                    join_clips_segment.append(task_data)
 
-        return {'segments': segments, 'stitch': stitch, 'join_clips': join_clips}
+        return {'segments': segments, 'stitch': stitch, 'join_clips_segment': join_clips_segment}
 
     except Exception as e:
         dprint(f"Error querying Supabase for orchestrator child tasks {orchestrator_task_id}: {e}")
         traceback.print_exc()
-        return {'segments': [], 'stitch': [], 'join_clips': []}
+        return {'segments': [], 'stitch': [], 'join_clips_segment': []}
 
 def cleanup_duplicate_child_tasks(orchestrator_task_id: str, expected_segments: int) -> dict:
     """
