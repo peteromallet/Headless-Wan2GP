@@ -3278,22 +3278,13 @@ def main():
                             # Not JSON, use as-is (backward compatibility)
                             pass
 
+                        # Mark orchestrator complete - pass thumbnail so edge function adds it to params
                         db_ops.update_task_status_supabase(
                             current_task_id_for_status_update,
                             db_ops.STATUS_COMPLETE,
                             actual_output,
+                            thumbnail_url  # Edge function will add this to params automatically
                         )
-
-                        # Set thumbnail if available
-                        if thumbnail_url:
-                            try:
-                                db_ops.SUPABASE_CLIENT.table(db_ops.PG_TABLE_NAME)\
-                                    .update({"params": {"thumbnail_url": thumbnail_url}})\
-                                    .eq("id", current_task_id_for_status_update)\
-                                    .execute()
-                                headless_logger.info(f"Set orchestrator thumbnail: {thumbnail_url}", task_id=current_task_id_for_status_update)
-                            except Exception as e:
-                                headless_logger.warning(f"Failed to set orchestrator thumbnail: {e}", task_id=current_task_id_for_status_update)
 
                         headless_logger.success(
                             f"Orchestrator completed: All child tasks finished. Output: {actual_output}",
@@ -3312,12 +3303,22 @@ def main():
                             task_id=current_task_id_for_status_update
                         )
                 else:
-                    # update_task_status_supabase now returns the storage URL from Edge Function
-                    final_storage_url = db_ops.update_task_status_supabase(
+                    # update_task_status_supabase now returns dict with public_url and thumbnail_url
+                    completion_result = db_ops.update_task_status_supabase(
                         current_task_id_for_status_update,
                         db_ops.STATUS_COMPLETE,
                         output_location,
                     )
+
+                    # Extract URLs from result (handle both dict and legacy string formats)
+                    if isinstance(completion_result, dict):
+                        final_storage_url = completion_result.get('public_url')
+                        final_thumbnail_url = completion_result.get('thumbnail_url')
+                    else:
+                        # Legacy format: just the URL string
+                        final_storage_url = completion_result
+                        final_thumbnail_url = None
+
                     headless_logger.success(
                         f"Task completed successfully: {final_storage_url or output_location}",
                         task_id=current_task_id_for_status_update
@@ -3328,11 +3329,17 @@ def main():
                         orchestrator_id = current_task_params.get("orchestrator_task_id_ref")
                         if orchestrator_id:
                             try:
-                                orchestrator_storage_url = db_ops.update_task_status_supabase(
+                                orch_result = db_ops.update_task_status_supabase(
                                     orchestrator_id,
                                     db_ops.STATUS_COMPLETE,
                                     final_storage_url  # Pass storage URL - will be sent as MODE 4 (storage_path)
                                 )
+
+                                # Extract orchestrator URL from result
+                                if isinstance(orch_result, dict):
+                                    orchestrator_storage_url = orch_result.get('public_url')
+                                else:
+                                    orchestrator_storage_url = orch_result
 
                                 if orchestrator_storage_url:
                                     headless_logger.success(
@@ -3351,50 +3358,18 @@ def main():
                         orchestrator_id = current_task_params.get("orchestrator_task_id_ref")
                         if is_last_join and orchestrator_id:
                             try:
-                                orchestrator_storage_url = db_ops.update_task_status_supabase(
+                                # Mark orchestrator complete - pass thumbnail so edge function adds it to params
+                                db_ops.update_task_status_supabase(
                                     orchestrator_id,
                                     db_ops.STATUS_COMPLETE,
-                                    final_storage_url  # Pass storage URL - will be sent as MODE 4 (storage_path)
+                                    final_storage_url,
+                                    final_thumbnail_url
                                 )
 
-                                if orchestrator_storage_url:
-                                    headless_logger.success(
-                                        f"Join orchestrator complete (final join): {orchestrator_id[:8]}",
-                                        task_id=current_task_id_for_status_update
-                                    )
-
-                                    # Construct thumbnail URL from video URL
-                                    # Pattern: video = "project_id/joined_xxx.mp4" -> thumbnail = "project_id/thumbnails/thumbnail.jpg"
-                                    try:
-                                        # Extract storage path from URL (e.g., "702a2ebf-xxx/joined_xxx.mp4")
-                                        if orchestrator_storage_url.startswith("http"):
-                                            # Full URL - extract the path after bucket name
-                                            storage_path = orchestrator_storage_url.split("/image_uploads/")[-1]
-                                        else:
-                                            storage_path = orchestrator_storage_url
-
-                                        # Get project folder (first part of path)
-                                        project_folder = storage_path.split("/")[0] if "/" in storage_path else None
-
-                                        if project_folder:
-                                            # Construct thumbnail URL
-                                            thumbnail_url = f"https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/{project_folder}/thumbnails/thumbnail.jpg"
-
-                                            # Update orchestrator with thumbnail
-                                            db_ops.SUPABASE_CLIENT.table(db_ops.PG_TABLE_NAME)\
-                                                .update({"params": {"thumbnail_url": thumbnail_url}})\
-                                                .eq("id", orchestrator_id)\
-                                                .execute()
-
-                                            headless_logger.info(
-                                                f"Set orchestrator thumbnail: {thumbnail_url}",
-                                                task_id=orchestrator_id
-                                            )
-                                    except Exception as e_thumb:
-                                        headless_logger.warning(
-                                            f"Failed to set orchestrator thumbnail: {e_thumb}",
-                                            task_id=orchestrator_id
-                                        )
+                                headless_logger.success(
+                                    f"Join orchestrator complete (final join): {orchestrator_id[:8]}",
+                                    task_id=current_task_id_for_status_update
+                                )
                             except Exception as e_orch:
                                 headless_logger.error(
                                     f"Failed to mark join orchestrator complete: {e_orch}",

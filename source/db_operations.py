@@ -280,9 +280,16 @@ def get_oldest_queued_task_supabase(worker_id: str = None):
         dprint("ERROR: No edge function URL or access token available for task claiming")
         return None
 
-def update_task_status_supabase(task_id_str, status_str, output_location_val=None):
-    """Updates a task's status via Supabase Edge Functions."""
-    dprint(f"[DEBUG] update_task_status_supabase called: task_id={task_id_str}, status={status_str}, output_location={output_location_val}")
+def update_task_status_supabase(task_id_str, status_str, output_location_val=None, thumbnail_url_val=None):
+    """Updates a task's status via Supabase Edge Functions.
+
+    Args:
+        task_id_str: Task ID
+        status_str: Status to set
+        output_location_val: Output file location or URL
+        thumbnail_url_val: Optional thumbnail URL to pass to edge function
+    """
+    dprint(f"[DEBUG] update_task_status_supabase called: task_id={task_id_str}, status={status_str}, output_location={output_location_val}, thumbnail={thumbnail_url_val}")
     
     if not SUPABASE_CLIENT:
         print("[ERROR] Supabase client not initialized. Cannot update task status.")
@@ -393,13 +400,17 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
 
                     if resp.status_code == 200:
                         dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE with base64 upload")
-                        # Parse response to get storage URL
+                        # Parse response to get storage URL and thumbnail URL
                         try:
                             resp_data = resp.json()
                             storage_url = resp_data.get('public_url')
+                            thumbnail_url = resp_data.get('thumbnail_url')  # Also get thumbnail
                             if storage_url:
                                 dprint(f"[DEBUG] File uploaded to: {storage_url}")
-                                return storage_url
+                                if thumbnail_url:
+                                    dprint(f"[DEBUG] Thumbnail available at: {thumbnail_url}")
+                                # Return both URLs as a dict
+                                return {'public_url': storage_url, 'thumbnail_url': thumbnail_url}
                         except:
                             pass
                         return None
@@ -524,13 +535,17 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
 
                     if resp.status_code == 200:
                         dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE with file upload")
-                        # Parse response to get storage URL
+                        # Parse response to get storage URL and thumbnail URL
                         try:
                             resp_data = resp.json()
                             storage_url = resp_data.get('public_url')
+                            thumbnail_url = resp_data.get('thumbnail_url')  # Also get thumbnail
                             if storage_url:
                                 dprint(f"[DEBUG] File uploaded to: {storage_url}")
-                                return storage_url
+                                if thumbnail_url:
+                                    dprint(f"[DEBUG] Thumbnail available at: {thumbnail_url}")
+                                # Return both URLs as a dict
+                                return {'public_url': storage_url, 'thumbnail_url': thumbnail_url}
                         except:
                             pass
                         return None
@@ -568,6 +583,17 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                 if storage_path:
                     payload = {"task_id": task_id_str, "storage_path": storage_path}
                     dprint(f"[DEBUG] Using storage_path for task {task_id_str}")
+
+                    # Extract thumbnail storage path if thumbnail URL provided
+                    if thumbnail_url_val and "/storage/v1/object/public/image_uploads/" in thumbnail_url_val:
+                        try:
+                            thumb_parts = thumbnail_url_val.split("/storage/v1/object/public/image_uploads/", 1)
+                            if len(thumb_parts) == 2:
+                                thumbnail_storage_path = thumb_parts[1]
+                                payload["thumbnail_storage_path"] = thumbnail_storage_path
+                                dprint(f"[DEBUG] Including thumbnail_storage_path: {thumbnail_storage_path}")
+                        except Exception as e:
+                            dprint(f"[DEBUG] Failed to extract thumbnail path: {e}")
                 else:
                     payload = {"task_id": task_id_str, "output_location": output_location_val}
                     dprint(f"[DEBUG] Using output_location (legacy) for task {task_id_str}")
@@ -580,14 +606,18 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
 
                 if resp.status_code == 200:
                     dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE")
-                    # Parse response to get storage URL (if applicable)
+                    # Parse response to get storage URL and thumbnail URL
                     try:
                         resp_data = resp.json()
                         storage_url = resp_data.get('public_url')
+                        thumbnail_url = resp_data.get('thumbnail_url')  # Also get thumbnail
                         if storage_url:
                             dprint(f"[DEBUG] Storage URL: {storage_url}")
-                            return storage_url
-                        # If no URL in response, return the original output_location_val
+                            if thumbnail_url:
+                                dprint(f"[DEBUG] Thumbnail available at: {thumbnail_url}")
+                            # Return both URLs as a dict
+                            return {'public_url': storage_url, 'thumbnail_url': thumbnail_url}
+                        # If no URL in response, return the original output_location_val as string (legacy)
                         return output_location_val
                     except:
                         return output_location_val
