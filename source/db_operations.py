@@ -686,14 +686,29 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
 
     # Defensive check: if a dependency is specified, ensure it exists before enqueueing
     if dependant_on:
-        try:
-            if SUPABASE_CLIENT:
-                resp_exist = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("id").eq("id", dependant_on).single().execute()
-                if not getattr(resp_exist, "data", None):
-                    dprint(f"[ERROR][DEBUG_DEPENDENCY_CHAIN] dependant_on not found: {dependant_on}. Refusing to create task of type {task_type_str} with broken dependency.")
-                    raise RuntimeError(f"dependant_on {dependant_on} not found")
-        except Exception as e_depchk:
-            dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on {dependant_on} existence prior to enqueue: {e_depchk}")
+        import time
+        max_retries = 3
+        retry_delay = 0.5
+
+        for attempt in range(max_retries):
+            try:
+                if SUPABASE_CLIENT:
+                    resp_exist = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("id").eq("id", dependant_on).single().execute()
+                    if not getattr(resp_exist, "data", None):
+                        dprint(f"[ERROR][DEBUG_DEPENDENCY_CHAIN] dependant_on not found: {dependant_on}. Refusing to create task of type {task_type_str} with broken dependency.")
+                        raise RuntimeError(f"dependant_on {dependant_on} not found")
+                    # Successfully verified dependency
+                    break
+            except Exception as e_depchk:
+                error_str = str(e_depchk)
+                # Check if it's a "0 rows" error (race condition) and we have retries left
+                if "0 rows" in error_str and attempt < max_retries - 1:
+                    dprint(f"[RETRY][DEBUG_DEPENDENCY_CHAIN] Dependency {dependant_on} not visible yet (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    # Final attempt failed or different error - log warning but continue
+                    dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on {dependant_on} existence prior to enqueue: {e_depchk}")
 
     payload_edge = {
         "task_id": actual_db_row_id,
@@ -838,20 +853,47 @@ def get_task_params(task_id: str) -> str | None:
         dprint(f"Error getting task params for {task_id} from Supabase: {e}")
         return None
 
-def get_task_dependency(task_id: str) -> str | None:
-    """Gets the dependency task ID for a given task ID from Supabase."""
+def get_task_dependency(task_id: str, max_retries: int = 3, retry_delay: float = 0.5) -> str | None:
+    """
+    Gets the dependency task ID for a given task ID from Supabase.
+
+    Includes retry logic to handle race conditions where a newly created task
+    may not be immediately visible in the database.
+
+    Args:
+        task_id: Task ID to get dependency for
+        max_retries: Maximum number of retry attempts (default: 3)
+        retry_delay: Seconds to wait between retries (default: 0.5)
+
+    Returns:
+        Dependency task ID or None if no dependency
+    """
     if not SUPABASE_CLIENT:
         print(f"[ERROR] Supabase client not initialized. Cannot get task dependency for {task_id}")
         return None
 
-    try:
-        response = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("dependant_on").eq("id", task_id).single().execute()
-        if response.data:
-            return response.data.get("dependant_on")
-        return None
-    except Exception as e_supabase_dep:
-        dprint(f"Error fetching dependant_on from Supabase for task {task_id}: {e_supabase_dep}")
-        return None
+    import time
+
+    for attempt in range(max_retries):
+        try:
+            response = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("dependant_on").eq("id", task_id).single().execute()
+            if response.data:
+                return response.data.get("dependant_on")
+            return None
+        except Exception as e_supabase_dep:
+            error_str = str(e_supabase_dep)
+
+            # Check if it's a "0 rows" error (race condition)
+            if "0 rows" in error_str and attempt < max_retries - 1:
+                dprint(f"[RETRY] Task {task_id} not visible yet (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+                continue
+
+            # Final attempt failed or different error
+            dprint(f"Error fetching dependant_on from Supabase for task {task_id}: {e_supabase_dep}")
+            return None
+
+    return None
 
 def get_orchestrator_child_tasks(orchestrator_task_id: str) -> dict:
     """
