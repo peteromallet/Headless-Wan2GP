@@ -130,19 +130,37 @@ def _handle_join_clips_orchestrator_task(
 
                 # If all complete, return final output
                 if all_joins_complete:
+                    import json
+
                     # Sort by join_index to get the last one
-                    sorted_joins = sorted(existing_joins, key=lambda x: x.get('task_params', {}).get('join_index', 0))
+                    # Parse task_params if it's a JSON string
+                    def get_join_index(task):
+                        params = task.get('task_params', {})
+                        if isinstance(params, str):
+                            try:
+                                params = json.loads(params)
+                            except (json.JSONDecodeError, ValueError):
+                                return 0
+                        return params.get('join_index', 0)
+
+                    sorted_joins = sorted(existing_joins, key=get_join_index)
                     final_join = sorted_joins[-1]
                     final_output = final_join.get('output_location', 'Completed via idempotency')
 
-                    # Extract thumbnail from final join's params
-                    final_thumbnail = final_join.get('task_params', {}).get('thumbnail_url', '')
+                    # Extract thumbnail from final join's params (parse JSON string if needed)
+                    final_params = final_join.get('task_params', {})
+                    if isinstance(final_params, str):
+                        try:
+                            final_params = json.loads(final_params)
+                        except (json.JSONDecodeError, ValueError):
+                            final_params = {}
+
+                    final_thumbnail = final_params.get('thumbnail_url', '')
 
                     dprint(f"[JOIN_ORCHESTRATOR] COMPLETE: All joins finished, final output: {final_output}")
                     dprint(f"[JOIN_ORCHESTRATOR] Final thumbnail: {final_thumbnail}")
 
                     # Include thumbnail in completion message using JSON format
-                    import json
                     completion_data = json.dumps({"output_location": final_output, "thumbnail_url": final_thumbnail})
                     return True, f"[ORCHESTRATOR_COMPLETE]{completion_data}"
 
