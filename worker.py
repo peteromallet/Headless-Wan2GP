@@ -3320,6 +3320,29 @@ def main():
                                     task_id=current_task_id_for_status_update
                                 )
 
+                    # If this is the last join segment, mark parent orchestrator as complete
+                    if current_task_type == "join_clips_segment" and final_storage_url:
+                        is_last_join = current_task_params.get("is_last_join", False)
+                        orchestrator_id = current_task_params.get("orchestrator_task_id_ref")
+                        if is_last_join and orchestrator_id:
+                            try:
+                                orchestrator_storage_url = db_ops.update_task_status_supabase(
+                                    orchestrator_id,
+                                    db_ops.STATUS_COMPLETE,
+                                    final_storage_url  # Pass storage URL - will be sent as MODE 4 (storage_path)
+                                )
+
+                                if orchestrator_storage_url:
+                                    headless_logger.success(
+                                        f"Join orchestrator complete (final join): {orchestrator_id[:8]}",
+                                        task_id=current_task_id_for_status_update
+                                    )
+                            except Exception as e_orch:
+                                headless_logger.error(
+                                    f"Failed to mark join orchestrator complete: {e_orch}",
+                                    task_id=current_task_id_for_status_update
+                                )
+
                     # Clean up generated files unless debug mode is enabled
                     cleanup_generated_files(output_location, current_task_id_for_status_update)
             else:
