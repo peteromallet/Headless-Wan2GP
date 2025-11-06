@@ -74,7 +74,8 @@ from source.sm_functions import travel_between_images as tbi
 from source.sm_functions import different_perspective as dp
 # single_image tasks now use direct queue integration (wan_2_2_t2i)
 from source.sm_functions import magic_edit as me
-from source.sm_functions.join_clips import _handle_join_clips_task
+from source.sm_functions.join_clips import _handle_join_clips_task, _handle_join_clips_child_task
+from source.sm_functions.join_clips_orchestrator import _handle_join_clips_orchestrator_task
 from source.sm_functions.inpaint_frames import _handle_inpaint_frames_task
 from source.sm_functions.create_visualization import _handle_create_visualization_task
 # --- New Queue-based Architecture Imports ---
@@ -2622,6 +2623,32 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
             task_queue=task_queue,
             dprint=dprint
         )
+    elif task_type == "join_clips_orchestrator":
+        headless_logger.debug("Delegating to join clips orchestrator handler", task_id=task_id)
+        # Ensure the orchestrator uses the DB row ID as its canonical task_id
+        task_params_dict["task_id"] = task_id
+        if "orchestrator_details" in task_params_dict:
+            task_params_dict["orchestrator_details"]["orchestrator_task_id"] = task_id
+        # Create task-aware dprint wrapper
+        task_dprint = make_task_dprint(task_id)
+        return _handle_join_clips_orchestrator_task(
+            task_params_from_db=task_params_dict,
+            main_output_dir_base=main_output_dir_base,
+            orchestrator_task_id_str=task_id,
+            orchestrator_project_id=project_id_for_task,
+            dprint=task_dprint
+        )
+    elif task_type == "join_clips_child":
+        headless_logger.debug("Delegating to join clips child handler", task_id=task_id)
+        # Create task-aware dprint wrapper
+        task_dprint = make_task_dprint(task_id)
+        return _handle_join_clips_child_task(
+            task_params_from_db=task_params_dict,
+            main_output_dir_base=main_output_dir_base,
+            task_id=task_id,
+            task_queue=task_queue,
+            dprint=task_dprint
+        )
     elif task_type == "inpaint_frames":
         headless_logger.debug("Delegating to inpaint frames handler", task_id=task_id)
         # Inject debug_mode from CLI args if not already set in task params
@@ -3241,7 +3268,7 @@ def main():
                 reset_fatal_error_counter()
 
                 # Orchestrator tasks stay "In Progress" until their children report back.
-                orchestrator_types_waiting = {"travel_orchestrator", "different_perspective_orchestrator"}
+                orchestrator_types_waiting = {"travel_orchestrator", "different_perspective_orchestrator", "join_clips_orchestrator"}
 
                 if current_task_type in orchestrator_types_waiting:
                     # Check if orchestrator is signaling that all children are complete

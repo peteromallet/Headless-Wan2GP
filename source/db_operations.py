@@ -856,11 +856,11 @@ def get_task_dependency(task_id: str) -> str | None:
 def get_orchestrator_child_tasks(orchestrator_task_id: str) -> dict:
     """
     Gets all child tasks for a given orchestrator task ID from Supabase.
-    Returns dict with 'segments' and 'stitch' lists.
+    Returns dict with 'segments', 'stitch', and 'join_clips_child' lists.
     """
     if not SUPABASE_CLIENT:
         print(f"[ERROR] Supabase client not initialized. Cannot get orchestrator child tasks for {orchestrator_task_id}")
-        return {'segments': [], 'stitch': []}
+        return {'segments': [], 'stitch': [], 'join_clips_child': []}
 
     try:
         # Query for child tasks referencing this orchestrator
@@ -872,6 +872,7 @@ def get_orchestrator_child_tasks(orchestrator_task_id: str) -> dict:
 
         segments = []
         stitch = []
+        join_clips_child = []
 
         if response.data:
             for task in response.data:
@@ -880,19 +881,22 @@ def get_orchestrator_child_tasks(orchestrator_task_id: str) -> dict:
                     'task_type': task['task_type'],
                     'status': task['status'],
                     'params': task.get('params', {}),
+                    'task_params': task.get('params', {}),  # Alias for compatibility
                     'output_location': task.get('output_location', '')
                 }
                 if task['task_type'] == 'travel_segment':
                     segments.append(task_data)
                 elif task['task_type'] == 'travel_stitch':
                     stitch.append(task_data)
+                elif task['task_type'] == 'join_clips_child':
+                    join_clips_child.append(task_data)
 
-        return {'segments': segments, 'stitch': stitch}
+        return {'segments': segments, 'stitch': stitch, 'join_clips_child': join_clips_child}
 
     except Exception as e:
         dprint(f"Error querying Supabase for orchestrator child tasks {orchestrator_task_id}: {e}")
         traceback.print_exc()
-        return {'segments': [], 'stitch': []}
+        return {'segments': [], 'stitch': [], 'join_clips_child': []}
 
 def cleanup_duplicate_child_tasks(orchestrator_task_id: str, expected_segments: int) -> dict:
     """
