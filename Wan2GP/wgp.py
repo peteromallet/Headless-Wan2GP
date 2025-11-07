@@ -4664,7 +4664,18 @@ def generate_video(
         loras_list_mult_choices_nums, loras_slists, errors =  parse_loras_multipliers(loras_multipliers, len(activated_loras), num_inference_steps, nb_phases = guidance_phases, merge_slist= loras_slists )
         if len(errors) > 0: raise Exception(f"Error parsing Loras: {errors}")
         lora_dir = get_lora_dir(model_type)
-        loras_selected += [ os.path.join(lora_dir, lora) for lora in activated_loras]
+        # Only prepend lora_dir to relative paths, not URLs or absolute paths
+        for lora in activated_loras:
+            # Skip URLs that shouldn't have made it through the download pipeline
+            if lora.startswith(("http://", "https://", "ftp://")):
+                print(f"WARNING: Skipping LoRA URL that was not downloaded: {lora}")
+                print(f"         URLs should be processed by lora_utils before reaching WGP.")
+                continue
+            # Only prepend lora_dir if it's a relative path
+            if os.path.isabs(lora):
+                loras_selected.append(lora)
+            else:
+                loras_selected.append(os.path.join(lora_dir, lora))
 
     if len(loras_selected) > 0:
         pinnedLora = loaded_profile !=5  # and transformer_loras_filenames == None False # # # 

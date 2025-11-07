@@ -472,26 +472,32 @@ def _process_additional_loras(additional_loras_dict: Dict[str, float], task_id: 
         dprint: Optional debug print function
         
     Returns:
-        Tuple of (processed_names, multipliers)
+        Tuple of (processed_names, multipliers) - only includes successfully processed LoRAs
     """
     processed_names = []
-    multipliers = list(additional_loras_dict.values())
+    processed_multipliers = []
     
-    for lora_name_or_url in additional_loras_dict.keys():
+    for idx, (lora_name_or_url, multiplier) in enumerate(additional_loras_dict.items()):
         if lora_name_or_url.startswith("http"):
             # It's a URL - download it
             try:
                 local_filename = _download_lora_from_url(lora_name_or_url, task_id, dprint)
                 processed_names.append(local_filename)
+                processed_multipliers.append(multiplier)
+                if dprint:
+                    dprint(f"[LORA_DOWNLOAD] Task {task_id}: Successfully processed URL → {local_filename}")
             except Exception as e:
                 if dprint:
-                    dprint(f"[LORA_DOWNLOAD] Task {task_id}: Failed to download {lora_name_or_url}: {e}")
-                processed_names.append(lora_name_or_url)  # Keep URL as fallback
+                    dprint(f"[LORA_DOWNLOAD] Task {task_id}: ⚠️  FAILED to download {lora_name_or_url}: {e}")
+                    dprint(f"[LORA_DOWNLOAD] Task {task_id}: ⚠️  Skipping this LoRA - it will not be applied to generation")
+                # Don't add URL to processed list - WGP can't handle URLs
+                # This LoRA will be skipped, but generation will continue
         else:
             # Already a local filename
             processed_names.append(lora_name_or_url)
+            processed_multipliers.append(multiplier)
     
-    return processed_names, multipliers
+    return processed_names, processed_multipliers
 
 
 def _check_lora_exists(lora_filename: str) -> bool:
@@ -610,9 +616,12 @@ def _download_lora_from_url(url: str, task_id: str, dprint=None) -> str:
     import os
     import shutil
     from urllib.request import urlretrieve
+    from urllib.parse import unquote
     
-    # Extract filename from URL
-    local_filename = url.split("/")[-1]
+    # Extract filename from URL and decode URL-encoded characters
+    # e.g., "%E5%BB%B6%E6%97%B6%E6%91%84%E5%BD%B1-high.safetensors" → "延时摄影-high.safetensors"
+    url_filename = url.split("/")[-1]
+    local_filename = unquote(url_filename)
     
     # Determine LoRA directory: prefer the WGP-visible root 'loras'
     lora_dir = "loras"
@@ -638,7 +647,9 @@ def _download_lora_from_url(url: str, task_id: str, dprint=None) -> str:
             url_path = url[len("https://huggingface.co/"):]
             url_parts = url_path.split("/resolve/main/")
             repo_id = url_parts[0]
-            rel_path = url_parts[-1]
+            rel_path_encoded = url_parts[-1]
+            # Decode URL-encoded path components (e.g., Chinese characters)
+            rel_path = unquote(rel_path_encoded)
             filename = os.path.basename(rel_path)
             subfolder = os.path.dirname(rel_path)
 
