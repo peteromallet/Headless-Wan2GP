@@ -83,9 +83,6 @@ def extract_orchestrator_parameters(db_task_params: dict, task_id: str = "unknow
             "switch_threshold2": "switch_threshold2",
             "model_switch_phase": "model_switch_phase",
             "sample_solver": "sample_solver",
-            "use_causvid_lora": "use_causvid_lora",
-            "use_lighti2x_lora": "use_lighti2x_lora",
-            "apply_reward_lora": "apply_reward_lora",
             # LoRA parameters from phase_config
             "lora_names": "lora_names",
             "lora_multipliers": "lora_multipliers",
@@ -1862,7 +1859,7 @@ def _apply_special_lora_settings(task_id: str, lora_type: str, lora_basename: st
     ui_defaults["loras_multipliers"] = " ".join(multipliers_list)
 
 # --- SM_RESTRUCTURE: Function moved from worker.py ---
-def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False, model_type_override: str = None):
+def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_model, image_download_dir: Path | str | None = None, model_type_override: str = None):
     # DEPRECATED: This function is no longer used in the queue-only system
     state = {
         "model_filename": model_filename,
@@ -2012,42 +2009,6 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
     # --- End Custom LoRA Handling ---
 
     # No automatic LoRA optimizations - all parameters come from JSON/task configuration
-
-    if apply_reward_lora:
-        print(f"[Task ID: {task_params_dict.get('task_id')}] Applying Reward LoRA settings.")
-
-        reward_lora = {"filename": "Wan2.1-Fun-14B-InP-MPS_reward_lora_wgp.safetensors", "strength": "0.5"}
-
-        # Get current activated LoRAs
-        current_activated = ui_defaults.get("activated_loras", [])
-        if not isinstance(current_activated, list):
-            try:
-                current_activated = [str(item).strip() for item in str(current_activated).split(',') if item.strip()]
-            except:
-                current_activated = []
-
-        # Get current multipliers
-        current_multipliers_str = ui_defaults.get("loras_multipliers", "")
-        if isinstance(current_multipliers_str, (list, tuple)):
-            current_multipliers_list = [str(m).strip() for m in current_multipliers_str if str(m).strip()]
-        elif isinstance(current_multipliers_str, str):
-            current_multipliers_list = [m.strip() for m in current_multipliers_str.split(" ") if m.strip()]
-        else:
-            current_multipliers_list = []
-
-        # Pad multipliers to match activated LoRAs before creating map
-        while len(current_multipliers_list) < len(current_activated):
-            current_multipliers_list.append("1.0")
-
-        # Create a dictionary to map lora to multiplier for easy update (preserves order in Python 3.7+)
-        lora_mult_map = dict(zip(current_activated, current_multipliers_list))
-
-        # Add/update reward lora
-        lora_mult_map[reward_lora['filename']] = reward_lora['strength']
-
-        ui_defaults["activated_loras"] = list(lora_mult_map.keys())
-        ui_defaults["loras_multipliers"] = " ".join(list(lora_mult_map.values()))
-        dprint(f"Reward LoRA applied. Activated: {ui_defaults['activated_loras']}, Multipliers: {ui_defaults['loras_multipliers']}")
 
     # Apply additional LoRAs that may have been passed via task params (e.g. from travel orchestrator)
     processed_additional_loras = task_params_dict.get("processed_additional_loras", {})

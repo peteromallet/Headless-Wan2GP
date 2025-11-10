@@ -10,7 +10,7 @@ from ..common_utils import (
 )
 
 
-def _handle_single_image_task(task_params_from_db: dict, main_output_dir_base: Path, task_id: str, image_download_dir: Path | str | None = None, apply_reward_lora: bool = False, *, dprint, task_queue=None):
+def _handle_single_image_task(task_params_from_db: dict, main_output_dir_base: Path, task_id: str, image_download_dir: Path | str | None = None, *, dprint, task_queue=None):
     """
     DEPRECATED: Single image task handler - now handled via direct queue integration in worker.py
     

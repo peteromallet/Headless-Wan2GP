@@ -401,8 +401,7 @@ def prepare_vace_generation_params(
             "flow_shift", "audio_guidance_scale", "cfg_zero_step",
             "guidance2_scale", "guidance3_scale", "guidance_phases",
             "switch_threshold", "switch_threshold2", "model_switch_phase",
-            "sample_solver", "use_causvid_lora", "use_lighti2x_lora",
-            "apply_reward_lora", "additional_loras"
+            "sample_solver", "additional_loras"
         ]
 
         for param in optional_params:

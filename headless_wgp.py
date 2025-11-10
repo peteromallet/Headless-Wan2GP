@@ -1033,158 +1033,25 @@ class WanOrchestrator:
             # Don't set LoRA parameters - let WGP extract them from model JSON via get_transformer_loras()
             # WGP will call get_transformer_loras(model_type) to get LoRAs from the temp model file
         else:
-            # Normal mode: process LoRAs from loras/loras_multipliers_list
-            # Filter out LoRAs that are not present on disk to avoid hard failures in offline setups.
-            filtered_multipliers: List[float] = []
-            if lora_names:
-                try:
-                    import wgp as _w
-                    from pathlib import Path as _P
-                    default_dir = _P(_w.get_lora_dir(self.current_model))
-                    # Common alternate directory used by tests for Qwen LoRAs
-                    alt_dir = default_dir.parent / "loras_qwen"
-                    cand_dirs = [default_dir]
-                    if alt_dir not in cand_dirs:
-                        cand_dirs.append(alt_dir)
-                    # Also include a plain "loras" at Wan root in case get_lora_dir changes working dir
-                    wan_root_loras = _P(self.wan_root) / "loras"
-                    if wan_root_loras not in cand_dirs:
-                        cand_dirs.append(wan_root_loras)
-                    # And include the dedicated Qwen LoRA directory at Wan root used by tests
-                    wan_root_loras_qwen = _P(self.wan_root) / "loras_qwen"
-                    if wan_root_loras_qwen not in cand_dirs:
-                        cand_dirs.append(wan_root_loras_qwen)
-
-                    def _exists_any(name: str) -> bool:
-                        try:
-                            npath = _P(name)
-                            # Absolute path provided
-                            if npath.is_absolute() and npath.exists():
-                                return True
-                            # Relative to Wan root
-                            if (_P(self.wan_root) / npath).exists():
-                                return True
-                            # Join with candidate dirs (full name and basename)
-                            for d in cand_dirs:
-                                if (d / npath).exists() or (d / npath.name).exists():
-                                    return True
-                        except Exception:
-                            pass
-                        return False
-
-                    def _resolve_first(name: str) -> str:
-                        """Return absolute path to the first matching file among candidates."""
-                        npath = _P(name)
-                        try:
-                            if npath.is_absolute() and npath.exists():
-                                return str(npath.resolve())
-                        except Exception:
-                            pass
-                        # Relative to Wan root
-                        try:
-                            p = (_P(self.wan_root) / npath)
-                            if p.exists():
-                                return str(p.resolve())
-                        except Exception:
-                            pass
-                        # Search candidate dirs
-                        for d in cand_dirs:
-                            for candidate in (d / npath, d / npath.name):
-                                try:
-                                    if candidate.exists():
-                                        return str(candidate.resolve())
-                                except Exception:
-                                    pass
-                        # Fallback to original name
-                        return name
-
-                    for idx, name in enumerate(lora_names):
-                        # Skip empty URLs from phase_config (phases without LoRAs)
-                        if not name or not name.strip():
-                            generation_logger.info(
-                                f"Skipping empty LoRA URL at index {idx} (phase without LoRA)"
-                            )
-                            continue
-                        if _exists_any(name):
-                            # Use absolute path so WGP join does not override it
-                            resolved = _resolve_first(name)
-                            activated_loras.append(resolved)
-                            if lora_multipliers and idx < len(lora_multipliers):
-                                filtered_multipliers.append(lora_multipliers[idx])
-                        else:
-                            # Try to download from model config URL before skipping
-                            try:
-                                # Get the LoRA URLs from the model config
-                                model_loras = task.parameters.get("model", {}).get("loras", [])
-                                lora_url = None
-                                if idx < len(model_loras):
-                                    lora_url = model_loras[idx]
-
-                                if lora_url and lora_url.startswith("http"):
-                                    generation_logger.info(
-                                        f"LoRA not found locally, attempting download from URL: '{name}' from {lora_url}"
-                                    )
-
-                                    # Use wget to download the file
-                                    import subprocess
-                                    import os
-
-                                    # Ensure loras directory exists
-                                    loras_dir = "loras"
-                                    os.makedirs(loras_dir, exist_ok=True)
-
-                                    # Download file
-                                    local_path = os.path.join(loras_dir, name)
-                                    result = subprocess.run(
-                                        ["wget", "-O", local_path, lora_url],
-                                        capture_output=True,
-                                        text=True
-                                    )
-
-                                    if result.returncode == 0 and _exists_any(name):
-                                        resolved = _resolve_first(name)
-                                        activated_loras.append(resolved)
-                                        if lora_multipliers and idx < len(lora_multipliers):
-                                            filtered_multipliers.append(lora_multipliers[idx])
-                                        generation_logger.info(
-                                            f"Successfully downloaded and activated LoRA: '{name}'"
-                                        )
-                                    else:
-                                        generation_logger.warning(
-                                            f"Failed to download LoRA from {lora_url}: {result.stderr}"
-                                        )
-                                else:
-                                    generation_logger.warning(
-                                        f"LoRA not found and no valid URL provided for download: '{name}'"
-                                    )
-
-                            except Exception as e:
-                                generation_logger.warning(
-                                    f"LoRA not found and download failed with error: '{name}' - {e}"
-                                )
-                    if lora_names and not activated_loras:
-                        generation_logger.info(
-                            "No requested LoRAs were found in known directories; proceeding without LoRAs."
-                        )
-                except Exception as _e:
-                    # On any error, fall back to original list to avoid accidental removal
-                    generation_logger.warning(f"LoRA filtering failed; using provided list as-is: {_e}")
-                    activated_loras = lora_names.copy()
-                    filtered_multipliers = (lora_multipliers or []).copy()
-            # WGP expects loras_multipliers as string, not list
-            # Detect phase-config format (contains semicolons) vs regular format
-            multipliers_to_convert = filtered_multipliers if filtered_multipliers else (lora_multipliers or [])
-            if multipliers_to_convert:
-                # Check if phase-config format (any multiplier contains semicolon)
-                is_phase_config = any(";" in str(m) for m in multipliers_to_convert)
-                if is_phase_config:
-                    # Phase-config format: ["1.0;0", "0;1.0"] → space-separated "1.0;0 0;1.0"
-                    loras_multipliers_str = " ".join(str(m) for m in multipliers_to_convert)
-                else:
-                    # Regular format: [1.0, 0.8] → space-separated "1.0 0.8"
-                    loras_multipliers_str = " ".join(str(m) for m in multipliers_to_convert)
+            # Normal mode: LoRAs are already validated absolute paths from LoraResolver
+            # (worker.py called LoraResolver.resolve_all_lora_formats() before passing to us)
+            # We just need to format them for WGP's expected string format
+            
+            # lora_names already contains validated absolute paths that exist on disk
+            activated_loras = lora_names or []
+            
+            # Format multipliers as space-separated string for WGP
+            # Handles both regular floats (1.0, 0.8) and phase-config strings ("1.0;0;0")
+            if lora_multipliers:
+                loras_multipliers_str = " ".join(str(m) for m in lora_multipliers)
             else:
                 loras_multipliers_str = ""
+            
+            if activated_loras:
+                generation_logger.info(f"Using {len(activated_loras)} LoRAs (pre-validated by LoraResolver)")
+                generation_logger.debug(f"LoRA paths: {[os.path.basename(p) for p in activated_loras]}")
+            else:
+                generation_logger.debug("No LoRAs to apply")
 
         # Create minimal task and callback objects (needed for wgp_params)
         task = {"id": 1, "params": {}, "repeats": 1}

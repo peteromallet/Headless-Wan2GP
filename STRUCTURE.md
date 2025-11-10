@@ -133,11 +133,15 @@ DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
 │   └── HEADLESS_SUPABASE_TASK.md  # Supabase implementation spec
 ├── supabase/
 │   └── functions/
-│       ├── complete_task/         # Edge Function: uploads file & marks task complete
-│       ├── create_task/           # Edge Function: queues task from client
-│       ├── claim_next_task/       # Edge Function: claims next task (service-role → any, user → own only)
+│       ├── _shared/                # Shared authentication utilities for edge functions
+│       ├── claim_next_task/        # Edge Function: claims next task (service-role → any, user → own only)
+│       ├── complete_task/          # Edge Function: uploads file & marks task complete
+│       ├── create_task/            # Edge Function: queues task from client
+│       ├── generate-upload-url/    # Edge Function: generates presigned URLs for file uploads
 │       ├── get_predecessor_output/ # Edge Function: gets task dependency and its output in single call
-│       └── get-completed-segments/ # Edge Function: fetches completed travel_segment outputs for a run_id, bypassing RLS
+│       ├── get-completed-segments/ # Edge Function: fetches completed travel_segment outputs for a run_id, bypassing RLS
+│       ├── task-counts/            # Edge Function: returns task counts and worker statistics
+│       └── update-task-status/     # Edge Function: updates task status (use claim_next_task for proper claiming)
 ├── logs/               # runtime logs (git-ignored)
 ├── outputs/            # generated videos/images (git-ignored)
 ├── samples/            # example inputs for docs & tests
@@ -149,10 +153,17 @@ DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
 
 ## Top-level scripts
 
-* **worker.py** – Headless service that polls the `tasks` database, claims work, and executes tasks via the HeadlessTaskQueue system. Includes specialized handlers for OpenPose and RIFE interpolation tasks with automatic Supabase storage upload. Supports both SQLite and Supabase backends via `--db-type` flag with queue-based processing architecture.
+* **worker.py** – Headless service that polls the `tasks` database, claims work, and executes tasks via the HeadlessTaskQueue system. Includes specialized handlers for OpenPose and RIFE interpolation tasks with automatic Supabase storage upload. Includes 4 Qwen image editing task types (qwen_image_edit, qwen_image_style, image_inpaint, annotated_image_edit) handled by `QwenHandler`. All Qwen tasks use the qwen_image_edit_20B model with automatic LoRA management via `LoraResolver`. Supports both SQLite and Supabase backends via `--db-type` flag with queue-based processing architecture. Features centralized logging that batches logs with heartbeats for orchestrator integration.
 * **add_task.py** – Lightweight CLI helper to queue a single new task into SQLite/Supabase. Accepts a JSON payload (or file) and inserts it into the `tasks` table.
 * **generate_test_tasks.py** – Developer utility that back-fills the database with synthetic images/prompts for integration testing and local benchmarking.
 * **tests/test_travel_workflow_db_edge_functions.py** – Comprehensive test script to verify Supabase Edge Functions, authentication, and database operations for the headless worker.
+
+## Documentation
+
+* **STRUCTURE.md** (this file) – Project structure and component overview
+* **AI_AGENT_MAINTENANCE_GUIDE.md** – Guide for AI agents working on this codebase
+* **WORKER_LOGGING_IMPLEMENTATION.md** – Centralized logging implementation guide for GPU workers integrating with orchestrator logging system
+* **HEADLESS_SYSTEM_ARCHITECTURE.md** – Detailed component interactions and system architecture
 
 ## Supabase Upload System
 
@@ -172,6 +183,11 @@ All task types support automatic upload to Supabase Storage when configured:
 * **different_perspective**: Final posed images → Supabase bucket  
 * **Standard WGP tasks**: All video outputs → Supabase bucket
 * **Specialized handlers**: OpenPose masks, RIFE interpolations, etc. → Supabase bucket
+* **Qwen Image Edit tasks**: All 4 Qwen task types → Supabase bucket with public URLs
+  * **qwen_image_edit**: Basic image editing with optional LoRAs
+  * **qwen_image_style**: Style transfer between images (auto-prompt modification, Lightning/Style/Subject LoRAs)
+  * **image_inpaint**: Inpainting with green mask overlay compositing
+  * **annotated_image_edit**: Scene annotation editing with specialized LoRA
 
 ### Database behavior
 * **SQLite mode**: `output_location` contains relative paths (e.g., `files/video.mp4`)
@@ -193,112 +209,29 @@ The system now uses a modern queue-based architecture for video generation:
 - **Memory Optimization**: Intelligent model loading and quantization support  
 - **Parameter Safety**: Clean parameter mapping prevents conflicts and errors
 - **Queue Efficiency**: Tasks are processed through an optimized queue system
-- **Modern Architecture**: Replaces legacy direct WGP calls with robust queue-based processing
-- **Code Deduplication**: Eliminated ~470 lines of duplicated travel segment logic through shared processor pattern
+- **Modern Architecture**: Robust queue-based processing system with centralized handlers
 
-## Code Deduplication Refactoring
-
-### Problem Addressed
-The travel segment system previously had nearly identical logic duplicated between two handlers:
-
-1. **Blocking Handler** (`travel_between_images.py`) - Synchronous processing with inline logic
-2. **Queue Handler** (`worker.py`) - Asynchronous processing with copied logic
-
-**Duplication Scope:**
-- Guide video creation logic (~280 lines)
-- Mask video creation logic (~140 lines) 
-- Video prompt type construction (~50 lines)
-- **Total: ~470 lines of duplicated code**
-
-### Maintenance Burden
-Every bug fix, feature addition, or parameter change had to be implemented twice:
-- Doubled development time
-- Error-prone manual synchronization  
-- Risk of behavioral divergence between handlers
-- Parameter precedence fixes needed in both places
-
-### Solution: Shared Processor Pattern
-Created `TravelSegmentProcessor` class that:
-- Consolidates all shared logic in a single location
-- Provides identical behavior for both execution paths
-- Maintains full compatibility with existing parameter handling
-- Supports both VACE and non-VACE model workflows
-
-**Files Modified:**
-- `source/travel_segment_processor.py` - **NEW**: Shared processor implementation
-- `source/sm_functions/travel_between_images.py` - Refactored to use shared processor
-- `worker.py` - Refactored to use shared processor  
-
-**Benefits:**
-- ✅ Single source of truth for travel segment logic
-- ✅ Consistent behavior across both execution paths
-- ✅ Easier maintenance and feature development
-- ✅ Reduced codebase size and complexity
-- ✅ Preserved existing functionality and parameter precedence
-
-## Centralized Parameter Extraction System
-
-### Problem Addressed
-Previously, multiple files manually extracted parameters from `orchestrator_details` with inconsistent logic:
-
-1. **`worker.py`** - Manual extraction for single_image tasks
-2. **`travel_between_images.py`** - Different manual extraction for travel segments  
-3. **`magic_edit.py`** - Yet another manual extraction implementation
-
-**Issues:**
-- Code duplication across multiple task handlers
-- Inconsistent parameter precedence rules
-- Manual maintenance of parameter mapping in each location
-- Risk of missing parameters when adding new task types
-
-### Solution: Centralized Extraction Function
-Created `extract_orchestrator_parameters()` function in `common_utils.py` that:
-- Provides single source of truth for parameter extraction logic
-- Maintains consistent parameter precedence across all task types
-- Supports extensible parameter mapping via centralized configuration
-- Handles all parameter types (LoRAs, generation settings, task-specific params)
-
-**Implementation:**
-```python
-# All task types now use the same extraction pattern:
-extracted_params = extract_orchestrator_parameters(
-    task_params_with_orchestrator_details, 
-    task_id=task_id, 
-    dprint=dprint
-)
-```
-
-**Files Modified:**
-- `source/common_utils.py` - **NEW**: `extract_orchestrator_parameters()` function
-- `worker.py` - Refactored to use centralized extraction
-- `source/sm_functions/travel_between_images.py` - Refactored to use centralized extraction (both orchestrator and segment levels)
-- `source/sm_functions/magic_edit.py` - Refactored to use centralized extraction
-
-**Benefits:**
-- ✅ DRY principle: Single extraction implementation used everywhere
-- ✅ Consistent parameter handling across all task types
-- ✅ Easy maintenance: Add new parameters in one place
-- ✅ Reduced bugs: Eliminates manual parameter extraction errors
-- ✅ Automatic support: New task types get parameter extraction for free
-- ✅ Fixed custom LoRA support: `additional_loras` now work consistently across single_image and travel_segment tasks
 
 ## source/ package
 
 This is the main application package.
 
-* **common_utils.py** – Reusable helpers (file downloads, ffmpeg helpers, MediaPipe keypoint interpolation, debug utilities, etc.). Includes generalized Supabase upload functions (`prepare_output_path_with_upload`, `upload_and_get_final_output_location`) used by all task types. **NEW**: Contains `extract_orchestrator_parameters()` function that provides centralized parameter extraction from `orchestrator_details` across all task types, eliminating code duplication and ensuring consistent parameter handling.
+* **common_utils.py** – Reusable helpers (file downloads, ffmpeg helpers, MediaPipe keypoint interpolation, debug utilities, etc.). Includes generalized Supabase upload functions (`prepare_output_path_with_upload`, `upload_and_get_final_output_location`) used by all task types. Contains `extract_orchestrator_parameters()` function that provides centralized parameter extraction from `orchestrator_details` across all task types.
 * **db_operations.py** – Handles all database interactions for both SQLite and Supabase. Includes Supabase client initialization, Edge Function integration, and automatic backend selection based on `DB_TYPE`.
 * **specialized_handlers.py** – Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation. Uses Supabase-compatible upload functions for all outputs.
 * **video_utils.py** – Provides utilities for video manipulation like cross-fading, frame extraction, and color matching.
-* **travel_segment_processor.py** – **NEW**: Shared processor that eliminates code duplication between travel segment handlers. Contains the unified logic for guide video creation, mask video creation, and video_prompt_type construction that was previously duplicated between `travel_between_images.py` and `worker.py`.
-* **lora_utils.py** – **NEW**: Centralized LoRA processing system with `process_all_loras()` function. Consolidates all LoRA handling (detection, optimization, download, formatting) into a single pipeline that replaces 200+ lines of scattered code. Supports auto-download of LightI2X/CausVid LoRAs and multiple input formats.
+* **travel_segment_processor.py** – Shared processor for travel segment handling. Contains unified logic for guide video creation, mask video creation, and video_prompt_type construction used by both `travel_between_images.py` and `worker.py`.
+* **lora_utils.py** – Centralized LoRA processing system with `process_all_loras()` function. Handles LoRA detection, optimization, download, and formatting. Supports auto-download of LightI2X/CausVid LoRAs and multiple input formats.
+* **lora_resolver.py** – Unified LoRA format resolution class (`LoraResolver`). Resolves all 8 LoRA input formats into validated absolute paths. Handles normalization, URL downloads (wget), path validation, and deduplication.
+* **model_handlers/** – Package for model-specific task handlers.
+  * **qwen_handler.py** – Qwen-specific preprocessing and parameter transformation. Handles 4 Qwen task types: `qwen_image_edit`, `image_inpaint`, `annotated_image_edit`, `qwen_image_style`. Manages resolution capping, composite image creation (green masks), system prompt selection, and LoRA coordination.
 
 
 ### source/sm_functions/ sub-package
 
 Task-specific wrappers around the bulky upstream logic. These are imported by `worker.py` (and potentially by notebooks/unit tests) without dragging in the interactive Gradio UI shipped with Wan2GP. All task handlers use generalized Supabase upload functions for consistent output handling.
 
-* **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images. Builds guide videos, queues generation tasks, stitches outputs. Final stitched videos are uploaded to Supabase when configured. Includes extensive debugging system with `debug_video_analysis()` function that tracks frame counts, file sizes, and processing steps throughout the entire orchestrator → segments → stitching pipeline. **Now uses shared TravelSegmentProcessor to eliminate code duplication.**
+* **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images. Builds guide videos, queues generation tasks, stitches outputs. Final stitched videos are uploaded to Supabase when configured. Includes extensive debugging system with `debug_video_analysis()` function that tracks frame counts, file sizes, and processing steps throughout the entire orchestrator → segments → stitching pipeline. Uses `TravelSegmentProcessor` for shared travel segment logic.
 * **different_perspective.py** – Generates a new perspective for a single image using an OpenPose or depth-driven guide video plus optional RIFE interpolation for smoothness. Final posed images are uploaded to Supabase when configured.
 * **single_image.py** – Minimal handler for one-off image-to-video generation without travel or pose manipulation. Generated images are uploaded to Supabase when configured.
 * **magic_edit.py** – Processes images through Replicate's black-forest-labs/flux-kontext-dev-lora model for scene transformations. Supports conditional InScene LoRA usage via `in_scene` parameter (true for scene consistency, false for creative freedom). Integrates with Supabase storage for output handling.
@@ -436,28 +369,16 @@ This debugging system provides comprehensive visibility into the video generatio
 
 ## LoRA Support
 
-### Centralized LoRA Processing System (NEW)
+### Centralized LoRA Processing System
 
-The system now features a comprehensive LoRA processing pipeline that consolidates all LoRA handling into a single entry point:
+The system features a comprehensive LoRA processing pipeline that consolidates all LoRA handling into a single entry point:
 
 * **`source/lora_utils.py`** – Central LoRA processing module with `process_all_loras()` function
-* **Consolidated Logic** – Replaces 200+ lines of scattered LoRA code across multiple files
+* **`source/lora_resolver.py`** – Unified LoRA format resolution class (`LoraResolver`) that handles all 8 LoRA input formats
 * **Auto-Download Support** – Automatically downloads missing LightI2X and CausVid LoRAs from HuggingFace
-* **Format Normalization** – Handles multiple input formats (`activated_loras`, `loras_multipliers`, `additional_loras`)
-* **URL Processing** – Supports `additional_loras` dict format with automatic URL downloads
+* **Format Normalization** – Handles multiple input formats (`activated_loras`, `loras_multipliers`, `additional_loras`, Qwen format, etc.)
+* **URL Processing** – Supports `additional_loras` dict format with automatic URL downloads (wget)
 
-### Special LoRA Flags and Auto-Detection
-
-* **`use_causvid_lora`** – Enables CausVid LoRA (`Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors`) with optimized parameters (9 steps, guidance 1.0, flow-shift 1.0). Step optimization only applies when no explicit steps are set. Auto-downloads from HuggingFace if missing.
-* **`use_lighti2x_lora`** – Enables LightI2X LoRA (`Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors`) with optimized parameters (6 steps, guidance 1.0, flow-shift 5.0). Step optimization only applies when no explicit steps are set. Auto-downloads from HuggingFace if missing.
-
-### Smart LoRA Detection
-
-The system auto-detects CausVid/LightI2X LoRAs included in model JSON configs:
-
-* **Built-in LoRAs**: When LoRAs are listed in model config's `loras` array, uses the JSON's parameter settings instead of forcing optimization values
-* **Explicit flags**: When `use_causvid_lora=True` is explicitly set (but model doesn't have it built-in), applies standard optimization parameters
-* **Best of both**: Allows fine-tuned parameter control in JSON configs while maintaining backward compatibility with explicit LoRA requests
 
 ### Additional LoRA Support
 
