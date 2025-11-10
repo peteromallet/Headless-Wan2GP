@@ -361,13 +361,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             prompts_identical = len(set(expanded_base_prompts)) == 1
             negative_prompts_identical = len(set(expanded_negative_prompts)) == 1
 
-            # LoRA consistency check
-            lora_flags_consistent = all([
-                orchestrator_payload.get("apply_causvid", False),
-                orchestrator_payload.get("use_lighti2x_lora", False),
-                orchestrator_payload.get("apply_reward_lora", False)
-            ])
-
             is_identical = prompts_identical and negative_prompts_identical
 
             if dprint and is_identical:
@@ -394,13 +387,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             # Critical safety checks
             all_prompts_identical = len(set(prompts)) == 1
             all_neg_prompts_identical = len(set(neg_prompts)) == 1
-
-            # LoRA consistency (flags should be uniform if prompts are identical)
-            lora_flags = [
-                orchestrator_payload.get("apply_causvid", False),
-                orchestrator_payload.get("use_lighti2x_lora", False),
-                orchestrator_payload.get("apply_reward_lora", False)
-            ]
 
             is_safe = all_prompts_identical and all_neg_prompts_identical
 
@@ -1229,13 +1215,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
             # [DEEP_DEBUG] Log orchestrator payload values BEFORE creating segment payload
             dprint(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: CREATING SEGMENT {idx} PAYLOAD")
-            dprint(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_causvid'): {orchestrator_payload.get('apply_causvid')}")
-            dprint(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('use_lighti2x_lora'): {orchestrator_payload.get('use_lighti2x_lora')}")
-            dprint(f"[ORCHESTRATOR_DEBUG]   orchestrator_payload.get('apply_reward_lora'): {orchestrator_payload.get('apply_reward_lora')}")
-            dprint(f"[DEEP_DEBUG] Orchestrator {orchestrator_task_id_str}: CREATING SEGMENT {idx} PAYLOAD")
-            dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('apply_causvid'): {orchestrator_payload.get('apply_causvid')}")
-            dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('use_lighti2x_lora'): {orchestrator_payload.get('use_lighti2x_lora')}")
-            dprint(f"[DEEP_DEBUG]   orchestrator_payload.get('apply_reward_lora'): {orchestrator_payload.get('apply_reward_lora')}")
             
             # Use centralized extraction to get all parameters that should be at top level
             from ..common_utils import extract_orchestrator_parameters
@@ -1318,9 +1297,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "parsed_resolution_wh": orchestrator_payload["parsed_resolution_wh"],
                 "model_name": orchestrator_payload["model_name"],
                 "seed_to_use": orchestrator_payload.get("seed_base", 12345),
-                "use_causvid_lora": orchestrator_payload.get("apply_causvid", False),
-                "use_lighti2x_lora": orchestrator_payload.get("use_lighti2x_lora", False),
-                "apply_reward_lora": orchestrator_payload.get("apply_reward_lora", False),
                 "cfg_star_switch": orchestrator_payload.get("cfg_star_switch", 0),
                 "cfg_zero_step": orchestrator_payload.get("cfg_zero_step", -1),
                 "params_json_str_override": orchestrator_payload.get("params_json_str_override"),
@@ -1358,23 +1334,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             if extracted_params.get("additional_loras"):
                 dprint(f"Orchestrator: Added additional_loras to segment {idx} payload: {extracted_params['additional_loras']}")
 
-            # [DEEP_DEBUG] Log segment payload values AFTER creation to verify they match
+            # [DEEP_DEBUG] Log segment payload values AFTER creation
             dprint(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: SEGMENT {idx} PAYLOAD CREATED")
-            dprint(f"[ORCHESTRATOR_DEBUG]   segment_payload['use_causvid_lora']: {segment_payload.get('use_causvid_lora')}")
-            dprint(f"[ORCHESTRATOR_DEBUG]   segment_payload['use_lighti2x_lora']: {segment_payload.get('use_lighti2x_lora')}")
-            dprint(f"[ORCHESTRATOR_DEBUG]   segment_payload['apply_reward_lora']: {segment_payload.get('apply_reward_lora')}")
-            dprint(f"[ORCHESTRATOR_DEBUG]   FULL segment_payload keys: {list(segment_payload.keys())}")
-            
-            # [DEEP_DEBUG] Also log what we're about to send to the Edge Function
-            # NOTE: task_id will be the actual DB row ID returned by add_task_to_db
-            
-            dprint(f"[DEEP_DEBUG] Orchestrator {orchestrator_task_id_str}: SEGMENT {idx} PAYLOAD CREATED")
-            dprint(f"[DEEP_DEBUG]   segment_payload['use_causvid_lora']: {segment_payload.get('use_causvid_lora')}")
-            dprint(f"[DEEP_DEBUG]   segment_payload['use_lighti2x_lora']: {segment_payload.get('use_lighti2x_lora')}")
-            dprint(f"[DEEP_DEBUG]   segment_payload['apply_reward_lora']: {segment_payload.get('apply_reward_lora')}")
-            dprint(f"[DEEP_DEBUG]   FULL segment_payload keys: {list(segment_payload.keys())}")
-            
-            # [DEEP_DEBUG] Segment payload ready for add_task_to_db
             dprint(f"[DEEP_DEBUG] Segment payload keys: {list(segment_payload.keys())}")
 
             dprint(f"[DEBUG_DEPENDENCY_CHAIN] Creating new segment {idx}, depends_on (prev idx {idx-1}): {previous_segment_task_id}")
@@ -1464,7 +1425,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
     return generation_success, output_message_for_orchestrator_db
 
-def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str, apply_reward_lora: bool = False, colour_match_videos: bool = False, mask_active_frames: bool = True, *, process_single_task, dprint, task_queue=None):
+def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base: Path, segment_task_id_str: str, colour_match_videos: bool = False, mask_active_frames: bool = True, *, process_single_task, dprint, task_queue=None):
     travel_logger.essential(f"Starting travel segment task", task_id=segment_task_id_str)
     log_ram_usage("Segment start", task_id=segment_task_id_str)
     dprint(f"_handle_travel_segment_task: Starting for {segment_task_id_str}")
@@ -1515,7 +1476,6 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         # Now full_orchestrator_payload is guaranteed to be populated or we've exited.
         # FIX: Prioritize job-specific settings from orchestrator payload over server-wide CLI flags.
         effective_colour_match_enabled = full_orchestrator_payload.get("colour_match_videos", colour_match_videos)
-        effective_apply_reward_lora = full_orchestrator_payload.get("apply_reward_lora", apply_reward_lora)
         debug_enabled = segment_params.get("debug_mode_enabled", full_orchestrator_payload.get("debug_mode_enabled", False))
 
         # Use centralized extraction function for all orchestrator parameters
@@ -1699,7 +1659,6 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         dprint(f"[SEGMENT_DEBUG]   total_frames_for_segment: {total_frames_for_segment}")
         dprint(f"[SEGMENT_DEBUG]   is_first_segment: {segment_params.get('is_first_segment', False)}")
         dprint(f"[SEGMENT_DEBUG]   is_last_segment: {segment_params.get('is_last_segment', False)}")
-        dprint(f"[SEGMENT_DEBUG]   use_causvid_lora: {full_orchestrator_payload.get('apply_causvid', False)}")
 
         fps_helpers = full_orchestrator_payload.get("fps_helpers", 16)
 
@@ -1864,7 +1823,6 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         dprint(f"[WGP_DEBUG]   parsed_res_wh: {parsed_res_wh}")
         dprint(f"[WGP_DEBUG]   fps_helpers: {fps_helpers}")
         dprint(f"[WGP_DEBUG]   model_name: {full_orchestrator_payload['model_name']}")
-        dprint(f"[WGP_DEBUG]   use_causvid_lora: {full_orchestrator_payload.get('apply_causvid', False)}")
         dprint(f"Task {segment_task_id_str}: Requesting WGP generation with {final_frames_for_wgp_generation} frames.")
 
         if final_frames_for_wgp_generation <= 0:
@@ -1947,9 +1905,6 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             # This suggested path (or process_single_task's default) is used, and an absolute path or URL is returned.
             "output_path": str(wgp_final_output_path_for_this_segment.resolve()), 
             "video_guide_path": str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
-            "use_causvid_lora": full_orchestrator_payload.get("apply_causvid", False),
-            "use_lighti2x_lora": full_orchestrator_payload.get("use_lighti2x_lora", False),
-            "apply_reward_lora": full_orchestrator_payload.get("apply_reward_lora", False),
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
             "image_refs_paths": safe_vace_image_ref_paths_for_wgp,
@@ -2029,55 +1984,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         # ------------------------------------------------------------------
         import sys
         # Path already imported at top of function
-        source_dir = Path(__file__).parent.parent
-        if str(source_dir) not in sys.path:
-            sys.path.insert(0, str(source_dir))
-        from lora_utils import detect_lora_optimization_flags, apply_lora_parameter_optimization
-        
-        model_name = full_orchestrator_payload["model_name"]
-        
-        # Detect LoRA optimization flags using shared logic
-        causvid_enabled, lighti2x_enabled = detect_lora_optimization_flags(
-            task_params=segment_params,
-            orchestrator_payload=full_orchestrator_payload,
-            model_name=model_name,
-            dprint=dprint
-        )
-
-        # [CausVidDebugTrace] Add detailed parameter precedence logging
-        dprint(f"[CausVidDebugTrace] Segment {segment_idx}: Parameter precedence analysis:")
-        dprint(f"[CausVidDebugTrace]   causvid_enabled: {causvid_enabled}")
-        dprint(f"[CausVidDebugTrace]   lighti2x_enabled: {lighti2x_enabled}")
-        dprint(f"[CausVidDebugTrace]   segment_params.get('num_inference_steps'): {segment_params.get('num_inference_steps')}")
-        dprint(f"[CausVidDebugTrace]   segment_params.get('steps'): {segment_params.get('steps')}")
-        dprint(f"[CausVidDebugTrace]   full_orchestrator_payload.get('num_inference_steps'): {full_orchestrator_payload.get('num_inference_steps')}")
-        dprint(f"[CausVidDebugTrace]   full_orchestrator_payload.get('steps'): {full_orchestrator_payload.get('steps')}")
-        dprint(f"[CausVidDebugTrace]   wgp_payload.get('num_inference_steps'): {wgp_payload.get('num_inference_steps')}")
-        dprint(f"[CausVidDebugTrace]   wgp_payload.get('steps'): {wgp_payload.get('steps')}")
-        dprint(f"[CausVidDebugTrace]   default would be: {6 if lighti2x_enabled else (9 if causvid_enabled else 30)}")
-
-        # Apply LoRA parameter optimization using shared logic
-        optimized_params = apply_lora_parameter_optimization(
-            params=wgp_payload.copy(),  # Work on a copy to avoid modifying original
-            causvid_enabled=causvid_enabled,
-            lighti2x_enabled=lighti2x_enabled,
-            model_name=model_name,
-            task_params=segment_params,
-            orchestrator_payload=full_orchestrator_payload,
-            task_id=segment_task_id_str,
-            dprint=dprint
-        )
-        
-        # Extract the optimized values
-        num_inference_steps = optimized_params["num_inference_steps"]
-        guidance_scale_default = optimized_params["guidance_scale"]
-        flow_shift_default = optimized_params["flow_shift"]
-        
-        dprint(f"[CausVidDebugTrace] Segment {segment_idx}: FINAL SELECTED num_inference_steps = {num_inference_steps}")
-        dprint(f"[CausVidDebugTrace] Segment {segment_idx}: FINAL SELECTED guidance_scale = {guidance_scale_default}")
-        dprint(f"[CausVidDebugTrace] Segment {segment_idx}: FINAL SELECTED flow_shift = {flow_shift_default}")
-
-        # Parameter defaults now handled in the shared optimization logic above
+        # LoRA optimization removed - all parameters from model JSON config
 
         # DEPRECATED: Legacy task queue system code - travel segments now processed via direct queue integration
         # Travel segments are now routed through worker.py's _handle_travel_segment_via_queue function

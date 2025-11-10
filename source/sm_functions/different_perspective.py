@@ -113,7 +113,6 @@ def _handle_different_perspective_orchestrator_task(task_params_from_db: dict, m
             "resolution": task_params_from_db.get("resolution"),
             "frames": 1,
             "seed": task_params_from_db.get("seed", -1),
-            "use_causvid_lora": task_params_from_db.get("use_causvid_lora", False),
             "dp_orchestrator_payload": orchestrator_payload,
             "output_dir": str(work_dir.resolve()),
         }
@@ -263,7 +262,6 @@ def _handle_dp_final_gen_task(
             "video_guide_path": str(custom_guide_video_path.resolve()),
             "image_refs_paths": [original_params['input_image_path']],
             "image_prompt_type": "IV",
-            "use_causvid_lora": original_params.get("use_causvid_lora", False),
             # ensure outputs stay inside the run work dir
             "output_dir": str(work_dir.resolve()),
         }
@@ -301,7 +299,6 @@ def _handle_dp_final_gen_task(
             "wgp",
             project_id_for_task=original_params.get("project_id"),
             image_download_dir=None,
-            apply_reward_lora=False,
             colour_match_videos=False,
             mask_active_frames=True,
             task_queue=task_queue

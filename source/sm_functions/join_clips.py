@@ -146,9 +146,6 @@ def _handle_join_clips_task(
             - resolution: Optional [width, height] override
             - fps: Optional FPS override (defaults to 16)
             - max_wait_time: Optional timeout in seconds for generation (defaults to 1800s / 30 minutes)
-            - use_causvid_lora: Optional bool to enable CausVid LoRA
-            - use_lighti2x_lora: Optional bool to enable LightI2X LoRA
-            - apply_reward_lora: Optional bool to enable Reward LoRA
             - additional_loras: Optional dict of additional LoRAs {name: weight}
             - Other standard VACE parameters (guidance_scale, flow_shift, etc.)
         main_output_dir_base: Base output directory
@@ -534,12 +531,6 @@ def _handle_join_clips_task(
         dprint(f"[JOIN_CLIPS]   Resolution: {parsed_res_wh}")
 
         # Log LoRA settings
-        if generation_params.get("use_causvid_lora"):
-            dprint(f"[JOIN_CLIPS]   CausVid LoRA: enabled")
-        if generation_params.get("use_lighti2x_lora"):
-            dprint(f"[JOIN_CLIPS]   LightI2X LoRA: enabled")
-        if generation_params.get("apply_reward_lora"):
-            dprint(f"[JOIN_CLIPS]   Reward LoRA: enabled")
         if generation_params.get("additional_loras"):
             dprint(f"[JOIN_CLIPS]   Additional LoRAs: {len(generation_params['additional_loras'])} configured")
 

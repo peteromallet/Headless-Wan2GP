@@ -83,9 +83,6 @@ def _handle_join_clips_orchestrator_task(
             "num_anchor_frames": orchestrator_payload.get("num_anchor_frames", 3),
             "aspect_ratio": orchestrator_payload.get("aspect_ratio"),
             # LoRA parameters
-            "use_causvid_lora": orchestrator_payload.get("use_causvid_lora", False),
-            "use_lighti2x_lora": orchestrator_payload.get("use_lighti2x_lora", False),
-            "apply_reward_lora": orchestrator_payload.get("apply_reward_lora", False),
             "additional_loras": orchestrator_payload.get("additional_loras", {}),
         }
 
