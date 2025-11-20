@@ -1161,30 +1161,43 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         # Loop to queue all segment tasks (skip existing ones for idempotency)
         segments_created = 0
         for idx in range(num_segments):
+            # Get travel mode for dependency logic
+            travel_mode = orchestrator_payload.get("model_type", "vace")
+            independent_segments = orchestrator_payload.get("independent_segments", False)
+            
             # Determine dependency strictly from previously resolved actual DB IDs
-            previous_segment_task_id = actual_segment_db_id_by_index.get(idx - 1) if idx > 0 else None
+            # I2I MODE: Independent segments (no dependency on previous task)
+            if travel_mode == "i2i":
+                previous_segment_task_id = None
+                dprint(f"[DEBUG_DEPENDENCY_CHAIN] Segment {idx} (i2i mode): No dependency on previous segment")
+            elif travel_mode == "vace" and independent_segments:
+                previous_segment_task_id = None
+                dprint(f"[DEBUG_DEPENDENCY_CHAIN] Segment {idx} (vace independent mode): No dependency on previous segment")
+            else:
+                # VACE MODE (Sequential): Dependent on previous segment
+                previous_segment_task_id = actual_segment_db_id_by_index.get(idx - 1) if idx > 0 else None
 
-            # Defensive fallback: if we somehow don't have the previous segment's DB ID yet,
-            # try to resolve it from existing_segment_task_ids, and then from DB.
-            if idx > 0 and not previous_segment_task_id:
-                fallback_prev = existing_segment_task_ids.get(idx - 1)
-                if fallback_prev:
-                    dprint(f"[DEBUG_DEPENDENCY_CHAIN] Fallback resolved previous DB ID for seg {idx-1} from existing_segment_task_ids: {fallback_prev}")
-                    actual_segment_db_id_by_index[idx - 1] = fallback_prev
-                    previous_segment_task_id = fallback_prev
-                else:
-                    try:
-                        child_tasks = db_ops.get_orchestrator_child_tasks(orchestrator_task_id_str)
-                        for seg in child_tasks.get('segments', []):
-                            if seg.get('params', {}).get('segment_index') == idx - 1:
-                                prev_from_db = seg.get('id')
-                                if prev_from_db:
-                                    dprint(f"[DEBUG_DEPENDENCY_CHAIN] DB fallback resolved previous DB ID for seg {idx-1}: {prev_from_db}")
-                                    actual_segment_db_id_by_index[idx - 1] = prev_from_db
-                                    previous_segment_task_id = prev_from_db
-                                break
-                    except Exception as e_depdb:
-                        dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not resolve previous DB ID for seg {idx-1} via DB fallback: {e_depdb}")
+                # Defensive fallback: if we somehow don't have the previous segment's DB ID yet,
+                # try to resolve it from existing_segment_task_ids, and then from DB.
+                if idx > 0 and not previous_segment_task_id:
+                    fallback_prev = existing_segment_task_ids.get(idx - 1)
+                    if fallback_prev:
+                        dprint(f"[DEBUG_DEPENDENCY_CHAIN] Fallback resolved previous DB ID for seg {idx-1} from existing_segment_task_ids: {fallback_prev}")
+                        actual_segment_db_id_by_index[idx - 1] = fallback_prev
+                        previous_segment_task_id = fallback_prev
+                    else:
+                        try:
+                            child_tasks = db_ops.get_orchestrator_child_tasks(orchestrator_task_id_str)
+                            for seg in child_tasks.get('segments', []):
+                                if seg.get('params', {}).get('segment_index') == idx - 1:
+                                    prev_from_db = seg.get('id')
+                                    if prev_from_db:
+                                        dprint(f"[DEBUG_DEPENDENCY_CHAIN] DB fallback resolved previous DB ID for seg {idx-1}: {prev_from_db}")
+                                        actual_segment_db_id_by_index[idx - 1] = prev_from_db
+                                        previous_segment_task_id = prev_from_db
+                                    break
+                        except Exception as e_depdb:
+                            dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not resolve previous DB ID for seg {idx-1} via DB fallback: {e_depdb}")
 
             # Skip if this segment already exists
             if idx in existing_segment_indices:
@@ -1355,56 +1368,61 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for seg {idx} ({actual_db_row_id}): {e_ver}")
         
         # After loop, enqueue the stitch task (check for idempotency)
-        stitch_created = 0
-        if not stitch_already_exists:
-            final_stitched_video_name = f"travel_final_stitched_{run_id}.mp4"
-            # Stitcher saves its final primary output directly under main_output_dir (e.g., ./steerable_motion_output/)
-            # NOT under current_run_output_dir (which is .../travel_run_XYZ/)
-            # The main_output_dir_base is the one passed to worker.py (e.g. server's ./outputs or steerable_motion's ./steerable_motion_output)
-            # The orchestrator_payload["main_output_dir_for_run"] is this main_output_dir_base.
-            final_stitched_output_path = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))) / final_stitched_video_name
-
-            stitch_payload = {
-                "orchestrator_task_id_ref": orchestrator_task_id_str,
-                "orchestrator_run_id": run_id,
-                "project_id": orchestrator_project_id, # Added project_id
-                "num_total_segments_generated": num_segments,
-                "current_run_base_output_dir": str(current_run_output_dir.resolve()), # Stitcher needs this to find segment outputs
-                "frame_overlap_settings_expanded": expanded_frame_overlap,
-                "crossfade_sharp_amt": orchestrator_payload.get("crossfade_sharp_amt", 0.3),
-                "parsed_resolution_wh": orchestrator_payload["parsed_resolution_wh"],
-                "fps_final_video": orchestrator_payload.get("fps_helpers", 16),
-                "upscale_factor": orchestrator_payload.get("upscale_factor", 0.0),
-                "upscale_model_name": orchestrator_payload.get("upscale_model_name"),
-                "seed_for_upscale": orchestrator_payload.get("seed_base", 12345) + 5000, # Consistent seed for upscale
-                "debug_mode_enabled": orchestrator_payload.get("debug_mode_enabled", False),
-                "skip_cleanup_enabled": orchestrator_payload.get("skip_cleanup_enabled", False),
-                "initial_continued_video_path": orchestrator_payload.get("continue_from_video_resolved_path"),
-                "final_stitched_output_path": str(final_stitched_output_path.resolve()),
-                 # For upscale polling, if stitcher enqueues an upscale sub-task
-                "poll_interval_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_interval", 15),
-                "poll_timeout_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_timeout", 1800),
-                "full_orchestrator_payload": orchestrator_payload, # Added this line
-            }
-            
-            # Stitch should depend on the last segment's actual DB row ID
-            previous_segment_task_id = actual_segment_db_id_by_index.get(num_segments - 1)
-            dprint(f"[DEBUG_DEPENDENCY_CHAIN] Creating stitch task, depends_on (last seg idx {num_segments-1}): {previous_segment_task_id}")
-            actual_stitch_db_row_id = db_ops.add_task_to_db(
-                task_payload=stitch_payload, 
-                task_type_str="travel_stitch",
-                dependant_on=previous_segment_task_id
-            )
-            dprint(f"[DEBUG_DEPENDENCY_CHAIN] Stitch task created with actual DB ID: {actual_stitch_db_row_id}")
-            # Post-insert verification of dependency from DB
-            try:
-                dep_saved = db_ops.get_task_dependency(actual_stitch_db_row_id)
-                dprint(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Stitch saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
-            except Exception as e_ver2:
-                dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for stitch ({actual_stitch_db_row_id}): {e_ver2}")
-            stitch_created = 1
+        # SKIP if independent segments or I2I mode
+        if independent_segments or travel_mode == "i2i":
+             dprint(f"[STITCHING] Skipping stitch task creation for independent/i2i mode")
+             stitch_created = 0
         else:
-            dprint(f"[IDEMPOTENCY] Skipping stitch task creation - already exists with ID {existing_stitch_task_id}")
+             stitch_created = 0
+             if not stitch_already_exists:
+                final_stitched_video_name = f"travel_final_stitched_{run_id}.mp4"
+                # Stitcher saves its final primary output directly under main_output_dir (e.g., ./steerable_motion_output/)
+                # NOT under current_run_output_dir (which is .../travel_run_XYZ/)
+                # The main_output_dir_base is the one passed to worker.py (e.g. server's ./outputs or steerable_motion's ./steerable_motion_output)
+                # The orchestrator_payload["main_output_dir_for_run"] is this main_output_dir_base.
+                final_stitched_output_path = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))) / final_stitched_video_name
+
+                stitch_payload = {
+                    "orchestrator_task_id_ref": orchestrator_task_id_str,
+                    "orchestrator_run_id": run_id,
+                    "project_id": orchestrator_project_id, # Added project_id
+                    "num_total_segments_generated": num_segments,
+                    "current_run_base_output_dir": str(current_run_output_dir.resolve()), # Stitcher needs this to find segment outputs
+                    "frame_overlap_settings_expanded": expanded_frame_overlap,
+                    "crossfade_sharp_amt": orchestrator_payload.get("crossfade_sharp_amt", 0.3),
+                    "parsed_resolution_wh": orchestrator_payload["parsed_resolution_wh"],
+                    "fps_final_video": orchestrator_payload.get("fps_helpers", 16),
+                    "upscale_factor": orchestrator_payload.get("upscale_factor", 0.0),
+                    "upscale_model_name": orchestrator_payload.get("upscale_model_name"),
+                    "seed_for_upscale": orchestrator_payload.get("seed_base", 12345) + 5000, # Consistent seed for upscale
+                    "debug_mode_enabled": orchestrator_payload.get("debug_mode_enabled", False),
+                    "skip_cleanup_enabled": orchestrator_payload.get("skip_cleanup_enabled", False),
+                    "initial_continued_video_path": orchestrator_payload.get("continue_from_video_resolved_path"),
+                    "final_stitched_output_path": str(final_stitched_output_path.resolve()),
+                     # For upscale polling, if stitcher enqueues an upscale sub-task
+                    "poll_interval_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_interval", 15),
+                    "poll_timeout_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_timeout", 1800),
+                    "full_orchestrator_payload": orchestrator_payload, # Added this line
+                }
+                
+                # Stitch should depend on the last segment's actual DB row ID
+                previous_segment_task_id = actual_segment_db_id_by_index.get(num_segments - 1)
+                dprint(f"[DEBUG_DEPENDENCY_CHAIN] Creating stitch task, depends_on (last seg idx {num_segments-1}): {previous_segment_task_id}")
+                actual_stitch_db_row_id = db_ops.add_task_to_db(
+                    task_payload=stitch_payload, 
+                    task_type_str="travel_stitch",
+                    dependant_on=previous_segment_task_id
+                )
+                dprint(f"[DEBUG_DEPENDENCY_CHAIN] Stitch task created with actual DB ID: {actual_stitch_db_row_id}")
+                # Post-insert verification of dependency from DB
+                try:
+                    dep_saved = db_ops.get_task_dependency(actual_stitch_db_row_id)
+                    dprint(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Stitch saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
+                except Exception as e_ver2:
+                    dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for stitch ({actual_stitch_db_row_id}): {e_ver2}")
+                stitch_created = 1
+             else:
+                dprint(f"[IDEMPOTENCY] Skipping stitch task creation - already exists with ID {existing_stitch_task_id}")
 
         generation_success = True
         if segments_created > 0 or stitch_created > 0:
@@ -1491,6 +1509,10 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             task_id=segment_task_id_str, 
             dprint=dprint
         )
+
+        # Extract travel mode (defaults to vace)
+        travel_mode = full_orchestrator_payload.get("model_type", "vace")
+        dprint(f"Segment {segment_idx}: Travel mode: {travel_mode}")
         
         # Extract additional_loras from the centralized function result
         additional_loras = extracted_params.get("additional_loras", {})
@@ -1514,49 +1536,54 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             segment_image_download_dir = segment_processing_dir  # Save directly to main output dir
         dprint(f"Segment {segment_idx} (Task {segment_task_id_str}): Processing in {segment_processing_dir.resolve()} | image_download_dir={segment_image_download_dir}")
 
-        # --- Color Match Reference Image Determination ---
-        start_ref_path_for_cm, end_ref_path_for_cm = None, None
-        if effective_colour_match_enabled:
-            input_images_for_cm = full_orchestrator_payload.get("input_image_paths_resolved", [])
-            is_continuing_for_cm = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
-            
-            if is_continuing_for_cm:
-                if segment_idx == 0:
-                    continued_video_path = full_orchestrator_payload.get("continue_from_video_resolved_path")
-                    if continued_video_path and Path(continued_video_path).exists():
-                        dprint(f"Seg {segment_idx} CM: Extracting last frame from {continued_video_path} as start ref.")
-                        start_ref_path_for_cm = sm_extract_last_frame_as_image(continued_video_path, segment_processing_dir, segment_task_id_str)
-                    if input_images_for_cm:
-                        end_ref_path_for_cm = input_images_for_cm[0]
-                else: # Subsequent segment when continuing
-                    if len(input_images_for_cm) > segment_idx:
-                        start_ref_path_for_cm = input_images_for_cm[segment_idx - 1]
-                        end_ref_path_for_cm = input_images_for_cm[segment_idx]
-            else: # From scratch
-                if len(input_images_for_cm) > segment_idx + 1:
-                    start_ref_path_for_cm = input_images_for_cm[segment_idx]
-                    end_ref_path_for_cm = input_images_for_cm[segment_idx + 1]
-            
-            # Download images if they are URLs so they exist locally for the color matching function.
-            if start_ref_path_for_cm:
-                start_ref_path_for_cm = sm_download_image_if_url(
-                    start_ref_path_for_cm, 
-                    segment_processing_dir,  # Save directly to main output dir, no subfolder
-                    segment_task_id_str, 
-                    debug_mode=debug_enabled,
-                    descriptive_name=f"seg{segment_idx:02d}_start_ref"
-                )
-            if end_ref_path_for_cm:
-                end_ref_path_for_cm = sm_download_image_if_url(
-                    end_ref_path_for_cm, 
-                    segment_processing_dir,  # Save directly to main output dir, no subfolder
-                    segment_task_id_str,
-                    debug_mode=debug_enabled,
-                    descriptive_name=f"seg{segment_idx:02d}_end_ref"
-                )
+        # --- Reference Image Determination (Start/End) ---
+        # Used for both Color Matching (VACE) and I2I input generation
+        start_ref_path, end_ref_path = None, None
+        
+        input_images_resolved = full_orchestrator_payload.get("input_image_paths_resolved", [])
+        is_continuing = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
+        
+        if is_continuing:
+            if segment_idx == 0:
+                continued_video_path = full_orchestrator_payload.get("continue_from_video_resolved_path")
+                if continued_video_path and Path(continued_video_path).exists():
+                    dprint(f"Seg {segment_idx} Ref: Extracting last frame from {continued_video_path} as start ref.")
+                    start_ref_path = sm_extract_last_frame_as_image(continued_video_path, segment_processing_dir, segment_task_id_str)
+                if input_images_resolved:
+                    end_ref_path = input_images_resolved[0]
+            else: # Subsequent segment when continuing
+                if len(input_images_resolved) > segment_idx:
+                    start_ref_path = input_images_resolved[segment_idx - 1]
+                    end_ref_path = input_images_resolved[segment_idx]
+        else: # From scratch
+            if len(input_images_resolved) > segment_idx + 1:
+                start_ref_path = input_images_resolved[segment_idx]
+                end_ref_path = input_images_resolved[segment_idx + 1]
+        
+        # Download images if they are URLs so they exist locally
+        if start_ref_path:
+            start_ref_path = sm_download_image_if_url(
+                start_ref_path, 
+                segment_processing_dir,  # Save directly to main output dir, no subfolder
+                segment_task_id_str, 
+                debug_mode=debug_enabled,
+                descriptive_name=f"seg{segment_idx:02d}_start_ref"
+            )
+        if end_ref_path:
+            end_ref_path = sm_download_image_if_url(
+                end_ref_path, 
+                segment_processing_dir,  # Save directly to main output dir, no subfolder
+                segment_task_id_str,
+                debug_mode=debug_enabled,
+                descriptive_name=f"seg{segment_idx:02d}_end_ref"
+            )
 
-            dprint(f"Seg {segment_idx} CM Refs: Start='{start_ref_path_for_cm}', End='{end_ref_path_for_cm}'")
-        # --- End Color Match Reference Image Determination ---
+        dprint(f"Seg {segment_idx} Refs: Start='{start_ref_path}', End='{end_ref_path}'")
+        
+        # Assign for backward compatibility / specific use
+        start_ref_path_for_cm = start_ref_path
+        end_ref_path_for_cm = end_ref_path
+        # --- End Reference Image Determination ---
 
         # --- Prepare VACE Refs for this Segment (moved to worker) ---
         actual_vace_image_ref_paths_for_wgp = []
@@ -1761,54 +1788,83 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         # ------------------------------------------------------------------
 
         # Use the shared TravelSegmentProcessor to eliminate code duplication
-        try:
-            from ..travel_segment_processor import TravelSegmentProcessor, TravelSegmentContext
-            
-            # Create context for the shared processor
-            processor_context = TravelSegmentContext(
-                task_id=segment_task_id_str,
-                segment_idx=segment_idx,
-                model_name=full_orchestrator_payload["model_name"],
-                total_frames_for_segment=total_frames_for_segment,
-                parsed_res_wh=parsed_res_wh,
-                segment_processing_dir=segment_processing_dir,
-                full_orchestrator_payload=full_orchestrator_payload,
-                segment_params=segment_params,
-                mask_active_frames=mask_active_frames,
-                debug_enabled=debug_enabled,
-                dprint=dprint
-            )
-            
-            # Create and use the shared processor
-            processor = TravelSegmentProcessor(processor_context)
-            segment_outputs = processor.process_segment()
-            
-            # Extract outputs
-            actual_guide_video_path_for_wgp = Path(segment_outputs["video_guide"]) if segment_outputs["video_guide"] else None
-            mask_video_path_for_wgp = Path(segment_outputs["video_mask"]) if segment_outputs["video_mask"] else None
-            video_prompt_type_str = segment_outputs["video_prompt_type"]
-            
-            # Get VACE model detection result from processor
-            is_vace_model = processor.is_vace_model
-            
-            dprint(f"[SHARED_PROCESSOR] Seg {segment_idx}: Guide video: {actual_guide_video_path_for_wgp}")
-            dprint(f"[SHARED_PROCESSOR] Seg {segment_idx}: Mask video: {mask_video_path_for_wgp}")
-            dprint(f"[SHARED_PROCESSOR] Seg {segment_idx}: Video prompt type: {video_prompt_type_str}")
-            dprint(f"[SHARED_PROCESSOR] Seg {segment_idx}: Is VACE model: {is_vace_model}")
-            
-        except Exception as e_shared_processor:
-            dprint(f"[ERROR] Seg {segment_idx}: Shared processor failed: {e_shared_processor}")
-            import traceback
-            traceback.print_exc()
-            return False, f"Shared processor failed: {e_shared_processor}", None
+        # Initialize outputs
+        actual_guide_video_path_for_wgp = None
+        mask_video_path_for_wgp = None
+        video_prompt_type_str = None
+        is_vace_model = False
+
+        if travel_mode == "vace":
+            try:
+                from ..travel_segment_processor import TravelSegmentProcessor, TravelSegmentContext
+                
+                # Create context for the shared processor
+                processor_context = TravelSegmentContext(
+                    task_id=segment_task_id_str,
+                    segment_idx=segment_idx,
+                    model_name=full_orchestrator_payload["model_name"],
+                    total_frames_for_segment=total_frames_for_segment,
+                    parsed_res_wh=parsed_res_wh,
+                    segment_processing_dir=segment_processing_dir,
+                    full_orchestrator_payload=full_orchestrator_payload,
+                    segment_params=segment_params,
+                    mask_active_frames=mask_active_frames,
+                    debug_enabled=debug_enabled,
+                    dprint=dprint
+                )
+                
+                # Create and use the shared processor
+                processor = TravelSegmentProcessor(processor_context)
+                segment_outputs = processor.process_segment()
+                
+                # Extract outputs
+                actual_guide_video_path_for_wgp = Path(segment_outputs["video_guide"]) if segment_outputs["video_guide"] else None
+                mask_video_path_for_wgp = Path(segment_outputs["video_mask"]) if segment_outputs["video_mask"] else None
+                video_prompt_type_str = segment_outputs["video_prompt_type"]
+                
+                # Get VACE model detection result from processor
+                is_vace_model = processor.is_vace_model
+                
+                dprint(f"[SHARED_PROCESSOR] Seg {segment_idx}: Guide video: {actual_guide_video_path_for_wgp}")
+                dprint(f"[SHARED_PROCESSOR] Seg {segment_idx}: Mask video: {mask_video_path_for_wgp}")
+                dprint(f"[SHARED_PROCESSOR] Seg {segment_idx}: Video prompt type: {video_prompt_type_str}")
+                dprint(f"[SHARED_PROCESSOR] Seg {segment_idx}: Is VACE model: {is_vace_model}")
+                
+            except Exception as e_shared_processor:
+                dprint(f"[ERROR] Seg {segment_idx}: Shared processor failed: {e_shared_processor}")
+                import traceback
+                traceback.print_exc()
+                return False, f"Shared processor failed: {e_shared_processor}", None
         
+        elif travel_mode == "i2i":
+            dprint(f"[I2I_MODE] Seg {segment_idx}: Using image-to-video generation mode")
+            # For I2I, we need start and end images
+            if not start_ref_path or not end_ref_path:
+                # Special case: first segment from scratch might only have start image
+                if is_first_segment_from_scratch and start_ref_path:
+                    dprint(f"[I2I_MODE] First segment from scratch: Only start image provided")
+                elif is_first_segment_from_scratch and not start_ref_path:
+                     # Allow text-to-video for first segment if no images
+                     dprint(f"[I2I_MODE] First segment from scratch: No images provided, falling back to text-to-video behavior")
+                else:
+                    msg = f"Seg {segment_idx}: I2I mode requires start and end reference images. Start: {start_ref_path}, End: {end_ref_path}"
+                    travel_logger.error(msg, task_id=segment_task_id_str)
+                    return False, msg
+            
+            # I2I doesn't use guide videos or VACE logic
+            actual_guide_video_path_for_wgp = None
+            mask_video_path_for_wgp = None
+            video_prompt_type_str = None 
+            is_vace_model = False
+
         # [GUIDE_CONTENT_DEBUG] Log guide and mask video paths for content verification  
         dprint(f"[GUIDE_CONTENT_DEBUG] Seg {segment_idx}: Video guide path: {actual_guide_video_path_for_wgp}")
         dprint(f"[GUIDE_CONTENT_DEBUG] Seg {segment_idx}: Video mask path: {mask_video_path_for_wgp}")
         dprint(f"[GUIDE_CONTENT_DEBUG] Seg {segment_idx}: Empty prompt may cause generic generation - consider adding descriptive prompt")
         
         # --- Invoke WGP Generation directly ---
-        if actual_guide_video_path_for_wgp is None and not is_first_segment_from_scratch:
+        # Check guide video necessity based on mode
+        if travel_mode == "vace" and actual_guide_video_path_for_wgp is None and not is_first_segment_from_scratch:
             # If guide creation failed AND it was essential (i.e., for any segment except the very first one from scratch)
             msg = f"Essential guide video failed to generate. Cannot proceed with WGP processing."
             travel_logger.error(msg, task_id=segment_task_id_str)
@@ -1904,10 +1960,18 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             # output_path for process_single_task: 
             # This suggested path (or process_single_task's default) is used, and an absolute path or URL is returned.
             "output_path": str(wgp_final_output_path_for_this_segment.resolve()), 
+            
+            # VACE specific inputs (pass None if not VACE)
             "video_guide_path": str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
+            "image_refs_paths": safe_vace_image_ref_paths_for_wgp,
+            
+            # I2I specific inputs (pass None if not I2I)
+            "image_start": str(start_ref_path.resolve()) if travel_mode == "i2i" and start_ref_path else None,
+            "image_end": str(end_ref_path.resolve()) if travel_mode == "i2i" and end_ref_path else None,
+            
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
-            "image_refs_paths": safe_vace_image_ref_paths_for_wgp,
+            
             # Propagate video_prompt_type so VACE model correctly interprets guide and mask inputs
             "video_prompt_type": video_prompt_type_str,
             # Attach mask video if available
