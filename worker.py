@@ -81,16 +81,16 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
                 headless_logger.error(f"Travel chaining failed: {chain_message}", task_id=task_id)
         
         elif task_params_dict.get("different_perspective_chain_details") and task_type != 'generate_openpose':
-             chain_success, chain_message, final_path_from_chaining = dp._handle_different_perspective_chaining(
-                completed_task_params=task_params_dict, 
-                task_output_path=output_location_to_db,
+                chain_success, chain_message, final_path_from_chaining = dp._handle_different_perspective_chaining(
+                    completed_task_params=task_params_dict, 
+                    task_output_path=output_location_to_db,
                 dprint=lambda msg: dprint(msg, task_id=task_id, debug_mode=debug_mode)
-            )
-             if chain_success:
-                chaining_result_path_override = final_path_from_chaining
+                )
+                if chain_success:
+                    chaining_result_path_override = final_path_from_chaining
 
         if chaining_result_path_override:
-             output_location_to_db = chaining_result_path_override
+                output_location_to_db = chaining_result_path_override
 
     # Ensure orchestrator tasks use their DB row ID
     if task_type in {"travel_orchestrator", "different_perspective_orchestrator"}:
@@ -136,7 +136,7 @@ def parse_args():
 
 def main():
     load_dotenv()
-    
+
     cli_args = parse_args()
     
     if cli_args.worker:
@@ -163,7 +163,7 @@ def main():
         db_ops.SUPABASE_CLIENT = create_client(cli_args.supabase_url, client_key)
         db_ops.SUPABASE_ACCESS_TOKEN = cli_args.supabase_access_token
         db_ops.debug_mode = debug_mode
-        
+
     except Exception as e:
         headless_logger.critical(f"Supabase init failed: {e}")
         sys.exit(1)
@@ -228,7 +228,7 @@ def main():
     try:
         while True:
             task_info = db_ops.get_oldest_queued_task_supabase(worker_id=cli_args.worker)
-            
+
             if not task_info:
                 time.sleep(cli_args.poll_interval)
                 continue
@@ -258,15 +258,15 @@ def main():
 
             if task_succeeded:
                 reset_fatal_error_counter()
-                
+
                 orchestrator_types = {"travel_orchestrator", "different_perspective_orchestrator", "join_clips_orchestrator"}
-                
+
                 if current_task_type in orchestrator_types:
                     if output_location and output_location.startswith("[ORCHESTRATOR_COMPLETE]"):
-                         actual_output = output_location.replace("[ORCHESTRATOR_COMPLETE]", "")
-                         thumbnail_url = None
-                         try:
-                             import json
+                        actual_output = output_location.replace("[ORCHESTRATOR_COMPLETE]", "")
+                        thumbnail_url = None
+                        try:
+                            import json
                              data = json.loads(actual_output)
                              actual_output = data.get("output_location", actual_output)
                              thumbnail_url = data.get("thumbnail_url")
@@ -308,4 +308,4 @@ def main():
             task_queue.stop()
 
 if __name__ == "__main__":
-    main()
+    main() 

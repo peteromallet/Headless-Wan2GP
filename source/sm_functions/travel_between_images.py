@@ -834,6 +834,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         depth_contrast = orchestrator_payload.get("structure_depth_contrast", 1.0)
         
         if structure_video_path:
+            # Capture original URL if it's a remote path
+            if isinstance(structure_video_path, str) and structure_video_path.startswith(("http://", "https://")):
+                 orchestrator_payload["structure_original_video_url"] = structure_video_path
+
             # Download if URL
             from ..common_utils import download_video_if_url
             structure_video_path = download_video_if_url(
@@ -922,7 +926,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             # Create and upload pre-warped guidance video for segments to download
             travel_logger.info("Creating structure guidance video...", task_id=orchestrator_task_id_str)
             try:
-                from source.structure_video_guidance import create_structure_guidance_video
+                from source.structure_video_guidance import create_structure_guidance_video, create_trimmed_structure_video
                 
                 # Get resolution and FPS from orchestrator payload
                 target_resolution_raw = orchestrator_payload["parsed_resolution_wh"]
@@ -937,10 +941,35 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 else:
                     target_resolution = target_resolution_raw
                 
-                # Create pre-warped video
                 # Generate unique filename to avoid race conditions and enable idempotency
                 timestamp_short = datetime.now().strftime("%H%M%S")
                 unique_suffix = uuid.uuid4().hex[:6]
+                
+                # 1. Create trimmed video (original content adjusted to timeline)
+                travel_logger.info("Creating trimmed structure video (original content adjusted to timeline)...", task_id=orchestrator_task_id_str)
+                trimmed_filename = f"structure_trimmed_{timestamp_short}_{unique_suffix}.mp4"
+                
+                trimmed_video_path = create_trimmed_structure_video(
+                    structure_video_path=structure_video_path,
+                    max_frames_needed=total_flow_frames,
+                    target_resolution=target_resolution,
+                    target_fps=target_fps,
+                    output_path=current_run_output_dir / trimmed_filename,
+                    treatment=structure_video_treatment,
+                    dprint=dprint
+                )
+                
+                # Upload trimmed video
+                trimmed_video_url = upload_and_get_final_output_location(
+                    local_file_path=trimmed_video_path,
+                    supabase_object_name=trimmed_filename,
+                    initial_db_location=str(trimmed_video_path),
+                    dprint=dprint
+                )
+                orchestrator_payload["structure_trimmed_video_url"] = trimmed_video_url
+                travel_logger.success(f"Trimmed structure video created: {trimmed_video_url}", task_id=orchestrator_task_id_str)
+
+                # 2. Create pre-warped guidance video (processed with flow/canny/depth)
                 structure_guidance_filename = f"structure_{structure_type}_{timestamp_short}_{unique_suffix}.mp4"
 
                 structure_guidance_video_path = create_structure_guidance_video(
@@ -1338,6 +1367,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "structure_depth_contrast": depth_contrast if 'depth_contrast' in locals() else orchestrator_payload.get("structure_depth_contrast", 1.0),
                 "structure_guidance_video_url": orchestrator_payload.get("structure_guidance_video_url"),  # Pre-warped video URL
                 "structure_guidance_frame_offset": segment_flow_offsets[idx] if 'segment_flow_offsets' in locals() else 0,  # Starting frame in structure_guidance video
+                
+                # Original and trimmed structure videos for reference
+                "structure_original_video_url": orchestrator_payload.get("structure_original_video_url"),
+                "structure_trimmed_video_url": orchestrator_payload.get("structure_trimmed_video_url"),
             }
             
             # Add extracted parameters at top level for queue processing
