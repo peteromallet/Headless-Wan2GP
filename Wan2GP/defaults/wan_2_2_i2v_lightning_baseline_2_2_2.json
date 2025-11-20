@@ -1,0 +1,32 @@
+{
+  "model": {
+    "name": "Wan2.2 I2V Lightning 14B (3-Phase) 2-2-2 Steps - Baseline",
+    "architecture": "i2v_2_2",
+    "description": "3-phase baseline model for I2V with Lightning HIGH Phase 1 + Lightning HIGH Phase 2 + Lightning LOW Phase 3 - 2-2-2 steps",
+    "URLs": "i2v_2_2",
+    "URLs2": "i2v_2_2",
+    "loras": [
+      "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-T2V-A14B-4steps-lora-250928/high_noise_model.safetensors",
+      "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-T2V-A14B-4steps-lora-250928/low_noise_model.safetensors"
+    ],
+    "loras_multipliers": [
+      "0.75;1.0;0",
+      "0;0;1"
+    ],
+    "lock_guidance_phases": true,
+    "group": "wan2_2"
+  },
+  "video_length": 81,
+  "guidance_phases": 3,
+  "num_inference_steps": 6,
+  "guidance_scale": 3,
+  "guidance2_scale": 1,
+  "guidance3_scale": 1,
+  "flow_shift": 5,
+  "switch_threshold": 883,
+  "switch_threshold2": 558,
+  "model_switch_phase": 2,
+  "seed": 12345,
+  "sample_solver": "euler",
+  "negative_prompt": "fading, breaking, shot cuts, jumpcuts, blurry, noise, distorted"
+}
