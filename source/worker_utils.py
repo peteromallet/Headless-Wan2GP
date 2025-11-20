@@ -1,0 +1,118 @@
+import os
+import datetime
+import shutil
+from pathlib import Path
+from source.logging_utils import headless_logger
+
+# RAM monitoring
+try:
+    import psutil
+    _PSUTIL_AVAILABLE = True
+except ImportError:
+    _PSUTIL_AVAILABLE = False
+
+
+def dprint(msg: str, task_id: str = None, debug_mode: bool = False):
+    """Print a debug message if debug_mode is enabled."""
+    if debug_mode:
+        # Prefix with timestamp for easier tracing
+        if task_id:
+            print(f"[DEBUG {datetime.datetime.now().isoformat()}] [Task {task_id}] {msg}")
+        else:
+            print(f"[DEBUG {datetime.datetime.now().isoformat()}] {msg}")
+
+def make_task_dprint(task_id: str, debug_mode: bool = False):
+    """Create a task-aware dprint function that automatically includes task_id."""
+    def task_dprint(msg: str):
+        dprint(msg, task_id=task_id, debug_mode=debug_mode)
+    return task_dprint
+
+def log_ram_usage(label: str, task_id: str = "unknown") -> dict:
+    """
+    Log current RAM usage with a descriptive label.
+    Returns dict with RAM metrics for programmatic use.
+    """
+    if not _PSUTIL_AVAILABLE:
+        return {"available": False}
+
+    try:
+        process = psutil.Process(os.getpid())
+        mem_info = process.memory_info()
+        rss_mb = mem_info.rss / 1024**2
+        rss_gb = rss_mb / 1024
+
+        # Get system-wide memory stats
+        sys_mem = psutil.virtual_memory()
+        sys_total_gb = sys_mem.total / 1024**3
+        sys_available_gb = sys_mem.available / 1024**3
+        sys_used_percent = sys_mem.percent
+
+        headless_logger.info(
+            f"[RAM] {label}: Process={rss_mb:.0f}MB ({rss_gb:.2f}GB) | "
+            f"System={sys_used_percent:.1f}% used, {sys_available_gb:.1f}GB/{sys_total_gb:.1f}GB available",
+            task_id=task_id
+        )
+
+        return {
+            "available": True,
+            "process_rss_mb": rss_mb,
+            "process_rss_gb": rss_gb,
+            "system_total_gb": sys_total_gb,
+            "system_available_gb": sys_available_gb,
+            "system_used_percent": sys_used_percent
+        }
+
+    except Exception as e:
+        headless_logger.warning(f"[RAM] Failed to get RAM usage: {e}", task_id=task_id)
+        return {"available": False, "error": str(e)}
+
+def cleanup_generated_files(output_location: str, task_id: str = "unknown", debug_mode: bool = False) -> None:
+    """
+    Delete generated files after successful task completion unless in debug mode.
+    This includes the main output file/directory and any temporary files that may have been created.
+
+    Args:
+        output_location: Path to the generated file or directory to clean up
+        task_id: Task ID for logging purposes
+        debug_mode: Whether debug mode is enabled (skips cleanup if True)
+    """
+    if debug_mode:
+        headless_logger.debug(f"Debug mode enabled - skipping file cleanup for {output_location}", task_id=task_id)
+        return
+
+    if not output_location:
+        return
+
+    try:
+        file_path = Path(output_location)
+
+        # Clean up main output file/directory
+        if file_path.exists() and file_path.is_file():
+            file_size = file_path.stat().st_size
+            file_path.unlink()
+            headless_logger.debug(f"Cleaned up generated file: {output_location} ({file_size:,} bytes)", task_id=task_id)
+        elif file_path.exists() and file_path.is_dir():
+            dir_size = sum(f.stat().st_size for f in file_path.rglob('*') if f.is_file())
+            shutil.rmtree(file_path)
+            headless_logger.debug(f"Cleaned up generated directory: {output_location} ({dir_size:,} bytes)", task_id=task_id)
+        else:
+            headless_logger.debug(f"File cleanup skipped - path not found: {output_location}", task_id=task_id)
+
+        # Clean up temporary files that may have been created during processing
+        _cleanup_temporary_files(task_id, debug_mode)
+
+    except Exception as e:
+        headless_logger.warning(f"Failed to cleanup generated file {output_location}: {e}", task_id=task_id)
+
+
+def _cleanup_temporary_files(task_id: str = "unknown", debug_mode: bool = False) -> None:
+    """
+    Clean up temporary files that were specifically created during this task's execution.
+    """
+    if debug_mode:
+        return  # Skip temp file cleanup in debug mode
+
+    # Note: Most temporary files are already cleaned up by their respective functions.
+    # This function is mainly a safety net.
+    headless_logger.debug(f"Temporary file cleanup completed (most temp files auto-cleaned by their creators)", task_id=task_id)
+

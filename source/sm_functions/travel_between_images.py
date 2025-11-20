@@ -1166,10 +1166,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             independent_segments = orchestrator_payload.get("independent_segments", False)
             
             # Determine dependency strictly from previously resolved actual DB IDs
-            # I2I MODE: Independent segments (no dependency on previous task)
-            if travel_mode == "i2i":
+            # I2V MODE: Independent segments (no dependency on previous task)
+            if travel_mode == "i2v":
                 previous_segment_task_id = None
-                dprint(f"[DEBUG_DEPENDENCY_CHAIN] Segment {idx} (i2i mode): No dependency on previous segment")
+                dprint(f"[DEBUG_DEPENDENCY_CHAIN] Segment {idx} (i2v mode): No dependency on previous segment")
             elif travel_mode == "vace" and independent_segments:
                 previous_segment_task_id = None
                 dprint(f"[DEBUG_DEPENDENCY_CHAIN] Segment {idx} (vace independent mode): No dependency on previous segment")
@@ -1368,9 +1368,9 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for seg {idx} ({actual_db_row_id}): {e_ver}")
         
         # After loop, enqueue the stitch task (check for idempotency)
-        # SKIP if independent segments or I2I mode
-        if independent_segments or travel_mode == "i2i":
-             dprint(f"[STITCHING] Skipping stitch task creation for independent/i2i mode")
+        # SKIP if independent segments or I2V mode
+        if independent_segments or travel_mode == "i2v":
+             dprint(f"[STITCHING] Skipping stitch task creation for independent/i2v mode")
              stitch_created = 0
         else:
              stitch_created = 0
@@ -1537,7 +1537,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         dprint(f"Segment {segment_idx} (Task {segment_task_id_str}): Processing in {segment_processing_dir.resolve()} | image_download_dir={segment_image_download_dir}")
 
         # --- Reference Image Determination (Start/End) ---
-        # Used for both Color Matching (VACE) and I2I input generation
+        # Used for both Color Matching (VACE) and I2V input generation
         start_ref_path, end_ref_path = None, None
         
         input_images_resolved = full_orchestrator_payload.get("input_image_paths_resolved", [])
@@ -1836,22 +1836,22 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                 traceback.print_exc()
                 return False, f"Shared processor failed: {e_shared_processor}", None
         
-        elif travel_mode == "i2i":
-            dprint(f"[I2I_MODE] Seg {segment_idx}: Using image-to-video generation mode")
-            # For I2I, we need start and end images
+        elif travel_mode == "i2v":
+            dprint(f"[I2V_MODE] Seg {segment_idx}: Using image-to-video generation mode")
+            # For I2V, we need start and end images
             if not start_ref_path or not end_ref_path:
                 # Special case: first segment from scratch might only have start image
                 if is_first_segment_from_scratch and start_ref_path:
-                    dprint(f"[I2I_MODE] First segment from scratch: Only start image provided")
+                    dprint(f"[I2V_MODE] First segment from scratch: Only start image provided")
                 elif is_first_segment_from_scratch and not start_ref_path:
                      # Allow text-to-video for first segment if no images
-                     dprint(f"[I2I_MODE] First segment from scratch: No images provided, falling back to text-to-video behavior")
+                     dprint(f"[I2V_MODE] First segment from scratch: No images provided, falling back to text-to-video behavior")
                 else:
-                    msg = f"Seg {segment_idx}: I2I mode requires start and end reference images. Start: {start_ref_path}, End: {end_ref_path}"
+                    msg = f"Seg {segment_idx}: I2V mode requires start and end reference images. Start: {start_ref_path}, End: {end_ref_path}"
                     travel_logger.error(msg, task_id=segment_task_id_str)
                     return False, msg
             
-            # I2I doesn't use guide videos or VACE logic
+            # I2V doesn't use guide videos or VACE logic
             actual_guide_video_path_for_wgp = None
             mask_video_path_for_wgp = None
             video_prompt_type_str = None 
@@ -1965,9 +1965,9 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             "video_guide_path": str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
             "image_refs_paths": safe_vace_image_ref_paths_for_wgp,
             
-            # I2I specific inputs (pass None if not I2I)
-            "image_start": str(start_ref_path.resolve()) if travel_mode == "i2i" and start_ref_path else None,
-            "image_end": str(end_ref_path.resolve()) if travel_mode == "i2i" and end_ref_path else None,
+            # I2V specific inputs (pass None if not I2V)
+            "image_start": str(start_ref_path.resolve()) if travel_mode == "i2v" and start_ref_path else None,
+            "image_end": str(end_ref_path.resolve()) if travel_mode == "i2v" and end_ref_path else None,
             
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
