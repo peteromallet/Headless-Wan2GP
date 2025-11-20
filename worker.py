@@ -1416,7 +1416,9 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             snap_resolution_to_model_grid,
             ensure_valid_prompt,
             ensure_valid_negative_prompt,
-            create_mask_video_from_inactive_indices
+            create_mask_video_from_inactive_indices,
+            download_image_if_url as sm_download_image_if_url,
+            extract_last_frame_as_image as sm_extract_last_frame_as_image
         )
         from source.video_utils import (
             prepare_vace_ref_for_segment as sm_prepare_vace_ref_for_segment,
@@ -1470,46 +1472,120 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         segment_processing_dir = current_run_base_output_dir
         segment_processing_dir.mkdir(parents=True, exist_ok=True)
         
-        # Use the shared TravelSegmentProcessor to eliminate code duplication
-        try:
-            from source.travel_segment_processor import TravelSegmentProcessor, TravelSegmentContext
-            
-            # Get debug mode from either segment params or orchestrator payload
-            debug_enabled = segment_params.get("debug_mode_enabled", full_orchestrator_payload.get("debug_mode_enabled", False))
-            
-            # Create context for the shared processor
-            processor_context = TravelSegmentContext(
-                task_id=task_id,
-                segment_idx=segment_idx,
-                model_name=model_name,
-                total_frames_for_segment=total_frames_for_segment,
-                parsed_res_wh=parsed_res_wh,
-                segment_processing_dir=segment_processing_dir,
-                full_orchestrator_payload=full_orchestrator_payload,
-                segment_params=segment_params,
-                mask_active_frames=mask_active_frames,
-                debug_enabled=debug_enabled,
-                dprint=dprint
-            )
-            
-            # Create and use the shared processor
-            processor = TravelSegmentProcessor(processor_context)
-            segment_outputs = processor.process_segment()
-            
-            # Extract outputs for queue handler variables
-            guide_video_path = segment_outputs.get("video_guide")
-            mask_video_path_for_wgp = Path(segment_outputs["video_mask"]) if segment_outputs.get("video_mask") else None
-            video_prompt_type_str = segment_outputs["video_prompt_type"]
-            
-            dprint(f"[SHARED_PROCESSOR_QUEUE] Seg {segment_idx}: Guide video: {guide_video_path}")
-            dprint(f"[SHARED_PROCESSOR_QUEUE] Seg {segment_idx}: Mask video: {mask_video_path_for_wgp}")
-            dprint(f"[SHARED_PROCESSOR_QUEUE] Seg {segment_idx}: Video prompt type: {video_prompt_type_str}")
-            
-        except Exception as e_shared_processor:
-            dprint(f"[ERROR] Seg {segment_idx}: Shared processor failed in queue handler: {e_shared_processor}")
-            traceback.print_exc()
-            return False, f"Shared processor failed: {e_shared_processor}"
+        # Get debug mode from either segment params or orchestrator payload
+        debug_enabled = segment_params.get("debug_mode_enabled", full_orchestrator_payload.get("debug_mode_enabled", False))
+
+        # --- Travel Mode Detection (VACE vs I2I) ---
+        # Defaults to "vace" for backward compatibility
+        travel_mode = full_orchestrator_payload.get("model_type", "vace")
+        dprint(f"[SEGMENT_MODE_DEBUG] Travel segment {task_id}: Mode={travel_mode}")
+
+        # --- Reference Image Determination (Start/End) ---
+        # Used for both Color Matching (VACE) and I2I input generation
+        start_ref_path = None
+        end_ref_path = None
         
+        input_images_resolved = full_orchestrator_payload.get("input_image_paths_resolved", [])
+        is_continuing = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
+        
+        if is_continuing:
+            if segment_idx == 0:
+                continued_video_path = full_orchestrator_payload.get("continue_from_video_resolved_path")
+                if continued_video_path and Path(continued_video_path).exists():
+                    dprint(f"Seg {segment_idx} Ref: Extracting last frame from {continued_video_path} as start ref.")
+                    start_ref_path = sm_extract_last_frame_as_image(continued_video_path, segment_processing_dir, task_id)
+                if input_images_resolved:
+                    end_ref_path = input_images_resolved[0]
+            else: # Subsequent segment when continuing
+                if len(input_images_resolved) > segment_idx:
+                    start_ref_path = input_images_resolved[segment_idx - 1]
+                    end_ref_path = input_images_resolved[segment_idx]
+        else: # From scratch
+            if len(input_images_resolved) > segment_idx + 1:
+                start_ref_path = input_images_resolved[segment_idx]
+                end_ref_path = input_images_resolved[segment_idx + 1]
+        
+        # Download images if they are URLs so they exist locally
+        if start_ref_path:
+            start_ref_path = sm_download_image_if_url(
+                start_ref_path, 
+                segment_processing_dir, 
+                task_id, 
+                debug_mode=debug_enabled,
+                descriptive_name=f"seg{segment_idx:02d}_start_ref"
+            )
+        if end_ref_path:
+            end_ref_path = sm_download_image_if_url(
+                end_ref_path, 
+                segment_processing_dir, 
+                task_id,
+                debug_mode=debug_enabled,
+                descriptive_name=f"seg{segment_idx:02d}_end_ref"
+            )
+
+        dprint(f"[REF_DEBUG] Seg {segment_idx} Refs: Start='{start_ref_path}', End='{end_ref_path}'")
+        
+        # Initialize output variables
+        guide_video_path = None
+        mask_video_path_for_wgp = None
+        video_prompt_type_str = None
+
+        # --- Mode-Specific Processing ---
+        if travel_mode == "vace":
+            # Use the shared TravelSegmentProcessor to eliminate code duplication
+            try:
+                from source.travel_segment_processor import TravelSegmentProcessor, TravelSegmentContext
+                
+                # Create context for the shared processor
+                processor_context = TravelSegmentContext(
+                    task_id=task_id,
+                    segment_idx=segment_idx,
+                    model_name=model_name,
+                    total_frames_for_segment=total_frames_for_segment,
+                    parsed_res_wh=parsed_res_wh,
+                    segment_processing_dir=segment_processing_dir,
+                    full_orchestrator_payload=full_orchestrator_payload,
+                    segment_params=segment_params,
+                    mask_active_frames=mask_active_frames,
+                    debug_enabled=debug_enabled,
+                    dprint=dprint
+                )
+                
+                # Create and use the shared processor
+                processor = TravelSegmentProcessor(processor_context)
+                segment_outputs = processor.process_segment()
+                
+                # Extract outputs for queue handler variables
+                guide_video_path = segment_outputs.get("video_guide")
+                mask_video_path_for_wgp = Path(segment_outputs["video_mask"]) if segment_outputs.get("video_mask") else None
+                video_prompt_type_str = segment_outputs["video_prompt_type"]
+                
+                dprint(f"[SHARED_PROCESSOR_QUEUE] Seg {segment_idx}: Guide video: {guide_video_path}")
+                dprint(f"[SHARED_PROCESSOR_QUEUE] Seg {segment_idx}: Mask video: {mask_video_path_for_wgp}")
+                dprint(f"[SHARED_PROCESSOR_QUEUE] Seg {segment_idx}: Video prompt type: {video_prompt_type_str}")
+                
+            except Exception as e_shared_processor:
+                dprint(f"[ERROR] Seg {segment_idx}: Shared processor failed in queue handler: {e_shared_processor}")
+                traceback.print_exc()
+                return False, f"Shared processor failed: {e_shared_processor}"
+        
+        elif travel_mode == "i2i":
+            dprint(f"[I2I_MODE] Seg {segment_idx}: Using image-to-video generation mode")
+            
+            # For I2I, validate start/end images if not the very first frame-0 segment
+            # Logic: 
+            # - If from scratch, segment 0 might be T2V (no start image) or I2V (start image only)
+            # - But for travel i2i, we generally expect bridging images.
+            # Let's allow standard I2V behavior if only start is present.
+            
+            # Ensure start/end refs are strings if they exist (they are paths)
+            # They are already resolved and downloaded above
+            
+            # I2I doesn't use guide/mask videos
+            guide_video_path = None
+            mask_video_path_for_wgp = None
+            video_prompt_type_str = None
+
         # Create generation task parameters optimized for queue processing
         # Let WanOrchestrator handle parameter resolution with proper model preset precedence
         # IMPORTANT: We use the CANONICAL model name (e.g., lightning_baseline_2_2_2) to avoid
@@ -1521,6 +1597,14 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             "video_length": total_frames_for_segment,
             "seed": segment_params.get("seed_to_use", 12345),
         }
+        
+        # Add I2I specific parameters if in I2I mode
+        if travel_mode == "i2i":
+            if start_ref_path:
+                generation_params["image_start"] = str(start_ref_path)
+            if end_ref_path:
+                generation_params["image_end"] = str(end_ref_path)
+            dprint(f"[I2I_PARAMS] Seg {segment_idx}: image_start={start_ref_path}, image_end={end_ref_path}")
         
         # Add additional LoRAs from orchestrator payload if present
         additional_loras = full_orchestrator_payload.get("additional_loras", {})
