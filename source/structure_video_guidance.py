@@ -1006,3 +1006,77 @@ def download_and_extract_motion_frames(
         traceback.print_exc()
         raise
 
+
+def create_trimmed_structure_video(
+    structure_video_path: str,
+    max_frames_needed: int,
+    target_resolution: Tuple[int, int],
+    target_fps: int,
+    output_path: Path,
+    treatment: str = "adjust",
+    dprint: Callable = print
+) -> Path:
+    """
+    Create a trimmed/adjusted version of the structure video without applying any style transfer.
+    This preserves the original video content but clips/stretches it to match the generation length.
+
+    Args:
+        structure_video_path: Path to the source structure video
+        max_frames_needed: Number of frames to generate
+        target_resolution: (width, height) for output frames
+        target_fps: FPS for the output video
+        output_path: Where to save the output video
+        treatment: "adjust" (stretch/compress entire video) or "clip" (temporal sample)
+        dprint: Debug print function
+
+    Returns:
+        Path to the created video file
+    """
+    dprint(f"[TRIMMED_STRUCTURE_VIDEO] Creating trimmed structure video...")
+    dprint(f"  Source: {structure_video_path}")
+    dprint(f"  Frames: {max_frames_needed}")
+    dprint(f"  Resolution: {target_resolution[0]}x{target_resolution[1]}")
+    dprint(f"  Treatment: {treatment}")
+
+    try:
+        # Step 1: Load structure video frames with treatment mode
+        # This handles the trimming/adjusting logic
+        frames = load_structure_video_frames(
+            structure_video_path,
+            target_frame_count=max_frames_needed,
+            target_fps=target_fps,
+            target_resolution=target_resolution,
+            treatment=treatment,
+            crop_to_fit=True,
+            dprint=dprint
+        )
+
+        # Step 2: Encode as video directly (no style transfer)
+        dprint(f"[TRIMMED_STRUCTURE_VIDEO] Encoding video to {output_path}")
+        
+        # Import video creation utilities
+        wan_dir = Path(__file__).parent.parent / "Wan2GP"
+        if str(wan_dir) not in sys.path:
+            sys.path.insert(0, str(wan_dir))
+        
+        from shared.utils.audio_video import save_video
+        
+        # Convert list of numpy arrays [H, W, C] to tensor [T, H, W, C]
+        video_tensor = np.stack(frames, axis=0)
+        
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        save_video(
+            video_tensor,
+            str(output_path),
+            fps=target_fps,
+            codec="libx264",
+            quality=18  # High quality for reference
+        )
+        
+        return output_path
+
+    except Exception as e:
+        dprint(f"[TRIMMED_STRUCTURE_VIDEO] Error: {e}")
+        raise
+
