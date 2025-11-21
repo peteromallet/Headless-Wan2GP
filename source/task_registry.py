@@ -138,6 +138,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         
         if start_ref_path:
             start_ref_path = sm_download_image_if_url(start_ref_path, segment_processing_dir, task_id, debug_mode=debug_enabled)
+            print(f"!!! DEBUG TASK REGISTRY !!! start_ref_path AFTER DOWNLOAD: {start_ref_path}")
         if end_ref_path:
             end_ref_path = sm_download_image_if_url(end_ref_path, segment_processing_dir, task_id, debug_mode=debug_enabled)
 
@@ -184,6 +185,8 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             generation_params["image_start"] = str(Path(start_ref_path).resolve())
         if end_ref_path: 
             generation_params["image_end"] = str(Path(end_ref_path).resolve())
+            
+        print(f"!!! DEBUG TASK REGISTRY !!! generation_params image_start: {generation_params.get('image_start')}")
         
         additional_loras = full_orchestrator_payload.get("additional_loras", {})
         if additional_loras:

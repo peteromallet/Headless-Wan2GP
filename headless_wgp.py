@@ -883,6 +883,13 @@ class WanOrchestrator:
         if not self.current_model:
             raise RuntimeError("No model loaded. Call load_model() first.")
 
+        # [DEBUG_KWARGS] Trace image_start presence
+        generation_logger.info(f"[DEBUG_KWARGS] generate received kwargs keys: {list(kwargs.keys())}")
+        if "image_start" in kwargs:
+            generation_logger.info(f"[DEBUG_KWARGS] image_start type: {type(kwargs['image_start'])}, value: {kwargs['image_start']}")
+        else:
+            generation_logger.info(f"[DEBUG_KWARGS] image_start NOT in kwargs")
+
         # Smoke-mode short-circuit: create a sample output and return its path
         if self.smoke_mode:
             from pathlib import Path
@@ -1257,13 +1264,13 @@ class WanOrchestrator:
             'skip_steps_start_step_perc': 0.0,
             
             # Image parameters
-            'image_prompt_type': "disabled",
-            'image_start': None,
-            'image_end': None,
-            'image_refs': None,
-            'frames_positions': "",
-            'image_guide': None,
-            'image_mask': None,
+            'image_prompt_type': resolved_params.get("image_prompt_type", "disabled"),
+            'image_start': resolved_params.get("image_start"),
+            'image_end': resolved_params.get("image_end"),
+            'image_refs': resolved_params.get("image_refs"),
+            'frames_positions': resolved_params.get("frames_positions", ""),
+            'image_guide': resolved_params.get("image_guide"),
+            'image_mask': resolved_params.get("image_mask"),
             
             # Video parameters
             'model_mode': 0,
