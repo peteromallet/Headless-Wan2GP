@@ -1017,6 +1017,14 @@ class WanOrchestrator:
         else:
             image_mode = 0
             actual_video_length = final_video_length
+            
+            # Safety check: Wan models with latent_size=4 crash if video_length < 4
+            # This happens because (len // 4) * 4 + 1 results in 1 frame,
+            # and I2V logic needs at least 2 frames (start + end logic)
+            if actual_video_length < 5:
+                generation_logger.warning(f"[SAFETY] Boosting video_length from {actual_video_length} to 5 to prevent quantization crash")
+                actual_video_length = 5
+            
             actual_batch_size = final_batch_size
             actual_guidance = final_guidance_scale
 
