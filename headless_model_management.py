@@ -1058,6 +1058,11 @@ class HeadlessTaskQueue:
             "sample_solver": "sample_solver",
             "lora_names": "lora_names",
             "lora_multipliers": "lora_multipliers",
+            # Image parameters
+            "image_start": "image_start",
+            "image_end": "image_end",
+            "image_refs": "image_refs",
+            "frames_positions": "frames_positions",
             # Special phase_config patching parameters (internal use)
             "_parsed_phase_config": "_parsed_phase_config",
             "_phase_config_model_name": "_phase_config_model_name",

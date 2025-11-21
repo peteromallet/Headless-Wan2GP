@@ -151,7 +151,7 @@ def main():
         if not cli_args.save_logging:
             # Automatically save logs to debug/ directory if debug mode is on
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            log_dir = "debug"
+            log_dir = "logs"
             os.makedirs(log_dir, exist_ok=True)
             log_file = os.path.join(log_dir, f"debug_{timestamp}.log")
             set_log_file(log_file)
