@@ -173,9 +173,11 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             "seed": segment_params.get("seed_to_use", 12345),
         }
         
-        if travel_mode == "i2v":
-            if start_ref_path: generation_params["image_start"] = str(start_ref_path)
-            if end_ref_path: generation_params["image_end"] = str(end_ref_path)
+        # Always pass images if available, regardless of specific travel_mode string (hybrid models need them)
+        if start_ref_path: 
+            generation_params["image_start"] = str(Path(start_ref_path).resolve())
+        if end_ref_path: 
+            generation_params["image_end"] = str(Path(end_ref_path).resolve())
         
         additional_loras = full_orchestrator_payload.get("additional_loras", {})
         if additional_loras:

@@ -1480,7 +1480,6 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
     travel_logger.essential(f"Starting travel segment task", task_id=segment_task_id_str)
     log_ram_usage("Segment start", task_id=segment_task_id_str)
     dprint(f"_handle_travel_segment_task: Starting for {segment_task_id_str}")
-    print(f"!!! DEBUG CODE ACTIVE !!! _handle_travel_segment_task: Starting for {segment_task_id_str}") # Force print
     # Safe logging: Use safe_json_repr to prevent hangs
     dprint(f"Segment task_params_from_db: {safe_json_repr(task_params_from_db)}")
     # task_params_from_db contains what was enqueued for this specific segment,
@@ -1620,10 +1619,10 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         
         # [DEBUG_REF_PATH] Trace start_ref_path
         if start_ref_path is None:
-             print(f"[DEBUG_REF_PATH] start_ref_path is None after init logic. len(input_images_resolved)={len(input_images_resolved)}, segment_idx={segment_idx}, is_continuing={is_continuing}")
+             dprint(f"[DEBUG_REF_PATH] start_ref_path is None after init logic. len(input_images_resolved)={len(input_images_resolved)}, segment_idx={segment_idx}, is_continuing={is_continuing}")
              # Fallback for segment 0 if not continuing
              if segment_idx == 0 and not is_continuing and len(input_images_resolved) > 0:
-                 print(f"[DEBUG_REF_PATH] Attempting fallback assignment from input_images_resolved[0]: {input_images_resolved[0]}")
+                 dprint(f"[DEBUG_REF_PATH] Attempting fallback assignment from input_images_resolved[0]: {input_images_resolved[0]}")
                  start_ref_path_raw = input_images_resolved[0]
                  start_ref_path = sm_download_image_if_url(
                     start_ref_path_raw, 
@@ -1632,7 +1631,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                     debug_mode=debug_enabled,
                     descriptive_name=f"seg{segment_idx:02d}_start_ref_fallback"
                 )
-                 print(f"[DEBUG_REF_PATH] Fallback result: {start_ref_path}")
+                 dprint(f"[DEBUG_REF_PATH] Fallback result: {start_ref_path}")
 
         
         # Assign for backward compatibility / specific use
