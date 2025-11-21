@@ -654,6 +654,9 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
             if output_location_val:
                 payload["output_location"] = output_location_val
             
+            if thumbnail_url_val:
+                payload["thumbnail_url"] = thumbnail_url_val
+            
             dprint(f"[DEBUG] Calling update-task-status Edge Function for task {task_id_str} → {status_str}")
             resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
             
