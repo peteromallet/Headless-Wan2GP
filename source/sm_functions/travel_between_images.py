@@ -1480,6 +1480,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
     travel_logger.essential(f"Starting travel segment task", task_id=segment_task_id_str)
     log_ram_usage("Segment start", task_id=segment_task_id_str)
     dprint(f"_handle_travel_segment_task: Starting for {segment_task_id_str}")
+    print(f"!!! DEBUG CODE ACTIVE !!! _handle_travel_segment_task: Starting for {segment_task_id_str}") # Force print
     # Safe logging: Use safe_json_repr to prevent hangs
     dprint(f"Segment task_params_from_db: {safe_json_repr(task_params_from_db)}")
     # task_params_from_db contains what was enqueued for this specific segment,
@@ -1574,6 +1575,10 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         start_ref_path, end_ref_path = None, None
         
         input_images_resolved = full_orchestrator_payload.get("input_image_paths_resolved", [])
+        print(f"[DEBUG_REF_PATH] input_images_resolved count: {len(input_images_resolved)}")
+        if len(input_images_resolved) > 0:
+             print(f"[DEBUG_REF_PATH] First image: {input_images_resolved[0]}")
+
         is_continuing = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
         
         if is_continuing:
