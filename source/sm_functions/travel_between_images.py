@@ -1613,6 +1613,23 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
 
         dprint(f"Seg {segment_idx} Refs: Start='{start_ref_path}', End='{end_ref_path}'")
         
+        # [DEBUG_REF_PATH] Trace start_ref_path
+        if start_ref_path is None:
+             dprint(f"[DEBUG_REF_PATH] start_ref_path is None after init logic. len(input_images_resolved)={len(input_images_resolved)}, segment_idx={segment_idx}, is_continuing={is_continuing}")
+             # Fallback for segment 0 if not continuing
+             if segment_idx == 0 and not is_continuing and len(input_images_resolved) > 0:
+                 dprint(f"[DEBUG_REF_PATH] Attempting fallback assignment from input_images_resolved[0]")
+                 start_ref_path = input_images_resolved[0]
+                 start_ref_path = sm_download_image_if_url(
+                    start_ref_path, 
+                    segment_processing_dir, 
+                    segment_task_id_str, 
+                    debug_mode=debug_enabled,
+                    descriptive_name=f"seg{segment_idx:02d}_start_ref_fallback"
+                )
+                 dprint(f"[DEBUG_REF_PATH] Fallback result: {start_ref_path}")
+
+        
         # Assign for backward compatibility / specific use
         start_ref_path_for_cm = start_ref_path
         end_ref_path_for_cm = end_ref_path
@@ -1981,6 +1998,9 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             dprint(f"[MODEL_CONFIG_DEBUG] Segment {segment_idx}: Loaded model defaults for '{model_name}': {model_defaults_from_config}")
         except Exception as e:
             dprint(f"[MODEL_CONFIG_DEBUG] Segment {segment_idx}: Warning - could not load model defaults for '{model_name}': {e}")
+
+        # [DEBUG_REF_PATH] Check before payload
+        dprint(f"[DEBUG_REF_PATH] Pre-payload check: start_ref_path={start_ref_path}, travel_mode={travel_mode}")
 
         wgp_payload = {
             "task_id": wgp_inline_task_id, # ID for this specific WGP generation operation
