@@ -1424,6 +1424,18 @@ class WanOrchestrator:
                         self.state["gen"]["process_status"] = "process:main"
                 except Exception:
                     pass
+                # Load I2V input images (image_start/image_end) if they are paths
+                # This is required for I2V models which expect PIL images, not paths
+                for img_param in ['image_start', 'image_end']:
+                    val = wgp_params.get(img_param)
+                    if val:
+                        if isinstance(val, str):
+                            generation_logger.info(f"[PREFLIGHT] Loading {img_param} from path: {val}")
+                            wgp_params[img_param] = self._load_image(val, mask=False)
+                        elif isinstance(val, list) and len(val) > 0 and isinstance(val[0], str):
+                            generation_logger.info(f"[PREFLIGHT] Loading {img_param} from list of paths")
+                            wgp_params[img_param] = [self._load_image(p, mask=False) for p in val]
+
                 # For image-based models, load PIL images instead of passing paths
                 if is_qwen or image_mode == 1:
                     if wgp_params.get('image_guide') and isinstance(wgp_params['image_guide'], str):
