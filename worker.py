@@ -8,6 +8,7 @@ import argparse
 import sys
 import os
 import time
+import datetime
 import traceback
 import threading
 import logging
@@ -30,7 +31,7 @@ from headless_model_management import HeadlessTaskQueue
 
 from source.logging_utils import (
     headless_logger, enable_debug_mode, disable_debug_mode,
-    LogBuffer, CustomLogInterceptor, set_log_interceptor
+    LogBuffer, CustomLogInterceptor, set_log_interceptor, set_log_file
 )
 from source.worker_utils import (
     dprint, log_ram_usage, cleanup_generated_files
@@ -147,8 +148,19 @@ def main():
     debug_mode = cli_args.debug
     if debug_mode:
         enable_debug_mode()
+        if not cli_args.save_logging:
+            # Automatically save logs to debug/ directory if debug mode is on
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_dir = "debug"
+            os.makedirs(log_dir, exist_ok=True)
+            log_file = os.path.join(log_dir, f"debug_{timestamp}.log")
+            set_log_file(log_file)
+            headless_logger.essential(f"Debug logging enabled. Saving to {log_file}")
     else:
         disable_debug_mode()
+
+    if cli_args.save_logging:
+        set_log_file(cli_args.save_logging)
 
     # Supabase Setup
     try:
