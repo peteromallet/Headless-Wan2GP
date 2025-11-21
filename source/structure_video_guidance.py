@@ -1066,12 +1066,14 @@ def create_trimmed_structure_video(
         
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
+        # Save video using WGP's video utilities
         save_video(
             video_tensor,
-            str(output_path),
+            save_file=str(output_path),
             fps=target_fps,
-            codec="libx264",
-            quality=18  # High quality for reference
+            codec_type='libx264_8',
+            normalize=False,
+            value_range=(0, 255)
         )
         
         return output_path
