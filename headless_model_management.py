@@ -1063,6 +1063,57 @@ class HeadlessTaskQueue:
             "image_end": "image_end",
             "image_refs": "image_refs",
             "frames_positions": "frames_positions",
+            
+            # Video/Media
+            "video_source": "video_source",
+            "keep_frames_video_source": "keep_frames_video_source",
+            "keep_frames_video_guide": "keep_frames_video_guide",
+            "video_guide_outpainting": "video_guide_outpainting",
+            "mask_expand": "mask_expand",
+            "min_frames_if_references": "min_frames_if_references",
+            "remove_background_images_ref": "remove_background_images_ref",
+            
+            # Audio
+            "audio_guidance_scale": "audio_guidance_scale",
+            "audio_guide": "audio_guide",
+            "audio_guide2": "audio_guide2",
+            "audio_source": "audio_source",
+            "audio_prompt_type": "audio_prompt_type",
+            "speakers_locations": "speakers_locations",
+            "MMAudio_setting": "MMAudio_setting",
+            "MMAudio_prompt": "MMAudio_prompt",
+            "MMAudio_neg_prompt": "MMAudio_neg_prompt",
+            
+            # Sliding Window
+            "sliding_window_size": "sliding_window_size",
+            "sliding_window_overlap": "sliding_window_overlap",
+            "sliding_window_color_correction_strength": "sliding_window_color_correction_strength",
+            "sliding_window_overlap_noise": "sliding_window_overlap_noise",
+            "sliding_window_discard_last_frames": "sliding_window_discard_last_frames",
+            
+            # Upscaling/Post-processing
+            "temporal_upsampling": "temporal_upsampling",
+            "spatial_upsampling": "spatial_upsampling",
+            "film_grain_intensity": "film_grain_intensity",
+            "film_grain_saturation": "film_grain_saturation",
+            
+            # Advanced Sampling
+            "RIFLEx_setting": "RIFLEx_setting",
+            "NAG_scale": "NAG_scale",
+            "NAG_tau": "NAG_tau",
+            "NAG_alpha": "NAG_alpha",
+            "slg_switch": "slg_switch",
+            "slg_layers": "slg_layers",
+            "slg_start_perc": "slg_start_perc",
+            "slg_end_perc": "slg_end_perc",
+            "apg_switch": "apg_switch",
+            "cfg_star_switch": "cfg_star_switch",
+            "cfg_zero_step": "cfg_zero_step",
+            "prompt_enhancer": "prompt_enhancer",
+            "model_mode": "model_mode",
+            "batch_size": "batch_size",
+            "repeat_generation": "repeat_generation",
+
             # Special phase_config patching parameters (internal use)
             "_parsed_phase_config": "_parsed_phase_config",
             "_phase_config_model_name": "_phase_config_model_name",
