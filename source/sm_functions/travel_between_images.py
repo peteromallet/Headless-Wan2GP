@@ -1615,19 +1615,19 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         
         # [DEBUG_REF_PATH] Trace start_ref_path
         if start_ref_path is None:
-             dprint(f"[DEBUG_REF_PATH] start_ref_path is None after init logic. len(input_images_resolved)={len(input_images_resolved)}, segment_idx={segment_idx}, is_continuing={is_continuing}")
+             print(f"[DEBUG_REF_PATH] start_ref_path is None after init logic. len(input_images_resolved)={len(input_images_resolved)}, segment_idx={segment_idx}, is_continuing={is_continuing}")
              # Fallback for segment 0 if not continuing
              if segment_idx == 0 and not is_continuing and len(input_images_resolved) > 0:
-                 dprint(f"[DEBUG_REF_PATH] Attempting fallback assignment from input_images_resolved[0]")
-                 start_ref_path = input_images_resolved[0]
+                 print(f"[DEBUG_REF_PATH] Attempting fallback assignment from input_images_resolved[0]: {input_images_resolved[0]}")
+                 start_ref_path_raw = input_images_resolved[0]
                  start_ref_path = sm_download_image_if_url(
-                    start_ref_path, 
+                    start_ref_path_raw, 
                     segment_processing_dir, 
                     segment_task_id_str, 
                     debug_mode=debug_enabled,
                     descriptive_name=f"seg{segment_idx:02d}_start_ref_fallback"
                 )
-                 dprint(f"[DEBUG_REF_PATH] Fallback result: {start_ref_path}")
+                 print(f"[DEBUG_REF_PATH] Fallback result: {start_ref_path}")
 
         
         # Assign for backward compatibility / specific use
@@ -2000,7 +2000,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             dprint(f"[MODEL_CONFIG_DEBUG] Segment {segment_idx}: Warning - could not load model defaults for '{model_name}': {e}")
 
         # [DEBUG_REF_PATH] Check before payload
-        dprint(f"[DEBUG_REF_PATH] Pre-payload check: start_ref_path={start_ref_path}, travel_mode={travel_mode}")
+        print(f"[DEBUG_REF_PATH] Pre-payload check: start_ref_path={start_ref_path}, travel_mode={travel_mode}")
 
         wgp_payload = {
             "task_id": wgp_inline_task_id, # ID for this specific WGP generation operation
@@ -2019,8 +2019,8 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             "image_refs_paths": safe_vace_image_ref_paths_for_wgp,
             
             # Always pass start/end images if available (required for I2V models even in VACE/Control mode)
-            "image_start": str(start_ref_path.resolve()) if start_ref_path else None,
-            "image_end": str(end_ref_path.resolve()) if end_ref_path else None,
+            "image_start": str(Path(start_ref_path).resolve()) if start_ref_path else None,
+            "image_end": str(Path(end_ref_path).resolve()) if end_ref_path else None,
             
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
