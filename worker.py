@@ -298,6 +298,13 @@ def main():
                         orch_id = current_task_params.get("orchestrator_task_id_ref")
                         if orch_id: db_ops.update_task_status_supabase(orch_id, db_ops.STATUS_COMPLETE, final_storage_url)
                     
+                    # Handle independent travel segments completion (no stitch task)
+                    if current_task_type == "travel_segment" and current_task_params.get("is_last_segment"):
+                        orch_details = current_task_params.get("orchestrator_details", {})
+                        if orch_details.get("independent_segments"):
+                            orch_id = current_task_params.get("orchestrator_task_id_ref")
+                            if orch_id: db_ops.update_task_status_supabase(orch_id, db_ops.STATUS_COMPLETE, final_storage_url, final_thumbnail_url)
+
                     if current_task_type == "join_clips_segment" and final_storage_url and current_task_params.get("is_last_join"):
                         orch_id = current_task_params.get("orchestrator_task_id_ref")
                         if orch_id: db_ops.update_task_status_supabase(orch_id, db_ops.STATUS_COMPLETE, final_storage_url, final_thumbnail_url)
