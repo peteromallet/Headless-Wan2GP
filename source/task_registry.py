@@ -36,12 +36,12 @@ from source.common_utils import (
     snap_resolution_to_model_grid,
     ensure_valid_prompt,
     ensure_valid_negative_prompt,
-    download_image_if_url as sm_download_image_if_url,
-    extract_last_frame_as_image as sm_extract_last_frame_as_image
+    download_image_if_url as sm_download_image_if_url
 )
 from source.video_utils import (
     prepare_vace_ref_for_segment as sm_prepare_vace_ref_for_segment,
-    create_guide_video_for_travel_segment as sm_create_guide_video_for_travel_segment
+    create_guide_video_for_travel_segment as sm_create_guide_video_for_travel_segment,
+    extract_last_frame_as_image as sm_extract_last_frame_as_image
 )
 from source import db_operations as db_ops
 from headless_model_management import HeadlessTaskQueue, GenerationTask
