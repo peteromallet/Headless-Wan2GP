@@ -303,7 +303,9 @@ def main():
                         orch_details = current_task_params.get("orchestrator_details", {})
                         if orch_details.get("independent_segments"):
                             orch_id = current_task_params.get("orchestrator_task_id_ref")
-                            if orch_id: db_ops.update_task_status_supabase(orch_id, db_ops.STATUS_COMPLETE, final_storage_url, final_thumbnail_url)
+                            # For independent segments, the orchestrator has no single output video.
+                            # Pass None for output_location, but include the thumbnail from the last segment if available.
+                            if orch_id: db_ops.update_task_status_supabase(orch_id, db_ops.STATUS_COMPLETE, None, final_thumbnail_url)
 
                     if current_task_type == "join_clips_segment" and final_storage_url and current_task_params.get("is_last_join"):
                         orch_id = current_task_params.get("orchestrator_task_id_ref")
