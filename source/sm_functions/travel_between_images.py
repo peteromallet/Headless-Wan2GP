@@ -1593,8 +1593,10 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                     start_ref_path = input_images_resolved[segment_idx - 1]
                     end_ref_path = input_images_resolved[segment_idx]
         else: # From scratch
-            if len(input_images_resolved) > segment_idx + 1:
+            if len(input_images_resolved) > segment_idx:
                 start_ref_path = input_images_resolved[segment_idx]
+            
+            if len(input_images_resolved) > segment_idx + 1:
                 end_ref_path = input_images_resolved[segment_idx + 1]
         
         # Download images if they are URLs so they exist locally

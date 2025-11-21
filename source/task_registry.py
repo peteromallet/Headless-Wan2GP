@@ -126,8 +126,10 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                     start_ref_path = input_images_resolved[segment_idx - 1]
                     end_ref_path = input_images_resolved[segment_idx]
         else:
-            if len(input_images_resolved) > segment_idx + 1:
+            if len(input_images_resolved) > segment_idx:
                 start_ref_path = input_images_resolved[segment_idx]
+            
+            if len(input_images_resolved) > segment_idx + 1:
                 end_ref_path = input_images_resolved[segment_idx + 1]
         
         if start_ref_path:
