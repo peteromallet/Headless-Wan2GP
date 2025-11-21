@@ -267,12 +267,12 @@ def main():
                         thumbnail_url = None
                         try:
                             import json
-                             data = json.loads(actual_output)
-                             actual_output = data.get("output_location", actual_output)
-                             thumbnail_url = data.get("thumbnail_url")
-                         except: pass
-                         
-                         db_ops.update_task_status_supabase(current_task_id, db_ops.STATUS_COMPLETE, actual_output, thumbnail_url)
+                            data = json.loads(actual_output)
+                            actual_output = data.get("output_location", actual_output)
+                            thumbnail_url = data.get("thumbnail_url")
+                        except: pass
+                        
+                        db_ops.update_task_status_supabase(current_task_id, db_ops.STATUS_COMPLETE, actual_output, thumbnail_url)
                     else:
                         db_ops.update_task_status(current_task_id, db_ops.STATUS_IN_PROGRESS, output_location)
                 else:
