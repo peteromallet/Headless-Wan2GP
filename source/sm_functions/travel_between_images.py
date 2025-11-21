@@ -1998,9 +1998,9 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             "video_guide_path": str(actual_guide_video_path_for_wgp.resolve()) if actual_guide_video_path_for_wgp and actual_guide_video_path_for_wgp.exists() else None,
             "image_refs_paths": safe_vace_image_ref_paths_for_wgp,
             
-            # I2V specific inputs (pass None if not I2V)
-            "image_start": str(start_ref_path.resolve()) if travel_mode == "i2v" and start_ref_path else None,
-            "image_end": str(end_ref_path.resolve()) if travel_mode == "i2v" and end_ref_path else None,
+            # Always pass start/end images if available (required for I2V models even in VACE/Control mode)
+            "image_start": str(start_ref_path.resolve()) if start_ref_path else None,
+            "image_end": str(end_ref_path.resolve()) if end_ref_path else None,
             
             "cfg_star_switch": full_orchestrator_payload.get("cfg_star_switch", 0),
             "cfg_zero_step": full_orchestrator_payload.get("cfg_zero_step", -1),
