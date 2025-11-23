@@ -39,6 +39,7 @@ def create_guide_and_mask_for_generation(
     regenerate_anchors: bool = False,
     num_anchor_frames: int = 3,
     replace_mode: bool = False,
+    gap_inserted_frames: dict = None,
     total_frames: int = None,
     *,
     dprint=print
@@ -61,6 +62,7 @@ def create_guide_and_mask_for_generation(
         regenerate_anchors: If True, exclude anchor frames from guide and regenerate them
         num_anchor_frames: Number of anchor frames to regenerate on each side (default: 3)
         replace_mode: If True, gap frames REPLACE boundary frames instead of being inserted (default: False)
+        gap_inserted_frames: Optional dict mapping {relative_gap_index: image_array} to insert and preserve in the gap
         dprint: Print function for logging
 
     Returns:
@@ -143,6 +145,12 @@ def create_guide_and_mask_for_generation(
 
     guide_frames = []
     gray_frame = sm_create_color_frame(resolution_wh, (128, 128, 128))
+    
+    # Track indices of inserted frames (absolute index in guide_frames)
+    inserted_frame_indices = []
+    
+    # Normalize gap_inserted_frames to empty dict if None
+    gap_inserted_frames = gap_inserted_frames or {}
 
     if replace_mode:
         # REPLACE MODE: Build guide with boundary regeneration
@@ -154,10 +162,17 @@ def create_guide_and_mask_for_generation(
         guide_frames.extend(context_frames_before[:num_preserved_before])
         dprint(f"[VACE_UTILS]   Added {num_preserved_before} preserved frames from before context")
 
-        # Add gray placeholders for regenerated boundary frames
-        for _ in range(gap_frame_count):
-            guide_frames.append(gray_frame.copy())
-        dprint(f"[VACE_UTILS]   Added {gap_frame_count} gray placeholders (replacing boundary frames)")
+        # Add gray placeholders for regenerated boundary frames (or inserted frames)
+        for i in range(gap_frame_count):
+            if i in gap_inserted_frames:
+                inserted_frame_indices.append(len(guide_frames))
+                guide_frames.append(gap_inserted_frames[i])
+            else:
+                guide_frames.append(gray_frame.copy())
+        
+        if inserted_frame_indices:
+            dprint(f"[VACE_UTILS]   Inserted {len(inserted_frame_indices)} frames into gap at relative indices: {list(gap_inserted_frames.keys())}")
+        dprint(f"[VACE_UTILS]   Added {gap_frame_count} frames for boundary regeneration")
 
         # Add preserved frames from context_after
         guide_frames.extend(context_frames_after[frames_to_replace_from_after:])
@@ -181,10 +196,17 @@ def create_guide_and_mask_for_generation(
                 guide_frames.append(gray_frame.copy())
             dprint(f"[VACE_UTILS]   Added {num_anchor_frames_before} gray placeholders for regenerated anchors (end of before context)")
 
-        # Add gray placeholder frames for the gap
-        for _ in range(gap_frame_count):
-            guide_frames.append(gray_frame.copy())
-        dprint(f"[VACE_UTILS]   Added {gap_frame_count} gray placeholder frames (gap)")
+        # Add gray placeholder frames for the gap (or inserted frames)
+        for i in range(gap_frame_count):
+            if i in gap_inserted_frames:
+                inserted_frame_indices.append(len(guide_frames))
+                guide_frames.append(gap_inserted_frames[i])
+            else:
+                guide_frames.append(gray_frame.copy())
+        
+        if inserted_frame_indices:
+            dprint(f"[VACE_UTILS]   Inserted {len(inserted_frame_indices)} frames into gap at relative indices: {list(gap_inserted_frames.keys())}")
+        dprint(f"[VACE_UTILS]   Added {gap_frame_count} frames for gap")
 
         # Add gray placeholders for regenerated anchors (first N frames of after context)
         if regenerate_anchors and num_anchor_frames_after > 0:
@@ -272,6 +294,14 @@ def create_guide_and_mask_for_generation(
 
     # Active frames are everything not in inactive_indices
     active_indices = [i for i in range(total_frames) if i not in inactive_indices]
+
+    # If frames were inserted into the gap, ensure they are inactive (BLACK/KEEP)
+    if inserted_frame_indices:
+        for idx in inserted_frame_indices:
+            inactive_indices.add(idx)
+            if idx in active_indices:
+                active_indices.remove(idx)
+        dprint(f"[VACE_UTILS]   Marked {len(inserted_frame_indices)} inserted frames as inactive (black/keep) at indices: {inserted_frame_indices}")
 
     dprint(f"[VACE_UTILS]   Inactive frame indices (black/keep): {sorted(inactive_indices)}")
     dprint(f"[VACE_UTILS]   Active frame indices (white/generate): {active_indices}")
