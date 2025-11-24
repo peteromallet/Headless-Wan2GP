@@ -442,7 +442,47 @@ def _download_lora_from_url(url: str, task_id: str, dprint=None) -> str:
     # Extract filename from URL and decode URL-encoded characters
     # e.g., "%E5%BB%B6%E6%97%B6%E6%91%84%E5%BD%B1-high.safetensors" → "延时摄影-high.safetensors"
     url_filename = url.split("/")[-1]
+    generic_filename = url_filename  # Save original before modification
+    
+    # Handle Wan2.2 Lightning LoRA collisions by prefixing parent folder
+    if url_filename in ["high_noise_model.safetensors", "low_noise_model.safetensors"]:
+        parts = url.split("/")
+        if len(parts) > 2:
+            parent = parts[-2].replace("%20", "_")
+            url_filename = f"{parent}_{url_filename}"
+
     local_filename = unquote(url_filename)
+    
+    # If we derived a unique filename (collision detected), clean up old generic file
+    if local_filename != generic_filename:
+        if dprint:
+            dprint(f"[LORA_DOWNLOAD] Task {task_id}: Collision-prone LoRA detected: {generic_filename} → {local_filename}")
+        
+        # Check ALL standard lora directories and delete old generic versions
+        lora_search_dirs = [
+            "loras",
+            "Wan2GP/loras",
+            "loras_i2v",
+            "Wan2GP/loras_i2v",
+            "loras_hunyuan_i2v",
+            "Wan2GP/loras_hunyuan_i2v",
+            "loras_qwen",
+            "Wan2GP/loras_qwen",
+        ]
+        
+        for search_dir in lora_search_dirs:
+            if os.path.isdir(search_dir):
+                old_path = os.path.join(search_dir, generic_filename)
+                if os.path.isfile(old_path):
+                    if dprint:
+                        dprint(f"[LORA_DOWNLOAD] Task {task_id}: 🗑️  Removing legacy LoRA file: {old_path}")
+                    try:
+                        os.remove(old_path)
+                        if dprint:
+                            dprint(f"[LORA_DOWNLOAD] Task {task_id}: ✅ Successfully deleted legacy file")
+                    except Exception as e:
+                        if dprint:
+                            dprint(f"[LORA_DOWNLOAD] Task {task_id}: ⚠️  Failed to delete old LoRA {old_path}: {e}")
     
     # Determine LoRA directory: prefer the WGP-visible root 'loras'
     lora_dir = "loras"
