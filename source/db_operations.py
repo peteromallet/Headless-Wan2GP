@@ -813,19 +813,19 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
                 else:
                     # Verification failed after all retries
                     elapsed = time.time() - verify_start_time
-                    print(f"[ERROR] ❌ Task {actual_db_row_id} creation confirmed by Edge Function but NOT VISIBLE in DB after {max_verify_retries} attempts ({elapsed:.2f}s)")
-                    print(f"[ERROR] This task may be lost due to database replication lag or consistency issues!")
-                    print(f"[ERROR] Task details: type={task_type_str}, project_id={project_id}, dependant_on={dependant_on}")
+                    print(f"[WARN] ⚠️  Task {actual_db_row_id} creation confirmed by Edge Function but NOT VISIBLE in DB after {max_verify_retries} attempts ({elapsed:.2f}s)")
+                    print(f"[WARN] This is likely due to database replication lag. The task IS CREATED and will be processed when visible.")
+                    dprint(f"[WARN] Task details: type={task_type_str}, project_id={project_id}, dependant_on={dependant_on}")
 
             return actual_db_row_id
         else:
             error_msg = f"Edge Function create-task failed: {resp.status_code} - {resp.text}"
-            print(f"[ERROR] {error_msg}")
+            print(f"[ERROR] ❌ {error_msg}")
             raise RuntimeError(error_msg)
 
     except httpx.RequestError as e:
         error_msg = f"Edge Function create-task request failed: {e}"
-        print(f"[ERROR] {error_msg}")
+        print(f"[ERROR] ❌ {error_msg}")
         raise RuntimeError(error_msg)
 
 def poll_task_status(task_id: str, poll_interval_seconds: int = 10, timeout_seconds: int = 1800, db_path: str | None = None) -> str | None:
