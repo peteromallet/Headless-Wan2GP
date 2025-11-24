@@ -139,18 +139,23 @@ def generate_transition_prompt(
             duration_seconds = num_frames / fps
             duration_text = f" This transition occurs over approximately {duration_seconds:.1f} seconds ({num_frames} frames at {fps} FPS)."
 
-        query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence.{duration_text} Your goal is to create a prompt that describes the transition from one to the next based on the user's description of this/the overall sequence: '{base_prompt_text}'
+        query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence.
 
-In the first line, you should describe the movement between these two frames in a single sentence that captures the motion, camera movement, scene changes, character actions, and object movements. Focus on what changes and how it changes. Include actions of characters, objects, or environmental elements when visible. In the next line, include details on what different aspects of the scene are and how they move.
+{duration_text} Your goal is to create a prompt that describes the transition from one to the next based on the user's description of this/the overall sequence: '{base_prompt_text}'
+
+In the first line, you should describe the movement between these two frames in a single sentence that captures the motion, camera movement, scene changes, character actions, and object movements. Focus on the main changes and how it changes. In the next line, include details on what different aspects of the scene are. Finally, include detail on the specific details of the video and how they move.
 
 Examples of good descriptions:
-- "The pale moon descends below the horizon as the sun rises above the mountains, bathing the landscape in golden light. The butterflies flutter away as the night falls and there's a beautiful shimmer on the water."
-- "The tall blonde woman runs from the kitchen to the playground as the camera pans right. The colorful toys scatter across the ground while birds take flight from nearby trees."
-- "The camera zooms in on the eye to reveal a brown horse in the reflection. The iris dilates as warm sunlight filters through, casting dynamic shadows across the pupil."
+
+- "The sun rises rapidly above the jagged peaks as the camera tilts upward from the dark valley floor. The landscape is rendered in a high-definition nature documentary style, featuring silhouette pine trees against a violet and gold sky. Wisps of morning mist evaporate off the river surface while distant birds circle in the upper left corner."
+
+- "A woman sprints from the kitchen into the bright exterior sunlight as the camera pans right to track her path. She wears a vintage floral dress amidst colorful playground equipment, visualized with high-contrast lighting and cinematic motion blur. Her hair whips back in the wind and dust particles kick up around her sneakers as she impacts the gravel."
+
+- "The camera zooms aggressively into a macro shot of an eye to reveal a brown horse in the reflection. The iris features deep hazel textures under warm, soft-focus lighting that highlights the biological details. The pupil constricts slightly in reaction to the light while the tiny reflected horse tosses its mane."
 
 Describe this transition based on the user's description of this/the overall sequence: '{base_prompt_text}'"""
 
-        system_prompt = "You are a video direction assistant. Describe visual transitions concisely and cinematically."
+        system_prompt = "You are a video direction assistant. Describe visual transitions concisely and cinematically. In the first sentence, cover the main motion of the video. After this, describe the objects, characters, and style . Finally, include details in the minute motion details from the video."
 
         dprint(f"[VLM_TRANSITION] Running inference...")
         result = extender.extend_with_img(
@@ -250,7 +255,7 @@ def generate_transition_prompts_batch(
 
         dprint(f"[VLM_BATCH] Model loaded (initially on CPU)")
 
-        system_prompt = "You are a video direction assistant. Describe visual transitions concisely and cinematically."
+        system_prompt = "You are a video direction assistant. Describe visual transitions concisely and cinematically. In the first sentence, cover the main motion of the video. After this, describe the objects, characters, and style . Finally, include details in the minute motion details from the video."
 
         results = []
         for i, ((start_path, end_path), base_prompt) in enumerate(zip(image_pairs, base_prompts)):
@@ -277,14 +282,19 @@ def generate_transition_prompts_batch(
                     duration_seconds = num_frames / fps
                     duration_text = f" This transition occurs over approximately {duration_seconds:.1f} seconds ({num_frames} frames at {fps} FPS)."
 
-                query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence.{duration_text} Your goal is to create a prompt that describes the transition from one to the next based on the user's description of this/the overall sequence: '{base_prompt_text}'
+                query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence.
 
-In the first line, you should describe the movement between these two frames in a single sentence that captures the motion, camera movement, scene changes, character actions, and object movements. Focus on what changes and how it changes. Include actions of characters, objects, or environmental elements when visible. In the next line, include details on what different aspects of the scene are and how they move.
+{duration_text} Your goal is to create a prompt that describes the transition from one to the next based on the user's description of this/the overall sequence: '{base_prompt_text}'
+
+In the first line, you should describe the movement between these two frames in a single sentence that captures the motion, camera movement, scene changes, character actions, and object movements. Focus on the main changes and how it changes. In the next line, include details on what different aspects of the scene are. Finally, include detail on the specific details of the video and how they move.
 
 Examples of good descriptions:
-- "The pale moon descends below the horizon as the sun rises above the mountains, bathing the landscape in golden light. The butterflies flutter away as the night falls and there's a beautiful shimmer on the water."
-- "The tall blonde woman runs from the kitchen to the playground as the camera pans right. The colorful toys scatter across the ground while birds take flight from nearby trees."
-- "The camera zooms in on the eye to reveal a brown horse in the reflection. The iris dilates as warm sunlight filters through, casting dynamic shadows across the pupil."
+
+- "The sun rises rapidly above the jagged peaks as the camera tilts upward from the dark valley floor. The landscape is rendered in a high-definition nature documentary style, featuring silhouette pine trees against a violet and gold sky. Wisps of morning mist evaporate off the river surface while distant birds circle in the upper left corner."
+
+- "A woman sprints from the kitchen into the bright exterior sunlight as the camera pans right to track her path. She wears a vintage floral dress amidst colorful playground equipment, visualized with high-contrast lighting and cinematic motion blur. Her hair whips back in the wind and dust particles kick up around her sneakers as she impacts the gravel."
+
+- "The camera zooms aggressively into a macro shot of an eye to reveal a brown horse in the reflection. The iris features deep hazel textures under warm, soft-focus lighting that highlights the biological details. The pupil constricts slightly in reaction to the light while the tiny reflected horse tosses its mane."
 
 Describe this transition based on the user's description of this/the overall sequence: '{base_prompt_text}'"""
 
