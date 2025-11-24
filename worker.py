@@ -46,6 +46,48 @@ heartbeat_thread = None
 heartbeat_stop_event = threading.Event()
 debug_mode = False
 
+def cleanup_legacy_lora_collisions():
+    """
+    Remove legacy generic LoRA filenames that collide with new uniquely-named versions.
+    
+    This runs at worker startup to ensure old collision-prone files like
+    'high_noise_model.safetensors' and 'low_noise_model.safetensors' are removed
+    before WGP loads models with updated LoRA URLs.
+    """
+    wan_dir = Path(__file__).parent / "Wan2GP"
+    lora_dirs = [
+        wan_dir / "loras",
+        wan_dir / "loras_i2v",
+        wan_dir / "loras_hunyuan_i2v",
+        wan_dir / "loras_qwen",
+    ]
+    
+    # Generic filenames that are collision-prone
+    collision_prone_files = [
+        "high_noise_model.safetensors",
+        "low_noise_model.safetensors",
+    ]
+    
+    cleaned_files = []
+    for lora_dir in lora_dirs:
+        if not lora_dir.exists():
+            continue
+        
+        for filename in collision_prone_files:
+            file_path = lora_dir / filename
+            if file_path.exists():
+                try:
+                    file_path.unlink()
+                    cleaned_files.append(str(file_path))
+                    headless_logger.info(f"🗑️  Removed legacy LoRA file: {file_path}")
+                except Exception as e:
+                    headless_logger.warning(f"⚠️  Failed to remove legacy LoRA {file_path}: {e}")
+    
+    if cleaned_files:
+        headless_logger.info(f"✅ Cleanup complete: removed {len(cleaned_files)} legacy LoRA file(s)")
+    else:
+        headless_logger.debug("No legacy LoRA files found to clean up")
+
 def process_single_task(task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None, colour_match_videos: bool = False, mask_active_frames: bool = True, task_queue: HeadlessTaskQueue = None):
     task_id = task_params_dict.get("task_id", "unknown_task_" + str(time.time()))
     headless_logger.essential(f"Processing {task_type} task", task_id=task_id)
@@ -225,6 +267,9 @@ def main():
         sys.exit(1)
     finally:
         os.chdir(original_cwd)
+
+    # Clean up legacy collision-prone LoRA files
+    cleanup_legacy_lora_collisions()
 
     # Initialize Task Queue
     try:
