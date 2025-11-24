@@ -40,65 +40,12 @@ from source.heartbeat_utils import start_heartbeat_guardian_process
 from source.task_registry import TaskRegistry
 from source.sm_functions import travel_between_images as tbi
 from source.sm_functions import different_perspective as dp
+from source.lora_utils import cleanup_legacy_lora_collisions
 
 # Global heartbeat control
 heartbeat_thread = None
 heartbeat_stop_event = threading.Event()
 debug_mode = False
-
-def cleanup_legacy_lora_collisions():
-    """
-    Remove legacy generic LoRA filenames that collide with new uniquely-named versions.
-    
-    This runs at worker startup to ensure old collision-prone files like
-    'high_noise_model.safetensors' and 'low_noise_model.safetensors' are removed
-    before WGP loads models with updated LoRA URLs.
-    
-    Checks ALL possible LoRA directories to ensure comprehensive cleanup.
-    """
-    repo_root = Path(__file__).parent
-    wan_dir = repo_root / "Wan2GP"
-    
-    # Comprehensive list of all possible LoRA directories
-    lora_dirs = [
-        # Wan2GP subdirectories (standard)
-        wan_dir / "loras",
-        wan_dir / "loras_i2v",
-        wan_dir / "loras_hunyuan_i2v",
-        wan_dir / "loras_qwen",
-        wan_dir / "loras_flux",
-        wan_dir / "loras_hunyuan",
-        wan_dir / "loras_ltxv",
-        # Parent directory (for dev setups)
-        repo_root / "loras",
-        repo_root / "loras_qwen",
-    ]
-    
-    # Generic filenames that are collision-prone
-    collision_prone_files = [
-        "high_noise_model.safetensors",
-        "low_noise_model.safetensors",
-    ]
-    
-    cleaned_files = []
-    for lora_dir in lora_dirs:
-        if not lora_dir.exists():
-            continue
-        
-        for filename in collision_prone_files:
-            file_path = lora_dir / filename
-            if file_path.exists():
-                try:
-                    file_path.unlink()
-                    cleaned_files.append(str(file_path))
-                    headless_logger.info(f"🗑️  Removed legacy LoRA file: {file_path}")
-                except Exception as e:
-                    headless_logger.warning(f"⚠️  Failed to remove legacy LoRA {file_path}: {e}")
-    
-    if cleaned_files:
-        headless_logger.info(f"✅ Cleanup complete: removed {len(cleaned_files)} legacy LoRA file(s)")
-    else:
-        headless_logger.debug("No legacy LoRA files found to clean up")
 
 def process_single_task(task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None, colour_match_videos: bool = False, mask_active_frames: bool = True, task_queue: HeadlessTaskQueue = None):
     task_id = task_params_dict.get("task_id", "unknown_task_" + str(time.time()))

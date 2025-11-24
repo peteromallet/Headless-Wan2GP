@@ -47,6 +47,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from contextlib import contextmanager
+from source.lora_utils import cleanup_legacy_lora_collisions
 
 # Add WanGP to path for imports
 def setup_wgp_path(wan_dir: str):
@@ -719,6 +720,12 @@ class HeadlessTaskQueue:
         
         self.logger.info(f"{worker_name} switching model: {self.current_model} → {model_key}")
         switch_start = time.time()
+        
+        # Cleanup legacy collision-prone LoRAs before loading new model to prevent wrong version usage
+        try:
+            cleanup_legacy_lora_collisions()
+        except Exception as e:
+            self.logger.warning(f"LoRA cleanup failed during model switch: {e}")
         
         try:
             # Use orchestrator's model loading (which uses wgp.py's persistence)
