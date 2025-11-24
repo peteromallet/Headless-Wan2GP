@@ -1378,6 +1378,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             dprint(f"[DEEP_DEBUG] Segment payload keys: {list(segment_payload.keys())}")
 
             dprint(f"[DEBUG_DEPENDENCY_CHAIN] Creating new segment {idx}, depends_on (prev idx {idx-1}): {previous_segment_task_id}")
+            print(f"[ORCHESTRATOR] Creating segment {idx} task...")
             actual_db_row_id = db_ops.add_task_to_db(
                 task_payload=segment_payload, 
                 task_type_str="travel_segment",
@@ -1385,13 +1386,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             )
             # Record the actual DB ID so subsequent segments depend on the real DB row ID
             actual_segment_db_id_by_index[idx] = actual_db_row_id
+            print(f"[ORCHESTRATOR] ✅ Segment {idx} created: task_id={actual_db_row_id}")
             dprint(f"[DEBUG_DEPENDENCY_CHAIN] New segment {idx} created with actual DB ID: {actual_db_row_id}; next segment will depend on this")
             # Post-insert verification of dependency from DB
             try:
                 dep_saved = db_ops.get_task_dependency(actual_db_row_id)
                 dprint(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Segment {idx} saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
+                print(f"[ORCHESTRATOR] Segment {idx} dependency verified: dependant_on={dep_saved}")
             except Exception as e_ver:
                 dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for seg {idx} ({actual_db_row_id}): {e_ver}")
+                print(f"[WARN] ⚠️  Segment {idx} dependency verification failed: {e_ver}")
         
         # After loop, enqueue the stitch task (check for idempotency)
         # SKIP if independent segments or I2V mode
