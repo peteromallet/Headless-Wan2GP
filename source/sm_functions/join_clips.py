@@ -465,12 +465,12 @@ def _handle_join_clips_task(
             replace_mode=replace_mode
         )
 
-        total_frames = quantization_result['total_frames']
+        quantized_total_frames = quantization_result['total_frames']
         gap_for_guide = quantization_result['gap_for_guide']
         quantization_shift = quantization_result['quantization_shift']
 
         if quantization_shift > 0:
-            dprint(f"[JOIN_CLIPS] Task {task_id}: VACE quantization: {gap_frame_count + quantization_shift} → {total_frames} frames")
+            dprint(f"[JOIN_CLIPS] Task {task_id}: VACE quantization: {gap_frame_count + quantization_shift} → {quantized_total_frames} frames")
             dprint(f"[JOIN_CLIPS] Task {task_id}: Gap adjusted: {gap_frame_count} → {gap_for_guide} for guide/mask")
 
             if replace_mode:
@@ -543,7 +543,7 @@ def _handle_join_clips_task(
 
         # Create guide/mask with adjusted gap
         try:
-            created_guide_video, created_mask_video = create_guide_and_mask_for_generation(
+            created_guide_video, created_mask_video, guide_frame_count = create_guide_and_mask_for_generation(
                 context_frames_before=start_context_frames,
                 context_frames_after=end_context_frames,
                 gap_frame_count=gap_for_guide,  # Use quantization-adjusted gap
@@ -564,6 +564,12 @@ def _handle_join_clips_task(
             import traceback
             traceback.print_exc()
             return False, error_msg
+
+        if guide_frame_count != quantized_total_frames:
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Guide/mask total frame count ({guide_frame_count}) "
+                   f"differs from quantized expectation ({quantized_total_frames}). Using actual count.")
+
+        total_frames = guide_frame_count
 
         # --- 6. Prepare Generation Parameters (using shared helper) ---
         dprint(f"[JOIN_CLIPS] Task {task_id}: Preparing generation parameters...")
