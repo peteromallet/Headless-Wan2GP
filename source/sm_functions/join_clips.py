@@ -61,6 +61,11 @@ def _calculate_vace_quantization(context_frame_count: int, gap_frame_count: int,
             - gap_for_guide: Adjusted gap to use in guide/mask creation
             - quantization_shift: Number of frames dropped by VACE (0 if no quantization)
     """
+    # In REPLACE mode, gap cannot exceed available context frames
+    max_available_frames = context_frame_count * 2
+    if replace_mode and gap_frame_count > max_available_frames:
+        gap_frame_count = max_available_frames
+    
     # Calculate desired total
     if replace_mode:
         desired_total = context_frame_count * 2
@@ -73,6 +78,10 @@ def _calculate_vace_quantization(context_frame_count: int, gap_frame_count: int,
 
     # Adjust gap to account for dropped frames
     gap_for_guide = gap_frame_count - quantization_shift
+    
+    # Final safety clamp: gap_for_guide cannot be negative or exceed available frames
+    if replace_mode:
+        gap_for_guide = max(0, min(gap_for_guide, max_available_frames))
 
     return {
         'total_frames': actual_total,
@@ -459,6 +468,7 @@ def _handle_join_clips_task(
         dprint(f"[JOIN_CLIPS] Task {task_id}: regenerate_anchors={regenerate_anchors}, num_anchor_frames={num_anchor_frames}")
 
         # Calculate VACE quantization adjustments
+        original_gap = gap_frame_count
         quantization_result = _calculate_vace_quantization(
             context_frame_count=context_frame_count,
             gap_frame_count=gap_frame_count,
@@ -469,9 +479,14 @@ def _handle_join_clips_task(
         gap_for_guide = quantization_result['gap_for_guide']
         quantization_shift = quantization_result['quantization_shift']
 
+        # Log if gap was clamped in REPLACE mode
+        max_available = context_frame_count * 2
+        if replace_mode and original_gap > max_available:
+            dprint(f"[JOIN_CLIPS] Task {task_id}: ⚠️  Gap clamped: {original_gap} → {max_available} (cannot exceed {context_frame_count}×2 available context frames)")
+        
         if quantization_shift > 0:
-            dprint(f"[JOIN_CLIPS] Task {task_id}: VACE quantization: {gap_frame_count + quantization_shift} → {quantized_total_frames} frames")
-            dprint(f"[JOIN_CLIPS] Task {task_id}: Gap adjusted: {gap_frame_count} → {gap_for_guide} for guide/mask")
+            dprint(f"[JOIN_CLIPS] Task {task_id}: VACE quantization: {gap_for_guide + quantization_shift} → {quantized_total_frames} frames")
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Gap adjusted: {original_gap if replace_mode and original_gap > max_available else gap_frame_count} → {gap_for_guide} for guide/mask")
 
             if replace_mode:
                 dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - quantization will shift preserved section by -{quantization_shift} frames")

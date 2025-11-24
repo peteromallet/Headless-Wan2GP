@@ -733,7 +733,6 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
 
     # Defensive check: if a dependency is specified, ensure it exists before enqueueing
     if dependant_on:
-        import time
         max_retries = 3
         retry_delay = 0.5
 

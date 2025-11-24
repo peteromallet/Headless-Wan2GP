@@ -195,7 +195,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
             except Exception as e:
                 travel_logger.error(f"Failed to parse phase_config: {e}", task_id=orchestrator_task_id_str)
-                import traceback
                 traceback.print_exc()
                 return False, f"Failed to parse phase_config: {e}"
 
@@ -999,7 +998,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
             except Exception as e:
                 travel_logger.error(f"Failed to create structure guidance video: {e}", task_id=orchestrator_task_id_str)
-                import traceback
                 traceback.print_exc()
                 travel_logger.warning("Structure guidance will not be available for this generation", task_id=orchestrator_task_id_str)
                 orchestrator_payload["structure_guidance_video_url"] = None
@@ -1169,13 +1167,11 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
                 except Exception as e_edge:
                     dprint(f"[VLM_BATCH] WARNING: Failed to call edge function: {e_edge}")
-                    import traceback
                     traceback.print_exc()
                     # Non-fatal - continue with task creation
 
             except Exception as e_vlm_batch:
                 dprint(f"[VLM_BATCH] ERROR during batch VLM processing: {e_vlm_batch}")
-                import traceback
                 traceback.print_exc()
                 dprint(f"[VLM_BATCH] Falling back to original prompts for all segments")
                 vlm_enhanced_prompts = {}
@@ -1885,7 +1881,6 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                 
             except Exception as e_shared_processor:
                 dprint(f"[ERROR] Seg {segment_idx}: Shared processor failed: {e_shared_processor}")
-                import traceback
                 traceback.print_exc()
                 return False, f"Shared processor failed: {e_shared_processor}", None
         
