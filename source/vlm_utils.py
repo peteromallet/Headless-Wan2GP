@@ -141,27 +141,29 @@ def generate_transition_prompt(
 
         query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence.
 
-{duration_text} Your goal is to create a THREE-SENTENCE prompt that describes the transition based on the user's description: '{base_prompt_text}'
+{duration_text} Your goal is to create a THREE-SENTENCE prompt that describes the MOTION and CHANGES in this transition based on the user's description: '{base_prompt_text}'
+
+FOCUS ON MOTION: Describe what MOVES, what CHANGES, and HOW things transition between these frames. Everything should be described in terms of motion and transformation, not static states.
 
 YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE:
 
-SENTENCE 1 (MAIN MOTION): Describe the primary action, camera movement, and scene changes. Focus on WHAT happens and HOW the scene changes between the two frames.
+SENTENCE 1 (PRIMARY MOTION): Describe the main action, camera movement, and major scene transitions. What is the dominant movement happening?
 
-SENTENCE 2 (CHARACTERS/OBJECTS/STYLE): Describe the characters, objects, environment, and visual style. Include colors, clothing, setting details, and artistic style.
+SENTENCE 2 (MOVING ELEMENTS): Describe how the characters, objects, and environment are moving or changing. Focus on what's in motion and how it moves through space.
 
-SENTENCE 3 (DETAIL OF MOTION): Describe the small details in motion - subtle movements, secondary animations, environmental effects, and fine details that enhance realism.
+SENTENCE 3 (MOTION DETAILS): Describe the subtle motion details - secondary movements, environmental dynamics, particles, lighting shifts, and small-scale motions.
 
-Examples of the THREE-SENTENCE structure:
+Examples of MOTION-FOCUSED descriptions:
 
-- "The sun rises rapidly above the jagged peaks as the camera tilts upward from the dark valley floor. The landscape is rendered in a high-definition nature documentary style, featuring silhouette pine trees against a violet and gold sky. Wisps of morning mist evaporate off the river surface while distant birds circle in the upper left corner."
+- "The sun rises rapidly above the jagged peaks as the camera tilts upward from the dark valley floor. The silhouette pine trees sway gently against the shifting violet and gold sky as the entire landscape brightens. Wisps of morning mist evaporate and drift upward from the river surface while distant birds circle and glide through the upper left corner."
 
-- "A woman sprints from the kitchen into the bright exterior sunlight as the camera pans right to track her path. She wears a vintage floral dress amidst colorful playground equipment, visualized with high-contrast lighting and cinematic motion blur. Her hair whips back in the wind and dust particles kick up around her sneakers as she impacts the gravel."
+- "A woman sprints from the kitchen into the bright exterior sunlight as the camera pans right to track her accelerating path. Her vintage floral dress flows and ripples in the wind while colorful playground equipment blurs past in the background. Her hair whips back dynamically and dust particles kick up and swirl around her sneakers as she impacts the gravel."
 
-- "The camera zooms aggressively into a macro shot of an eye to reveal a brown horse in the reflection. The iris features deep hazel textures under warm, soft-focus lighting that highlights the biological details. The pupil constricts slightly in reaction to the light while the tiny reflected horse tosses its mane."
+- "The camera zooms aggressively inward into a macro shot of an eye as the brown horse reflection grows larger and more detailed. The iris textures shift under the changing warm lighting while the biological details come into sharper focus. The pupil constricts and contracts in reaction to the light while the tiny reflected horse tosses its mane and shifts position."
 
-Now create your THREE-SENTENCE description based on: '{base_prompt_text}'"""
+Now create your THREE-SENTENCE MOTION-FOCUSED description based on: '{base_prompt_text}'"""
 
-        system_prompt = "You are a video direction assistant. You MUST respond with EXACTLY THREE SENTENCES following this structure: 1) MAIN MOTION, 2) CHARACTERS/OBJECTS/STYLE, 3) DETAIL OF MOTION."
+        system_prompt = "You are a video direction assistant. You MUST respond with EXACTLY THREE SENTENCES following this structure: 1) PRIMARY MOTION, 2) MOVING ELEMENTS, 3) MOTION DETAILS. Focus exclusively on what moves and changes, not static descriptions."
 
         dprint(f"[VLM_TRANSITION] Running inference...")
         result = extender.extend_with_img(
@@ -261,7 +263,7 @@ def generate_transition_prompts_batch(
 
         dprint(f"[VLM_BATCH] Model loaded (initially on CPU)")
 
-        system_prompt = "You are a video direction assistant. You MUST respond with EXACTLY THREE SENTENCES following this structure: 1) MAIN MOTION, 2) CHARACTERS/OBJECTS/STYLE, 3) DETAIL OF MOTION. Be concise and cinematic."
+        system_prompt = "You are a video direction assistant. You MUST respond with EXACTLY THREE SENTENCES following this structure: 1) PRIMARY MOTION, 2) MOVING ELEMENTS, 3) MOTION DETAILS. Focus exclusively on what moves and changes, not static descriptions."
 
         results = []
         for i, ((start_path, end_path), base_prompt) in enumerate(zip(image_pairs, base_prompts)):
@@ -290,25 +292,27 @@ def generate_transition_prompts_batch(
 
                 query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence.
 
-{duration_text} Your goal is to create a THREE-SENTENCE prompt that describes the transition based on the user's description: '{base_prompt_text}'
+{duration_text} Your goal is to create a THREE-SENTENCE prompt that describes the MOTION and CHANGES in this transition based on the user's description: '{base_prompt_text}'
+
+FOCUS ON MOTION: Describe what MOVES, what CHANGES, and HOW things transition between these frames. Everything should be described in terms of motion and transformation, not static states.
 
 YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE:
 
-SENTENCE 1 (MAIN MOTION): Describe the primary action, camera movement, and scene changes. Focus on WHAT happens and HOW the scene changes between the two frames.
+SENTENCE 1 (PRIMARY MOTION): Describe the main action, camera movement, and major scene transitions. What is the dominant movement happening?
 
-SENTENCE 2 (CHARACTERS/OBJECTS/STYLE): Describe the characters, objects, environment, and visual style. Include colors, clothing, setting details, and artistic style.
+SENTENCE 2 (MOVING ELEMENTS): Describe how the characters, objects, and environment are moving or changing. Focus on what's in motion and how it moves through space.
 
-SENTENCE 3 (DETAIL OF MOTION): Describe the small details in motion - subtle movements, secondary animations, environmental effects, and fine details that enhance realism.
+SENTENCE 3 (MOTION DETAILS): Describe the subtle motion details - secondary movements, environmental dynamics, particles, lighting shifts, and small-scale motions.
 
-Examples of the THREE-SENTENCE structure:
+Examples of MOTION-FOCUSED descriptions:
 
-- "The sun rises rapidly above the jagged peaks as the camera tilts upward from the dark valley floor. The landscape is rendered in a high-definition nature documentary style, featuring silhouette pine trees against a violet and gold sky. Wisps of morning mist evaporate off the river surface while distant birds circle in the upper left corner."
+- "The sun rises rapidly above the jagged peaks as the camera tilts upward from the dark valley floor. The silhouette pine trees sway gently against the shifting violet and gold sky as the entire landscape brightens. Wisps of morning mist evaporate and drift upward from the river surface while distant birds circle and glide through the upper left corner."
 
-- "A woman sprints from the kitchen into the bright exterior sunlight as the camera pans right to track her path. She wears a vintage floral dress amidst colorful playground equipment, visualized with high-contrast lighting and cinematic motion blur. Her hair whips back in the wind and dust particles kick up around her sneakers as she impacts the gravel."
+- "A woman sprints from the kitchen into the bright exterior sunlight as the camera pans right to track her accelerating path. Her vintage floral dress flows and ripples in the wind while colorful playground equipment blurs past in the background. Her hair whips back dynamically and dust particles kick up and swirl around her sneakers as she impacts the gravel."
 
-- "The camera zooms aggressively into a macro shot of an eye to reveal a brown horse in the reflection. The iris features deep hazel textures under warm, soft-focus lighting that highlights the biological details. The pupil constricts slightly in reaction to the light while the tiny reflected horse tosses its mane."
+- "The camera zooms aggressively inward into a macro shot of an eye as the brown horse reflection grows larger and more detailed. The iris textures shift under the changing warm lighting while the biological details come into sharper focus. The pupil constricts and contracts in reaction to the light while the tiny reflected horse tosses its mane and shifts position."
 
-Now create your THREE-SENTENCE description based on: '{base_prompt_text}'"""
+Now create your THREE-SENTENCE MOTION-FOCUSED description based on: '{base_prompt_text}'"""
 
                 # Run inference
                 result = extender.extend_with_img(
