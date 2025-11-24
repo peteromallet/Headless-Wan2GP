@@ -44,3 +44,4 @@ def get_gpu_memory_usage():
     
     return None, None
 
+
