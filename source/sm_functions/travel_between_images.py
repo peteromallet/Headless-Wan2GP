@@ -1391,7 +1391,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 print(f"[ORCHESTRATOR] Segment {idx} dependency verified: dependant_on={dep_saved}")
             except Exception as e_ver:
                 dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for seg {idx} ({actual_db_row_id}): {e_ver}")
-                print(f"[WARN] ⚠️  Segment {idx} dependency verification failed: {e_ver}")
+                print(f"[WARN] ⚠️  Segment {idx} dependency verification failed (likely replication lag): {e_ver}")
         
         # After loop, enqueue the stitch task (check for idempotency)
         # SKIP if independent segments or I2V mode
