@@ -647,15 +647,8 @@ def process_all_loras(params: Dict[str, Any], task_params: Dict[str, Any], model
         if dprint:
             dprint(f"[LORA_PROCESS] Task {task_id}: phase_config detected in orchestrator_payload - parsing LoRA configuration")
 
-        # Import parse_phase_config from worker.py
-        import sys
-        from pathlib import Path
-        worker_dir = Path(__file__).parent.parent
-        if str(worker_dir) not in sys.path:
-            sys.path.insert(0, str(worker_dir))
-
         try:
-            from worker import parse_phase_config
+            from source.task_conversion import parse_phase_config
 
             # Get num_inference_steps for parsing
             phase_config = orchestrator_payload["phase_config"]

@@ -158,14 +158,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
             try:
                 # Import parse_phase_config
-                import sys
-                # Path is already imported at module level, don't shadow it
-                worker_path = Path(__file__).parent.parent / "worker.py"
-                worker_dir = worker_path.parent
-                if str(worker_dir) not in sys.path:
-                    sys.path.insert(0, str(worker_dir))
-
-                from worker import parse_phase_config
+                from source.task_conversion import parse_phase_config
 
                 # Get total steps from phase_config
                 phase_config = orchestrator_payload["phase_config"]
