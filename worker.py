@@ -53,13 +53,25 @@ def cleanup_legacy_lora_collisions():
     This runs at worker startup to ensure old collision-prone files like
     'high_noise_model.safetensors' and 'low_noise_model.safetensors' are removed
     before WGP loads models with updated LoRA URLs.
+    
+    Checks ALL possible LoRA directories to ensure comprehensive cleanup.
     """
-    wan_dir = Path(__file__).parent / "Wan2GP"
+    repo_root = Path(__file__).parent
+    wan_dir = repo_root / "Wan2GP"
+    
+    # Comprehensive list of all possible LoRA directories
     lora_dirs = [
+        # Wan2GP subdirectories (standard)
         wan_dir / "loras",
         wan_dir / "loras_i2v",
         wan_dir / "loras_hunyuan_i2v",
         wan_dir / "loras_qwen",
+        wan_dir / "loras_flux",
+        wan_dir / "loras_hunyuan",
+        wan_dir / "loras_ltxv",
+        # Parent directory (for dev setups)
+        repo_root / "loras",
+        repo_root / "loras_qwen",
     ]
     
     # Generic filenames that are collision-prone
