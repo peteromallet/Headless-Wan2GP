@@ -141,11 +141,17 @@ def generate_transition_prompt(
 
         query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence.
 
-{duration_text} Your goal is to create a prompt that describes the transition from one to the next based on the user's description of this/the overall sequence: '{base_prompt_text}'
+{duration_text} Your goal is to create a THREE-SENTENCE prompt that describes the transition based on the user's description: '{base_prompt_text}'
 
-In the first line, you should describe the movement between these two frames in a single sentence that captures the motion, camera movement, scene changes, character actions, and object movements. Focus on the main changes and how it changes. In the next line, include details on what different aspects of the scene are. Finally, include detail on the specific details of the video and how they move.
+YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE:
 
-Examples of good descriptions:
+SENTENCE 1 (MAIN MOTION): Describe the primary action, camera movement, and scene changes. Focus on WHAT happens and HOW the scene changes between the two frames.
+
+SENTENCE 2 (CHARACTERS/OBJECTS/STYLE): Describe the characters, objects, environment, and visual style. Include colors, clothing, setting details, and artistic style.
+
+SENTENCE 3 (DETAIL OF MOTION): Describe the small details in motion - subtle movements, secondary animations, environmental effects, and fine details that enhance realism.
+
+Examples of the THREE-SENTENCE structure:
 
 - "The sun rises rapidly above the jagged peaks as the camera tilts upward from the dark valley floor. The landscape is rendered in a high-definition nature documentary style, featuring silhouette pine trees against a violet and gold sky. Wisps of morning mist evaporate off the river surface while distant birds circle in the upper left corner."
 
@@ -153,9 +159,9 @@ Examples of good descriptions:
 
 - "The camera zooms aggressively into a macro shot of an eye to reveal a brown horse in the reflection. The iris features deep hazel textures under warm, soft-focus lighting that highlights the biological details. The pupil constricts slightly in reaction to the light while the tiny reflected horse tosses its mane."
 
-Describe this transition based on the user's description of this/the overall sequence: '{base_prompt_text}'"""
+Now create your THREE-SENTENCE description based on: '{base_prompt_text}'"""
 
-        system_prompt = "You are a video direction assistant. Describe visual transitions concisely and cinematically. In the first sentence, cover the main motion of the video. After this, describe the objects, characters, and style . Finally, include details in the minute motion details from the video."
+        system_prompt = "You are a video direction assistant. You MUST respond with EXACTLY THREE SENTENCES following this structure: 1) MAIN MOTION, 2) CHARACTERS/OBJECTS/STYLE, 3) DETAIL OF MOTION."
 
         dprint(f"[VLM_TRANSITION] Running inference...")
         result = extender.extend_with_img(
@@ -255,7 +261,7 @@ def generate_transition_prompts_batch(
 
         dprint(f"[VLM_BATCH] Model loaded (initially on CPU)")
 
-        system_prompt = "You are a video direction assistant. Describe visual transitions concisely and cinematically. In the first sentence, cover the main motion of the video. After this, describe the objects, characters, and style . Finally, include details in the minute motion details from the video."
+        system_prompt = "You are a video direction assistant. You MUST respond with EXACTLY THREE SENTENCES following this structure: 1) MAIN MOTION, 2) CHARACTERS/OBJECTS/STYLE, 3) DETAIL OF MOTION. Be concise and cinematic."
 
         results = []
         for i, ((start_path, end_path), base_prompt) in enumerate(zip(image_pairs, base_prompts)):
@@ -284,11 +290,17 @@ def generate_transition_prompts_batch(
 
                 query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence.
 
-{duration_text} Your goal is to create a prompt that describes the transition from one to the next based on the user's description of this/the overall sequence: '{base_prompt_text}'
+{duration_text} Your goal is to create a THREE-SENTENCE prompt that describes the transition based on the user's description: '{base_prompt_text}'
 
-In the first line, you should describe the movement between these two frames in a single sentence that captures the motion, camera movement, scene changes, character actions, and object movements. Focus on the main changes and how it changes. In the next line, include details on what different aspects of the scene are. Finally, include detail on the specific details of the video and how they move.
+YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE:
 
-Examples of good descriptions:
+SENTENCE 1 (MAIN MOTION): Describe the primary action, camera movement, and scene changes. Focus on WHAT happens and HOW the scene changes between the two frames.
+
+SENTENCE 2 (CHARACTERS/OBJECTS/STYLE): Describe the characters, objects, environment, and visual style. Include colors, clothing, setting details, and artistic style.
+
+SENTENCE 3 (DETAIL OF MOTION): Describe the small details in motion - subtle movements, secondary animations, environmental effects, and fine details that enhance realism.
+
+Examples of the THREE-SENTENCE structure:
 
 - "The sun rises rapidly above the jagged peaks as the camera tilts upward from the dark valley floor. The landscape is rendered in a high-definition nature documentary style, featuring silhouette pine trees against a violet and gold sky. Wisps of morning mist evaporate off the river surface while distant birds circle in the upper left corner."
 
@@ -296,7 +308,7 @@ Examples of good descriptions:
 
 - "The camera zooms aggressively into a macro shot of an eye to reveal a brown horse in the reflection. The iris features deep hazel textures under warm, soft-focus lighting that highlights the biological details. The pupil constricts slightly in reaction to the light while the tiny reflected horse tosses its mane."
 
-Describe this transition based on the user's description of this/the overall sequence: '{base_prompt_text}'"""
+Now create your THREE-SENTENCE description based on: '{base_prompt_text}'"""
 
                 # Run inference
                 result = extender.extend_with_img(
