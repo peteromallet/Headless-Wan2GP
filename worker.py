@@ -8,6 +8,7 @@ import argparse
 import sys
 import os
 import time
+import datetime
 import traceback
 import threading
 import logging
@@ -30,7 +31,7 @@ from headless_model_management import HeadlessTaskQueue
 
 from source.logging_utils import (
     headless_logger, enable_debug_mode, disable_debug_mode,
-    LogBuffer, CustomLogInterceptor, set_log_interceptor
+    LogBuffer, CustomLogInterceptor, set_log_interceptor, set_log_file
 )
 from source.worker_utils import (
     dprint, log_ram_usage, cleanup_generated_files
@@ -39,6 +40,7 @@ from source.heartbeat_utils import start_heartbeat_guardian_process
 from source.task_registry import TaskRegistry
 from source.sm_functions import travel_between_images as tbi
 from source.sm_functions import different_perspective as dp
+from source.lora_utils import cleanup_legacy_lora_collisions
 
 # Global heartbeat control
 heartbeat_thread = None
@@ -147,8 +149,19 @@ def main():
     debug_mode = cli_args.debug
     if debug_mode:
         enable_debug_mode()
+        if not cli_args.save_logging:
+            # Automatically save logs to debug/ directory if debug mode is on
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_dir = "logs"
+            os.makedirs(log_dir, exist_ok=True)
+            log_file = os.path.join(log_dir, f"debug_{timestamp}.log")
+            set_log_file(log_file)
+            headless_logger.essential(f"Debug logging enabled. Saving to {log_file}")
     else:
         disable_debug_mode()
+
+    if cli_args.save_logging:
+        set_log_file(cli_args.save_logging)
 
     # Supabase Setup
     try:
@@ -213,6 +226,9 @@ def main():
         sys.exit(1)
     finally:
         os.chdir(original_cwd)
+
+    # Clean up legacy collision-prone LoRA files
+    cleanup_legacy_lora_collisions()
 
     # Initialize Task Queue
     try:
@@ -286,6 +302,15 @@ def main():
                         orch_id = current_task_params.get("orchestrator_task_id_ref")
                         if orch_id: db_ops.update_task_status_supabase(orch_id, db_ops.STATUS_COMPLETE, final_storage_url)
                     
+                    # Handle independent travel segments completion (no stitch task)
+                    if current_task_type == "travel_segment" and current_task_params.get("is_last_segment"):
+                        orch_details = current_task_params.get("orchestrator_details", {})
+                        if orch_details.get("independent_segments"):
+                            orch_id = current_task_params.get("orchestrator_task_id_ref")
+                            # For independent segments, the orchestrator has no single output video.
+                            # Pass None for output_location, but include the thumbnail from the last segment if available.
+                            if orch_id: db_ops.update_task_status_supabase(orch_id, db_ops.STATUS_COMPLETE, None, final_thumbnail_url)
+
                     if current_task_type == "join_clips_segment" and final_storage_url and current_task_params.get("is_last_join"):
                         orch_id = current_task_params.get("orchestrator_task_id_ref")
                         if orch_id: db_ops.update_task_status_supabase(orch_id, db_ops.STATUS_COMPLETE, final_storage_url, final_thumbnail_url)

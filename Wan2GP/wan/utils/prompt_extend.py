@@ -437,7 +437,13 @@ class QwenPromptExpander(PromptExpander):
         inputs = inputs.to(self.device)
 
         # Inference: Generation of the output
-        generated_ids = self.model.generate(**inputs, max_new_tokens=512)
+        generated_ids = self.model.generate(
+            **inputs, 
+            max_new_tokens=512,
+            do_sample=True,
+            temperature=0.7,
+            top_p=0.9
+        )
         generated_ids_trimmed = [
             out_ids[len(in_ids):]
             for in_ids, out_ids in zip(inputs.input_ids, generated_ids)

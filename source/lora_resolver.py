@@ -79,6 +79,23 @@ class LoraResolver:
                 return candidate_path.resolve()
         return None
     
+    def _derive_filename_from_url(self, url: str) -> str:
+        """Derive a unique local filename from a URL, handling collisions."""
+        filename = Path(url).name
+        
+        # Handle Wan2.2 Lightning LoRA collisions
+        if filename in ["high_noise_model.safetensors", "low_noise_model.safetensors"]:
+            # Extract parent folder to disambiguate
+            # e.g. .../Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/high_noise_model.safetensors
+            parts = url.split("/")
+            if len(parts) > 2:
+                parent = parts[-2]
+                # Clean up parent name just in case
+                parent = parent.replace("%20", "_")
+                return f"{parent}_{filename}"
+        
+        return filename
+
     def _download_lora_from_url(self, lora_url: str, model_type: str) -> Optional[Path]:
         """
         Download a LoRA from a URL using wget.
@@ -90,7 +107,22 @@ class LoraResolver:
         Returns:
             Path to downloaded LoRA file, or None if download failed
         """
-        filename = Path(lora_url).name
+        filename = self._derive_filename_from_url(lora_url)
+        generic_filename = Path(lora_url).name
+        
+        # If we derived a unique filename (collision detected), clean up old generic file
+        if filename != generic_filename:
+            self._log_info(f"Collision-prone LoRA detected: {generic_filename} → {filename}")
+            # Check ALL lora directories and delete old generic versions
+            for lora_dir in self.lora_dirs:
+                old_path = lora_dir / generic_filename
+                if old_path.exists():
+                    self._log_info(f"🗑️  Removing legacy LoRA file to prevent collision: {old_path}")
+                    try:
+                        old_path.unlink()
+                        self._log_info(f"✅ Successfully deleted legacy file: {generic_filename}")
+                    except Exception as e:
+                        self._log_warning(f"⚠️  Failed to delete old LoRA {old_path}: {e}")
         
         # Determine target directory based on model type
         if "qwen" in model_type.lower():
@@ -150,16 +182,16 @@ class LoraResolver:
             self._log_debug(f"LoRA is valid absolute path: {p}")
             return p.resolve()
         
-        # 2. Check if filename exists in standard directories
-        local_path = self._check_lora_exists_locally(p.name)
-        if local_path:
-            return local_path
-        
-        # 3. If it's a URL, download it
+        # 2. If it's a URL, download it (prioritize URL over local name match to handle collisions)
         if lora_identifier.startswith(("http://", "https://")):
             downloaded_path = self._download_lora_from_url(lora_identifier, model_type)
             if downloaded_path:
                 return downloaded_path
+
+        # 3. Check if filename exists in standard directories
+        local_path = self._check_lora_exists_locally(p.name)
+        if local_path:
+            return local_path
         
         # 4. Check if it's relative to wan_root
         relative_to_wan = self.wan_root / p

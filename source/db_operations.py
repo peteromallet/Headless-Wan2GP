@@ -231,10 +231,18 @@ def get_oldest_queued_task_supabase(worker_id: str = None):
         totals = task_counts.get('totals', {})
         # Gate claim by queued_only to avoid claiming when only active tasks exist
         available_tasks = totals.get('queued_only', 0)
+        eligible_queued = totals.get('eligible_queued', 0)
+        active_only = totals.get('active_only', 0)
         
-        dprint(f"Task counts - queued_only available: {available_tasks}")
+        dprint(f"[CLAIM_DEBUG] Task counts: queued_only={available_tasks}, eligible_queued={eligible_queued}, active_only={active_only}")
         
-        if available_tasks <= 0:
+        # Log warning if counts are inconsistent
+        if eligible_queued > 0 and available_tasks == 0:
+            print(f"[WARN] ⚠️  Task count inconsistency detected: eligible_queued={eligible_queued} but queued_only={available_tasks}")
+            print(f"[WARN] This suggests tasks exist but aren't visible as 'Queued' status - possible replication lag or status corruption")
+            # Proceed with claim attempt despite queued_only=0 since eligible_queued>0
+            dprint(f"[CLAIM_DEBUG] Proceeding with claim attempt despite queued_only=0 because eligible_queued={eligible_queued}")
+        elif available_tasks <= 0:
             dprint("No queued tasks according to task-counts, skipping claim attempt")
             return None
         else:
@@ -265,7 +273,13 @@ def get_oldest_queued_task_supabase(worker_id: str = None):
             
             if resp.status_code == 200:
                 task_data = resp.json()
-                dprint(f"Edge Function claimed task: {task_data}")
+                task_id = task_data.get('task_id', 'unknown')
+                task_type = task_data.get('task_type', 'unknown')
+                params = task_data.get('params', {})
+                segment_index = params.get('segment_index') if isinstance(params, dict) else None
+                
+                print(f"[CLAIM] ✅ Claimed task {task_id} (type={task_type}, segment_index={segment_index})")
+                dprint(f"[CLAIM_DEBUG] Full task data: {task_data}")
                 return task_data  # Already in the expected format
             elif resp.status_code == 204:
                 dprint("Edge Function: No queued tasks available")
@@ -653,6 +667,9 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
             
             if output_location_val:
                 payload["output_location"] = output_location_val
+                
+            if thumbnail_url_val:
+                payload["thumbnail_url"] = thumbnail_url_val
             
             dprint(f"[DEBUG] Calling update-task-status Edge Function for task {task_id_str} → {status_str}")
             resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
@@ -716,7 +733,6 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
 
     # Defensive check: if a dependency is specified, ensure it exists before enqueueing
     if dependant_on:
-        import time
         max_retries = 3
         retry_delay = 0.5
 
@@ -755,15 +771,61 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
 
         if resp.status_code == 200:
             print(f"Task {actual_db_row_id} (Type: {task_type_str}) queued via Edge Function.")
+            
+            # Verify task visibility and status to catch race conditions
+            if SUPABASE_CLIENT:
+                max_verify_retries = 10  # Increased from 5 to handle longer replication delays
+                verify_start_time = time.time()
+                
+                for attempt in range(max_verify_retries):
+                    try:
+                        # Check status, created_at, and project_id for comprehensive debugging
+                        verify_resp = SUPABASE_CLIENT.table(PG_TABLE_NAME).select("status, created_at, project_id, task_type").eq("id", actual_db_row_id).single().execute()
+                        if verify_resp.data:
+                            status = verify_resp.data.get("status")
+                            created_at = verify_resp.data.get("created_at")
+                            db_project_id = verify_resp.data.get("project_id")
+                            db_task_type = verify_resp.data.get("task_type")
+                            elapsed = time.time() - verify_start_time
+                            
+                            dprint(f"[VERIFY] Task {actual_db_row_id} found after {elapsed:.2f}s: status={status}, project_id={db_project_id}, task_type={db_task_type}, created_at={created_at}")
+                            
+                            if status == STATUS_QUEUED:
+                                print(f"[VERIFY] ✅ Task {actual_db_row_id} verified visible and Queued (took {elapsed:.2f}s)")
+                                break
+                            elif status == STATUS_IN_PROGRESS:
+                                print(f"[VERIFY] ⚠️  Task {actual_db_row_id} already In Progress (claimed in {elapsed:.2f}s - unusually fast)")
+                                break
+                            else:
+                                print(f"[VERIFY] ⚠️  Task {actual_db_row_id} has unexpected status '{status}' after {elapsed:.2f}s")
+                                break
+                        else:
+                            dprint(f"[VERIFY] Attempt {attempt+1}/{max_verify_retries}: Task {actual_db_row_id} not visible yet (no data returned)")
+                    except Exception as e_ver:
+                        error_str = str(e_ver)
+                        if "0 rows" in error_str:
+                            dprint(f"[VERIFY] Attempt {attempt+1}/{max_verify_retries}: Task {actual_db_row_id} not visible yet (0 rows)")
+                        else:
+                            dprint(f"[VERIFY] Attempt {attempt+1}/{max_verify_retries}: Error verifying task {actual_db_row_id}: {e_ver}")
+                    
+                    if attempt < max_verify_retries - 1:
+                        time.sleep(1.0)
+                else:
+                    # Verification failed after all retries
+                    elapsed = time.time() - verify_start_time
+                    print(f"[WARN] ⚠️  Task {actual_db_row_id} creation confirmed by Edge Function but NOT VISIBLE in DB after {max_verify_retries} attempts ({elapsed:.2f}s)")
+                    print(f"[WARN] This is likely due to database replication lag. The task IS CREATED and will be processed when visible.")
+                    dprint(f"[WARN] Task details: type={task_type_str}, project_id={project_id}, dependant_on={dependant_on}")
+
             return actual_db_row_id
         else:
             error_msg = f"Edge Function create-task failed: {resp.status_code} - {resp.text}"
-            print(f"[ERROR] {error_msg}")
+            print(f"[ERROR] ❌ {error_msg}")
             raise RuntimeError(error_msg)
 
     except httpx.RequestError as e:
         error_msg = f"Edge Function create-task request failed: {e}"
-        print(f"[ERROR] {error_msg}")
+        print(f"[ERROR] ❌ {error_msg}")
         raise RuntimeError(error_msg)
 
 def poll_task_status(task_id: str, poll_interval_seconds: int = 10, timeout_seconds: int = 1800, db_path: str | None = None) -> str | None:

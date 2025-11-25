@@ -158,14 +158,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
             try:
                 # Import parse_phase_config
-                import sys
-                # Path is already imported at module level, don't shadow it
-                worker_path = Path(__file__).parent.parent / "worker.py"
-                worker_dir = worker_path.parent
-                if str(worker_dir) not in sys.path:
-                    sys.path.insert(0, str(worker_dir))
-
-                from worker import parse_phase_config
+                from source.task_conversion import parse_phase_config
 
                 # Get total steps from phase_config
                 phase_config = orchestrator_payload["phase_config"]
@@ -202,7 +195,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
             except Exception as e:
                 travel_logger.error(f"Failed to parse phase_config: {e}", task_id=orchestrator_task_id_str)
-                import traceback
                 traceback.print_exc()
                 return False, f"Failed to parse phase_config: {e}"
 
@@ -1006,7 +998,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
             except Exception as e:
                 travel_logger.error(f"Failed to create structure guidance video: {e}", task_id=orchestrator_task_id_str)
-                import traceback
                 traceback.print_exc()
                 travel_logger.warning("Structure guidance will not be available for this generation", task_id=orchestrator_task_id_str)
                 orchestrator_payload["structure_guidance_video_url"] = None
@@ -1176,13 +1167,11 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
                 except Exception as e_edge:
                     dprint(f"[VLM_BATCH] WARNING: Failed to call edge function: {e_edge}")
-                    import traceback
                     traceback.print_exc()
                     # Non-fatal - continue with task creation
 
             except Exception as e_vlm_batch:
                 dprint(f"[VLM_BATCH] ERROR during batch VLM processing: {e_vlm_batch}")
-                import traceback
                 traceback.print_exc()
                 dprint(f"[VLM_BATCH] Falling back to original prompts for all segments")
                 vlm_enhanced_prompts = {}
@@ -1385,6 +1374,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             dprint(f"[DEEP_DEBUG] Segment payload keys: {list(segment_payload.keys())}")
 
             dprint(f"[DEBUG_DEPENDENCY_CHAIN] Creating new segment {idx}, depends_on (prev idx {idx-1}): {previous_segment_task_id}")
+            print(f"[ORCHESTRATOR] Creating segment {idx} task...")
             actual_db_row_id = db_ops.add_task_to_db(
                 task_payload=segment_payload, 
                 task_type_str="travel_segment",
@@ -1392,13 +1382,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             )
             # Record the actual DB ID so subsequent segments depend on the real DB row ID
             actual_segment_db_id_by_index[idx] = actual_db_row_id
+            print(f"[ORCHESTRATOR] ✅ Segment {idx} created: task_id={actual_db_row_id}")
             dprint(f"[DEBUG_DEPENDENCY_CHAIN] New segment {idx} created with actual DB ID: {actual_db_row_id}; next segment will depend on this")
             # Post-insert verification of dependency from DB
             try:
                 dep_saved = db_ops.get_task_dependency(actual_db_row_id)
                 dprint(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Segment {idx} saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
+                print(f"[ORCHESTRATOR] Segment {idx} dependency verified: dependant_on={dep_saved}")
             except Exception as e_ver:
                 dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for seg {idx} ({actual_db_row_id}): {e_ver}")
+                print(f"[WARN] ⚠️  Segment {idx} dependency verification failed (likely replication lag): {e_ver}")
         
         # After loop, enqueue the stitch task (check for idempotency)
         # SKIP if independent segments or I2V mode
@@ -1574,6 +1567,10 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         start_ref_path, end_ref_path = None, None
         
         input_images_resolved = full_orchestrator_payload.get("input_image_paths_resolved", [])
+        print(f"[DEBUG_REF_PATH] input_images_resolved count: {len(input_images_resolved)}")
+        if len(input_images_resolved) > 0:
+             print(f"[DEBUG_REF_PATH] First image: {input_images_resolved[0]}")
+
         is_continuing = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
         
         if is_continuing:
@@ -1589,8 +1586,10 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                     start_ref_path = input_images_resolved[segment_idx - 1]
                     end_ref_path = input_images_resolved[segment_idx]
         else: # From scratch
-            if len(input_images_resolved) > segment_idx + 1:
+            if len(input_images_resolved) > segment_idx:
                 start_ref_path = input_images_resolved[segment_idx]
+            
+            if len(input_images_resolved) > segment_idx + 1:
                 end_ref_path = input_images_resolved[segment_idx + 1]
         
         # Download images if they are URLs so they exist locally
@@ -1615,10 +1614,10 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         
         # [DEBUG_REF_PATH] Trace start_ref_path
         if start_ref_path is None:
-             print(f"[DEBUG_REF_PATH] start_ref_path is None after init logic. len(input_images_resolved)={len(input_images_resolved)}, segment_idx={segment_idx}, is_continuing={is_continuing}")
+             dprint(f"[DEBUG_REF_PATH] start_ref_path is None after init logic. len(input_images_resolved)={len(input_images_resolved)}, segment_idx={segment_idx}, is_continuing={is_continuing}")
              # Fallback for segment 0 if not continuing
              if segment_idx == 0 and not is_continuing and len(input_images_resolved) > 0:
-                 print(f"[DEBUG_REF_PATH] Attempting fallback assignment from input_images_resolved[0]: {input_images_resolved[0]}")
+                 dprint(f"[DEBUG_REF_PATH] Attempting fallback assignment from input_images_resolved[0]: {input_images_resolved[0]}")
                  start_ref_path_raw = input_images_resolved[0]
                  start_ref_path = sm_download_image_if_url(
                     start_ref_path_raw, 
@@ -1627,7 +1626,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                     debug_mode=debug_enabled,
                     descriptive_name=f"seg{segment_idx:02d}_start_ref_fallback"
                 )
-                 print(f"[DEBUG_REF_PATH] Fallback result: {start_ref_path}")
+                 dprint(f"[DEBUG_REF_PATH] Fallback result: {start_ref_path}")
 
         
         # Assign for backward compatibility / specific use
@@ -1882,7 +1881,6 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                 
             except Exception as e_shared_processor:
                 dprint(f"[ERROR] Seg {segment_idx}: Shared processor failed: {e_shared_processor}")
-                import traceback
                 traceback.print_exc()
                 return False, f"Shared processor failed: {e_shared_processor}", None
         

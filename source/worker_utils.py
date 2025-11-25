@@ -1,5 +1,4 @@
 import os
-import datetime
 import shutil
 from pathlib import Path
 from source.logging_utils import headless_logger
@@ -15,11 +14,8 @@ except ImportError:
 def dprint(msg: str, task_id: str = None, debug_mode: bool = False):
     """Print a debug message if debug_mode is enabled."""
     if debug_mode:
-        # Prefix with timestamp for easier tracing
-        if task_id:
-            print(f"[DEBUG {datetime.datetime.now().isoformat()}] [Task {task_id}] {msg}")
-        else:
-            print(f"[DEBUG {datetime.datetime.now().isoformat()}] {msg}")
+        # Use headless_logger to ensure logs go to file if configured
+        headless_logger.debug(msg, task_id=task_id)
 
 def make_task_dprint(task_id: str, debug_mode: bool = False):
     """Create a task-aware dprint function that automatically includes task_id."""
