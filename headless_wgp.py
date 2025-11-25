@@ -883,6 +883,13 @@ class WanOrchestrator:
         if not self.current_model:
             raise RuntimeError("No model loaded. Call load_model() first.")
 
+        # [DEBUG_KWARGS] Trace image_start presence
+        generation_logger.info(f"[DEBUG_KWARGS] generate received kwargs keys: {list(kwargs.keys())}")
+        if "image_start" in kwargs:
+            generation_logger.info(f"[DEBUG_KWARGS] image_start type: {type(kwargs['image_start'])}, value: {kwargs['image_start']}")
+        else:
+            generation_logger.info(f"[DEBUG_KWARGS] image_start NOT in kwargs")
+
         # Smoke-mode short-circuit: create a sample output and return its path
         if self.smoke_mode:
             from pathlib import Path
@@ -1010,6 +1017,14 @@ class WanOrchestrator:
         else:
             image_mode = 0
             actual_video_length = final_video_length
+            
+            # Safety check: Wan models with latent_size=4 crash if video_length < 4
+            # This happens because (len // 4) * 4 + 1 results in 1 frame,
+            # and I2V logic needs at least 2 frames (start + end logic)
+            if actual_video_length < 5:
+                generation_logger.warning(f"[SAFETY] Boosting video_length from {actual_video_length} to 5 to prevent quantization crash")
+                actual_video_length = 5
+            
             actual_batch_size = final_batch_size
             actual_guidance = final_guidance_scale
 
@@ -1257,13 +1272,13 @@ class WanOrchestrator:
             'skip_steps_start_step_perc': 0.0,
             
             # Image parameters
-            'image_prompt_type': "disabled",
-            'image_start': None,
-            'image_end': None,
-            'image_refs': None,
-            'frames_positions': "",
-            'image_guide': None,
-            'image_mask': None,
+            'image_prompt_type': resolved_params.get("image_prompt_type", "disabled"),
+            'image_start': resolved_params.get("image_start"),
+            'image_end': resolved_params.get("image_end"),
+            'image_refs': resolved_params.get("image_refs"),
+            'frames_positions': resolved_params.get("frames_positions", ""),
+            'image_guide': resolved_params.get("image_guide"),
+            'image_mask': resolved_params.get("image_mask"),
             
             # Video parameters
             'model_mode': 0,
@@ -1417,6 +1432,18 @@ class WanOrchestrator:
                         self.state["gen"]["process_status"] = "process:main"
                 except Exception:
                     pass
+                # Load I2V input images (image_start/image_end) if they are paths
+                # This is required for I2V models which expect PIL images, not paths
+                for img_param in ['image_start', 'image_end']:
+                    val = wgp_params.get(img_param)
+                    if val:
+                        if isinstance(val, str):
+                            generation_logger.info(f"[PREFLIGHT] Loading {img_param} from path: {val}")
+                            wgp_params[img_param] = self._load_image(val, mask=False)
+                        elif isinstance(val, list) and len(val) > 0 and isinstance(val[0], str):
+                            generation_logger.info(f"[PREFLIGHT] Loading {img_param} from list of paths")
+                            wgp_params[img_param] = [self._load_image(p, mask=False) for p in val]
+
                 # For image-based models, load PIL images instead of passing paths
                 if is_qwen or image_mode == 1:
                     if wgp_params.get('image_guide') and isinstance(wgp_params['image_guide'], str):

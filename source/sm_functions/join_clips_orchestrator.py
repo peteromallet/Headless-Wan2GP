@@ -84,6 +84,8 @@ def _handle_join_clips_orchestrator_task(
             "aspect_ratio": orchestrator_payload.get("aspect_ratio"),
             # LoRA parameters
             "additional_loras": orchestrator_payload.get("additional_loras", {}),
+            # Keep bridging image param
+            "keep_bridging_images": orchestrator_payload.get("keep_bridging_images", False),
         }
 
         per_join_settings = orchestrator_payload.get("per_join_settings", [])

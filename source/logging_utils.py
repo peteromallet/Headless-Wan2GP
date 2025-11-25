@@ -12,6 +12,33 @@ from pathlib import Path
 
 # Global debug mode flag - set by the main application
 _debug_mode = False
+# Global log file handle
+_log_file = None
+_log_file_lock = None
+
+def set_log_file(path: str):
+    """Set a file path to mirror all logs to."""
+    global _log_file, _log_file_lock
+    import threading
+    try:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        _log_file = open(path, 'a', encoding='utf-8')
+        _log_file_lock = threading.Lock()
+        essential("LOGGING", f"Logging to file enabled: {path}")
+    except Exception as e:
+        error("LOGGING", f"Failed to set log file {path}: {e}")
+
+def _write_to_log_file(formatted_message: str):
+    """Write message to log file if enabled."""
+    global _log_file, _log_file_lock
+    if _log_file and _log_file_lock:
+        try:
+            with _log_file_lock:
+                _log_file.write(formatted_message + "\n")
+                _log_file.flush()
+        except Exception:
+            pass
 
 def enable_debug_mode():
     """Enable debug logging globally."""
@@ -44,37 +71,44 @@ def essential(component: str, message: str, task_id: Optional[str] = None):
     """Log an essential message that should always be shown."""
     formatted = _format_message("INFO", component, message, task_id)
     print(formatted)
+    _write_to_log_file(formatted)
 
 def success(component: str, message: str, task_id: Optional[str] = None):
     """Log a success message that should always be shown."""
     formatted = _format_message("✅", component, message, task_id)
     print(formatted)
+    _write_to_log_file(formatted)
 
 def warning(component: str, message: str, task_id: Optional[str] = None):
     """Log a warning message that should always be shown."""
     formatted = _format_message("⚠️", component, message, task_id)
     print(formatted)
+    _write_to_log_file(formatted)
 
 def error(component: str, message: str, task_id: Optional[str] = None):
     """Log an error message that should always be shown."""
     formatted = _format_message("❌", component, message, task_id)
     print(formatted, file=sys.stderr)
+    _write_to_log_file(formatted)
 
 def debug(component: str, message: str, task_id: Optional[str] = None):
     """Log a debug message that only appears when debug mode is enabled."""
     if _debug_mode:
         formatted = _format_message("DEBUG", component, message, task_id)
         print(formatted)
+        _write_to_log_file(formatted)
 
 def progress(component: str, message: str, task_id: Optional[str] = None):
     """Log a progress message that should always be shown."""
     formatted = _format_message("⏳", component, message, task_id)
     print(formatted)
+    _write_to_log_file(formatted)
 
 def status(component: str, message: str, task_id: Optional[str] = None):
     """Log a status message that should always be shown."""
     formatted = _format_message("📊", component, message, task_id)
     print(formatted)
+    _write_to_log_file(formatted)
 
 # Component-specific loggers for better organization
 class ComponentLogger:

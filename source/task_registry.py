@@ -112,6 +112,8 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         end_ref_path = None
         
         input_images_resolved = full_orchestrator_payload.get("input_image_paths_resolved", [])
+        print(f"!!! DEBUG TASK REGISTRY !!! segment_idx: {segment_idx}, input_images_resolved len: {len(input_images_resolved)}")
+        print(f"!!! DEBUG TASK REGISTRY !!! input_images: {input_images_resolved}")
         is_continuing = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
         
         if is_continuing:
@@ -126,12 +128,17 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                     start_ref_path = input_images_resolved[segment_idx - 1]
                     end_ref_path = input_images_resolved[segment_idx]
         else:
-            if len(input_images_resolved) > segment_idx + 1:
+            print("!!! DEBUG TASK REGISTRY !!! Entering ELSE block (from scratch)")
+            if len(input_images_resolved) > segment_idx:
                 start_ref_path = input_images_resolved[segment_idx]
+            
+            if len(input_images_resolved) > segment_idx + 1:
                 end_ref_path = input_images_resolved[segment_idx + 1]
+        print(f"!!! DEBUG TASK REGISTRY !!! start_ref_path after logic: {start_ref_path}")
         
         if start_ref_path:
             start_ref_path = sm_download_image_if_url(start_ref_path, segment_processing_dir, task_id, debug_mode=debug_enabled)
+            print(f"!!! DEBUG TASK REGISTRY !!! start_ref_path AFTER DOWNLOAD: {start_ref_path}")
         if end_ref_path:
             end_ref_path = sm_download_image_if_url(end_ref_path, segment_processing_dir, task_id, debug_mode=debug_enabled)
 
@@ -173,9 +180,13 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             "seed": segment_params.get("seed_to_use", 12345),
         }
         
-        if travel_mode == "i2v":
-            if start_ref_path: generation_params["image_start"] = str(start_ref_path)
-            if end_ref_path: generation_params["image_end"] = str(end_ref_path)
+        # Always pass images if available, regardless of specific travel_mode string (hybrid models need them)
+        if start_ref_path: 
+            generation_params["image_start"] = str(Path(start_ref_path).resolve())
+        if end_ref_path: 
+            generation_params["image_end"] = str(Path(end_ref_path).resolve())
+            
+        print(f"!!! DEBUG TASK REGISTRY !!! generation_params image_start: {generation_params.get('image_start')}")
         
         additional_loras = full_orchestrator_payload.get("additional_loras", {})
         if additional_loras:

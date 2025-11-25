@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Tuple
 from datetime import datetime
 
+import cv2
+import numpy as np
+
 # Import shared utilities
 from ..common_utils import (
     ensure_valid_prompt,
@@ -58,6 +61,11 @@ def _calculate_vace_quantization(context_frame_count: int, gap_frame_count: int,
             - gap_for_guide: Adjusted gap to use in guide/mask creation
             - quantization_shift: Number of frames dropped by VACE (0 if no quantization)
     """
+    # In REPLACE mode, gap cannot exceed available context frames
+    max_available_frames = context_frame_count * 2
+    if replace_mode and gap_frame_count > max_available_frames:
+        gap_frame_count = max_available_frames
+    
     # Calculate desired total
     if replace_mode:
         desired_total = context_frame_count * 2
@@ -70,6 +78,10 @@ def _calculate_vace_quantization(context_frame_count: int, gap_frame_count: int,
 
     # Adjust gap to account for dropped frames
     gap_for_guide = gap_frame_count - quantization_shift
+    
+    # Final safety clamp: gap_for_guide cannot be negative or exceed available frames
+    if replace_mode:
+        gap_for_guide = max(0, min(gap_for_guide, max_available_frames))
 
     return {
         'total_frames': actual_total,
@@ -167,6 +179,9 @@ def _handle_join_clips_task(
         replace_mode = task_params_from_db.get("replace_mode", False)  # If True, gap REPLACES frames instead of inserting
         prompt = task_params_from_db.get("prompt", "")
         aspect_ratio = task_params_from_db.get("aspect_ratio")  # Optional: e.g., "16:9", "9:16", "1:1"
+        
+        # Extract keep_bridging_images param
+        keep_bridging_images = task_params_from_db.get("keep_bridging_images", False)
 
         dprint(f"[JOIN_CLIPS] Task {task_id}: Mode: {'REPLACE' if replace_mode else 'INSERT'}")
         if replace_mode:
@@ -453,28 +468,97 @@ def _handle_join_clips_task(
         dprint(f"[JOIN_CLIPS] Task {task_id}: regenerate_anchors={regenerate_anchors}, num_anchor_frames={num_anchor_frames}")
 
         # Calculate VACE quantization adjustments
+        original_gap = gap_frame_count
         quantization_result = _calculate_vace_quantization(
             context_frame_count=context_frame_count,
             gap_frame_count=gap_frame_count,
             replace_mode=replace_mode
         )
 
-        total_frames = quantization_result['total_frames']
+        quantized_total_frames = quantization_result['total_frames']
         gap_for_guide = quantization_result['gap_for_guide']
         quantization_shift = quantization_result['quantization_shift']
 
+        # Log if gap was clamped in REPLACE mode
+        max_available = context_frame_count * 2
+        if replace_mode and original_gap > max_available:
+            dprint(f"[JOIN_CLIPS] Task {task_id}: ⚠️  Gap clamped: {original_gap} → {max_available} (cannot exceed {context_frame_count}×2 available context frames)")
+        
         if quantization_shift > 0:
-            dprint(f"[JOIN_CLIPS] Task {task_id}: VACE quantization: {gap_frame_count + quantization_shift} → {total_frames} frames")
-            dprint(f"[JOIN_CLIPS] Task {task_id}: Gap adjusted: {gap_frame_count} → {gap_for_guide} for guide/mask")
+            dprint(f"[JOIN_CLIPS] Task {task_id}: VACE quantization: {gap_for_guide + quantization_shift} → {quantized_total_frames} frames")
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Gap adjusted: {original_gap if replace_mode and original_gap > max_available else gap_frame_count} → {gap_for_guide} for guide/mask")
 
             if replace_mode:
                 dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - quantization will shift preserved section by -{quantization_shift} frames")
             else:
                 dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode - gap reduced to {gap_for_guide} frames")
 
+        # Determine inserted frames for gap preservation (if enabled)
+        gap_inserted_frames = {}
+        
+        if keep_bridging_images:
+            if replace_mode:
+                # REPLACE MODE: Equidistant anchors from original videos
+                # "take 2 frames equidistant from both... from the appropriate position from the og video"
+                
+                # Calculate split point (how many frames from first video are in the gap)
+                frames_to_replace_from_before = gap_for_guide // 2
+                num_preserved_before = len(start_context_frames) - frames_to_replace_from_before
+                
+                # Calculate anchor positions (1/3 and 2/3 of gap)
+                idx1 = gap_for_guide // 3
+                idx2 = (gap_for_guide * 2) // 3
+                
+                if idx1 != idx2 and gap_for_guide >= 3:
+                    # Anchor 1: From start_context_frames (Video 1)
+                    # It falls in the first half of the gap, so it comes from the replaced end of Video 1
+                    if idx1 < frames_to_replace_from_before:
+                        # Index in start_context_frames = preserved_part + relative_gap_index
+                        source_idx1 = num_preserved_before + idx1
+                        if 0 <= source_idx1 < len(start_context_frames):
+                            gap_inserted_frames[idx1] = start_context_frames[source_idx1]
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: keep_bridging_images=True (Replace): Anchor 1 at gap[{idx1}] from start_clip[{source_idx1}]")
+                    
+                    # Anchor 2: From end_context_frames (Video 2)
+                    # It usually falls in the second half, so it comes from the replaced start of Video 2
+                    if idx2 >= frames_to_replace_from_before:
+                        # Index in end_context_frames = relative_gap_index - first_half_length
+                        source_idx2 = idx2 - frames_to_replace_from_before
+                        if 0 <= source_idx2 < len(end_context_frames):
+                            gap_inserted_frames[idx2] = end_context_frames[source_idx2]
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: keep_bridging_images=True (Replace): Anchor 2 at gap[{idx2}] from end_clip[{source_idx2}]")
+                    
+                    # Fallback/Edge case handling (if distributions are weird due to small gap)
+                    # Use existing logic for safety if needed, but 1/3 and 2/3 should partition cleanly for gaps >= 3
+                else:
+                    dprint(f"[JOIN_CLIPS] Task {task_id}: Gap too small ({gap_for_guide}) for equidistant replace anchors")
+            
+            else:
+                # INSERT MODE: Equidistant anchors from boundary frames
+                # "take an anchor from from the end of the first video and end of the second and put them equidistant inside the bridging portion"
+                
+                if len(start_context_frames) > 0 and len(end_context_frames) > 0:
+                    # Anchor 1: End of first video (last frame of start context)
+                    anchor1 = start_context_frames[-1]
+                    idx1 = gap_for_guide // 3
+                    
+                    # Anchor 2: Start of second video (first frame of end context)
+                    anchor2 = end_context_frames[0]
+                    idx2 = (gap_for_guide * 2) // 3
+                    
+                    # Only insert if gap is large enough to separate them
+                    if gap_for_guide >= 3 and idx1 < idx2:
+                        gap_inserted_frames[idx1] = anchor1
+                        gap_inserted_frames[idx2] = anchor2
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: keep_bridging_images=True (Insert): Using start_clip[-1] at {idx1} and end_clip[0] at {idx2}")
+                    else:
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: Gap too small ({gap_for_guide}) for equidistant anchors, skipping")
+                else:
+                    dprint(f"[JOIN_CLIPS_WARNING] Task {task_id}: keep_bridging_images=True but contexts empty")
+
         # Create guide/mask with adjusted gap
         try:
-            created_guide_video, created_mask_video = create_guide_and_mask_for_generation(
+            created_guide_video, created_mask_video, guide_frame_count = create_guide_and_mask_for_generation(
                 context_frames_before=start_context_frames,
                 context_frames_after=end_context_frames,
                 gap_frame_count=gap_for_guide,  # Use quantization-adjusted gap
@@ -486,6 +570,7 @@ def _handle_join_clips_task(
                 regenerate_anchors=regenerate_anchors,
                 num_anchor_frames=num_anchor_frames,
                 replace_mode=replace_mode,
+                gap_inserted_frames=gap_inserted_frames,
                 dprint=dprint
             )
         except Exception as e:
@@ -494,6 +579,12 @@ def _handle_join_clips_task(
             import traceback
             traceback.print_exc()
             return False, error_msg
+
+        if guide_frame_count != quantized_total_frames:
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Guide/mask total frame count ({guide_frame_count}) "
+                   f"differs from quantized expectation ({quantized_total_frames}). Using actual count.")
+
+        total_frames = guide_frame_count
 
         # --- 6. Prepare Generation Parameters (using shared helper) ---
         dprint(f"[JOIN_CLIPS] Task {task_id}: Preparing generation parameters...")

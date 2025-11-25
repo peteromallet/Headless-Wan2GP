@@ -187,7 +187,7 @@ def _handle_inpaint_frames_task(
         inpaint_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            created_guide_video, created_mask_video = create_guide_and_mask_for_generation(
+            created_guide_video, created_mask_video, guide_frame_count = create_guide_and_mask_for_generation(
                 context_frames_before=context_before,
                 context_frames_after=context_after,
                 gap_frame_count=gap_count,
@@ -205,7 +205,11 @@ def _handle_inpaint_frames_task(
             traceback.print_exc()
             return False, error_msg
 
-        total_frames = context_frame_count * 2 + gap_count
+        expected_total_frames = context_frame_count * 2 + gap_count
+        if guide_frame_count != expected_total_frames:
+            dprint(f"[INPAINT_FRAMES] Task {task_id}: Guide/mask total frame count ({guide_frame_count}) "
+                   f"differs from expected ({expected_total_frames}). Using actual count.")
+        total_frames = guide_frame_count
 
         # --- 6. Prepare Generation Parameters (using shared helper) ---
         dprint(f"[INPAINT_FRAMES] Task {task_id}: Preparing generation parameters...")

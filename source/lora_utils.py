@@ -65,6 +65,7 @@ TERMINOLOGY:
 import os
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional
+from source.logging_utils import headless_logger
 
 
 def detect_loras_in_model_config(model_name: str, dprint=None) -> Tuple[bool, bool]:
@@ -442,7 +443,47 @@ def _download_lora_from_url(url: str, task_id: str, dprint=None) -> str:
     # Extract filename from URL and decode URL-encoded characters
     # e.g., "%E5%BB%B6%E6%97%B6%E6%91%84%E5%BD%B1-high.safetensors" → "延时摄影-high.safetensors"
     url_filename = url.split("/")[-1]
+    generic_filename = url_filename  # Save original before modification
+    
+    # Handle Wan2.2 Lightning LoRA collisions by prefixing parent folder
+    if url_filename in ["high_noise_model.safetensors", "low_noise_model.safetensors"]:
+        parts = url.split("/")
+        if len(parts) > 2:
+            parent = parts[-2].replace("%20", "_")
+            url_filename = f"{parent}_{url_filename}"
+
     local_filename = unquote(url_filename)
+    
+    # If we derived a unique filename (collision detected), clean up old generic file
+    if local_filename != generic_filename:
+        if dprint:
+            dprint(f"[LORA_DOWNLOAD] Task {task_id}: Collision-prone LoRA detected: {generic_filename} → {local_filename}")
+        
+        # Check ALL standard lora directories and delete old generic versions
+        lora_search_dirs = [
+            "loras",
+            "Wan2GP/loras",
+            "loras_i2v",
+            "Wan2GP/loras_i2v",
+            "loras_hunyuan_i2v",
+            "Wan2GP/loras_hunyuan_i2v",
+            "loras_qwen",
+            "Wan2GP/loras_qwen",
+        ]
+        
+        for search_dir in lora_search_dirs:
+            if os.path.isdir(search_dir):
+                old_path = os.path.join(search_dir, generic_filename)
+                if os.path.isfile(old_path):
+                    if dprint:
+                        dprint(f"[LORA_DOWNLOAD] Task {task_id}: 🗑️  Removing legacy LoRA file: {old_path}")
+                    try:
+                        os.remove(old_path)
+                        if dprint:
+                            dprint(f"[LORA_DOWNLOAD] Task {task_id}: ✅ Successfully deleted legacy file")
+                    except Exception as e:
+                        if dprint:
+                            dprint(f"[LORA_DOWNLOAD] Task {task_id}: ⚠️  Failed to delete old LoRA {old_path}: {e}")
     
     # Determine LoRA directory: prefer the WGP-visible root 'loras'
     lora_dir = "loras"
@@ -606,15 +647,8 @@ def process_all_loras(params: Dict[str, Any], task_params: Dict[str, Any], model
         if dprint:
             dprint(f"[LORA_PROCESS] Task {task_id}: phase_config detected in orchestrator_payload - parsing LoRA configuration")
 
-        # Import parse_phase_config from worker.py
-        import sys
-        from pathlib import Path
-        worker_dir = Path(__file__).parent.parent
-        if str(worker_dir) not in sys.path:
-            sys.path.insert(0, str(worker_dir))
-
         try:
-            from worker import parse_phase_config
+            from source.task_conversion import parse_phase_config
 
             # Get num_inference_steps for parsing
             phase_config = orchestrator_payload["phase_config"]
@@ -739,3 +773,58 @@ def process_all_loras(params: Dict[str, Any], task_params: Dict[str, Any], model
             dprint(f"[LORA_PROCESS] Task {task_id}: No LoRAs to process")
     
     return params
+
+
+def cleanup_legacy_lora_collisions():
+    """
+    Remove legacy generic LoRA filenames that collide with new uniquely-named versions.
+    
+    This runs at worker startup to ensure old collision-prone files like
+    'high_noise_model.safetensors' and 'low_noise_model.safetensors' are removed
+    before WGP loads models with updated LoRA URLs.
+    
+    Checks ALL possible LoRA directories to ensure comprehensive cleanup.
+    """
+    repo_root = Path(__file__).parent.parent
+    wan_dir = repo_root / "Wan2GP"
+    
+    # Comprehensive list of all possible LoRA directories
+    lora_dirs = [
+        # Wan2GP subdirectories (standard)
+        wan_dir / "loras",
+        wan_dir / "loras_i2v",
+        wan_dir / "loras_hunyuan_i2v",
+        wan_dir / "loras_qwen",
+        wan_dir / "loras_flux",
+        wan_dir / "loras_hunyuan",
+        wan_dir / "loras_ltxv",
+        # Parent directory (for dev setups)
+        repo_root / "loras",
+        repo_root / "loras_qwen",
+    ]
+    
+    # Generic filenames that are collision-prone
+    collision_prone_files = [
+        "high_noise_model.safetensors",
+        "low_noise_model.safetensors",
+    ]
+    
+    cleaned_files = []
+    for lora_dir in lora_dirs:
+        if not lora_dir.exists():
+            continue
+        
+        for filename in collision_prone_files:
+            file_path = lora_dir / filename
+            if file_path.exists():
+                try:
+                    file_path.unlink()
+                    cleaned_files.append(str(file_path))
+                    headless_logger.info(f"🗑️  Removed legacy LoRA file: {file_path}")
+                except Exception as e:
+                    headless_logger.warning(f"⚠️  Failed to remove legacy LoRA {file_path}: {e}")
+    
+    if cleaned_files:
+        headless_logger.info(f"✅ Cleanup complete: removed {len(cleaned_files)} legacy LoRA file(s)")
+    else:
+        headless_logger.debug("No legacy LoRA files found to clean up")
