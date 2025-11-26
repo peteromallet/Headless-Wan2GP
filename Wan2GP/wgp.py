@@ -4550,6 +4550,7 @@ def generate_video(
     model_filename,
     mode,
     system_prompt=None,
+    phase_config=None,
 ):
 
 
@@ -5251,6 +5252,7 @@ def generate_video(
                     switch_threshold = switch_threshold, 
                     switch2_threshold = switch_threshold2,
                     guide_phases= guidance_phases,
+                    phase_config=phase_config,
                     model_switch_phase = model_switch_phase,
                     embedded_guidance_scale=embedded_guidance_scale,
                     n_prompt=negative_prompt,
