@@ -603,6 +603,11 @@ def _handle_join_clips_task(
         if additional_loras:
             dprint(f"[JOIN_CLIPS] Task {task_id}: Found {len(additional_loras)} additional LoRAs: {list(additional_loras.keys())}")
 
+        # Extract phase_config for logging (if present)
+        phase_config = task_params_from_db.get("phase_config")
+        if phase_config:
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Found phase_config: {json.dumps(phase_config, default=str)[:100]}...")
+
         # Use shared helper to prepare standardized VACE parameters
         generation_params = prepare_vace_generation_params(
             guide_video_path=created_guide_video,

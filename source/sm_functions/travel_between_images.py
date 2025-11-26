@@ -1395,64 +1395,68 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         
         # After loop, enqueue the stitch task (check for idempotency)
         # SKIP if independent segments or I2V mode
-        if independent_segments or travel_mode == "i2v":
-             dprint(f"[STITCHING] Skipping stitch task creation for independent/i2v mode")
-             stitch_created = 0
-        else:
-             stitch_created = 0
-             if not stitch_already_exists:
-                final_stitched_video_name = f"travel_final_stitched_{run_id}.mp4"
-                # Stitcher saves its final primary output directly under main_output_dir (e.g., ./steerable_motion_output/)
-                # NOT under current_run_output_dir (which is .../travel_run_XYZ/)
-                # The main_output_dir_base is the one passed to worker.py (e.g. server's ./outputs or steerable_motion's ./steerable_motion_output)
-                # The orchestrator_payload["main_output_dir_for_run"] is this main_output_dir_base.
-                final_stitched_output_path = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))) / final_stitched_video_name
+        # TEMPORARILY DISABLED: Commented out stitch task creation to prevent excess generation
+        # if independent_segments or travel_mode == "i2v":
+        #      dprint(f"[STITCHING] Skipping stitch task creation for independent/i2v mode")
+        #      stitch_created = 0
+        # else:
+        #      stitch_created = 0
+        #      if not stitch_already_exists:
+        #         final_stitched_video_name = f"travel_final_stitched_{run_id}.mp4"
+        #         # Stitcher saves its final primary output directly under main_output_dir (e.g., ./steerable_motion_output/)
+        #         # NOT under current_run_output_dir (which is .../travel_run_XYZ/)
+        #         # The main_output_dir_base is the one passed to worker.py (e.g. server's ./outputs or steerable_motion's ./steerable_motion_output)
+        #         # The orchestrator_payload["main_output_dir_for_run"] is this main_output_dir_base.
+        #         final_stitched_output_path = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))) / final_stitched_video_name
 
-                stitch_payload = {
-                    "orchestrator_task_id_ref": orchestrator_task_id_str,
-                    "orchestrator_run_id": run_id,
-                    "project_id": orchestrator_project_id, # Added project_id
-                    "num_total_segments_generated": num_segments,
-                    "current_run_base_output_dir": str(current_run_output_dir.resolve()), # Stitcher needs this to find segment outputs
-                    "frame_overlap_settings_expanded": expanded_frame_overlap,
-                    "crossfade_sharp_amt": orchestrator_payload.get("crossfade_sharp_amt", 0.3),
-                    "parsed_resolution_wh": orchestrator_payload["parsed_resolution_wh"],
-                    "fps_final_video": orchestrator_payload.get("fps_helpers", 16),
-                    "upscale_factor": orchestrator_payload.get("upscale_factor", 0.0),
-                    "upscale_model_name": orchestrator_payload.get("upscale_model_name"),
-                    "seed_for_upscale": orchestrator_payload.get("seed_base", 12345) + 5000, # Consistent seed for upscale
-                    "debug_mode_enabled": orchestrator_payload.get("debug_mode_enabled", False),
-                    "skip_cleanup_enabled": orchestrator_payload.get("skip_cleanup_enabled", False),
-                    "initial_continued_video_path": orchestrator_payload.get("continue_from_video_resolved_path"),
-                    "final_stitched_output_path": str(final_stitched_output_path.resolve()),
-                     # For upscale polling, if stitcher enqueues an upscale sub-task
-                    "poll_interval_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_interval", 15),
-                    "poll_timeout_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_timeout", 1800),
-                    "full_orchestrator_payload": orchestrator_payload, # Added this line
-                }
-                
-                # Stitch should depend on the last segment's actual DB row ID
-                previous_segment_task_id = actual_segment_db_id_by_index.get(num_segments - 1)
-                dprint(f"[DEBUG_DEPENDENCY_CHAIN] Creating stitch task, depends_on (last seg idx {num_segments-1}): {previous_segment_task_id}")
-                actual_stitch_db_row_id = db_ops.add_task_to_db(
-                    task_payload=stitch_payload, 
-                    task_type_str="travel_stitch",
-                    dependant_on=previous_segment_task_id
-                )
-                dprint(f"[DEBUG_DEPENDENCY_CHAIN] Stitch task created with actual DB ID: {actual_stitch_db_row_id}")
-                # Post-insert verification of dependency from DB
-                try:
-                    dep_saved = db_ops.get_task_dependency(actual_stitch_db_row_id)
-                    dprint(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Stitch saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
-                except Exception as e_ver2:
-                    dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for stitch ({actual_stitch_db_row_id}): {e_ver2}")
-                stitch_created = 1
-             else:
-                dprint(f"[IDEMPOTENCY] Skipping stitch task creation - already exists with ID {existing_stitch_task_id}")
+        #         stitch_payload = {
+        #             "orchestrator_task_id_ref": orchestrator_task_id_str,
+        #             "orchestrator_run_id": run_id,
+        #             "project_id": orchestrator_project_id, # Added project_id
+        #             "num_total_segments_generated": num_segments,
+        #             "current_run_base_output_dir": str(current_run_output_dir.resolve()), # Stitcher needs this to find segment outputs
+        #             "frame_overlap_settings_expanded": expanded_frame_overlap,
+        #             "crossfade_sharp_amt": orchestrator_payload.get("crossfade_sharp_amt", 0.3),
+        #             "parsed_resolution_wh": orchestrator_payload["parsed_resolution_wh"],
+        #             "fps_final_video": orchestrator_payload.get("fps_helpers", 16),
+        #             "upscale_factor": orchestrator_payload.get("upscale_factor", 0.0),
+        #             "upscale_model_name": orchestrator_payload.get("upscale_model_name"),
+        #             "seed_for_upscale": orchestrator_payload.get("seed_base", 12345) + 5000, # Consistent seed for upscale
+        #             "debug_mode_enabled": orchestrator_payload.get("debug_mode_enabled", False),
+        #             "skip_cleanup_enabled": orchestrator_payload.get("skip_cleanup_enabled", False),
+        #             "initial_continued_video_path": orchestrator_payload.get("continue_from_video_resolved_path"),
+        #             "final_stitched_output_path": str(final_stitched_output_path.resolve()),
+        #              # For upscale polling, if stitcher enqueues an upscale sub-task
+        #             "poll_interval_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_interval", 15),
+        #             "poll_timeout_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_timeout", 1800),
+        #             "full_orchestrator_payload": orchestrator_payload, # Added this line
+        #         }
+        #         
+        #         # Stitch should depend on the last segment's actual DB row ID
+        #         previous_segment_task_id = actual_segment_db_id_by_index.get(num_segments - 1)
+        #         dprint(f"[DEBUG_DEPENDENCY_CHAIN] Creating stitch task, depends_on (last seg idx {num_segments-1}): {previous_segment_task_id}")
+        #         actual_stitch_db_row_id = db_ops.add_task_to_db(
+        #             task_payload=stitch_payload, 
+        #             task_type_str="travel_stitch",
+        #             dependant_on=previous_segment_task_id
+        #         )
+        #         dprint(f"[DEBUG_DEPENDENCY_CHAIN] Stitch task created with actual DB ID: {actual_stitch_db_row_id}")
+        #         # Post-insert verification of dependency from DB
+        #         try:
+        #             dep_saved = db_ops.get_task_dependency(actual_stitch_db_row_id)
+        #             dprint(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Stitch saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
+        #         except Exception as e_ver2:
+        #             dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for stitch ({actual_stitch_db_row_id}): {e_ver2}")
+        #         stitch_created = 1
+        #      else:
+        #         dprint(f"[IDEMPOTENCY] Skipping stitch task creation - already exists with ID {existing_stitch_task_id}")
+        
+        # Stitch task creation disabled - always set to 0
+        stitch_created = 0
 
         generation_success = True
-        if segments_created > 0 or stitch_created > 0:
-            output_message_for_orchestrator_db = f"Successfully enqueued {segments_created} new segment tasks and {stitch_created} new stitch task for run {run_id}. (Total expected: {num_segments} segments + 1 stitch)"
+        if segments_created > 0:
+            output_message_for_orchestrator_db = f"Successfully enqueued {segments_created} new segment tasks for run {run_id}. (Total expected: {num_segments} segments)"
         else:
             output_message_for_orchestrator_db = f"[IDEMPOTENT] All child tasks already exist for run {run_id}. No new tasks created."
         travel_logger.info(output_message_for_orchestrator_db, task_id=orchestrator_task_id_str)
