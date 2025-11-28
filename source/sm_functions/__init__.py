@@ -40,7 +40,6 @@ from ..common_utils import (
     get_resized_frame,
     draw_multiline_text,
     generate_debug_summary_video,
-    generate_different_perspective_debug_video_summary,
     extract_specific_frame_ffmpeg,
     concatenate_videos_ffmpeg,
     get_video_frame_count_and_fps,
@@ -74,11 +73,9 @@ __all__ = [
     "DEFAULT_DB_TABLE_NAME",
     "get_image_dimensions_pil",
     "draw_multiline_text",
-    "generate_different_perspective_debug_video_summary",
     "create_mask_video_from_inactive_indices",
     "create_simple_first_frame_mask_video",
     # travel_between_images exports
-    # different_perspective exports
     # video_utils exports
     # "crossfade_ease",
     # "_blend_linear",

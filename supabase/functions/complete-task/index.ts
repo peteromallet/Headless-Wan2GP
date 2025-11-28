@@ -712,55 +712,9 @@ import { authenticateRequest, verifyTaskOwnership, getTaskUserId } from "../_sha
       // Do not fail the main request because of cost calc issues
       }
     }
-    // 11) Check if this task completes an orchestrator workflow
-    try {
-      // Get the task details to check if it's a final task in an orchestrator workflow
-      console.log(`[COMPLETE-TASK-DEBUG] Checking orchestrator workflow for task ${taskIdString}`);
-      console.log(`[COMPLETE-TASK-DEBUG] taskIdString type: ${typeof taskIdString}, value: ${taskIdString}`);
-      const { data: taskData, error: taskError } = await supabaseAdmin.from("tasks").select("task_type, params").eq("id", taskIdString).single();
-      if (!taskError && taskData) {
-        const { task_type, params } = taskData;
-        // Check if this is a final task that should complete an orchestrator
-        const isFinalTask = task_type === "travel_stitch" || task_type === "dp_final_gen";
-        if (isFinalTask && params?.orchestrator_task_id_ref) {
-          console.log(`[COMPLETE-TASK-DEBUG] Task ${taskIdString} is a final ${task_type} task. Marking orchestrator ${params.orchestrator_task_id_ref} as complete.`);
-          // Update the orchestrator task to Complete status with the same output location
-          // Ensure orchestrator_task_id_ref is properly extracted as a string from JSONB
-          let orchestratorIdString;
-          if (typeof params.orchestrator_task_id_ref === 'string') {
-            orchestratorIdString = params.orchestrator_task_id_ref;
-          } else if (typeof params.orchestrator_task_id_ref === 'object' && params.orchestrator_task_id_ref !== null) {
-            // If it's wrapped in an object, try to extract the actual UUID
-            orchestratorIdString = String(params.orchestrator_task_id_ref.id || params.orchestrator_task_id_ref.uuid || params.orchestrator_task_id_ref);
-          } else {
-            orchestratorIdString = String(params.orchestrator_task_id_ref);
-          }
-          console.log(`[COMPLETE-TASK-DEBUG] Orchestrator ID string: ${orchestratorIdString}, type: ${typeof orchestratorIdString}, original type: ${typeof params.orchestrator_task_id_ref}`);
-          // Validate UUID format before using in query
-          const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-          if (!uuidRegex.test(orchestratorIdString)) {
-            console.error(`[COMPLETE-TASK-DEBUG] Invalid UUID format for orchestrator: ${orchestratorIdString}`);
-          // Don't attempt the update with invalid UUID
-          } else {
-            const { error: orchError } = await supabaseAdmin.from("tasks").update({
-              status: "Complete",
-              output_location: publicUrl,
-              generation_processed_at: new Date().toISOString()
-            }).eq("id", orchestratorIdString).eq("status", "In Progress"); // Only update if still in progress
-            if (orchError) {
-              console.error(`[COMPLETE-TASK-DEBUG] Failed to update orchestrator ${params.orchestrator_task_id_ref}:`, orchError);
-              console.error(`[COMPLETE-TASK-DEBUG] Orchestrator error details:`, JSON.stringify(orchError, null, 2));
-            // Don't fail the whole request, just log the error
-            } else {
-              console.log(`[COMPLETE-TASK-DEBUG] Successfully marked orchestrator ${params.orchestrator_task_id_ref} as complete.`);
-            }
-          }
-        }
-      }
-    } catch (orchCheckError) {
-      // Don't fail the main request if orchestrator check fails
-      console.error("Error checking for orchestrator completion:", orchCheckError);
-    }
+    // Note: Orchestrator completion is handled separately via dedicated Edge Function
+    // that checks if ALL child tasks are complete before marking orchestrator complete.
+    
     console.log(`[COMPLETE-TASK-DEBUG] Successfully completed task ${taskIdString} by ${isServiceRole ? 'service-role' : `user ${callerId}`}`);
     const responseData = {
       success: true,
