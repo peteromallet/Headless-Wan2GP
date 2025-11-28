@@ -292,29 +292,11 @@ def main():
                     else:
                         db_ops.update_task_status(current_task_id, db_ops.STATUS_IN_PROGRESS, output_location)
                 else:
-                    completion_result = db_ops.update_task_status_supabase(current_task_id, db_ops.STATUS_COMPLETE, output_location)
+                    db_ops.update_task_status_supabase(current_task_id, db_ops.STATUS_COMPLETE, output_location)
                     
-                    # Handle completion side effects (stitching, joins)
-                    final_storage_url = completion_result.get('public_url') if isinstance(completion_result, dict) else completion_result
-                    final_thumbnail_url = completion_result.get('thumbnail_url') if isinstance(completion_result, dict) else None
+                    # Note: Orchestrator completion is handled by the complete-task Edge Function
+                    # based on checking if all child tasks are complete.
                     
-                    if current_task_type == "travel_stitch" and final_storage_url:
-                        orch_id = current_task_params.get("orchestrator_task_id_ref")
-                        if orch_id: db_ops.update_task_status_supabase(orch_id, db_ops.STATUS_COMPLETE, final_storage_url)
-                    
-                    # Handle independent travel segments completion (no stitch task)
-                    if current_task_type == "travel_segment" and current_task_params.get("is_last_segment"):
-                        orch_details = current_task_params.get("orchestrator_details", {})
-                        if orch_details.get("independent_segments"):
-                            orch_id = current_task_params.get("orchestrator_task_id_ref")
-                            # For independent segments, the orchestrator has no single output video.
-                            # Pass None for output_location, but include the thumbnail from the last segment if available.
-                            if orch_id: db_ops.update_task_status_supabase(orch_id, db_ops.STATUS_COMPLETE, None, final_thumbnail_url)
-
-                    if current_task_type == "join_clips_segment" and final_storage_url and current_task_params.get("is_last_join"):
-                        orch_id = current_task_params.get("orchestrator_task_id_ref")
-                        if orch_id: db_ops.update_task_status_supabase(orch_id, db_ops.STATUS_COMPLETE, final_storage_url, final_thumbnail_url)
-
                     cleanup_generated_files(output_location, current_task_id, debug_mode)
             else:
                 db_ops.update_task_status_supabase(current_task_id, db_ops.STATUS_FAILED, output_location)
