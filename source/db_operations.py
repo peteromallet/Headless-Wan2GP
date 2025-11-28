@@ -392,7 +392,8 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                                         first_frame_base64 = base64.b64encode(thumb_bytes).decode('utf-8')
                                     
                                     payload["first_frame_data"] = first_frame_base64
-                                    payload["first_frame_filename"] = "thumbnail.jpg"
+                                    # Use unique filename based on task_id to prevent overwrites
+                                    payload["first_frame_filename"] = f"thumb_{task_id_str[:8]}.jpg"
                                     dprint(f"[DEBUG] First frame encoded successfully")
                                 else:
                                     dprint(f"[WARNING] Failed to extract first frame from video")
