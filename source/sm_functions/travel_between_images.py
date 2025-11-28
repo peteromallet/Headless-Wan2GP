@@ -726,92 +726,98 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         if (not expanded_frame_overlap) and _orig_frame_overlap:
             expanded_frame_overlap = _orig_frame_overlap
 
-        # --- FRAME CONSOLIDATION OPTIMIZATION ---
-        # Store original values for comparison logging
-        original_num_segments = num_segments
-        original_segment_frames = list(expanded_segment_frames)
-        original_frame_overlap = list(expanded_frame_overlap)
-
-        # Check if all prompts and LoRAs are identical to enable frame consolidation
-        # IMPORTANT: Disable consolidation if enhance_prompt is enabled, because VLM will
-        # generate different prompts for each segment AFTER consolidation would have run.
-        # This would create consolidated segments with different prompts, breaking the
-        # consolidation assumption that all segments have identical parameters.
-        enhance_prompt_enabled = orchestrator_payload.get("enhance_prompt", False)
-        if enhance_prompt_enabled:
-            dprint(f"[FRAME_CONSOLIDATION] enhance_prompt=True detected - DISABLING frame consolidation")
-            dprint(f"[FRAME_CONSOLIDATION] Reason: VLM will generate unique prompts per segment, breaking identity assumption")
-            identity_analysis = {
-                "can_optimize_frames": False,
-                "can_reuse_model": False,
-                "is_identical": False
-            }
-        else:
-            identity_analysis = detect_identical_parameters(orchestrator_payload, num_segments, dprint)
-
-        if identity_analysis["can_optimize_frames"]:
-            # Only run consolidation if there are multiple segments to consolidate
-            num_segments = len(orchestrator_payload["segment_frames_expanded"])
-            if num_segments <= 1:
-                dprint(f"[FRAME_CONSOLIDATION] ⏭️  Skipping optimization - only {num_segments} segment(s), nothing to consolidate")
-                travel_logger.info(f"Frame consolidation: Only {num_segments} segment(s) - no consolidation needed", task_id=orchestrator_task_id_str)
-            else:
-                # Run safety validation before optimization
-                safety_check = validate_consolidation_safety(orchestrator_payload, dprint)
-
-                if safety_check["is_safe"]:
-                    dprint(f"[FRAME_CONSOLIDATION] ✅ Triggering optimization for identical parameters")
-                    travel_logger.info("Frame consolidation: All parameters identical - enabling optimization", task_id=orchestrator_task_id_str)
-
-                    # Apply frame consolidation optimization
-                    orchestrator_payload = optimize_frame_allocation_for_identical_params(
-                        orchestrator_payload,
-                        max_frames_per_segment=81,  # Max 81 frames per video
-                        dprint=dprint
-                    )
-
-                    # Update variables with optimized values
-                    expanded_segment_frames = orchestrator_payload["segment_frames_expanded"]
-                    expanded_frame_overlap = orchestrator_payload["frame_overlap_expanded"]
-                    expanded_base_prompts = orchestrator_payload["base_prompts_expanded"]
-                    expanded_negative_prompts = orchestrator_payload["negative_prompts_expanded"]
-                    num_segments = orchestrator_payload["num_new_segments_to_generate"]
-
-                    # CRITICAL: Update VACE image references for consolidated segments
-                    # When segments are consolidated, we need to reassign all VACE image refs
-                    # to the new consolidated segments based on their new indices
-                    if vace_refs_instructions_all:
-                        dprint(f"[VACE_REFS_CONSOLIDATION] Updating VACE image refs for {num_segments} consolidated segments")
-                        dprint(f"[VACE_REFS_CONSOLIDATION] Original VACE refs count: {len(vace_refs_instructions_all)}")
-
-                        # For consolidated segments, reassign all VACE refs to the appropriate new segment
-                        # based on the original keyframe positions and new segment boundaries
-                        for ref_idx, ref_instr in enumerate(vace_refs_instructions_all):
-                            original_segment_idx = ref_instr.get("segment_idx_for_naming", 0)
-
-                            # For now, assign all refs to the first (and often only) consolidated segment
-                            # This ensures the consolidated segment gets all the keyframe images
-                            new_segment_idx = 0 if num_segments == 1 else min(original_segment_idx, num_segments - 1)
-
-                            if original_segment_idx != new_segment_idx:
-                                dprint(f"[VACE_REFS_CONSOLIDATION] VACE ref {ref_idx}: segment {original_segment_idx} → {new_segment_idx}")
-                                ref_instr["segment_idx_for_naming"] = new_segment_idx
-
-                        dprint(f"[VACE_REFS_CONSOLIDATION] VACE refs updated for consolidated segments")
-
-                    # Summary logging for optimization results
-                    segments_saved = original_num_segments - num_segments
-                    travel_logger.info(f"Frame consolidation optimization: {original_num_segments} → {num_segments} segments (saved {segments_saved})", task_id=orchestrator_task_id_str)
-                    travel_logger.debug(f"Original allocation: {original_segment_frames}, Optimized: {expanded_segment_frames}", task_id=orchestrator_task_id_str)
-                    travel_logger.debug(f"Original overlaps: {original_frame_overlap}, Optimized: {expanded_frame_overlap}", task_id=orchestrator_task_id_str)
-
-                    dprint(f"[FRAME_CONSOLIDATION] Successfully updated to {num_segments} optimized segments")
-                else:
-                    travel_logger.warning("Frame consolidation: Safety validation failed - parameters not identical enough", task_id=orchestrator_task_id_str)
-                    dprint(f"[FRAME_CONSOLIDATION] Safety check failed - keeping original allocation")
-        else:
-            travel_logger.info("Frame consolidation: Parameters not identical - using standard allocation", task_id=orchestrator_task_id_str)
-            dprint(f"[FRAME_CONSOLIDATION] Parameters not identical - keeping original allocation")
+        # --- FRAME CONSOLIDATION OPTIMIZATION (DISABLED) ---
+        # This optimization was consolidating multiple segments into fewer when all prompts
+        # were identical. Commented out to ensure all requested segments are created.
+        # To re-enable, uncomment this section.
+        #
+        # # Store original values for comparison logging
+        # original_num_segments = num_segments
+        # original_segment_frames = list(expanded_segment_frames)
+        # original_frame_overlap = list(expanded_frame_overlap)
+        #
+        # # Check if all prompts and LoRAs are identical to enable frame consolidation
+        # # IMPORTANT: Disable consolidation if enhance_prompt is enabled, because VLM will
+        # # generate different prompts for each segment AFTER consolidation would have run.
+        # # This would create consolidated segments with different prompts, breaking the
+        # # consolidation assumption that all segments have identical parameters.
+        # enhance_prompt_enabled = orchestrator_payload.get("enhance_prompt", False)
+        # if enhance_prompt_enabled:
+        #     dprint(f"[FRAME_CONSOLIDATION] enhance_prompt=True detected - DISABLING frame consolidation")
+        #     dprint(f"[FRAME_CONSOLIDATION] Reason: VLM will generate unique prompts per segment, breaking identity assumption")
+        #     identity_analysis = {
+        #         "can_optimize_frames": False,
+        #         "can_reuse_model": False,
+        #         "is_identical": False
+        #     }
+        # else:
+        #     identity_analysis = detect_identical_parameters(orchestrator_payload, num_segments, dprint)
+        #
+        # if identity_analysis["can_optimize_frames"]:
+        #     # Only run consolidation if there are multiple segments to consolidate
+        #     num_segments = len(orchestrator_payload["segment_frames_expanded"])
+        #     if num_segments <= 1:
+        #         dprint(f"[FRAME_CONSOLIDATION] ⏭️  Skipping optimization - only {num_segments} segment(s), nothing to consolidate")
+        #         travel_logger.info(f"Frame consolidation: Only {num_segments} segment(s) - no consolidation needed", task_id=orchestrator_task_id_str)
+        #     else:
+        #         # Run safety validation before optimization
+        #         safety_check = validate_consolidation_safety(orchestrator_payload, dprint)
+        #
+        #         if safety_check["is_safe"]:
+        #             dprint(f"[FRAME_CONSOLIDATION] ✅ Triggering optimization for identical parameters")
+        #             travel_logger.info("Frame consolidation: All parameters identical - enabling optimization", task_id=orchestrator_task_id_str)
+        #
+        #             # Apply frame consolidation optimization
+        #             orchestrator_payload = optimize_frame_allocation_for_identical_params(
+        #                 orchestrator_payload,
+        #                 max_frames_per_segment=81,  # Max 81 frames per video
+        #                 dprint=dprint
+        #             )
+        #
+        #             # Update variables with optimized values
+        #             expanded_segment_frames = orchestrator_payload["segment_frames_expanded"]
+        #             expanded_frame_overlap = orchestrator_payload["frame_overlap_expanded"]
+        #             expanded_base_prompts = orchestrator_payload["base_prompts_expanded"]
+        #             expanded_negative_prompts = orchestrator_payload["negative_prompts_expanded"]
+        #             num_segments = orchestrator_payload["num_new_segments_to_generate"]
+        #
+        #             # CRITICAL: Update VACE image references for consolidated segments
+        #             # When segments are consolidated, we need to reassign all VACE image refs
+        #             # to the new consolidated segments based on their new indices
+        #             if vace_refs_instructions_all:
+        #                 dprint(f"[VACE_REFS_CONSOLIDATION] Updating VACE image refs for {num_segments} consolidated segments")
+        #                 dprint(f"[VACE_REFS_CONSOLIDATION] Original VACE refs count: {len(vace_refs_instructions_all)}")
+        #
+        #                 # For consolidated segments, reassign all VACE refs to the appropriate new segment
+        #                 # based on the original keyframe positions and new segment boundaries
+        #                 for ref_idx, ref_instr in enumerate(vace_refs_instructions_all):
+        #                     original_segment_idx = ref_instr.get("segment_idx_for_naming", 0)
+        #
+        #                     # For now, assign all refs to the first (and often only) consolidated segment
+        #                     # This ensures the consolidated segment gets all the keyframe images
+        #                     new_segment_idx = 0 if num_segments == 1 else min(original_segment_idx, num_segments - 1)
+        #
+        #                     if original_segment_idx != new_segment_idx:
+        #                         dprint(f"[VACE_REFS_CONSOLIDATION] VACE ref {ref_idx}: segment {original_segment_idx} → {new_segment_idx}")
+        #                         ref_instr["segment_idx_for_naming"] = new_segment_idx
+        #
+        #                 dprint(f"[VACE_REFS_CONSOLIDATION] VACE refs updated for consolidated segments")
+        #
+        #             # Summary logging for optimization results
+        #             segments_saved = original_num_segments - num_segments
+        #             travel_logger.info(f"Frame consolidation optimization: {original_num_segments} → {num_segments} segments (saved {segments_saved})", task_id=orchestrator_task_id_str)
+        #             travel_logger.debug(f"Original allocation: {original_segment_frames}, Optimized: {expanded_segment_frames}", task_id=orchestrator_task_id_str)
+        #             travel_logger.debug(f"Original overlaps: {original_frame_overlap}, Optimized: {expanded_frame_overlap}", task_id=orchestrator_task_id_str)
+        #
+        #             dprint(f"[FRAME_CONSOLIDATION] Successfully updated to {num_segments} optimized segments")
+        #         else:
+        #             travel_logger.warning("Frame consolidation: Safety validation failed - parameters not identical enough", task_id=orchestrator_task_id_str)
+        #             dprint(f"[FRAME_CONSOLIDATION] Safety check failed - keeping original allocation")
+        # else:
+        #     travel_logger.info("Frame consolidation: Parameters not identical - using standard allocation", task_id=orchestrator_task_id_str)
+        #     dprint(f"[FRAME_CONSOLIDATION] Parameters not identical - keeping original allocation")
+        
+        dprint(f"[FRAME_CONSOLIDATION] Consolidation disabled - using original {num_segments} segments as specified")
         # --- END FRAME CONSOLIDATION OPTIMIZATION ---
 
         # Extract and validate structure video parameters
