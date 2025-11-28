@@ -5,14 +5,6 @@
     "description": "2-phase baseline model for I2V with Lightning HIGH at 1.2 Phase 1 + Lightning LOW Phase 2 - 2-2-2 steps",
     "URLs": "i2v_2_2",
     "URLs2": "i2v_2_2",
-    "loras": [
-      "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
-      "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"
-    ],
-    "loras_multipliers": [
-      "1.2;0",
-      "0;1.0"
-    ],
     "lock_guidance_phases": true,
     "group": "wan2_2"
   },

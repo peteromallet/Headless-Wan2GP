@@ -39,7 +39,6 @@ from source.worker_utils import (
 from source.heartbeat_utils import start_heartbeat_guardian_process
 from source.task_registry import TaskRegistry
 from source.sm_functions import travel_between_images as tbi
-from source.sm_functions import different_perspective as dp
 from source.lora_utils import cleanup_legacy_lora_collisions
 
 # Global heartbeat control
@@ -61,7 +60,6 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
         "mask_active_frames": mask_active_frames,
         "debug_mode": debug_mode,
         "wan2gp_path": wan2gp_path,
-        "process_single_task_func": process_single_task  # Pass self for recursion in dp_final_gen
     }
 
     generation_success, output_location_to_db = TaskRegistry.dispatch(task_type, context)
@@ -81,21 +79,12 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
                 chaining_result_path_override = final_path_from_chaining
             else:
                 headless_logger.error(f"Travel chaining failed: {chain_message}", task_id=task_id)
-        
-        elif task_params_dict.get("different_perspective_chain_details") and task_type != 'generate_openpose':
-                chain_success, chain_message, final_path_from_chaining = dp._handle_different_perspective_chaining(
-                    completed_task_params=task_params_dict, 
-                    task_output_path=output_location_to_db,
-                dprint=lambda msg: dprint(msg, task_id=task_id, debug_mode=debug_mode)
-                )
-                if chain_success:
-                    chaining_result_path_override = final_path_from_chaining
 
         if chaining_result_path_override:
                 output_location_to_db = chaining_result_path_override
 
     # Ensure orchestrator tasks use their DB row ID
-    if task_type in {"travel_orchestrator", "different_perspective_orchestrator"}:
+    if task_type in {"travel_orchestrator"}:
         task_params_dict["task_id"] = task_id
 
     headless_logger.essential(f"Finished task (Success: {generation_success})", task_id=task_id)
@@ -259,7 +248,7 @@ def main():
                 continue
 
             # Ensure task_id in params
-            if current_task_type in {"travel_orchestrator", "different_perspective_orchestrator", "join_clips_orchestrator", "travel_segment", "join_clips_segment"}:
+            if current_task_type in {"travel_orchestrator", "join_clips_orchestrator", "travel_segment", "join_clips_segment"}:
                 current_task_params["task_id"] = current_task_id
                 if "orchestrator_details" in current_task_params:
                     current_task_params["orchestrator_details"]["orchestrator_task_id"] = current_task_id
@@ -275,7 +264,7 @@ def main():
             if task_succeeded:
                 reset_fatal_error_counter()
 
-                orchestrator_types = {"travel_orchestrator", "different_perspective_orchestrator", "join_clips_orchestrator"}
+                orchestrator_types = {"travel_orchestrator", "join_clips_orchestrator"}
 
                 if current_task_type in orchestrator_types:
                     if output_location and output_location.startswith("[ORCHESTRATOR_COMPLETE]"):

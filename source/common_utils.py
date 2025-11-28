@@ -1270,113 +1270,6 @@ def generate_debug_summary_video(segments_data: list[dict], output_path: str | P
         dprint("GENERATE_DEBUG_SUMMARY_VIDEO: Video writer released.")
 
 
-def generate_different_perspective_debug_video_summary(
-    video_stage_data: list[dict], 
-    output_path: Path, 
-    fps: int, 
-    target_resolution: tuple[int, int] # width, height
-):
-    if not DEBUG_MODE: return # Only run if debug mode is on
-    dprint(f"Generating different_perspective DEBUG VIDEO summary at {output_path} ({fps} FPS, {target_resolution[0]}x{target_resolution[1]})")
-    
-    all_output_frames = [] 
-    font_pil = None
-    try:
-        pil_font = ImageFont.truetype("arial.ttf", size=24) 
-    except IOError:
-        pil_font = ImageFont.load_default()
-        dprint("Arial font not found for debug video summary, using default PIL font.")
-
-    text_color = (255, 255, 255) 
-    bg_color = (0,0,0) 
-    text_bg_opacity = 128 
-
-    for stage_info in video_stage_data:
-        label = stage_info.get('label', 'Unknown Stage')
-        file_type = stage_info.get('type', 'image')
-        file_path_str = stage_info.get('path')
-        display_duration_frames = stage_info.get('display_frames', fps * 2) 
-
-        if not file_path_str:
-            print(f"[Debug Video] Missing path for stage '{label}', skipping.")
-            continue
-        
-        file_path = Path(file_path_str)
-        if not file_path.exists():
-            print(f"[Debug Video] File not found for stage '{label}': {file_path}, creating placeholder frames.")
-            placeholder_frame_np = create_color_frame(target_resolution, (50, 0, 0)) 
-            placeholder_pil = Image.fromarray(cv2.cvtColor(placeholder_frame_np, cv2.COLOR_BGR2RGB))
-            draw = ImageDraw.Draw(placeholder_pil)
-            draw.text((20, 20), f"{label}\n(File Not Found)", font=pil_font, fill=text_color)
-            placeholder_frame_final_np = cv2.cvtColor(np.array(placeholder_pil), cv2.COLOR_RGB2BGR)
-            all_output_frames.extend([placeholder_frame_final_np] * display_duration_frames)
-            continue
-
-        current_stage_frames_np = []
-        try:
-            if file_type == 'image':
-                pil_img = Image.open(file_path).convert("RGB")
-                pil_img_resized = pil_img.resize(target_resolution, Image.Resampling.LANCZOS)
-                np_bgr_frame = cv2.cvtColor(np.array(pil_img_resized), cv2.COLOR_RGB2BGR)
-                current_stage_frames_np = [np_bgr_frame] * display_duration_frames
-            
-            elif file_type == 'video':
-                cap_video = cv2.VideoCapture(str(file_path))
-                if not cap_video.isOpened():
-                    raise IOError(f"Could not open video: {file_path}")
-                
-                frames_read = 0
-                while frames_read < display_duration_frames:
-                    ret, frame_np = cap_video.read()
-                    if not ret:
-                        if current_stage_frames_np: 
-                            current_stage_frames_np.extend([current_stage_frames_np[-1]] * (display_duration_frames - frames_read))
-                        else: 
-                            err_frame = create_color_frame(target_resolution, (0,50,0)) 
-                            err_pil = Image.fromarray(cv2.cvtColor(err_frame, cv2.COLOR_BGR2RGB))
-                            ImageDraw.Draw(err_pil).text((20,20), f"{label}\n(Video Read Error)", font=pil_font, fill=text_color)
-                            current_stage_frames_np.extend([cv2.cvtColor(np.array(err_pil), cv2.COLOR_RGB2BGR)] * (display_duration_frames - frames_read))
-                        break 
-                    
-                    if frame_np.shape[1] != target_resolution[0] or frame_np.shape[0] != target_resolution[1]:
-                        frame_np = cv2.resize(frame_np, target_resolution, interpolation=cv2.INTER_AREA)
-                    current_stage_frames_np.append(frame_np)
-                    frames_read += 1
-                cap_video.release()
-            else:
-                print(f"[Debug Video] Unknown file type '{file_type}' for stage '{label}'. Skipping.")
-                continue
-
-            for i in range(len(current_stage_frames_np)):
-                frame_pil = Image.fromarray(cv2.cvtColor(current_stage_frames_np[i], cv2.COLOR_BGR2RGB))
-                draw = ImageDraw.Draw(frame_pil, 'RGBA') 
-                
-                text_x, text_y = 20, 20
-                bbox = draw.textbbox((text_x, text_y), label, font=pil_font)
-                rect_coords = [(bbox[0]-5, bbox[1]-5), (bbox[2]+5, bbox[3]+5)]
-                draw.rectangle(rect_coords, fill=(bg_color[0], bg_color[1], bg_color[2], text_bg_opacity))
-                draw.text((text_x, text_y), label, font=pil_font, fill=text_color) 
-                
-                current_stage_frames_np[i] = cv2.cvtColor(np.array(frame_pil), cv2.COLOR_RGB2BGR)
-            
-            all_output_frames.extend(current_stage_frames_np)
-
-        except Exception as e_stage:
-            print(f"[Debug Video] Error processing stage '{label}' (path: {file_path}): {e_stage}")
-            traceback.print_exc()
-            err_frame_np = create_color_frame(target_resolution, (0,0,50)) 
-            err_pil = Image.fromarray(cv2.cvtColor(err_frame_np, cv2.COLOR_BGR2RGB))
-            ImageDraw.Draw(err_pil).text((20,20), f"{label}\n(Stage Processing Error)", font=pil_font, fill=text_color)
-            all_output_frames.extend([cv2.cvtColor(np.array(err_pil), cv2.COLOR_RGB2BGR)] * display_duration_frames)
-            
-    if not all_output_frames:
-        dprint("[Debug Video] No frames were generated for the debug video summary.")
-        return
-
-    print(f"[Debug Video] Creating final video with {len(all_output_frames)} frames.")
-    create_video_from_frames_list(all_output_frames, output_path, fps, target_resolution)
-    print(f"Debug video summary for 'different_perspective' saved to: {output_path.resolve()}") 
-
 def download_file(url, dest_folder, filename):
     dest_path = Path(dest_folder) / filename
     if dest_path.exists():
@@ -2272,7 +2165,7 @@ def create_simple_first_frame_mask_video(
 ) -> Path | None:
     """
     Convenience function to create a mask video where only the first frame is inactive (black).
-    This is useful for workflows like different_perspective where you want to keep the first frame unchanged
+    This is useful for workflows where you want to keep the first frame unchanged
     and generate the rest.
     
     Returns:

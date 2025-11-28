@@ -5,14 +5,6 @@
     "description": "3-phase baseline model with Lightning HIGH Phase 1 + Lightning HIGH Phase 2 + Lightning LOW Phase 3 - 2-2-2 steps, standard CFG, model switch at phase 3",
     "URLs": "vace_fun_14B_2_2",
     "URLs2": "vace_fun_14B_2_2",
-    "loras": [
-      "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V2.0/high_noise_model.safetensors",
-      "https://huggingface.co/lightx2v/Wan2.2-Lightning/resolve/main/Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V2.0/low_noise_model.safetensors"
-    ],
-    "loras_multipliers": [
-      "0.75;1.0;0",
-      "0;0;1"
-    ],
     "lock_guidance_phases": true,
     "group": "wan2_2"
   },

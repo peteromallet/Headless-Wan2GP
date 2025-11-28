@@ -19,12 +19,10 @@ from source.phase_config import apply_phase_config_patch
 # Import task handlers
 # These imports should be available from the environment where this module is used
 from source.specialized_handlers import (
-    handle_generate_openpose_task,
     handle_rife_interpolate_task,
     handle_extract_frame_task
 )
 from source.sm_functions import travel_between_images as tbi
-from source.sm_functions import different_perspective as dp
 from source.sm_functions import magic_edit as me
 from source.sm_functions.join_clips import _handle_join_clips_task
 from source.sm_functions.join_clips_orchestrator import _handle_join_clips_orchestrator_task
@@ -347,20 +345,6 @@ class TaskRegistry:
                 stitch_task_id_str=task_id,
                 dprint=dprint_func
             ),
-            "different_perspective_orchestrator": lambda: dp._handle_different_perspective_orchestrator_task(
-                task_params_from_db=params,
-                main_output_dir_base=context["main_output_dir_base"],
-                orchestrator_task_id_str=task_id,
-                dprint=dprint_func
-            ),
-            "dp_final_gen": lambda: dp._handle_dp_final_gen_task(
-                main_output_dir_base=context["main_output_dir_base"],
-                # Recursive call to process_single_task wrapper passed in context
-                process_single_task=context["process_single_task_func"], 
-                task_params_from_db=params,
-                dprint=dprint_func,
-                task_queue=context["task_queue"]
-            ),
             "magic_edit": lambda: me._handle_magic_edit_task(
                 task_params_from_db=params,
                 main_output_dir_base=context["main_output_dir_base"],
@@ -394,9 +378,6 @@ class TaskRegistry:
                 viz_task_id_str=task_id,
                 dprint=dprint_func
             ),
-            "generate_openpose": lambda: handle_generate_openpose_task(
-                params, context["main_output_dir_base"], task_id, dprint_func
-            ),
             "extract_frame": lambda: handle_extract_frame_task(
                 params, context["main_output_dir_base"], task_id, dprint_func
             ),
@@ -407,7 +388,7 @@ class TaskRegistry:
 
         if task_type in handlers:
             # Orchestrator setup
-            if task_type in ["travel_orchestrator", "different_perspective_orchestrator", "join_clips_orchestrator"]:
+            if task_type in ["travel_orchestrator", "join_clips_orchestrator"]:
                 params["task_id"] = task_id
                 if "orchestrator_details" in params:
                     params["orchestrator_details"]["orchestrator_task_id"] = task_id
