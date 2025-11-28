@@ -379,14 +379,6 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         except Exception as e:
             raise ValueError(f"Task {task_id}: Invalid phase_config: {e}")
 
-    # Wan 2.2 Auto-Acceleration
-    if ("phase_config" not in db_task_params and
-        ("2_2" in model or "cocktail_2_2" in model) and
-        "lora_names" not in generation_params and
-        "activated_loras" not in db_task_params):
-        generation_params["lora_names"] = ["CausVid", "DetailEnhancerV1"]
-        generation_params["lora_multipliers"] = [1.0, 0.2]
-
     priority = db_task_params.get("priority", 0)
     if task_type.endswith("_orchestrator"):
         priority = max(priority, 10)
