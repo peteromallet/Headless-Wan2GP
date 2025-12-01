@@ -274,6 +274,11 @@ def _generate_vlm_prompts_for_joins(
         from Wan2GP.wan.utils.prompt_extend import QwenPromptExpander
         from ..vlm_utils import download_qwen_vlm_if_needed
         
+        # Log memory before loading (same as vlm_utils.py)
+        if torch.cuda.is_available():
+            gpu_mem_before = torch.cuda.memory_allocated() / 1024**3
+            dprint(f"[VLM_PROMPTS] GPU memory BEFORE VLM load: {gpu_mem_before:.2f} GB")
+        
         # Initialize VLM ONCE for all pairs (batch efficiency)
         local_model_path = wan_dir / "ckpts" / "Qwen2.5-VL-7B-Instruct"
         dprint(f"[VLM_PROMPTS] Checking for model at {local_model_path}...")
@@ -285,6 +290,7 @@ def _generate_vlm_prompts_for_joins(
             device=vlm_device,
             is_vl=True
         )
+        dprint(f"[VLM_PROMPTS] Model loaded (initially on CPU, moves to {vlm_device} for inference)")
         
         # Process each pair
         for i, (start_path, end_path) in enumerate(valid_pairs):
@@ -309,21 +315,36 @@ def _generate_vlm_prompts_for_joins(
                 dprint(f"[VLM_PROMPTS] Join {idx}: ERROR - {e}")
                 # Continue with other pairs
         
-        # Cleanup VLM
-        dprint(f"[VLM_PROMPTS] Cleaning up VLM model...")
+        # Cleanup VLM (same pattern as vlm_utils.py)
+        # Log memory BEFORE cleanup
+        if torch.cuda.is_available():
+            gpu_mem_before_cleanup = torch.cuda.memory_allocated() / 1024**3
+            dprint(f"[VLM_CLEANUP] GPU memory BEFORE cleanup: {gpu_mem_before_cleanup:.2f} GB")
+        
+        # Explicitly delete model and processor to free all memory
+        dprint(f"[VLM_CLEANUP] Cleaning up VLM model and processor...")
         try:
             del extender.model
             del extender.processor
             del extender
-        except:
-            pass
+            dprint(f"[VLM_CLEANUP] ✅ Successfully deleted VLM objects")
+        except Exception as e:
+            dprint(f"[VLM_CLEANUP] ⚠️  Error during deletion: {e}")
         
+        # Force garbage collection
         import gc
-        gc.collect()
+        collected = gc.collect()
+        dprint(f"[VLM_CLEANUP] Garbage collected {collected} objects")
+        
+        # Clear CUDA cache
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            gpu_mem_after = torch.cuda.memory_allocated() / 1024**3
+            gpu_freed = gpu_mem_before_cleanup - gpu_mem_after
+            dprint(f"[VLM_CLEANUP] GPU memory AFTER cleanup: {gpu_mem_after:.2f} GB")
+            dprint(f"[VLM_CLEANUP] GPU memory freed: {gpu_freed:.2f} GB")
         
-        dprint(f"[VLM_PROMPTS] VLM cleanup complete")
+        dprint(f"[VLM_CLEANUP] ✅ VLM cleanup complete")
         return result
         
     except Exception as e:
