@@ -396,6 +396,17 @@ def _handle_join_clips_task(
             dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
             return False, error_msg
 
+        # Validate that frame counts were detected (WebM and some codecs may fail)
+        if start_frame_count is None:
+            error_msg = f"Could not detect frame count for starting video: {starting_video}. The video may be corrupt, empty, or in an unsupported format."
+            dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
+            return False, error_msg
+
+        if end_frame_count is None:
+            error_msg = f"Could not detect frame count for ending video: {ending_video}. The video may be corrupt, empty, or in an unsupported format."
+            dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
+            return False, error_msg
+
         # Validate context frame counts
         if context_frame_count > start_frame_count:
             error_msg = f"context_frame_count ({context_frame_count}) exceeds starting video frame count ({start_frame_count})"
