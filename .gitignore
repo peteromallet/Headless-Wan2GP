@@ -85,3 +85,4 @@ env/
 .coverage
 htmlcov/
 node_modules/
+*.webm
