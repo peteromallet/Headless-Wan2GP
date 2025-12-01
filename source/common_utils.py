@@ -732,16 +732,111 @@ def concatenate_videos_ffmpeg(
         dprint("CONCATENATE_VIDEOS_FFMPEG: ffmpeg command not found.")
         raise
 
-# --- OpenCV-based video properties extraction ---
+# --- Video properties extraction with ffprobe fallback ---
+def _get_video_props_ffprobe(video_path_str: str) -> tuple[int | None, float | None]:
+    """
+    Fallback method using ffprobe to get frame count and FPS.
+    More reliable for WebM and other containers where OpenCV struggles.
+    """
+    import subprocess
+    try:
+        # Get frame count and fps using ffprobe
+        # For containers without frame count in metadata, we use nb_read_frames (requires counting)
+        # First try fast method: nb_frames from stream metadata
+        probe_cmd = [
+            'ffprobe', '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=nb_frames,r_frame_rate,duration',
+            '-of', 'json',
+            video_path_str
+        ]
+        result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            dprint(f"GET_VIDEO_PROPS_FFPROBE: ffprobe failed: {result.stderr}")
+            return None, None
+        
+        import json
+        data = json.loads(result.stdout)
+        streams = data.get('streams', [])
+        if not streams:
+            return None, None
+        
+        stream = streams[0]
+        
+        # Parse FPS from r_frame_rate (e.g., "30/1" or "30000/1001")
+        fps = None
+        r_frame_rate = stream.get('r_frame_rate', '')
+        if r_frame_rate and '/' in r_frame_rate:
+            num, den = r_frame_rate.split('/')
+            if float(den) > 0:
+                fps = float(num) / float(den)
+        
+        # Try to get frame count from metadata
+        frame_count = None
+        nb_frames = stream.get('nb_frames')
+        if nb_frames and nb_frames != 'N/A':
+            try:
+                frame_count = int(nb_frames)
+            except (ValueError, TypeError):
+                pass
+        
+        # If no frame count in metadata, estimate from duration * fps
+        # This is common for WebM files
+        if frame_count is None and fps and fps > 0:
+            duration = stream.get('duration')
+            if duration and duration != 'N/A':
+                try:
+                    frame_count = int(float(duration) * fps)
+                    dprint(f"GET_VIDEO_PROPS_FFPROBE: Estimated frame count from duration: {frame_count}")
+                except (ValueError, TypeError):
+                    pass
+        
+        # Last resort: actually count frames (slow but accurate)
+        if frame_count is None:
+            dprint(f"GET_VIDEO_PROPS_FFPROBE: Counting frames for {video_path_str} (may be slow)...")
+            count_cmd = [
+                'ffprobe', '-v', 'error',
+                '-select_streams', 'v:0',
+                '-count_frames',
+                '-show_entries', 'stream=nb_read_frames',
+                '-of', 'csv=p=0',
+                video_path_str
+            ]
+            count_result = subprocess.run(count_cmd, capture_output=True, text=True, timeout=120)
+            if count_result.returncode == 0 and count_result.stdout.strip():
+                try:
+                    frame_count = int(count_result.stdout.strip())
+                except (ValueError, TypeError):
+                    pass
+        
+        dprint(f"GET_VIDEO_PROPS_FFPROBE: {video_path_str} - Frames: {frame_count}, FPS: {fps}")
+        return frame_count, fps
+        
+    except subprocess.TimeoutExpired:
+        dprint(f"GET_VIDEO_PROPS_FFPROBE: Timeout processing {video_path_str}")
+        return None, None
+    except Exception as e:
+        dprint(f"GET_VIDEO_PROPS_FFPROBE: Exception processing {video_path_str}: {e}")
+        return None, None
+
+
 def get_video_frame_count_and_fps(video_path: str | Path) -> tuple[int | None, float | None]:
-    """Gets frame count and FPS of a video using OpenCV. Returns (None, None) on failure."""
+    """
+    Gets frame count and FPS of a video.
+    
+    Uses OpenCV first (fast), then falls back to ffprobe for containers
+    where OpenCV is unreliable (e.g., WebM with VP8/VP9 codec).
+    
+    Returns (None, None) on failure.
+    """
     video_path_str = str(Path(video_path).resolve())
     cap = None
     try:
         cap = cv2.VideoCapture(video_path_str)
         if not cap.isOpened():
-            dprint(f"GET_VIDEO_FRAME_COUNT_FPS: Could not open video: {video_path_str}")
-            return None, None
+            dprint(f"GET_VIDEO_FRAME_COUNT_FPS: Could not open video with OpenCV: {video_path_str}")
+            # Try ffprobe as fallback
+            return _get_video_props_ffprobe(video_path_str)
         
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS)
@@ -750,16 +845,24 @@ def get_video_frame_count_and_fps(video_path: str | Path) -> tuple[int | None, f
         valid_frame_count = frame_count if frame_count > 0 else None
         valid_fps = fps if fps > 0 else None
 
+        # If OpenCV failed to get frame count (common for WebM), try ffprobe
         if valid_frame_count is None:
-             dprint(f"GET_VIDEO_FRAME_COUNT_FPS: Video {video_path_str} reported non-positive frame count: {frame_count}. Treating as unknown.")
+            dprint(f"GET_VIDEO_FRAME_COUNT_FPS: OpenCV reported non-positive frame count ({frame_count}) for {video_path_str}. Trying ffprobe...")
+            ffprobe_frame_count, ffprobe_fps = _get_video_props_ffprobe(video_path_str)
+            if ffprobe_frame_count is not None:
+                valid_frame_count = ffprobe_frame_count
+            if valid_fps is None and ffprobe_fps is not None:
+                valid_fps = ffprobe_fps
+        
         if valid_fps is None:
-             dprint(f"GET_VIDEO_FRAME_COUNT_FPS: Video {video_path_str} reported non-positive FPS: {fps}. Treating as unknown.")
+            dprint(f"GET_VIDEO_FRAME_COUNT_FPS: Video {video_path_str} reported non-positive FPS: {fps}. Treating as unknown.")
 
         dprint(f"GET_VIDEO_FRAME_COUNT_FPS: Video {video_path_str} - Frames: {valid_frame_count}, FPS: {valid_fps}")
         return valid_frame_count, valid_fps
     except Exception as e:
         dprint(f"GET_VIDEO_FRAME_COUNT_FPS: Exception processing {video_path_str}: {e}")
-        return None, None
+        # Try ffprobe as fallback on any exception
+        return _get_video_props_ffprobe(video_path_str)
     finally:
         if cap:
             cap.release()
