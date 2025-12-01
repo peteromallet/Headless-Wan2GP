@@ -132,6 +132,86 @@ def _extract_boundary_frames_for_vlm(
     return image_pairs
 
 
+def _generate_join_transition_prompt(
+    start_image_path: str,
+    end_image_path: str,
+    base_prompt: str,
+    num_frames: int,
+    fps: int,
+    extender,
+    dprint
+) -> str:
+    """
+    Generate a single transition prompt for join_clips using custom 3-sentence structure:
+    1. Main motion (running, walking, camera movement)
+    2. Visual style (anime, illustrated, photorealistic, etc.)
+    3. Scene details (flowers, particles, lighting, environment)
+    
+    Args:
+        start_image_path: Path to the starting frame
+        end_image_path: Path to the ending frame
+        base_prompt: Base prompt for context
+        num_frames: Number of transition frames
+        fps: Frames per second
+        extender: QwenPromptExpander instance (reused for batch efficiency)
+        dprint: Debug print function
+        
+    Returns:
+        Generated 3-sentence prompt
+    """
+    from PIL import Image
+    
+    # Load and combine images side by side
+    start_img = Image.open(start_image_path).convert("RGB")
+    end_img = Image.open(end_image_path).convert("RGB")
+    
+    combined_width = start_img.width + end_img.width
+    combined_height = max(start_img.height, end_img.height)
+    combined_img = Image.new('RGB', (combined_width, combined_height))
+    combined_img.paste(start_img, (0, 0))
+    combined_img.paste(end_img, (start_img.width, 0))
+    
+    # Calculate duration
+    duration_text = ""
+    if num_frames and fps:
+        duration_seconds = num_frames / fps
+        duration_text = f"This transition occurs over approximately {duration_seconds:.1f} seconds ({num_frames} frames at {fps} FPS)."
+    
+    base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "a video sequence"
+    
+    query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence.
+
+{duration_text} Your goal is to create a THREE-SENTENCE prompt that describes this transition. Use the user's context if provided: '{base_prompt_text}'
+
+YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE:
+
+SENTENCE 1 (MAIN MOTION): Describe the primary action or movement happening - what are characters doing (running, walking, turning), what is the camera doing (panning, zooming, tracking), what major changes occur between the frames.
+
+SENTENCE 2 (VISUAL STYLE): Describe the unique visual style of the footage - is it photorealistic, anime, illustrated, cel-shaded, watercolor, 3D rendered, vintage film, etc. Include the overall mood and color palette.
+
+SENTENCE 3 (SCENE DETAILS): Describe the specific elements and details in the scene - objects, environment features, particles (dust, snow, petals), lighting effects, background elements, and any small details that make the scene rich.
+
+Examples following this structure:
+
+- "A woman runs through an open field, her arms pumping as the camera tracks alongside her moving figure. The scene has a dreamy, soft-focus aesthetic with warm golden hour lighting and muted pastel tones reminiscent of indie film photography. Tall grass sways in waves around her feet, dandelion seeds drift lazily through the air, and distant mountains are silhouetted against the glowing orange sky."
+
+- "The camera slowly zooms into the character's face as their expression shifts from surprise to determination. The visual style is vibrant anime with bold outlines, cel-shading, and dramatic speed lines radiating outward. Cherry blossom petals swirl in the foreground, glowing magical particles orbit their raised hand, and detailed mechanical gears spin in the steampunk background."
+
+- "A bat spreads its wings and takes flight from a gnarled tree branch while the camera follows its ascending path. The footage has a dark gothic illustration style with crosshatching textures and deep purple and black color schemes. A full moon glows behind thin clouds, bare twisted branches frame the composition, and tiny moths flutter near flickering lantern light below."
+
+Now create your THREE-SENTENCE description (MOTION, STYLE, DETAILS) based on what you see in the frames."""
+
+    system_prompt = "You are a video description assistant. Respond with EXACTLY THREE SENTENCES: 1) Main motion/action, 2) Visual style/aesthetic, 3) Scene details/elements. Be specific and descriptive."
+    
+    result = extender.extend_with_img(
+        prompt=query,
+        system_prompt=system_prompt,
+        image=combined_img
+    )
+    
+    return result.prompt.strip()
+
+
 def _generate_vlm_prompts_for_joins(
     image_pairs: List[Tuple[Optional[str], Optional[str]]],
     base_prompt: str,
@@ -143,8 +223,10 @@ def _generate_vlm_prompts_for_joins(
     """
     Generate VLM-enhanced prompts for ALL joins using boundary frame pairs.
     
-    When enhance_prompt=True, runs VLM for every join to generate motion-focused
-    prompts based on the boundary frames.
+    Uses custom join_clips prompt structure:
+    1. Main motion (running, walking, camera movement)
+    2. Visual style (anime, illustrated, photorealistic)
+    3. Scene details (flowers, particles, environment)
     
     Args:
         image_pairs: List of (start_frame_path, end_frame_path) tuples
@@ -157,7 +239,9 @@ def _generate_vlm_prompts_for_joins(
     Returns:
         List of enhanced prompts (None for joins with missing image pairs)
     """
-    from ..vlm_utils import generate_transition_prompts_batch
+    import sys
+    from pathlib import Path
+    import torch
     
     num_joins = len(image_pairs)
     result = [None] * num_joins
@@ -181,29 +265,69 @@ def _generate_vlm_prompts_for_joins(
     dprint(f"[VLM_PROMPTS] Processing {len(valid_pairs)}/{num_joins} joins with VLM")
     dprint(f"[VLM_PROMPTS] Base prompt context: '{base_prompt[:80]}...'" if base_prompt else "[VLM_PROMPTS] No base prompt (VLM will infer from frames)")
     
-    # Build lists - same base prompt and frame count for all joins
-    base_prompts = [base_prompt] * len(valid_pairs)
-    num_frames_list = [gap_frame_count] * len(valid_pairs)
-    
     try:
-        enhanced_prompts = generate_transition_prompts_batch(
-            image_pairs=valid_pairs,
-            base_prompts=base_prompts,
-            num_frames_list=num_frames_list,
-            fps=fps,
+        # Add Wan2GP to path for imports
+        wan_dir = Path(__file__).parent.parent.parent / "Wan2GP"
+        if str(wan_dir) not in sys.path:
+            sys.path.insert(0, str(wan_dir))
+        
+        from Wan2GP.wan.utils.prompt_extend import QwenPromptExpander
+        from ..vlm_utils import download_qwen_vlm_if_needed
+        
+        # Initialize VLM ONCE for all pairs (batch efficiency)
+        local_model_path = wan_dir / "ckpts" / "Qwen2.5-VL-7B-Instruct"
+        dprint(f"[VLM_PROMPTS] Checking for model at {local_model_path}...")
+        download_qwen_vlm_if_needed(local_model_path)
+        
+        dprint(f"[VLM_PROMPTS] Initializing Qwen2.5-VL-7B-Instruct...")
+        extender = QwenPromptExpander(
+            model_name=str(local_model_path),
             device=vlm_device,
-            dprint=dprint
+            is_vl=True
         )
         
-        # Map results back to original indices
-        for i, enhanced in zip(valid_indices, enhanced_prompts):
-            result[i] = enhanced
-            dprint(f"[VLM_PROMPTS] Join {i}: {enhanced[:80]}...")
-            
+        # Process each pair
+        for i, (start_path, end_path) in enumerate(valid_pairs):
+            idx = valid_indices[i]
+            try:
+                dprint(f"[VLM_PROMPTS] Processing join {idx} ({i+1}/{len(valid_pairs)})...")
+                
+                enhanced = _generate_join_transition_prompt(
+                    start_image_path=start_path,
+                    end_image_path=end_path,
+                    base_prompt=base_prompt,
+                    num_frames=gap_frame_count,
+                    fps=fps,
+                    extender=extender,
+                    dprint=dprint
+                )
+                
+                result[idx] = enhanced
+                dprint(f"[VLM_PROMPTS] Join {idx}: {enhanced[:100]}...")
+                
+            except Exception as e:
+                dprint(f"[VLM_PROMPTS] Join {idx}: ERROR - {e}")
+                # Continue with other pairs
+        
+        # Cleanup VLM
+        dprint(f"[VLM_PROMPTS] Cleaning up VLM model...")
+        try:
+            del extender.model
+            del extender.processor
+            del extender
+        except:
+            pass
+        
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        dprint(f"[VLM_PROMPTS] VLM cleanup complete")
         return result
         
     except Exception as e:
-        dprint(f"[VLM_PROMPTS] ERROR in batch VLM: {e}")
+        dprint(f"[VLM_PROMPTS] ERROR in VLM processing: {e}")
         traceback.print_exc()
         return result
 
