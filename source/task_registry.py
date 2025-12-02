@@ -56,6 +56,10 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
     """
     Handle travel segment tasks via direct queue integration to eliminate blocking waits.
     This is moved from worker.py.
+    
+    Supports two modes:
+    1. Orchestrator mode: Requires orchestrator_task_id_ref, orchestrator_run_id, segment_index
+    2. Standalone mode (individual_travel_segment): full_orchestrator_payload provided directly in params
     """
     headless_logger.debug(f"Starting travel segment queue processing", task_id=task_id)
     log_ram_usage("Segment via queue - start", task_id=task_id)
@@ -68,11 +72,20 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         orchestrator_run_id = segment_params.get("orchestrator_run_id")
         segment_idx = segment_params.get("segment_index")
         
-        if None in [orchestrator_task_id_ref, orchestrator_run_id, segment_idx]:
-            return False, f"Travel segment {task_id} missing critical orchestrator references"
-        
+        # Check if full_orchestrator_payload is provided directly (standalone mode)
         full_orchestrator_payload = segment_params.get("full_orchestrator_payload")
-        if not full_orchestrator_payload:
+        is_standalone = full_orchestrator_payload is not None
+        
+        if is_standalone:
+            # Standalone mode: use provided payload, default segment_idx to 0
+            if segment_idx is None:
+                segment_idx = 0
+            headless_logger.debug(f"Running in standalone mode (individual_travel_segment)", task_id=task_id)
+        else:
+            # Orchestrator mode: require references and fetch payload
+            if None in [orchestrator_task_id_ref, orchestrator_run_id, segment_idx]:
+                return False, f"Travel segment {task_id} missing critical orchestrator references"
+            
             orchestrator_task_raw_params_json = db_ops.get_task_params(orchestrator_task_id_ref)
             if orchestrator_task_raw_params_json:
                 fetched_params = json.loads(orchestrator_task_raw_params_json) if isinstance(orchestrator_task_raw_params_json, str) else orchestrator_task_raw_params_json
@@ -256,6 +269,12 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             if status is None: return False, f"Travel segment {task_id}: Task status became None"
             
             if status.status == "completed":
+                # In standalone mode, skip chaining (no orchestrator to coordinate with)
+                if is_standalone:
+                    headless_logger.debug(f"Standalone segment completed, skipping chaining", task_id=task_id)
+                    return True, status.result_path
+                
+                # Orchestrator mode: run chaining
                 chain_success, chain_message, final_chained_path = _handle_travel_chaining_after_wgp(
                     wgp_task_params={"travel_chain_details": {
                         "orchestrator_task_id_ref": orchestrator_task_id_ref,
