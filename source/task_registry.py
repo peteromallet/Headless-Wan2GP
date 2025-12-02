@@ -72,28 +72,32 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         orchestrator_run_id = segment_params.get("orchestrator_run_id")
         segment_idx = segment_params.get("segment_index")
         
-        full_orchestrator_payload = segment_params.get("full_orchestrator_payload")
+        # Check for orchestrator_details (standard field name) or full_orchestrator_payload (legacy)
+        full_orchestrator_payload = segment_params.get("orchestrator_details") or segment_params.get("full_orchestrator_payload")
         
         if is_standalone:
             # Standalone mode: use provided payload, default segment_idx to 0
             if segment_idx is None:
                 segment_idx = 0
             if not full_orchestrator_payload:
-                return False, f"Individual travel segment {task_id} missing full_orchestrator_payload"
+                return False, f"Individual travel segment {task_id} missing orchestrator_details"
             headless_logger.debug(f"Running in standalone mode (individual_travel_segment)", task_id=task_id)
         else:
-            # Orchestrator mode: require references and fetch payload
-            if None in [orchestrator_task_id_ref, orchestrator_run_id, segment_idx]:
-                return False, f"Travel segment {task_id} missing critical orchestrator references"
+            # Orchestrator mode: require segment_index and either inline orchestrator_details or ability to fetch
+            if segment_idx is None:
+                return False, f"Travel segment {task_id} missing segment_index"
             
+            # If orchestrator_details not inline, try to fetch from parent task
             if not full_orchestrator_payload:
+                if not orchestrator_task_id_ref:
+                    return False, f"Travel segment {task_id} missing orchestrator_details and orchestrator_task_id_ref"
                 orchestrator_task_raw_params_json = db_ops.get_task_params(orchestrator_task_id_ref)
                 if orchestrator_task_raw_params_json:
                     fetched_params = json.loads(orchestrator_task_raw_params_json) if isinstance(orchestrator_task_raw_params_json, str) else orchestrator_task_raw_params_json
                     full_orchestrator_payload = fetched_params.get("orchestrator_details")
             
             if not full_orchestrator_payload:
-                return False, f"Travel segment {task_id}: Could not retrieve orchestrator payload"
+                return False, f"Travel segment {task_id}: Could not retrieve orchestrator_details"
         
         model_name = full_orchestrator_payload["model_name"]
         prompt_for_wgp = ensure_valid_prompt(segment_params.get("base_prompt", " "))
