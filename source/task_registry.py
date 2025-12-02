@@ -143,16 +143,30 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         start_ref_path = None
         end_ref_path = None
         
-        # Check for top-level input_image_paths_resolved (segment-specific, usually 2 images)
+        # Image resolution priority:
+        # 1. individual_segment_params.start_image_url / end_image_url
+        # 2. individual_segment_params.input_image_paths_resolved (array)
+        # 3. top-level input_image_paths_resolved
+        # 4. orchestrator_details images (indexed by segment_idx)
+        
+        individual_images = individual_params.get("input_image_paths_resolved", [])
         top_level_images = segment_params.get("input_image_paths_resolved", [])
         orchestrator_images = full_orchestrator_payload.get("input_image_paths_resolved", [])
         
-        print(f"!!! DEBUG TASK REGISTRY !!! segment_idx: {segment_idx}, top_level_images: {len(top_level_images)}, orchestrator_images: {len(orchestrator_images)}")
+        print(f"!!! DEBUG TASK REGISTRY !!! segment_idx: {segment_idx}, individual_images: {len(individual_images)}, top_level_images: {len(top_level_images)}, orchestrator_images: {len(orchestrator_images)}")
         
         is_continuing = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
         
-        # For standalone mode or when top-level has exactly 2 images, use them directly as start/end
-        if is_standalone and len(top_level_images) >= 2:
+        # Check individual_segment_params first (highest priority for standalone)
+        if individual_params.get("start_image_url") or individual_params.get("end_image_url"):
+            start_ref_path = individual_params.get("start_image_url")
+            end_ref_path = individual_params.get("end_image_url")
+            print(f"!!! DEBUG TASK REGISTRY !!! Using individual_segment_params URLs: start={start_ref_path}")
+        elif len(individual_images) >= 2:
+            start_ref_path = individual_images[0]
+            end_ref_path = individual_images[1]
+            print(f"!!! DEBUG TASK REGISTRY !!! Using individual_segment_params array: start={start_ref_path}")
+        elif is_standalone and len(top_level_images) >= 2:
             start_ref_path = top_level_images[0]
             end_ref_path = top_level_images[1]
             print(f"!!! DEBUG TASK REGISTRY !!! Using top-level images directly: start={start_ref_path}")
