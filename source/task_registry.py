@@ -99,18 +99,34 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             if not full_orchestrator_payload:
                 return False, f"Travel segment {task_id}: Could not retrieve orchestrator_details"
         
-        model_name = full_orchestrator_payload["model_name"]
-        prompt_for_wgp = ensure_valid_prompt(segment_params.get("base_prompt", " "))
-        negative_prompt_for_wgp = ensure_valid_negative_prompt(segment_params.get("negative_prompt", " "))
+        # Check for individual_segment_params overrides (highest priority for segment-specific values)
+        individual_params = segment_params.get("individual_segment_params", {})
         
-        parsed_res_wh_str = full_orchestrator_payload["parsed_resolution_wh"]
+        # Model name: top-level > orchestrator_details
+        model_name = segment_params.get("model_name") or full_orchestrator_payload["model_name"]
+        
+        # Prompts: individual_segment_params > top-level > defaults
+        prompt_for_wgp = ensure_valid_prompt(
+            individual_params.get("base_prompt") or segment_params.get("base_prompt", " ")
+        )
+        negative_prompt_for_wgp = ensure_valid_negative_prompt(
+            individual_params.get("negative_prompt") or segment_params.get("negative_prompt", " ")
+        )
+        
+        # Resolution: top-level > orchestrator_details
+        parsed_res_wh_str = segment_params.get("parsed_resolution_wh") or full_orchestrator_payload["parsed_resolution_wh"]
         parsed_res_raw = sm_parse_resolution(parsed_res_wh_str)
         if parsed_res_raw is None:
             return False, f"Travel segment {task_id}: Invalid resolution format {parsed_res_wh_str}"
         parsed_res_wh = snap_resolution_to_model_grid(parsed_res_raw)
         
-        total_frames_for_segment = segment_params.get("segment_frames_target", 
-                                                    full_orchestrator_payload["segment_frames_expanded"][segment_idx])
+        # Frame count: individual_segment_params.num_frames > top-level num_frames > segment_frames_target > segment_frames_expanded[idx]
+        total_frames_for_segment = (
+            individual_params.get("num_frames") or 
+            segment_params.get("num_frames") or
+            segment_params.get("segment_frames_target") or
+            full_orchestrator_payload["segment_frames_expanded"][segment_idx]
+        )
         
         current_run_base_output_dir_str = segment_params.get("current_run_base_output_dir")
         if not current_run_base_output_dir_str:
@@ -127,29 +143,37 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         start_ref_path = None
         end_ref_path = None
         
-        input_images_resolved = full_orchestrator_payload.get("input_image_paths_resolved", [])
-        print(f"!!! DEBUG TASK REGISTRY !!! segment_idx: {segment_idx}, input_images_resolved len: {len(input_images_resolved)}")
-        print(f"!!! DEBUG TASK REGISTRY !!! input_images: {input_images_resolved}")
+        # Check for top-level input_image_paths_resolved (segment-specific, usually 2 images)
+        top_level_images = segment_params.get("input_image_paths_resolved", [])
+        orchestrator_images = full_orchestrator_payload.get("input_image_paths_resolved", [])
+        
+        print(f"!!! DEBUG TASK REGISTRY !!! segment_idx: {segment_idx}, top_level_images: {len(top_level_images)}, orchestrator_images: {len(orchestrator_images)}")
+        
         is_continuing = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
         
-        if is_continuing:
+        # For standalone mode or when top-level has exactly 2 images, use them directly as start/end
+        if is_standalone and len(top_level_images) >= 2:
+            start_ref_path = top_level_images[0]
+            end_ref_path = top_level_images[1]
+            print(f"!!! DEBUG TASK REGISTRY !!! Using top-level images directly: start={start_ref_path}")
+        elif is_continuing:
             if segment_idx == 0:
                 continued_video_path = full_orchestrator_payload.get("continue_from_video_resolved_path")
                 if continued_video_path and Path(continued_video_path).exists():
                     start_ref_path = sm_extract_last_frame_as_image(continued_video_path, segment_processing_dir, task_id)
-                if input_images_resolved:
-                    end_ref_path = input_images_resolved[0]
+                if orchestrator_images:
+                    end_ref_path = orchestrator_images[0]
             else:
-                if len(input_images_resolved) > segment_idx:
-                    start_ref_path = input_images_resolved[segment_idx - 1]
-                    end_ref_path = input_images_resolved[segment_idx]
+                if len(orchestrator_images) > segment_idx:
+                    start_ref_path = orchestrator_images[segment_idx - 1]
+                    end_ref_path = orchestrator_images[segment_idx]
         else:
             print("!!! DEBUG TASK REGISTRY !!! Entering ELSE block (from scratch)")
-            if len(input_images_resolved) > segment_idx:
-                start_ref_path = input_images_resolved[segment_idx]
+            if len(orchestrator_images) > segment_idx:
+                start_ref_path = orchestrator_images[segment_idx]
             
-            if len(input_images_resolved) > segment_idx + 1:
-                end_ref_path = input_images_resolved[segment_idx + 1]
+            if len(orchestrator_images) > segment_idx + 1:
+                end_ref_path = orchestrator_images[segment_idx + 1]
         print(f"!!! DEBUG TASK REGISTRY !!! start_ref_path after logic: {start_ref_path}")
         
         if start_ref_path:
@@ -188,12 +212,15 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 traceback.print_exc()
                 return False, f"Shared processor failed: {e_shared_processor}"
         
+        # Seed: individual_segment_params > top-level > default
+        seed_to_use = individual_params.get("seed_to_use") or segment_params.get("seed_to_use", 12345)
+        
         generation_params = {
             "model_name": model_name,
             "negative_prompt": negative_prompt_for_wgp,
             "resolution": f"{parsed_res_wh[0]}x{parsed_res_wh[1]}",
             "video_length": total_frames_for_segment,
-            "seed": segment_params.get("seed_to_use", 12345),
+            "seed": seed_to_use,
         }
         
         # Always pass images if available, regardless of specific travel_mode string (hybrid models need them)
@@ -204,7 +231,12 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             
         print(f"!!! DEBUG TASK REGISTRY !!! generation_params image_start: {generation_params.get('image_start')}")
         
-        additional_loras = full_orchestrator_payload.get("additional_loras", {})
+        # Additional LoRAs: individual_segment_params > top-level > orchestrator_details
+        additional_loras = (
+            individual_params.get("additional_loras") or 
+            segment_params.get("additional_loras") or 
+            full_orchestrator_payload.get("additional_loras", {})
+        )
         if additional_loras:
             generation_params["additional_loras"] = additional_loras
 
@@ -212,20 +244,25 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                           full_orchestrator_payload.get("num_inference_steps") or full_orchestrator_payload.get("steps"))
         if explicit_steps: generation_params["num_inference_steps"] = explicit_steps
         
-        explicit_guidance = (full_orchestrator_payload.get("guidance_scale") or segment_params.get("guidance_scale"))
+        explicit_guidance = (segment_params.get("guidance_scale") or full_orchestrator_payload.get("guidance_scale"))
         if explicit_guidance: generation_params["guidance_scale"] = explicit_guidance
         
-        explicit_flow_shift = (full_orchestrator_payload.get("flow_shift") or segment_params.get("flow_shift"))
+        explicit_flow_shift = (segment_params.get("flow_shift") or full_orchestrator_payload.get("flow_shift"))
         if explicit_flow_shift: generation_params["flow_shift"] = explicit_flow_shift
 
-        # Phase Config Override
-        if "phase_config" in full_orchestrator_payload:
+        # Phase Config: individual_segment_params > top-level > orchestrator_details
+        phase_config_source = (
+            individual_params.get("phase_config") or 
+            segment_params.get("phase_config") or 
+            full_orchestrator_payload.get("phase_config")
+        )
+        if phase_config_source:
             try:
-                steps_per_phase = full_orchestrator_payload["phase_config"].get("steps_per_phase", [2, 2, 2])
+                steps_per_phase = phase_config_source.get("steps_per_phase", [2, 2, 2])
                 phase_config_steps = sum(steps_per_phase)
                 
                 parsed_phase_config = parse_phase_config(
-                    phase_config=full_orchestrator_payload["phase_config"],
+                    phase_config=phase_config_source,
                     num_inference_steps=phase_config_steps,
                     task_id=task_id,
                     model_name=generation_params.get("model_name"),
