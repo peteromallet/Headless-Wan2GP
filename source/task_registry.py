@@ -52,16 +52,16 @@ DIRECT_QUEUE_TASK_TYPES = {
 }
 
 
-def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Path, task_id: str, colour_match_videos: bool, mask_active_frames: bool, task_queue: HeadlessTaskQueue, dprint_func):
+def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Path, task_id: str, colour_match_videos: bool, mask_active_frames: bool, task_queue: HeadlessTaskQueue, dprint_func, is_standalone: bool = False):
     """
     Handle travel segment tasks via direct queue integration to eliminate blocking waits.
     This is moved from worker.py.
     
     Supports two modes:
-    1. Orchestrator mode: Requires orchestrator_task_id_ref, orchestrator_run_id, segment_index
-    2. Standalone mode (individual_travel_segment): full_orchestrator_payload provided directly in params
+    1. Orchestrator mode (is_standalone=False): Requires orchestrator_task_id_ref, orchestrator_run_id, segment_index
+    2. Standalone mode (is_standalone=True): full_orchestrator_payload provided directly in params
     """
-    headless_logger.debug(f"Starting travel segment queue processing", task_id=task_id)
+    headless_logger.debug(f"Starting travel segment queue processing (standalone={is_standalone})", task_id=task_id)
     log_ram_usage("Segment via queue - start", task_id=task_id)
     
     try:
@@ -72,24 +72,25 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         orchestrator_run_id = segment_params.get("orchestrator_run_id")
         segment_idx = segment_params.get("segment_index")
         
-        # Check if full_orchestrator_payload is provided directly (standalone mode)
         full_orchestrator_payload = segment_params.get("full_orchestrator_payload")
-        is_standalone = full_orchestrator_payload is not None
         
         if is_standalone:
             # Standalone mode: use provided payload, default segment_idx to 0
             if segment_idx is None:
                 segment_idx = 0
+            if not full_orchestrator_payload:
+                return False, f"Individual travel segment {task_id} missing full_orchestrator_payload"
             headless_logger.debug(f"Running in standalone mode (individual_travel_segment)", task_id=task_id)
         else:
             # Orchestrator mode: require references and fetch payload
             if None in [orchestrator_task_id_ref, orchestrator_run_id, segment_idx]:
                 return False, f"Travel segment {task_id} missing critical orchestrator references"
             
-            orchestrator_task_raw_params_json = db_ops.get_task_params(orchestrator_task_id_ref)
-            if orchestrator_task_raw_params_json:
-                fetched_params = json.loads(orchestrator_task_raw_params_json) if isinstance(orchestrator_task_raw_params_json, str) else orchestrator_task_raw_params_json
-                full_orchestrator_payload = fetched_params.get("orchestrator_details")
+            if not full_orchestrator_payload:
+                orchestrator_task_raw_params_json = db_ops.get_task_params(orchestrator_task_id_ref)
+                if orchestrator_task_raw_params_json:
+                    fetched_params = json.loads(orchestrator_task_raw_params_json) if isinstance(orchestrator_task_raw_params_json, str) else orchestrator_task_raw_params_json
+                    full_orchestrator_payload = fetched_params.get("orchestrator_details")
             
             if not full_orchestrator_payload:
                 return False, f"Travel segment {task_id}: Could not retrieve orchestrator payload"
@@ -356,7 +357,8 @@ class TaskRegistry:
                 colour_match_videos=context["colour_match_videos"],
                 mask_active_frames=context["mask_active_frames"],
                 task_queue=context["task_queue"],
-                dprint_func=dprint_func
+                dprint_func=dprint_func,
+                is_standalone=False
             ),
             "individual_travel_segment": lambda: _handle_travel_segment_via_queue(
                 task_params_dict=params,
@@ -365,7 +367,8 @@ class TaskRegistry:
                 colour_match_videos=context["colour_match_videos"],
                 mask_active_frames=context["mask_active_frames"],
                 task_queue=context["task_queue"],
-                dprint_func=dprint_func
+                dprint_func=dprint_func,
+                is_standalone=True
             ),
             "travel_stitch": lambda: tbi._handle_travel_stitch_task(
                 task_params_from_db=params,
