@@ -248,7 +248,7 @@ def main():
                 continue
 
             # Ensure task_id in params
-            if current_task_type in {"travel_orchestrator", "join_clips_orchestrator", "travel_segment", "join_clips_segment"}:
+            if current_task_type in {"travel_orchestrator", "join_clips_orchestrator", "travel_segment", "individual_travel_segment", "join_clips_segment"}:
                 current_task_params["task_id"] = current_task_id
                 if "orchestrator_details" in current_task_params:
                     current_task_params["orchestrator_details"]["orchestrator_task_id"] = current_task_id

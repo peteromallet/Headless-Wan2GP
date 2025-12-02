@@ -339,6 +339,15 @@ class TaskRegistry:
                 task_queue=context["task_queue"],
                 dprint_func=dprint_func
             ),
+            "individual_travel_segment": lambda: _handle_travel_segment_via_queue(
+                task_params_dict=params,
+                main_output_dir_base=context["main_output_dir_base"],
+                task_id=task_id,
+                colour_match_videos=context["colour_match_videos"],
+                mask_active_frames=context["mask_active_frames"],
+                task_queue=context["task_queue"],
+                dprint_func=dprint_func
+            ),
             "travel_stitch": lambda: tbi._handle_travel_stitch_task(
                 task_params_from_db=params,
                 main_output_dir_base=context["main_output_dir_base"],
