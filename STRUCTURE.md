@@ -234,7 +234,8 @@ Task-specific wrappers around the bulky upstream logic. These are imported by `w
 
 * **travel_between_images.py** – Implements the segment-by-segment interpolation pipeline between multiple anchor images. Builds guide videos, queues generation tasks, stitches outputs. Final stitched videos are uploaded to Supabase when configured. Includes extensive debugging system with `debug_video_analysis()` function that tracks frame counts, file sizes, and processing steps throughout the entire orchestrator → segments → stitching pipeline. Uses `TravelSegmentProcessor` for shared travel segment logic.
 * **join_clips.py** – Bridges two video clips using VACE generation. Extracts context frames from boundaries, generates transition frames, and stitches with crossfade blending.
-* **join_clips_orchestrator.py** – Orchestrates sequential joining of multiple clips. Supports optional VLM prompt enhancement (Qwen) to generate motion/style/details prompts from boundary frames.
+* **join_clips_orchestrator.py** – Orchestrates sequential joining of multiple clips. Contains shared core logic (`_create_join_chain_tasks`, `_check_existing_join_tasks`, `_extract_join_settings_from_payload`) used by both `join_clips_orchestrator` and `edit_video_orchestrator`. Supports optional VLM prompt enhancement (Qwen) to generate motion/style/details prompts from boundary frames.
+* **edit_video_orchestrator.py** – Regenerates selected portions of a video. Takes a source video and `portions_to_regenerate` (list of frame ranges), extracts "keeper" clips from non-regenerated portions, then uses the shared join_clips infrastructure to regenerate transitions. Reuses all join_clips_orchestrator core logic for task creation.
 * **single_image.py** – Minimal handler for one-off image-to-video generation without travel or pose manipulation. Generated images are uploaded to Supabase when configured.
 * **magic_edit.py** – Processes images through Replicate's black-forest-labs/flux-kontext-dev-lora model for scene transformations. Supports conditional InScene LoRA usage via `in_scene` parameter (true for scene consistency, false for creative freedom). Integrates with Supabase storage for output handling.
 * **__init__.py** – Re-exports public APIs and common utilities for convenient importing.
@@ -322,6 +323,7 @@ The submodule is updated periodically using standard git submodule commands. Onl
 | Single image video   | Direct queue integration (wan_2_2_t2i) | `worker.py` (direct routing)   |
 | Join clips           | `_handle_join_clips_task`          | `sm_functions/join_clips.py` |
 | Join clips orchestrator | `_handle_join_clips_orchestrator_task` | `sm_functions/join_clips_orchestrator.py` |
+| Edit video orchestrator | `_handle_edit_video_orchestrator_task` | `sm_functions/edit_video_orchestrator.py` |
 | Magic edit           | `_handle_magic_edit_task`          | `sm_functions/magic_edit.py` |
 | OpenPose mask video  | `handle_openpose_task`             | `specialized_handlers.py` |
 | RIFE interpolation   | `handle_rife_task`                 | `specialized_handlers.py` |
