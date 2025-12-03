@@ -243,12 +243,12 @@ def main():
             current_project_id = task_info.get("project_id")
             current_task_id = task_info["task_id"]
 
-            if current_project_id is None and current_task_type == "travel_orchestrator":
+            if current_project_id is None and current_task_type in {"travel_orchestrator", "edit_video_orchestrator"}:
                 db_ops.update_task_status_supabase(current_task_id, db_ops.STATUS_FAILED, "Orchestrator missing project_id")
                 continue
 
             # Ensure task_id in params
-            if current_task_type in {"travel_orchestrator", "join_clips_orchestrator", "travel_segment", "individual_travel_segment", "join_clips_segment"}:
+            if current_task_type in {"travel_orchestrator", "join_clips_orchestrator", "edit_video_orchestrator", "travel_segment", "individual_travel_segment", "join_clips_segment"}:
                 current_task_params["task_id"] = current_task_id
                 if "orchestrator_details" in current_task_params:
                     current_task_params["orchestrator_details"]["orchestrator_task_id"] = current_task_id
@@ -264,7 +264,7 @@ def main():
             if task_succeeded:
                 reset_fatal_error_counter()
 
-                orchestrator_types = {"travel_orchestrator", "join_clips_orchestrator"}
+                orchestrator_types = {"travel_orchestrator", "join_clips_orchestrator", "edit_video_orchestrator"}
 
                 if current_task_type in orchestrator_types:
                     if output_location and output_location.startswith("[ORCHESTRATOR_COMPLETE]"):

@@ -26,6 +26,7 @@ from source.sm_functions import travel_between_images as tbi
 from source.sm_functions import magic_edit as me
 from source.sm_functions.join_clips import _handle_join_clips_task
 from source.sm_functions.join_clips_orchestrator import _handle_join_clips_orchestrator_task
+from source.sm_functions.edit_video_orchestrator import _handle_edit_video_orchestrator_task
 from source.sm_functions.inpaint_frames import _handle_inpaint_frames_task
 from source.sm_functions.create_visualization import _handle_create_visualization_task
 from source.travel_segment_processor import TravelSegmentProcessor, TravelSegmentContext
@@ -444,6 +445,13 @@ class TaskRegistry:
                 orchestrator_project_id=context["project_id"],
                 dprint=dprint_func
             ),
+            "edit_video_orchestrator": lambda: _handle_edit_video_orchestrator_task(
+                task_params_from_db=params,
+                main_output_dir_base=context["main_output_dir_base"],
+                orchestrator_task_id_str=task_id,
+                orchestrator_project_id=context["project_id"],
+                dprint=dprint_func
+            ),
             "join_clips_segment": lambda: _handle_join_clips_task(
                 task_params_from_db=params,
                 main_output_dir_base=context["main_output_dir_base"],
@@ -474,7 +482,7 @@ class TaskRegistry:
 
         if task_type in handlers:
             # Orchestrator setup
-            if task_type in ["travel_orchestrator", "join_clips_orchestrator"]:
+            if task_type in ["travel_orchestrator", "join_clips_orchestrator", "edit_video_orchestrator"]:
                 params["task_id"] = task_id
                 if "orchestrator_details" in params:
                     params["orchestrator_details"]["orchestrator_task_id"] = task_id
