@@ -361,8 +361,9 @@ def _preprocess_portions_to_regenerate(
             new_per_join_settings.append(join_setting)
             
             portion_frame_count = portion.get("frame_count") or (portion["end_frame"] - portion["start_frame"] + 1)
-            gap_used = join_setting.get("gap_frame_count", join_settings.get("gap_frame_count", "default"))
-            dprint(f"[EDIT_VIDEO] Join {i}: chopped {portion_frame_count} frames (portion {portion['start_frame']}-{portion['end_frame']}), gap={gap_used}")
+            gap_override = join_setting.get("gap_frame_count")
+            gap_info = f", gap={gap_override}" if gap_override else ""
+            dprint(f"[EDIT_VIDEO] Join {i}: chopped {portion_frame_count} frames (portion {portion['start_frame']}-{portion['end_frame']}){gap_info}")
         
         return {
             "success": True,
