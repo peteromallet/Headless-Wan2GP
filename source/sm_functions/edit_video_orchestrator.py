@@ -147,13 +147,14 @@ def _extract_clip_frames(
     
     # Use select filter for frame-accurate extraction
     # between(n,START,END) is inclusive on both ends
-    filter_str = f"select='between(n,{start_frame},{end_frame})',setpts=N/FRAME_RATE/TB"
+    # setpts=PTS-STARTPTS resets timestamps to start from 0
+    # fps filter sets the output framerate explicitly
+    filter_str = f"select='between(n,{start_frame},{end_frame})',setpts=PTS-STARTPTS,fps={fps}"
     
     cmd = [
         'ffmpeg', '-y',
         '-i', str(source_video),
         '-vf', filter_str,
-        '-r', str(fps),
         '-an',  # No audio
         str(output_path)
     ]
