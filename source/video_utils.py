@@ -353,6 +353,98 @@ def extract_frames_from_video(video_path: str | Path, start_frame: int = 0, num_
     return frames
 
 
+def ensure_video_fps(
+    video_path: str | Path,
+    target_fps: float,
+    output_dir: str | Path | None = None,
+    fps_tolerance: float = 0.5,
+    *,
+    dprint_func=print
+) -> Path | None:
+    """
+    Ensure a video is at the target FPS, resampling if necessary.
+    
+    This is important when frame indices are calculated for a specific FPS
+    (e.g., from frontend) but the actual video file may be at a different FPS.
+    
+    Args:
+        video_path: Path to source video
+        target_fps: Desired FPS (e.g., 16)
+        output_dir: Directory for resampled video (defaults to same dir as source)
+        fps_tolerance: Maximum FPS difference before resampling (default 0.5)
+        dprint_func: Debug print function
+        
+    Returns:
+        Path to video at target FPS (original if already correct, resampled if not),
+        or None on error
+        
+    Example:
+        # Ensure video is at 16fps before frame-based extraction
+        video_16fps = ensure_video_fps(downloaded_video, 16, work_dir)
+        if video_16fps:
+            extract_frame_range_to_video(video_16fps, output, 0, 252, 16)
+    """
+    video_path = Path(video_path)
+    
+    if not video_path.exists():
+        dprint_func(f"[ENSURE_FPS_ERROR] Video does not exist: {video_path}")
+        return None
+    
+    # Get actual fps
+    actual_frames, actual_fps = get_video_frame_count_and_fps(str(video_path))
+    if not actual_fps:
+        dprint_func(f"[ENSURE_FPS_ERROR] Could not determine video FPS: {video_path}")
+        return None
+    
+    # Check if resampling is needed
+    if abs(actual_fps - target_fps) <= fps_tolerance:
+        dprint_func(f"[ENSURE_FPS] Video already at target FPS: {actual_fps} fps (target: {target_fps}, tolerance: ±{fps_tolerance})")
+        return video_path
+    
+    # Need to resample
+    dprint_func(f"[ENSURE_FPS] ⚠️  FPS mismatch: actual={actual_fps}, target={target_fps}")
+    dprint_func(f"[ENSURE_FPS] Resampling {video_path.name} to {target_fps} fps...")
+    
+    # Determine output path
+    if output_dir is None:
+        output_dir = video_path.parent
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    resampled_path = output_dir / f"{video_path.stem}_resampled_{int(target_fps)}fps.mp4"
+    
+    resample_cmd = [
+        'ffmpeg', '-y',
+        '-i', str(video_path),
+        '-r', str(target_fps),
+        '-an',  # No audio for now
+        str(resampled_path)
+    ]
+    
+    try:
+        result = subprocess.run(resample_cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode != 0:
+            dprint_func(f"[ENSURE_FPS_ERROR] FFmpeg resample failed: {result.stderr[:500]}")
+            return None
+        
+        if not resampled_path.exists() or resampled_path.stat().st_size == 0:
+            dprint_func(f"[ENSURE_FPS_ERROR] Resampled video missing or empty")
+            return None
+        
+        # Verify result
+        new_frames, new_fps = get_video_frame_count_and_fps(str(resampled_path))
+        dprint_func(f"[ENSURE_FPS] ✅ Resampled: {new_frames} frames @ {new_fps} fps")
+        
+        return resampled_path
+        
+    except subprocess.TimeoutExpired:
+        dprint_func(f"[ENSURE_FPS_ERROR] FFmpeg resample timeout")
+        return None
+    except Exception as e:
+        dprint_func(f"[ENSURE_FPS_ERROR] Exception: {e}")
+        return None
+
+
 def extract_frame_range_to_video(
     source_video: str | Path,
     output_path: str | Path,

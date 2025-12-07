@@ -33,6 +33,7 @@ from ..common_utils import (
 from ..video_utils import (
     extract_frames_from_video as sm_extract_frames_from_video,
     extract_frame_range_to_video,
+    ensure_video_fps,
     standardize_video_aspect_ratio,
     stitch_videos_with_crossfade as sm_stitch_videos_with_crossfade,
 )
@@ -220,7 +221,37 @@ def _handle_join_clips_task(
         if aspect_ratio:
             dprint(f"[JOIN_CLIPS]   Target aspect ratio: {aspect_ratio}")
 
-        # --- 2. Standardize Videos to Target Aspect Ratio (if specified) ---
+        # --- 2a. Ensure Videos are at Target FPS (if specified) ---
+        # This is important when videos might come from different sources at different FPS
+        target_fps_param = task_params_from_db.get("fps")
+        if target_fps_param:
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Ensuring videos are at target FPS {target_fps_param}...")
+            
+            starting_video_fps = ensure_video_fps(
+                video_path=starting_video,
+                target_fps=target_fps_param,
+                output_dir=join_clips_dir,
+                dprint_func=dprint
+            )
+            if not starting_video_fps:
+                error_msg = f"Failed to ensure starting video is at {target_fps_param} fps"
+                dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
+                return False, error_msg
+            starting_video = starting_video_fps
+            
+            ending_video_fps = ensure_video_fps(
+                video_path=ending_video,
+                target_fps=target_fps_param,
+                output_dir=join_clips_dir,
+                dprint_func=dprint
+            )
+            if not ending_video_fps:
+                error_msg = f"Failed to ensure ending video is at {target_fps_param} fps"
+                dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
+                return False, error_msg
+            ending_video = ending_video_fps
+
+        # --- 2b. Standardize Videos to Target Aspect Ratio (if specified) ---
         if aspect_ratio:
             dprint(f"[JOIN_CLIPS] Task {task_id}: Standardizing videos to aspect ratio {aspect_ratio}...")
 
