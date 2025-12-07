@@ -172,13 +172,18 @@ def _extract_clip_frames(
             dprint(f"[EXTRACT_CLIP_ERROR] Output missing or empty: {output_path}")
             return None
         
-        # Verify frame count
-        actual_frames, _ = get_video_frame_count_and_fps(str(output_path))
+        # Verify frame count - CRITICAL: wrong count means wrong extraction
+        actual_frames, actual_fps = get_video_frame_count_and_fps(str(output_path))
         expected_frames = end_frame - start_frame + 1
-        if actual_frames and actual_frames != expected_frames:
-            dprint(f"[EXTRACT_CLIP_WARN] Frame count mismatch: expected {expected_frames}, got {actual_frames}")
+        if actual_frames is None:
+            dprint(f"[EXTRACT_CLIP_ERROR] Could not determine frame count of extracted clip")
+            return None
+        if actual_frames != expected_frames:
+            dprint(f"[EXTRACT_CLIP_ERROR] Frame count mismatch: expected {expected_frames}, got {actual_frames}")
+            dprint(f"[EXTRACT_CLIP_ERROR] This indicates frames were extracted from wrong location or filter failed")
+            return None
         
-        dprint(f"[EXTRACT_CLIP] ✅ Extracted {actual_frames} frames to {output_path.name}")
+        dprint(f"[EXTRACT_CLIP] ✅ Extracted {actual_frames} frames (frames {start_frame}-{end_frame}) to {output_path.name}")
         return output_path
         
     except subprocess.TimeoutExpired:
