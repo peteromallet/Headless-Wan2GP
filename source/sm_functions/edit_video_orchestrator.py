@@ -296,16 +296,62 @@ def _preprocess_portions_to_regenerate(
         if not source_video.exists():
             return {"success": False, "error": f"Source video not found: {source_video_path}"}
         
-        # Get actual frame count if not provided
-        if not source_video_total_frames:
-            actual_frames, actual_fps = get_video_frame_count_and_fps(str(source_video))
-            if not actual_frames:
-                return {"success": False, "error": "Could not determine source video frame count"}
-            source_video_total_frames = actual_frames
-            if not source_video_fps:
-                source_video_fps = actual_fps or 16
+        # Get actual video properties
+        actual_frames, actual_fps = get_video_frame_count_and_fps(str(source_video))
+        if not actual_frames or not actual_fps:
+            return {"success": False, "error": "Could not determine source video properties"}
         
-        dprint(f"[EDIT_VIDEO] Source video: {source_video_total_frames} frames @ {source_video_fps} fps")
+        dprint(f"[EDIT_VIDEO] Downloaded source video: {actual_frames} frames @ {actual_fps} fps")
+        dprint(f"[EDIT_VIDEO] Expected (from payload): {source_video_total_frames} frames @ {source_video_fps} fps")
+        
+        # Check for FPS mismatch - frame indices are calculated for source_video_fps
+        # If actual video has different fps, we need to resample it first
+        target_fps = source_video_fps or 16
+        fps_tolerance = 0.5  # Allow small rounding differences
+        
+        if abs(actual_fps - target_fps) > fps_tolerance:
+            dprint(f"[EDIT_VIDEO] ⚠️  FPS mismatch detected: actual={actual_fps}, expected={target_fps}")
+            dprint(f"[EDIT_VIDEO] Resampling source video to {target_fps} fps before extraction...")
+            
+            # Resample to target fps
+            resampled_path = work_dir / f"source_resampled_{target_fps}fps.mp4"
+            resample_cmd = [
+                'ffmpeg', '-y',
+                '-i', str(source_video),
+                '-r', str(target_fps),
+                '-an',  # No audio for now
+                str(resampled_path)
+            ]
+            
+            result = subprocess.run(resample_cmd, capture_output=True, text=True, timeout=600)
+            if result.returncode != 0:
+                dprint(f"[EDIT_VIDEO_ERROR] Failed to resample video: {result.stderr[:500]}")
+                return {"success": False, "error": f"Failed to resample video to {target_fps} fps"}
+            
+            if not resampled_path.exists() or resampled_path.stat().st_size == 0:
+                return {"success": False, "error": "Resampled video is missing or empty"}
+            
+            # Verify resampled video
+            resampled_frames, resampled_fps = get_video_frame_count_and_fps(str(resampled_path))
+            dprint(f"[EDIT_VIDEO] ✅ Resampled: {resampled_frames} frames @ {resampled_fps} fps")
+            
+            # Use resampled video for extraction
+            source_video = resampled_path
+            actual_frames = resampled_frames
+            actual_fps = resampled_fps
+        
+        # Use actual frame count from video (or payload if provided)
+        if not source_video_total_frames:
+            source_video_total_frames = actual_frames
+        elif source_video_total_frames != actual_frames:
+            dprint(f"[EDIT_VIDEO] Note: Payload frame count ({source_video_total_frames}) differs from actual ({actual_frames})")
+            # Trust the actual video frame count
+            source_video_total_frames = actual_frames
+        
+        if not source_video_fps:
+            source_video_fps = actual_fps
+        
+        dprint(f"[EDIT_VIDEO] Final source video: {source_video_total_frames} frames @ {source_video_fps} fps")
         
         # Calculate keeper segments
         keeper_segments = _calculate_keeper_segments(
