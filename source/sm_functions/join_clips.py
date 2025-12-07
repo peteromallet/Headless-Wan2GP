@@ -52,8 +52,9 @@ def _calculate_vace_quantization(context_frame_count: int, gap_frame_count: int,
 
     Args:
         context_frame_count: Number of frames from each clip's boundary
-        gap_frame_count: Number of frames to insert/replace
-        replace_mode: Whether gap replaces frames (True) or inserts between (False)
+        gap_frame_count: Number of frames to generate in the gap
+        replace_mode: Whether we're replacing a portion (True) or inserting (False)
+                     Both modes now work similarly for VACE - context + gap + context
 
     Returns:
         dict with:
@@ -61,78 +62,22 @@ def _calculate_vace_quantization(context_frame_count: int, gap_frame_count: int,
             - gap_for_guide: Adjusted gap to use in guide/mask creation
             - quantization_shift: Number of frames dropped by VACE (0 if no quantization)
     """
-    # In REPLACE mode, gap cannot exceed available context frames
-    max_available_frames = context_frame_count * 2
-    if replace_mode and gap_frame_count > max_available_frames:
-        gap_frame_count = max_available_frames
-    
-    # Calculate desired total
-    if replace_mode:
-        desired_total = context_frame_count * 2
-    else:
-        desired_total = context_frame_count * 2 + gap_frame_count
+    # Both modes now use the same calculation: context + gap + context
+    # The difference is in how the final video is stitched (replace removes original frames)
+    desired_total = context_frame_count * 2 + gap_frame_count
 
     # Apply VACE quantization (4n + 1)
     actual_total = ((desired_total - 1) // 4) * 4 + 1
     quantization_shift = desired_total - actual_total
 
     # Adjust gap to account for dropped frames
-    gap_for_guide = gap_frame_count - quantization_shift
-    
-    # Final safety clamp: gap_for_guide cannot be negative or exceed available frames
-    if replace_mode:
-        gap_for_guide = max(0, min(gap_for_guide, max_available_frames))
+    gap_for_guide = max(0, gap_frame_count - quantization_shift)
 
     return {
         'total_frames': actual_total,
         'gap_for_guide': gap_for_guide,
         'quantization_shift': quantization_shift,
     }
-
-
-def _calculate_replace_mode_clip2_skip(
-    context_frame_count: int,
-    gap_for_guide: int,
-    blend_frames: int,
-    quantization_shift: int
-) -> int:
-    """
-    Calculate how many frames to skip from clip2 start in REPLACE mode.
-
-    REPLACE mode preserves portions of both clip boundaries in the bridge.
-    Due to VACE quantization, the preserved section gets SHIFTED earlier in
-    the original clip by exactly quantization_shift frames.
-
-    Example: context=24, gap=16, blend=3
-        - Guide requests: 48 frames total (24 + 24)
-        - VACE generates: 45 frames (quantization_shift = 3)
-        - Guide specifies: preserve clip2[7:24] (17 frames)
-        - VACE actually preserves: clip2[4:21] (shifted by -3)
-        - To align crossfade, clip2 must start at frame 18 (not 21)
-
-    Args:
-        context_frame_count: Number of frames in original context extraction
-        gap_for_guide: Adjusted gap used in guide/mask (after quantization)
-        blend_frames: Number of frames to blend in crossfade
-        quantization_shift: Frames dropped by VACE quantization
-
-    Returns:
-        Number of frames to skip from start of clip2
-    """
-    # How the gap is split between before/after contexts
-    frames_replaced_from_after = gap_for_guide - (gap_for_guide // 2)
-
-    # How many frames are preserved from the clip2 context
-    preserved_frame_count = context_frame_count - frames_replaced_from_after
-
-    # Base calculation: skip replaced frames + preserved frames - blend overlap
-    base_skip = frames_replaced_from_after + (preserved_frame_count - blend_frames)
-
-    # CRITICAL: VACE shifts the preserved section by quantization_shift
-    # The bridge actually contains earlier frames than the guide specified
-    actual_skip = base_skip - quantization_shift
-
-    return actual_skip
 
 
 def _handle_join_clips_task(
@@ -490,82 +435,36 @@ def _handle_join_clips_task(
         gap_for_guide = quantization_result['gap_for_guide']
         quantization_shift = quantization_result['quantization_shift']
 
-        # Log if gap was clamped in REPLACE mode
-        max_available = context_frame_count * 2
-        if replace_mode and original_gap > max_available:
-            dprint(f"[JOIN_CLIPS] Task {task_id}: ⚠️  Gap clamped: {original_gap} → {max_available} (cannot exceed {context_frame_count}×2 available context frames)")
+        mode_name = "REPLACE" if replace_mode else "INSERT"
+        dprint(f"[JOIN_CLIPS] Task {task_id}: {mode_name} mode - context={context_frame_count}, gap={gap_frame_count}")
+        dprint(f"[JOIN_CLIPS] Task {task_id}: Total VACE frames: {quantized_total_frames} (context + gap + context)")
         
         if quantization_shift > 0:
-            dprint(f"[JOIN_CLIPS] Task {task_id}: VACE quantization: {gap_for_guide + quantization_shift} → {quantized_total_frames} frames")
-            dprint(f"[JOIN_CLIPS] Task {task_id}: Gap adjusted: {original_gap if replace_mode and original_gap > max_available else gap_frame_count} → {gap_for_guide} for guide/mask")
-
-            if replace_mode:
-                dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - quantization will shift preserved section by -{quantization_shift} frames")
-            else:
-                dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode - gap reduced to {gap_for_guide} frames")
+            dprint(f"[JOIN_CLIPS] Task {task_id}: VACE quantization applied: gap adjusted {gap_frame_count} → {gap_for_guide} frames")
 
         # Determine inserted frames for gap preservation (if enabled)
+        # Both modes now use the same logic: insert boundary frames at 1/3 and 2/3 of gap
         gap_inserted_frames = {}
         
         if keep_bridging_images:
-            if replace_mode:
-                # REPLACE MODE: Equidistant anchors from original videos
-                # "take 2 frames equidistant from both... from the appropriate position from the og video"
-                
-                # Calculate split point (how many frames from first video are in the gap)
-                frames_to_replace_from_before = gap_for_guide // 2
-                num_preserved_before = len(start_context_frames) - frames_to_replace_from_before
-                
-                # Calculate anchor positions (1/3 and 2/3 of gap)
+            if len(start_context_frames) > 0 and len(end_context_frames) > 0:
+                # Anchor 1: End of first video (last frame of start context)
+                anchor1 = start_context_frames[-1]
                 idx1 = gap_for_guide // 3
+                
+                # Anchor 2: Start of second video (first frame of end context)
+                anchor2 = end_context_frames[0]
                 idx2 = (gap_for_guide * 2) // 3
                 
-                if idx1 != idx2 and gap_for_guide >= 3:
-                    # Anchor 1: From start_context_frames (Video 1)
-                    # It falls in the first half of the gap, so it comes from the replaced end of Video 1
-                    if idx1 < frames_to_replace_from_before:
-                        # Index in start_context_frames = preserved_part + relative_gap_index
-                        source_idx1 = num_preserved_before + idx1
-                        if 0 <= source_idx1 < len(start_context_frames):
-                            gap_inserted_frames[idx1] = start_context_frames[source_idx1]
-                            dprint(f"[JOIN_CLIPS] Task {task_id}: keep_bridging_images=True (Replace): Anchor 1 at gap[{idx1}] from start_clip[{source_idx1}]")
-                    
-                    # Anchor 2: From end_context_frames (Video 2)
-                    # It usually falls in the second half, so it comes from the replaced start of Video 2
-                    if idx2 >= frames_to_replace_from_before:
-                        # Index in end_context_frames = relative_gap_index - first_half_length
-                        source_idx2 = idx2 - frames_to_replace_from_before
-                        if 0 <= source_idx2 < len(end_context_frames):
-                            gap_inserted_frames[idx2] = end_context_frames[source_idx2]
-                            dprint(f"[JOIN_CLIPS] Task {task_id}: keep_bridging_images=True (Replace): Anchor 2 at gap[{idx2}] from end_clip[{source_idx2}]")
-                    
-                    # Fallback/Edge case handling (if distributions are weird due to small gap)
-                    # Use existing logic for safety if needed, but 1/3 and 2/3 should partition cleanly for gaps >= 3
+                # Only insert if gap is large enough to separate them
+                if gap_for_guide >= 3 and idx1 < idx2:
+                    gap_inserted_frames[idx1] = anchor1
+                    gap_inserted_frames[idx2] = anchor2
+                    dprint(f"[JOIN_CLIPS] Task {task_id}: keep_bridging_images=True: Using start_clip[-1] at gap[{idx1}] and end_clip[0] at gap[{idx2}]")
                 else:
-                    dprint(f"[JOIN_CLIPS] Task {task_id}: Gap too small ({gap_for_guide}) for equidistant replace anchors")
-            
+                    dprint(f"[JOIN_CLIPS] Task {task_id}: Gap too small ({gap_for_guide}) for equidistant anchors, skipping")
             else:
-                # INSERT MODE: Equidistant anchors from boundary frames
-                # "take an anchor from from the end of the first video and end of the second and put them equidistant inside the bridging portion"
-                
-                if len(start_context_frames) > 0 and len(end_context_frames) > 0:
-                    # Anchor 1: End of first video (last frame of start context)
-                    anchor1 = start_context_frames[-1]
-                    idx1 = gap_for_guide // 3
-                    
-                    # Anchor 2: Start of second video (first frame of end context)
-                    anchor2 = end_context_frames[0]
-                    idx2 = (gap_for_guide * 2) // 3
-                    
-                    # Only insert if gap is large enough to separate them
-                    if gap_for_guide >= 3 and idx1 < idx2:
-                        gap_inserted_frames[idx1] = anchor1
-                        gap_inserted_frames[idx2] = anchor2
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: keep_bridging_images=True (Insert): Using start_clip[-1] at {idx1} and end_clip[0] at {idx2}")
-                    else:
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: Gap too small ({gap_for_guide}) for equidistant anchors, skipping")
-                else:
-                    dprint(f"[JOIN_CLIPS_WARNING] Task {task_id}: keep_bridging_images=True but contexts empty")
+                dprint(f"[JOIN_CLIPS_WARNING] Task {task_id}: keep_bridging_images=True but contexts empty")
 
         # Create guide/mask with adjusted gap
         try:
@@ -728,20 +627,16 @@ def _handle_join_clips_task(
                         with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False, dir=join_clips_dir) as clip2_trimmed_file:
                             clip2_trimmed_path = Path(clip2_trimmed_file.name)
 
-                        if replace_mode:
-                            # REPLACE MODE: Trim to blend with transition's preserved section
-                            # Transition starts with preserved frames from Clip1 context
-                            # Keep Clip1 up to (but not including) where transition's preserved section starts, plus blend overlap
-                            # This ensures we blend Clip1[n] with Transition[0] which contains Clip1[n]' (VACE processed)
-                            frames_to_remove_clip1 = context_frame_count - blend_frames
-                            frames_to_keep_clip1 = start_frame_count - frames_to_remove_clip1
-                            dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode trimming clip1 - removing last {frames_to_remove_clip1} frames, keeping {frames_to_keep_clip1}/{start_frame_count}")
-                            dprint(f"[JOIN_CLIPS] Task {task_id}:   This keeps blend overlap with transition's preserved section")
-                        else:
-                            # INSERT MODE (original): keep all frames except last (context_frame_count - blend_frames)
-                            # This leaves blend_frames overlap for crossfade with transition
-                            frames_to_keep_clip1 = start_frame_count - (context_frame_count - blend_frames)
-                            dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode trimming clip1 - keeping {frames_to_keep_clip1}/{start_frame_count} frames")
+                        # Both modes now use the same clip1 trimming logic:
+                        # VACE output starts with context_before frames, so remove (context - blend) from clip1
+                        # This leaves blend_frames for crossfade overlap
+                        frames_to_remove_clip1 = context_frame_count - blend_frames
+                        frames_to_keep_clip1 = start_frame_count - frames_to_remove_clip1
+                        
+                        mode_name = "REPLACE" if replace_mode else "INSERT"
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: {mode_name} mode trimming clip1")
+                        dprint(f"[JOIN_CLIPS] Task {task_id}:   Removing last {frames_to_remove_clip1} frames, keeping {frames_to_keep_clip1}/{start_frame_count}")
+                        dprint(f"[JOIN_CLIPS] Task {task_id}:   This leaves {blend_frames} frames for crossfade overlap")
 
                         # Use select filter for frame-accurate trimming: frames 0 to (frames_to_keep_clip1 - 1)
                         # setpts resets timestamps for smooth concatenation
@@ -756,26 +651,17 @@ def _handle_join_clips_task(
                         if result.returncode != 0:
                             raise ValueError(f"Failed to trim clip1: {result.stderr}")
 
-                        if replace_mode:
-                            # REPLACE MODE: Calculate clip2 skip accounting for VACE quantization shift
-                            frames_to_skip_clip2 = _calculate_replace_mode_clip2_skip(
-                                context_frame_count=context_frame_count,
-                                gap_for_guide=gap_for_guide,
-                                blend_frames=blend_frames,
-                                quantization_shift=quantization_shift
-                            )
-                            frames_remaining_clip2 = end_frame_count - frames_to_skip_clip2
-
-                            dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode trimming clip2")
-                            dprint(f"[JOIN_CLIPS] Task {task_id}:   Skipping first {frames_to_skip_clip2}/{end_frame_count} frames")
-                            dprint(f"[JOIN_CLIPS] Task {task_id}:   Keeping {frames_remaining_clip2} frames")
-                            dprint(f"[JOIN_CLIPS] Task {task_id}:   Quantization shift applied: -{quantization_shift} frames")
-                            dprint(f"[JOIN_CLIPS] Task {task_id}:   Crossfade: {blend_frames} frames starting at clip2[{frames_to_skip_clip2}]")
-                        else:
-                            # INSERT MODE: Standard calculation
-                            frames_to_skip_clip2 = context_frame_count - blend_frames
-                            frames_remaining_clip2 = end_frame_count - frames_to_skip_clip2
-                            dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode trimming clip2 - skipping first {frames_to_skip_clip2}/{end_frame_count} frames, keeping {frames_remaining_clip2}")
+                        # Both modes now use the same clip2 trimming logic:
+                        # VACE output ends with context_after frames, so skip (context - blend) from clip2
+                        # This leaves blend_frames for crossfade overlap
+                        frames_to_skip_clip2 = context_frame_count - blend_frames
+                        frames_remaining_clip2 = end_frame_count - frames_to_skip_clip2
+                        
+                        mode_name = "REPLACE" if replace_mode else "INSERT"
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: {mode_name} mode trimming clip2")
+                        dprint(f"[JOIN_CLIPS] Task {task_id}:   Skipping first {frames_to_skip_clip2}/{end_frame_count} frames")
+                        dprint(f"[JOIN_CLIPS] Task {task_id}:   Keeping {frames_remaining_clip2} frames")
+                        dprint(f"[JOIN_CLIPS] Task {task_id}:   Crossfade: {blend_frames} frames starting at clip2[{frames_to_skip_clip2}]")
 
                         # Select frames from context_frame_count onwards and reset PTS for smooth concatenation
                         trim_clip2_cmd = [
