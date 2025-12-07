@@ -32,6 +32,7 @@ from typing import Tuple, List, Optional, Dict
 
 from .. import db_operations as db_ops
 from ..common_utils import download_video_if_url, get_video_frame_count_and_fps
+from ..video_utils import extract_frame_range_to_video
 
 # Import shared functions from join_clips_orchestrator
 from .join_clips_orchestrator import (
@@ -133,8 +134,7 @@ def _extract_clip_frames(
     """
     Extract a frame range from video using frame-accurate FFmpeg selection.
     
-    Uses FFmpeg's select filter with between(n,START,END) for frame-accurate
-    extraction (not time-based which can drift).
+    Wrapper around extract_frame_range_to_video() from video_utils.
     
     Args:
         source_video: Path to source video
@@ -147,74 +147,14 @@ def _extract_clip_frames(
     Returns:
         Path to extracted clip, or None on failure
     """
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Verify source video exists and log its properties
-    if not source_video.exists():
-        dprint(f"[EXTRACT_CLIP_ERROR] Source video does not exist: {source_video}")
-        return None
-    
-    source_frames, source_fps = get_video_frame_count_and_fps(str(source_video))
-    expected_frames = end_frame - start_frame + 1
-    
-    dprint(f"[EXTRACT_CLIP] === Extraction Debug ===")
-    dprint(f"[EXTRACT_CLIP]   Source: {source_video.name} ({source_frames} frames @ {source_fps} fps)")
-    dprint(f"[EXTRACT_CLIP]   Requested range: frames {start_frame}-{end_frame} ({expected_frames} frames)")
-    dprint(f"[EXTRACT_CLIP]   Output: {output_path.name}")
-    
-    # Validate requested range is within source video bounds
-    if source_frames and (start_frame < 0 or end_frame >= source_frames):
-        dprint(f"[EXTRACT_CLIP_ERROR] Requested range [{start_frame}-{end_frame}] out of bounds for {source_frames}-frame video")
-        return None
-    
-    # Use select filter for frame-accurate extraction
-    # between(n,START,END) is inclusive on both ends
-    # setpts=N/FR/TB resets timestamps (FR = FRAME_RATE constant)
-    # -r sets output framerate as separate flag (not in filter chain!)
-    filter_str = f"select=between(n\\,{start_frame}\\,{end_frame}),setpts=N/FR/TB"
-    
-    cmd = [
-        'ffmpeg', '-y',
-        '-i', str(source_video),
-        '-vf', filter_str,
-        '-r', str(fps),
-        '-an',  # No audio
-        str(output_path)
-    ]
-    
-    dprint(f"[EXTRACT_CLIP]   FFmpeg command: ffmpeg -y -i {source_video.name} -vf '{filter_str}' -r {fps} -an {output_path.name}")
-    
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        
-        if result.returncode != 0:
-            dprint(f"[EXTRACT_CLIP_ERROR] FFmpeg failed: {result.stderr[:500]}")
-            return None
-        
-        if not output_path.exists() or output_path.stat().st_size == 0:
-            dprint(f"[EXTRACT_CLIP_ERROR] Output missing or empty: {output_path}")
-            return None
-        
-        # Verify frame count - CRITICAL: wrong count means wrong extraction
-        actual_frames, actual_fps = get_video_frame_count_and_fps(str(output_path))
-        expected_frames = end_frame - start_frame + 1
-        if actual_frames is None:
-            dprint(f"[EXTRACT_CLIP_ERROR] Could not determine frame count of extracted clip")
-            return None
-        if actual_frames != expected_frames:
-            dprint(f"[EXTRACT_CLIP_ERROR] Frame count mismatch: expected {expected_frames}, got {actual_frames}")
-            dprint(f"[EXTRACT_CLIP_ERROR] This indicates frames were extracted from wrong location or filter failed")
-            return None
-        
-        dprint(f"[EXTRACT_CLIP] ✅ Extracted {actual_frames} frames (frames {start_frame}-{end_frame}) to {output_path.name}")
-        return output_path
-        
-    except subprocess.TimeoutExpired:
-        dprint(f"[EXTRACT_CLIP_ERROR] FFmpeg timeout extracting {output_path.name}")
-        return None
-    except Exception as e:
-        dprint(f"[EXTRACT_CLIP_ERROR] Exception: {e}")
-        return None
+    return extract_frame_range_to_video(
+        source_video=source_video,
+        output_path=output_path,
+        start_frame=start_frame,
+        end_frame=end_frame,
+        fps=fps,
+        dprint_func=dprint
+    )
 
 
 def _get_clip_url_or_path(
