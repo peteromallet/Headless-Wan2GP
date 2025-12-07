@@ -62,8 +62,12 @@ def _calculate_keeper_segments(
     # Sort portions by start_frame
     sorted_portions = sorted(portions, key=lambda p: p["start_frame"])
     
-    dprint(f"[EDIT_VIDEO] Calculating keeper segments from {len(sorted_portions)} portions")
-    dprint(f"[EDIT_VIDEO] Total source frames: {total_frames}")
+    dprint(f"[EDIT_VIDEO] === Keeper Segment Calculation ===")
+    dprint(f"[EDIT_VIDEO] Source video: {total_frames} total frames")
+    dprint(f"[EDIT_VIDEO] Portions to regenerate ({len(sorted_portions)}):")
+    for i, p in enumerate(sorted_portions):
+        frame_count = p.get("frame_count") or (p["end_frame"] - p["start_frame"] + 1)
+        dprint(f"[EDIT_VIDEO]   Portion {i}: frames {p['start_frame']}-{p['end_frame']} ({frame_count} frames)")
     
     # Validate portions don't overlap
     for i in range(len(sorted_portions) - 1):
@@ -145,6 +149,24 @@ def _extract_clip_frames(
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
+    # Verify source video exists and log its properties
+    if not source_video.exists():
+        dprint(f"[EXTRACT_CLIP_ERROR] Source video does not exist: {source_video}")
+        return None
+    
+    source_frames, source_fps = get_video_frame_count_and_fps(str(source_video))
+    expected_frames = end_frame - start_frame + 1
+    
+    dprint(f"[EXTRACT_CLIP] === Extraction Debug ===")
+    dprint(f"[EXTRACT_CLIP]   Source: {source_video.name} ({source_frames} frames @ {source_fps} fps)")
+    dprint(f"[EXTRACT_CLIP]   Requested range: frames {start_frame}-{end_frame} ({expected_frames} frames)")
+    dprint(f"[EXTRACT_CLIP]   Output: {output_path.name}")
+    
+    # Validate requested range is within source video bounds
+    if source_frames and (start_frame < 0 or end_frame >= source_frames):
+        dprint(f"[EXTRACT_CLIP_ERROR] Requested range [{start_frame}-{end_frame}] out of bounds for {source_frames}-frame video")
+        return None
+    
     # Use select filter for frame-accurate extraction
     # between(n,START,END) is inclusive on both ends
     # setpts=PTS-STARTPTS resets timestamps to start from 0
@@ -159,7 +181,7 @@ def _extract_clip_frames(
         str(output_path)
     ]
     
-    dprint(f"[EXTRACT_CLIP] Extracting frames {start_frame}-{end_frame} to {output_path.name}")
+    dprint(f"[EXTRACT_CLIP]   FFmpeg filter: {filter_str}")
     
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
