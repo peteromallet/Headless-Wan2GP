@@ -352,6 +352,121 @@ def extract_frames_from_video(video_path: str | Path, start_frame: int = 0, num_
     dprint_func(f"Error: Failed to extract any frames from {video_path} after {max_attempts} attempts")
     return frames
 
+
+def extract_frame_range_to_video(
+    source_video: str | Path,
+    output_path: str | Path,
+    start_frame: int,
+    end_frame: int | None,
+    fps: float,
+    *,
+    dprint_func=print
+) -> Path | None:
+    """
+    Extract a range of frames from a video to a new video file using FFmpeg.
+    
+    Uses FFmpeg's select filter with frame-accurate selection (not time-based).
+    This is the canonical function for frame extraction - use this instead of
+    inline FFmpeg commands.
+    
+    Args:
+        source_video: Path to source video file
+        output_path: Path for output video file
+        start_frame: First frame to include (0-indexed, inclusive)
+        end_frame: Last frame to include (0-indexed, inclusive), or None for all remaining frames
+        fps: Output framerate
+        dprint_func: Debug print function
+        
+    Returns:
+        Path to extracted video, or None on failure
+        
+    Examples:
+        # Extract frames 0-252 (253 frames)
+        extract_frame_range_to_video(src, out, 0, 252, 16)
+        
+        # Extract frames from 13 onwards (skip first 13)
+        extract_frame_range_to_video(src, out, 13, None, 16)
+    """
+    source_video = Path(source_video)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Verify source exists
+    if not source_video.exists():
+        dprint_func(f"[EXTRACT_RANGE_ERROR] Source video does not exist: {source_video}")
+        return None
+    
+    # Get source properties
+    source_frames, source_fps = get_video_frame_count_and_fps(str(source_video))
+    if not source_frames:
+        dprint_func(f"[EXTRACT_RANGE_ERROR] Could not determine source video frame count")
+        return None
+    
+    # Validate range
+    if start_frame < 0:
+        dprint_func(f"[EXTRACT_RANGE_ERROR] start_frame cannot be negative: {start_frame}")
+        return None
+    
+    if end_frame is not None and end_frame >= source_frames:
+        dprint_func(f"[EXTRACT_RANGE_ERROR] end_frame {end_frame} >= source frames {source_frames}")
+        return None
+    
+    # Build filter based on whether we have an end_frame
+    if end_frame is not None:
+        # Extract specific range: frames start_frame to end_frame (inclusive)
+        filter_str = f"select=between(n\\,{start_frame}\\,{end_frame}),setpts=N/FR/TB"
+        expected_frames = end_frame - start_frame + 1
+        range_desc = f"frames {start_frame}-{end_frame} ({expected_frames} frames)"
+    else:
+        # Extract from start_frame onwards (skip first start_frame frames)
+        filter_str = f"select=gte(n\\,{start_frame}),setpts=N/FR/TB"
+        expected_frames = source_frames - start_frame
+        range_desc = f"frames {start_frame}-{source_frames-1} ({expected_frames} frames)"
+    
+    dprint_func(f"[EXTRACT_RANGE] Source: {source_video.name} ({source_frames} frames @ {source_fps} fps)")
+    dprint_func(f"[EXTRACT_RANGE] Extracting: {range_desc}")
+    
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', str(source_video),
+        '-vf', filter_str,
+        '-r', str(fps),
+        '-an',  # No audio
+        str(output_path)
+    ]
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        
+        if result.returncode != 0:
+            dprint_func(f"[EXTRACT_RANGE_ERROR] FFmpeg failed: {result.stderr[:500]}")
+            return None
+        
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            dprint_func(f"[EXTRACT_RANGE_ERROR] Output missing or empty: {output_path}")
+            return None
+        
+        # Verify frame count
+        actual_frames, _ = get_video_frame_count_and_fps(str(output_path))
+        if actual_frames is None:
+            dprint_func(f"[EXTRACT_RANGE_ERROR] Could not verify output frame count")
+            return None
+        
+        if actual_frames != expected_frames:
+            dprint_func(f"[EXTRACT_RANGE_ERROR] Frame count mismatch: expected {expected_frames}, got {actual_frames}")
+            return None
+        
+        dprint_func(f"[EXTRACT_RANGE] ✅ Extracted {actual_frames} frames to {output_path.name}")
+        return output_path
+        
+    except subprocess.TimeoutExpired:
+        dprint_func(f"[EXTRACT_RANGE_ERROR] FFmpeg timeout")
+        return None
+    except Exception as e:
+        dprint_func(f"[EXTRACT_RANGE_ERROR] Exception: {e}")
+        return None
+
+
 def create_video_from_frames_list(
     frames_list: list[np.ndarray],
     output_path: str | Path,

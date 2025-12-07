@@ -32,6 +32,7 @@ from ..common_utils import (
 )
 from ..video_utils import (
     extract_frames_from_video as sm_extract_frames_from_video,
+    extract_frame_range_to_video,
     standardize_video_aspect_ratio,
     stitch_videos_with_crossfade as sm_stitch_videos_with_crossfade,
 )
@@ -638,18 +639,17 @@ def _handle_join_clips_task(
                         dprint(f"[JOIN_CLIPS] Task {task_id}:   Removing last {frames_to_remove_clip1} frames, keeping {frames_to_keep_clip1}/{start_frame_count}")
                         dprint(f"[JOIN_CLIPS] Task {task_id}:   This leaves {blend_frames} frames for crossfade overlap")
 
-                        # Use select filter for frame-accurate trimming: frames 0 to (frames_to_keep_clip1 - 1)
-                        # setpts resets timestamps for smooth concatenation
-                        trim_clip1_cmd = [
-                            'ffmpeg', '-y', '-i', str(starting_video),
-                            '-vf', f'select=between(n\\,0\\,{frames_to_keep_clip1 - 1}),setpts=N/FR/TB',
-                            '-r', str(start_fps),
-                            str(clip1_trimmed_path)
-                        ]
-
-                        result = subprocess.run(trim_clip1_cmd, capture_output=True, text=True, timeout=60)
-                        if result.returncode != 0:
-                            raise ValueError(f"Failed to trim clip1: {result.stderr}")
+                        # Use common frame extraction: frames 0 to (frames_to_keep_clip1 - 1)
+                        trimmed_clip1 = extract_frame_range_to_video(
+                            source_video=starting_video,
+                            output_path=clip1_trimmed_path,
+                            start_frame=0,
+                            end_frame=frames_to_keep_clip1 - 1,
+                            fps=start_fps,
+                            dprint_func=dprint
+                        )
+                        if not trimmed_clip1:
+                            raise ValueError(f"Failed to trim clip1 (frames 0-{frames_to_keep_clip1 - 1})")
 
                         # Both modes now use the same clip2 trimming logic:
                         # VACE output ends with context_after frames, so skip (context - blend) from clip2
@@ -663,17 +663,17 @@ def _handle_join_clips_task(
                         dprint(f"[JOIN_CLIPS] Task {task_id}:   Keeping {frames_remaining_clip2} frames")
                         dprint(f"[JOIN_CLIPS] Task {task_id}:   Crossfade: {blend_frames} frames starting at clip2[{frames_to_skip_clip2}]")
 
-                        # Select frames from context_frame_count onwards and reset PTS for smooth concatenation
-                        trim_clip2_cmd = [
-                            'ffmpeg', '-y', '-i', str(ending_video),
-                            '-vf', f'select=gte(n\\,{frames_to_skip_clip2}),setpts=N/FR/TB',
-                            '-r', str(end_fps),
-                            str(clip2_trimmed_path)
-                        ]
-
-                        result = subprocess.run(trim_clip2_cmd, capture_output=True, text=True, timeout=60)
-                        if result.returncode != 0:
-                            raise ValueError(f"Failed to trim clip2: {result.stderr}")
+                        # Use common frame extraction: skip first frames_to_skip_clip2 frames
+                        trimmed_clip2 = extract_frame_range_to_video(
+                            source_video=ending_video,
+                            output_path=clip2_trimmed_path,
+                            start_frame=frames_to_skip_clip2,
+                            end_frame=None,  # All remaining frames
+                            fps=end_fps,
+                            dprint_func=dprint
+                        )
+                        if not trimmed_clip2:
+                            raise ValueError(f"Failed to trim clip2 (skip first {frames_to_skip_clip2} frames)")
 
                         # Final concatenated output
                         final_output_path = join_clips_dir / f"joined_{task_id}.mp4"
