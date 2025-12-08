@@ -521,6 +521,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             orchestrator_payload["base_prompts_expanded"] = optimized_prompts
             orchestrator_payload["negative_prompts_expanded"] = [orchestrator_payload["negative_prompts_expanded"][0]] * len(optimized_segments)
             orchestrator_payload["num_new_segments_to_generate"] = len(optimized_segments)
+            
+            # CRITICAL FIX: Also remap enhanced_prompts_expanded to consolidated segment count
+            # When segments are consolidated, the transitions are DIFFERENT (different start/end images),
+            # so pre-existing enhanced prompts from original segments don't apply.
+            # Set to empty strings to trigger VLM regeneration for the new consolidated transitions.
+            original_enhanced_prompts = orchestrator_payload.get("enhanced_prompts_expanded", [])
+            if original_enhanced_prompts and len(original_enhanced_prompts) != len(optimized_segments):
+                dprint(f"[FRAME_CONSOLIDATION] Remapping enhanced_prompts_expanded from {len(original_enhanced_prompts)} to {len(optimized_segments)} segments")
+                dprint(f"[FRAME_CONSOLIDATION] Setting enhanced_prompts to empty (consolidated transitions differ from originals, will regenerate via VLM)")
+                orchestrator_payload["enhanced_prompts_expanded"] = [""] * len(optimized_segments)
 
             # CRITICAL: Store end anchor image indices for consolidated segments
             # This tells each consolidated segment which image should be its end anchor
@@ -1057,6 +1067,33 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 else:
                     dprint(f"[VLM_BATCH] No pre-existing enhanced prompts found in payload")
 
+                # CRITICAL FIX: Detect and handle mismatched array sizes
+                # This can happen when:
+                # 1. Consolidation reduced segments but enhanced_prompts wasn't remapped (handled by consolidation fix)
+                # 2. Payload arrived with inconsistent data from frontend (handled here)
+                if expanded_enhanced_prompts and len(expanded_enhanced_prompts) != num_segments:
+                    dprint(f"[VLM_BATCH] ⚠️ SIZE MISMATCH: enhanced_prompts has {len(expanded_enhanced_prompts)} items but num_segments={num_segments}")
+                    
+                    # Build a remapped version: map first/last segments to first/last prompts
+                    # This handles the common case where prompts are set for first and last segments
+                    remapped_enhanced_prompts = [""] * num_segments
+                    
+                    # First segment always maps to first prompt
+                    if expanded_enhanced_prompts[0] and expanded_enhanced_prompts[0].strip():
+                        remapped_enhanced_prompts[0] = expanded_enhanced_prompts[0]
+                        dprint(f"[VLM_BATCH] Remapped: segment 0 ← original prompt[0]")
+                    
+                    # Last segment maps to last prompt (if we have multiple segments)
+                    if num_segments > 1 and len(expanded_enhanced_prompts) > 1:
+                        last_prompt = expanded_enhanced_prompts[-1]
+                        if last_prompt and last_prompt.strip():
+                            remapped_enhanced_prompts[-1] = last_prompt
+                            dprint(f"[VLM_BATCH] Remapped: segment {num_segments-1} ← original prompt[{len(expanded_enhanced_prompts)-1}]")
+                    
+                    # Use remapped prompts for the rest of the processing
+                    expanded_enhanced_prompts = remapped_enhanced_prompts
+                    dprint(f"[VLM_BATCH] Using remapped enhanced_prompts (first/last preserved, middle will use VLM)")
+
                 # Build lists of image pairs, base prompts, and frame counts
                 image_pairs = []
                 base_prompts_for_batch = []
@@ -1179,11 +1216,12 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
                             payload = {
                                 "shot_id": shot_id,
+                                "task_id": orchestrator_task_id_str,  # Links logs to orchestrator task
                                 "enhanced_prompts": complete_enhanced_prompts
                             }
 
                             dprint(f"[VLM_BATCH] Calling edge function to update shot_generations with enhanced prompts...")
-                            dprint(f"[VLM_BATCH] Payload: shot_id={shot_id}, enhanced_prompts={len(complete_enhanced_prompts)} items")
+                            dprint(f"[VLM_BATCH] Payload: shot_id={shot_id}, task_id={orchestrator_task_id_str}, enhanced_prompts={len(complete_enhanced_prompts)} items")
                             
                             # [EDGE_FUNC_DEBUG] Log what we're sending to the edge function
                             # Edge function will store enhanced_prompts[i] to imageGenerations[i] (ordered by timeline_frame)
