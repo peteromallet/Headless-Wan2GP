@@ -401,7 +401,7 @@ def prepare_vace_generation_params(
     resolution_wh: Tuple[int, int],
     prompt: str,
     negative_prompt: str,
-    model: str = "lightning_baseline_2_2_2",
+    model: str = "wan_2_2_vace_lightning_baseline_2_2_2",
     seed: int = -1,
     task_params: dict = None
 ) -> dict:
@@ -417,7 +417,7 @@ def prepare_vace_generation_params(
         resolution_wh: (width, height) tuple
         prompt: Generation prompt
         negative_prompt: Negative prompt
-        model: Model name (default: lightning_baseline_2_2_2)
+        model: Model name (default: wan_2_2_vace_lightning_baseline_2_2_2)
         seed: Random seed (-1 for random)
         task_params: Additional task-specific parameters to merge
 

@@ -383,7 +383,7 @@ def _extract_join_settings_from_payload(orchestrator_payload: dict) -> dict:
         "blend_frames": orchestrator_payload.get("blend_frames", 3),
         "prompt": orchestrator_payload.get("prompt", "smooth transition"),
         "negative_prompt": orchestrator_payload.get("negative_prompt", ""),
-        "model": orchestrator_payload.get("model", "lightning_baseline_2_2_2"),
+        "model": orchestrator_payload.get("model", "wan_2_2_vace_lightning_baseline_2_2_2"),
         "regenerate_anchors": orchestrator_payload.get("regenerate_anchors", True),
         "num_anchor_frames": orchestrator_payload.get("num_anchor_frames", 3),
         "aspect_ratio": orchestrator_payload.get("aspect_ratio"),

@@ -39,7 +39,7 @@ def run_inpaint_frames(
     output_path: str,
     prompt: str = "smooth continuous camera motion",
     context_frame_count: int = 8,
-    model: str = "lightning_baseline_2_2_2",
+    model: str = "wan_2_2_vace_lightning_baseline_2_2_2",
     num_inference_steps: int = 6,
     guidance_scale: float = 3.0,
     seed: int = -1,
@@ -58,7 +58,7 @@ def run_inpaint_frames(
         output_path: Path to save output video
         prompt: Description of desired content
         context_frame_count: Frames to preserve on each side (default: 8)
-        model: Model to use (default: lightning_baseline_2_2_2)
+        model: Model to use (default: wan_2_2_vace_lightning_baseline_2_2_2)
         num_inference_steps: Number of inference steps (default: 6 for Lightning)
         guidance_scale: CFG scale (default: 3.0 for Lightning)
         seed: Random seed (-1 for random)
@@ -260,8 +260,8 @@ Examples:
     # Optional arguments
     parser.add_argument("--context-frames", type=int, default=8,
                        help="Frames to preserve on each side (default: 8)")
-    parser.add_argument("--model", default="lightning_baseline_2_2_2",
-                       help="Model to use (default: lightning_baseline_2_2_2)")
+    parser.add_argument("--model", default="wan_2_2_vace_lightning_baseline_2_2_2",
+                       help="Model to use (default: wan_2_2_vace_lightning_baseline_2_2_2)")
     parser.add_argument("--steps", type=int, default=6,
                        help="Number of inference steps (default: 6)")
     parser.add_argument("--guidance-scale", type=float, default=3.0,

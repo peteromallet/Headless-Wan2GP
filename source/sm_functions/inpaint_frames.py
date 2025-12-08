@@ -52,7 +52,7 @@ def _handle_inpaint_frames_task(
             - inpaint_end_frame: End frame index (exclusive)
             - context_frame_count: Frames to preserve on each side (default: 8)
             - prompt: Generation prompt for the inpainted frames
-            - model: Optional model override (defaults to lightning_baseline_2_2_2)
+            - model: Optional model override (defaults to wan_2_2_vace_lightning_baseline_2_2_2)
             - Other standard VACE parameters
         main_output_dir_base: Base output directory
         task_id: Task ID for logging and status updates
@@ -215,7 +215,7 @@ def _handle_inpaint_frames_task(
         dprint(f"[INPAINT_FRAMES] Task {task_id}: Preparing generation parameters...")
 
         # Determine model (default to Lightning baseline for fast generation)
-        model = task_params_from_db.get("model", "lightning_baseline_2_2_2")
+        model = task_params_from_db.get("model", "wan_2_2_vace_lightning_baseline_2_2_2")
 
         # Ensure prompt is valid
         prompt = ensure_valid_prompt(prompt)

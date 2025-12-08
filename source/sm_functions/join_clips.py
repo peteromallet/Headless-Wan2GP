@@ -101,7 +101,7 @@ def _handle_join_clips_task(
             - replace_mode: Optional bool (default False). If True, gap frames REPLACE boundary frames instead of being inserted
             - prompt: Generation prompt for the transition
             - aspect_ratio: Optional aspect ratio (e.g., "16:9", "9:16", "1:1") to standardize both videos
-            - model: Optional model override (defaults to lightning_baseline_2_2_2)
+            - model: Optional model override (defaults to wan_2_2_vace_lightning_baseline_2_2_2)
             - resolution: Optional [width, height] override
             - fps: Optional FPS override (defaults to 16)
             - max_wait_time: Optional timeout in seconds for generation (defaults to 1800s / 30 minutes)
@@ -532,7 +532,7 @@ def _handle_join_clips_task(
         dprint(f"[JOIN_CLIPS] Task {task_id}: Preparing generation parameters...")
 
         # Determine model (default to Lightning baseline for fast generation)
-        model = task_params_from_db.get("model", "lightning_baseline_2_2_2")
+        model = task_params_from_db.get("model", "wan_2_2_vace_lightning_baseline_2_2_2")
 
         # Ensure prompt is valid
         prompt = ensure_valid_prompt(prompt)

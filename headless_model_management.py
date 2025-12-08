@@ -437,7 +437,7 @@ class HeadlessTaskQueue:
             preload_model: Optional model to pre-load before processing tasks.
                           If specified, the model will be loaded immediately after
                           workers start, making the first task much faster.
-                          Example: "lightning_baseline_2_2_2"
+                          Example: "wan_2_2_vace_lightning_baseline_2_2_2"
         """
         if self.running:
             self.logger.warning("Queue already running")

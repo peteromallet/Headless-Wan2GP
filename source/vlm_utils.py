@@ -269,16 +269,42 @@ def generate_transition_prompts_batch(
         for i, ((start_path, end_path), base_prompt) in enumerate(zip(image_pairs, base_prompts)):
             try:
                 dprint(f"[VLM_BATCH] Processing pair {i+1}/{len(image_pairs)}: {Path(start_path).name} → {Path(end_path).name}")
+                
+                # [VLM_FILE_DEBUG] Log the actual file paths and verify they exist
+                start_exists = Path(start_path).exists() if start_path else False
+                end_exists = Path(end_path).exists() if end_path else False
+                dprint(f"[VLM_FILE_DEBUG] Pair {i}: start={start_path} (exists={start_exists})")
+                dprint(f"[VLM_FILE_DEBUG] Pair {i}: end={end_path} (exists={end_exists})")
+                if start_exists:
+                    start_size = Path(start_path).stat().st_size
+                    dprint(f"[VLM_FILE_DEBUG] Pair {i}: start file size={start_size} bytes")
+                if end_exists:
+                    end_size = Path(end_path).stat().st_size
+                    dprint(f"[VLM_FILE_DEBUG] Pair {i}: end file size={end_size} bytes")
 
                 # Load and combine images
                 start_img = Image.open(start_path).convert("RGB")
                 end_img = Image.open(end_path).convert("RGB")
+                
+                # [VLM_IMAGE_VERIFY] Log image dimensions to verify correct loading
+                dprint(f"[VLM_IMAGE_VERIFY] Pair {i}: start_img dimensions={start_img.size}, end_img dimensions={end_img.size}")
 
                 combined_width = start_img.width + end_img.width
                 combined_height = max(start_img.height, end_img.height)
                 combined_img = Image.new('RGB', (combined_width, combined_height))
                 combined_img.paste(start_img, (0, 0))
                 combined_img.paste(end_img, (start_img.width, 0))
+                
+                # [VLM_DEBUG_SAVE] Save combined image for manual inspection
+                # This shows EXACTLY what VLM sees - left=start, right=end
+                try:
+                    debug_dir = Path(start_path).parent / "vlm_debug"
+                    debug_dir.mkdir(exist_ok=True)
+                    debug_path = debug_dir / f"vlm_combined_pair{i}.jpg"
+                    combined_img.save(str(debug_path), quality=95)
+                    dprint(f"[VLM_DEBUG_SAVE] Saved combined image for pair {i} to: {debug_path}")
+                except Exception as e_save:
+                    dprint(f"[VLM_DEBUG_SAVE] Could not save debug image: {e_save}")
 
                 # Craft query with base_prompt context
                 base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "a cinematic sequence"
