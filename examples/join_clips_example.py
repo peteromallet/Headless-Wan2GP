@@ -38,7 +38,7 @@ def run_join_clips(
     prompt: str = "smooth camera transition between scenes",
     context_frame_count: int = 8,
     gap_frame_count: int = 53,
-    model: str = "lightning_baseline_2_2_2",
+    model: str = "wan_2_2_vace_lightning_baseline_2_2_2",
     num_inference_steps: int = 6,
     guidance_scale: float = 3.0,
     seed: int = -1,
@@ -57,7 +57,7 @@ def run_join_clips(
         prompt: Description of the transition
         context_frame_count: Frames to extract from each clip (default: 8)
         gap_frame_count: Frames to generate between clips (default: 53)
-        model: Model to use (default: lightning_baseline_2_2_2)
+        model: Model to use (default: wan_2_2_vace_lightning_baseline_2_2_2)
         num_inference_steps: Number of inference steps (default: 6 for Lightning)
         guidance_scale: CFG scale (default: 3.0 for Lightning)
         seed: Random seed (-1 for random)
@@ -250,8 +250,8 @@ Examples:
                        help="Frames to extract from each clip (default: 8)")
     parser.add_argument("--gap-frames", type=int, default=53,
                        help="Frames to generate between clips (default: 53)")
-    parser.add_argument("--model", default="lightning_baseline_2_2_2",
-                       help="Model to use (default: lightning_baseline_2_2_2)")
+    parser.add_argument("--model", default="wan_2_2_vace_lightning_baseline_2_2_2",
+                       help="Model to use (default: wan_2_2_vace_lightning_baseline_2_2_2)")
     parser.add_argument("--steps", type=int, default=6,
                        help="Number of inference steps (default: 6)")
     parser.add_argument("--guidance-scale", type=float, default=3.0,

@@ -334,6 +334,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         expanded_segment_frames = orchestrator_payload["segment_frames_expanded"]
         expanded_frame_overlap = orchestrator_payload["frame_overlap_expanded"]
         vace_refs_instructions_all = orchestrator_payload.get("vace_image_refs_to_prepare_by_worker", [])
+        
+        # [PAYLOAD_ORDER_DEBUG] Log the alignment of images and prompts from payload
+        input_images_from_payload = orchestrator_payload.get("input_image_paths_resolved", [])
+        dprint(f"[PAYLOAD_ORDER_DEBUG] Orchestrator received: {len(input_images_from_payload)} images, {len(expanded_base_prompts)} prompts, {num_segments} segments")
+        dprint(f"[PAYLOAD_ORDER_DEBUG] Image → Prompt alignment check:")
+        for i in range(max(len(input_images_from_payload), len(expanded_base_prompts))):
+            img_name = Path(input_images_from_payload[i]).name if i < len(input_images_from_payload) else "NO_IMAGE"
+            prompt_preview = expanded_base_prompts[i][:60] if i < len(expanded_base_prompts) and expanded_base_prompts[i] else "NO_PROMPT"
+            transition_note = f"(seg {i}: img[{i}]→img[{i+1}])" if i < num_segments else "(no segment)"
+            dprint(f"[PAYLOAD_ORDER_DEBUG]   [{i}] {img_name} | '{prompt_preview}...' {transition_note}")
 
         # Preserve a copy of the original overlap list in case we need it later
         _orig_frame_overlap = list(expanded_frame_overlap)  # shallow copy
@@ -1023,6 +1033,12 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 # Get input images
                 input_images_resolved = orchestrator_payload.get("input_image_paths_resolved", [])
                 vlm_device = orchestrator_payload.get("vlm_device", "cuda")
+                
+                # [VLM_INPUT_DEBUG] Log the source images array to verify ordering
+                dprint(f"[VLM_INPUT_DEBUG] input_images_resolved from payload ({len(input_images_resolved)} images):")
+                for i, img in enumerate(input_images_resolved):
+                    img_name = Path(img).name if img else 'NONE'
+                    dprint(f"[VLM_INPUT_DEBUG]   [{i}]: {img_name}")
 
                 # Get pre-existing enhanced prompts if available
                 expanded_enhanced_prompts = orchestrator_payload.get("enhanced_prompts_expanded", [])
@@ -1104,6 +1120,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
                 # Generate all prompts in one batch (reuses VLM model)
                 if image_pairs:
+                    # [VLM_IMAGE_DEBUG] Log exactly what image pairs VLM will process
+                    dprint(f"[VLM_IMAGE_DEBUG] About to call VLM with {len(image_pairs)} image pairs:")
+                    for i, ((start, end), base_prompt) in enumerate(zip(image_pairs, base_prompts_for_batch)):
+                        seg_idx = segment_indices[i]
+                        start_name = Path(start).name if start else 'NONE'
+                        end_name = Path(end).name if end else 'NONE'
+                        prompt_preview = base_prompt[:50] if base_prompt else 'EMPTY'
+                        dprint(f"[VLM_IMAGE_DEBUG]   Pair {i} (segment {seg_idx}): {start_name} → {end_name}")
+                        dprint(f"[VLM_IMAGE_DEBUG]     Base prompt: '{prompt_preview}...'")
+                    
                     # Get FPS from orchestrator payload (default to 16)
                     fps_helpers = orchestrator_payload.get("fps_helpers", 16)
 
@@ -1158,6 +1184,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
                             dprint(f"[VLM_BATCH] Calling edge function to update shot_generations with enhanced prompts...")
                             dprint(f"[VLM_BATCH] Payload: shot_id={shot_id}, enhanced_prompts={len(complete_enhanced_prompts)} items")
+                            
+                            # [EDGE_FUNC_DEBUG] Log what we're sending to the edge function
+                            # Edge function will store enhanced_prompts[i] to imageGenerations[i] (ordered by timeline_frame)
+                            # This MUST match input_image_paths_resolved ordering!
+                            dprint(f"[EDGE_FUNC_DEBUG] Sending {len(complete_enhanced_prompts)} prompts to edge function:")
+                            for i, prompt in enumerate(complete_enhanced_prompts):
+                                img_name = Path(input_images_resolved[i]).name if i < len(input_images_resolved) else "NO_IMAGE"
+                                prompt_preview = prompt[:60] if prompt else "EMPTY"
+                                dprint(f"[EDGE_FUNC_DEBUG]   [{i}] → {img_name} | '{prompt_preview}...'")
+                            dprint(f"[EDGE_FUNC_DEBUG] WARNING: If images above don't match timeline_frame order in shot_generations, prompts will be misaligned!")
                             dprint(f"[VLM_BATCH] Using auth token: {'SERVICE_KEY' if db_ops.SUPABASE_SERVICE_KEY else ('ACCESS_TOKEN' if db_ops.SUPABASE_ACCESS_TOKEN else 'None')}")
 
                             resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
@@ -1270,9 +1306,19 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             # Prompts were pre-generated in batch processing (lines 845-924) for performance.
             # This avoids reloading the VLM model for each segment.
             segment_base_prompt = expanded_base_prompts[idx]
+            prompt_source = "expanded_base_prompts"
             if idx in vlm_enhanced_prompts:
                 segment_base_prompt = vlm_enhanced_prompts[idx]
+                prompt_source = "vlm_enhanced_prompts"
                 dprint(f"[VLM_ENHANCE] Segment {idx}: Using pre-generated enhanced prompt")
+            
+            # [SEGMENT_PROMPT_DEBUG] Log the prompt assignment for each segment
+            input_images = orchestrator_payload.get("input_image_paths_resolved", [])
+            img_start_name = Path(input_images[idx]).name if idx < len(input_images) else "OUT_OF_BOUNDS"
+            img_end_name = Path(input_images[idx + 1]).name if idx + 1 < len(input_images) else "OUT_OF_BOUNDS"
+            dprint(f"[SEGMENT_PROMPT_DEBUG] Segment {idx}: images {img_start_name} → {img_end_name}")
+            dprint(f"[SEGMENT_PROMPT_DEBUG]   Prompt source: {prompt_source}")
+            dprint(f"[SEGMENT_PROMPT_DEBUG]   Prompt: '{segment_base_prompt[:80]}...'" if segment_base_prompt else "[SEGMENT_PROMPT_DEBUG]   Prompt: EMPTY")
             
             # Fallback to orchestrator's base_prompt if segment prompt is empty
             if not segment_base_prompt or not segment_base_prompt.strip():
