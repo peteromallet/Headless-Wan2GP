@@ -1094,66 +1094,134 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     expanded_enhanced_prompts = remapped_enhanced_prompts
                     dprint(f"[VLM_BATCH] Using remapped enhanced_prompts (first/last preserved, middle will use VLM)")
 
-                # Build lists of image pairs, base prompts, and frame counts
-                image_pairs = []
-                base_prompts_for_batch = []
-                segment_frame_counts = []  # Frame count for each segment
-                segment_indices = []  # Track which segment each pair belongs to
+                # Detect single-image mode: only 1 image, no transition to describe
+                is_single_image_mode = len(input_images_resolved) == 1
+                
+                # Get FPS early for single-image mode (also used later for transitions)
+                fps_helpers = orchestrator_payload.get("fps_helpers", 16)
+                
+                if is_single_image_mode:
+                    dprint(f"[VLM_SINGLE] Detected single-image mode - using single-image VLM prompt generation")
+                    
+                    # Import single-image VLM helper
+                    from ..vlm_utils import generate_single_image_prompts_batch
+                    
+                    # Build lists for single-image batch processing
+                    single_images = []
+                    single_base_prompts = []
+                    single_frame_counts = []
+                    single_indices = []
+                    
+                    for idx in range(num_segments):
+                        # Check if enhanced prompt already exists for this segment
+                        if idx < len(expanded_enhanced_prompts) and expanded_enhanced_prompts[idx] and expanded_enhanced_prompts[idx].strip():
+                            vlm_enhanced_prompts[idx] = expanded_enhanced_prompts[idx]
+                            dprint(f"[VLM_SINGLE] Segment {idx}: Using pre-existing enhanced prompt: {expanded_enhanced_prompts[idx][:80]}...")
+                            continue
+                        
+                        # For single-image mode, use the only image we have
+                        image_path = input_images_resolved[0]
+                        
+                        # Download image if it's a URL
+                        image_path = download_image_if_url(
+                            image_path,
+                            current_run_output_dir,
+                            f"vlm_single_{idx}",
+                            debug_mode=False,
+                            descriptive_name=f"vlm_single_seg{idx}"
+                        )
+                        
+                        single_images.append(image_path)
+                        segment_base_prompt = expanded_base_prompts[idx] if expanded_base_prompts[idx] and expanded_base_prompts[idx].strip() else base_prompt
+                        single_base_prompts.append(segment_base_prompt)
+                        segment_frames = expanded_segment_frames[idx] if idx < len(expanded_segment_frames) else None
+                        single_frame_counts.append(segment_frames)
+                        single_indices.append(idx)
+                    
+                    # Generate prompts for single images
+                    if single_images:
+                        dprint(f"[VLM_SINGLE] Processing {len(single_images)} segment(s) with single-image VLM...")
+                        
+                        enhanced_prompts = generate_single_image_prompts_batch(
+                            image_paths=single_images,
+                            base_prompts=single_base_prompts,
+                            num_frames_list=single_frame_counts,
+                            fps=fps_helpers,
+                            device=vlm_device,
+                            dprint=dprint
+                        )
+                        
+                        # Map results back to segment indices
+                        for idx, enhanced in zip(single_indices, enhanced_prompts):
+                            vlm_enhanced_prompts[idx] = enhanced
+                            dprint(f"[VLM_SINGLE] Segment {idx}: {enhanced[:80]}...")
+                    
+                    # Skip the transition-based processing below
+                    image_pairs = []
+                    segment_indices = []
+                
+                else:
+                    # Multi-image mode: build lists of image pairs for transitions
+                    # Build lists of image pairs, base prompts, and frame counts
+                    image_pairs = []
+                    base_prompts_for_batch = []
+                    segment_frame_counts = []  # Frame count for each segment
+                    segment_indices = []  # Track which segment each pair belongs to
 
-                for idx in range(num_segments):
-                    # Check if enhanced prompt already exists for this segment
-                    if idx < len(expanded_enhanced_prompts) and expanded_enhanced_prompts[idx] and expanded_enhanced_prompts[idx].strip():
-                        # Use existing enhanced prompt, skip VLM enrichment
-                        vlm_enhanced_prompts[idx] = expanded_enhanced_prompts[idx]
-                        dprint(f"[VLM_BATCH] Segment {idx}: Using pre-existing enhanced prompt: {expanded_enhanced_prompts[idx][:80]}...")
-                        continue
+                    for idx in range(num_segments):
+                        # Check if enhanced prompt already exists for this segment
+                        if idx < len(expanded_enhanced_prompts) and expanded_enhanced_prompts[idx] and expanded_enhanced_prompts[idx].strip():
+                            # Use existing enhanced prompt, skip VLM enrichment
+                            vlm_enhanced_prompts[idx] = expanded_enhanced_prompts[idx]
+                            dprint(f"[VLM_BATCH] Segment {idx}: Using pre-existing enhanced prompt: {expanded_enhanced_prompts[idx][:80]}...")
+                            continue
 
-                    # Determine which images this segment transitions between
-                    if orchestrator_payload.get("_consolidated_end_anchors"):
-                        consolidated_end_anchors = orchestrator_payload["_consolidated_end_anchors"]
-                        if idx < len(consolidated_end_anchors):
-                            end_anchor_idx = consolidated_end_anchors[idx]
-                            start_anchor_idx = 0 if idx == 0 else consolidated_end_anchors[idx - 1]
+                        # Determine which images this segment transitions between
+                        if orchestrator_payload.get("_consolidated_end_anchors"):
+                            consolidated_end_anchors = orchestrator_payload["_consolidated_end_anchors"]
+                            if idx < len(consolidated_end_anchors):
+                                end_anchor_idx = consolidated_end_anchors[idx]
+                                start_anchor_idx = 0 if idx == 0 else consolidated_end_anchors[idx - 1]
+                            else:
+                                start_anchor_idx = idx
+                                end_anchor_idx = idx + 1
                         else:
                             start_anchor_idx = idx
                             end_anchor_idx = idx + 1
-                    else:
-                        start_anchor_idx = idx
-                        end_anchor_idx = idx + 1
 
-                    # Ensure indices are within bounds
-                    if (start_anchor_idx < len(input_images_resolved) and
-                        end_anchor_idx < len(input_images_resolved)):
+                        # Ensure indices are within bounds
+                        if (start_anchor_idx < len(input_images_resolved) and
+                            end_anchor_idx < len(input_images_resolved)):
 
-                        start_image_path = input_images_resolved[start_anchor_idx]
-                        end_image_path = input_images_resolved[end_anchor_idx]
+                            start_image_path = input_images_resolved[start_anchor_idx]
+                            end_image_path = input_images_resolved[end_anchor_idx]
 
-                        # Download images if they're URLs
-                        start_image_path = download_image_if_url(
-                            start_image_path,
-                            current_run_output_dir,
-                            f"vlm_start_{idx}",
-                            debug_mode=False,
-                            descriptive_name=f"vlm_start_seg{idx}"
-                        )
-                        end_image_path = download_image_if_url(
-                            end_image_path,
-                            current_run_output_dir,
-                            f"vlm_end_{idx}",
-                            debug_mode=False,
-                            descriptive_name=f"vlm_end_seg{idx}"
-                        )
+                            # Download images if they're URLs
+                            start_image_path = download_image_if_url(
+                                start_image_path,
+                                current_run_output_dir,
+                                f"vlm_start_{idx}",
+                                debug_mode=False,
+                                descriptive_name=f"vlm_start_seg{idx}"
+                            )
+                            end_image_path = download_image_if_url(
+                                end_image_path,
+                                current_run_output_dir,
+                                f"vlm_end_{idx}",
+                                debug_mode=False,
+                                descriptive_name=f"vlm_end_seg{idx}"
+                            )
 
-                        image_pairs.append((start_image_path, end_image_path))
-                        # Use segment-specific base_prompt if available, otherwise use overall base_prompt
-                        segment_base_prompt = expanded_base_prompts[idx] if expanded_base_prompts[idx] and expanded_base_prompts[idx].strip() else base_prompt
-                        base_prompts_for_batch.append(segment_base_prompt)
-                        # Get frame count for this segment for duration calculation
-                        segment_frames = expanded_segment_frames[idx] if idx < len(expanded_segment_frames) else None
-                        segment_frame_counts.append(segment_frames)
-                        segment_indices.append(idx)
-                    else:
-                        dprint(f"[VLM_BATCH] Segment {idx}: Skipping - image indices out of bounds")
+                            image_pairs.append((start_image_path, end_image_path))
+                            # Use segment-specific base_prompt if available, otherwise use overall base_prompt
+                            segment_base_prompt = expanded_base_prompts[idx] if expanded_base_prompts[idx] and expanded_base_prompts[idx].strip() else base_prompt
+                            base_prompts_for_batch.append(segment_base_prompt)
+                            # Get frame count for this segment for duration calculation
+                            segment_frames = expanded_segment_frames[idx] if idx < len(expanded_segment_frames) else None
+                            segment_frame_counts.append(segment_frames)
+                            segment_indices.append(idx)
+                        else:
+                            dprint(f"[VLM_BATCH] Segment {idx}: Skipping - image indices out of bounds (start={start_anchor_idx}, end={end_anchor_idx}, available={len(input_images_resolved)})")
 
                 # Generate all prompts in one batch (reuses VLM model)
                 if image_pairs:
