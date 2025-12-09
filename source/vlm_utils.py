@@ -402,6 +402,298 @@ Now create your THREE-SENTENCE MOTION-FOCUSED description based on: '{base_promp
         return [bp if bp and bp.strip() else "cinematic transition" for bp in base_prompts]
 
 
+def generate_single_image_prompt(
+    image_path: str,
+    base_prompt: Optional[str] = None,
+    num_frames: Optional[int] = None,
+    fps: int = 16,
+    device: str = "cuda",
+    dprint=print
+) -> str:
+    """
+    Use QwenVLM to generate a descriptive prompt based on a single image.
+    
+    This is used for single-image video generation where there's no transition
+    between images - instead, we describe the image and suggest natural motion.
+
+    Args:
+        image_path: Path to the image
+        base_prompt: Optional base prompt to incorporate
+        num_frames: Number of frames in the video segment (for duration calculation)
+        fps: Frames per second (default: 16)
+        device: Device to run the model on ('cuda' or 'cpu')
+        dprint: Print function for logging
+
+    Returns:
+        Generated prompt describing the image and suggesting motion
+    """
+    try:
+        # Add Wan2GP to path for imports
+        wan_dir = Path(__file__).parent.parent / "Wan2GP"
+        if str(wan_dir) not in sys.path:
+            sys.path.insert(0, str(wan_dir))
+
+        from Wan2GP.wan.utils.prompt_extend import QwenPromptExpander
+
+        dprint(f"[VLM_SINGLE] Generating prompt for single image: {Path(image_path).name}")
+
+        # Load the image
+        img = Image.open(image_path).convert("RGB")
+
+        # Initialize VLM with Qwen2.5-VL-7B
+        local_model_path = wan_dir / "ckpts" / "Qwen2.5-VL-7B-Instruct"
+
+        # Ensure model is downloaded
+        dprint(f"[VLM_SINGLE] Checking for model at {local_model_path}...")
+        download_qwen_vlm_if_needed(local_model_path)
+
+        dprint(f"[VLM_SINGLE] Initializing Qwen2.5-VL-7B-Instruct from local path: {local_model_path}")
+        extender = QwenPromptExpander(
+            model_name=str(local_model_path),
+            device=device,
+            is_vl=True
+        )
+
+        # Craft the query prompt
+        base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "a cinematic video"
+
+        # Add duration info if available
+        duration_text = ""
+        if num_frames and fps:
+            duration_seconds = num_frames / fps
+            duration_text = f" The video will be approximately {duration_seconds:.1f} seconds long ({num_frames} frames at {fps} FPS)."
+
+        query = f"""You are viewing a single image that will be the starting frame of a video sequence.
+
+{duration_text} Your goal is to create a THREE-SENTENCE prompt that describes the image and suggests NATURAL MOTION based on the user's description: '{base_prompt_text}'
+
+FOCUS ON MOTION: Describe what's in the image and how things could naturally move, animate, or change. Everything should suggest dynamic motion from this starting point.
+
+YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE:
+
+SENTENCE 1 (SCENE & CAMERA): Describe the scene and suggest camera movement (pan, zoom, tilt, tracking shot, etc.). What would a cinematographer do?
+
+SENTENCE 2 (SUBJECT MOTION): Describe the main subjects and how they could naturally move or animate. People breathe, blink, shift weight; animals move; plants sway; water flows.
+
+SENTENCE 3 (ENVIRONMENTAL DYNAMICS): Describe ambient motion - wind effects, lighting changes, particles, atmospheric effects, subtle movements that bring the scene to life.
+
+Examples of MOTION-FOCUSED single-image descriptions:
+
+- "The camera slowly pushes forward through the misty forest as the early morning light filters through the canopy. The tall pine trees sway gently in the breeze while a deer in the clearing lifts its head alertly and flicks its ears. Dust motes drift lazily through the golden light beams and fallen leaves rustle and tumble across the forest floor."
+
+- "The camera tracks slowly around the woman as she stands at the window gazing out at the city. She shifts her weight slightly and turns her head, her hair catching the warm light from the sunset outside. The curtains billow softly in a gentle breeze while city lights begin twinkling on in the darkening skyline."
+
+- "The camera zooms gradually into the vintage car parked on the empty desert road as heat waves shimmer off the asphalt. Chrome details on the car glint and sparkle as the harsh sun shifts position overhead. Tumbleweeds roll slowly across the cracked pavement while sand particles drift on the hot wind."
+
+Now create your THREE-SENTENCE MOTION-FOCUSED description based on: '{base_prompt_text}'"""
+
+        system_prompt = "You are a video direction assistant. You MUST respond with EXACTLY THREE SENTENCES following this structure: 1) SCENE & CAMERA, 2) SUBJECT MOTION, 3) ENVIRONMENTAL DYNAMICS. Focus on natural motion that could emerge from this single image."
+
+        dprint(f"[VLM_SINGLE] Running inference...")
+        result = extender.extend_with_img(
+            prompt=query,
+            system_prompt=system_prompt,
+            image=img
+        )
+
+        vlm_prompt = result.prompt.strip()
+        dprint(f"[VLM_SINGLE] Generated: {vlm_prompt}")
+
+        # Cleanup
+        try:
+            del extender.model
+            del extender.processor
+            del extender
+        except:
+            pass
+        
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return vlm_prompt
+
+    except Exception as e:
+        dprint(f"[VLM_SINGLE] ERROR: Failed to generate single image prompt: {e}")
+        import traceback
+        traceback.print_exc()
+
+        # Fallback to base_prompt if VLM fails
+        if base_prompt and base_prompt.strip():
+            dprint(f"[VLM_SINGLE] Falling back to base prompt: {base_prompt}")
+            return base_prompt
+        else:
+            dprint(f"[VLM_SINGLE] Falling back to generic prompt")
+            return "cinematic video"
+
+
+def generate_single_image_prompts_batch(
+    image_paths: List[str],
+    base_prompts: List[Optional[str]],
+    num_frames_list: Optional[List[int]] = None,
+    fps: int = 16,
+    device: str = "cuda",
+    dprint=print
+) -> List[str]:
+    """
+    Batch generate prompts for multiple single images.
+    
+    This is more efficient than calling generate_single_image_prompt() multiple times,
+    because it loads the VLM model once and reuses it for all images.
+
+    Args:
+        image_paths: List of image paths
+        base_prompts: List of base prompts (one per image, can be None)
+        num_frames_list: List of frame counts for each segment (for duration calculation)
+        fps: Frames per second (default: 16)
+        device: Device to run the model on ('cuda' or 'cpu')
+        dprint: Print function for logging
+
+    Returns:
+        List of generated prompts (one per image)
+    """
+    if len(image_paths) != len(base_prompts):
+        raise ValueError(f"image_paths and base_prompts must have same length ({len(image_paths)} != {len(base_prompts)})")
+
+    if not image_paths:
+        return []
+
+    try:
+        # Add Wan2GP to path for imports
+        wan_dir = Path(__file__).parent.parent / "Wan2GP"
+        if str(wan_dir) not in sys.path:
+            sys.path.insert(0, str(wan_dir))
+
+        from Wan2GP.wan.utils.prompt_extend import QwenPromptExpander
+
+        # Log memory BEFORE loading
+        if torch.cuda.is_available():
+            gpu_mem_before = torch.cuda.memory_allocated() / 1024**3
+            dprint(f"[VLM_SINGLE_BATCH] GPU memory BEFORE: {gpu_mem_before:.2f} GB")
+
+        dprint(f"[VLM_SINGLE_BATCH] Initializing Qwen2.5-VL-7B-Instruct for {len(image_paths)} single images...")
+
+        # Initialize VLM ONCE for all images
+        local_model_path = wan_dir / "ckpts" / "Qwen2.5-VL-7B-Instruct"
+
+        # Ensure model is downloaded
+        dprint(f"[VLM_SINGLE_BATCH] Checking for model at {local_model_path}...")
+        download_qwen_vlm_if_needed(local_model_path)
+
+        dprint(f"[VLM_SINGLE_BATCH] Using local model from: {local_model_path}")
+        extender = QwenPromptExpander(
+            model_name=str(local_model_path),
+            device=device,
+            is_vl=True
+        )
+
+        dprint(f"[VLM_SINGLE_BATCH] Model loaded")
+
+        system_prompt = "You are a video direction assistant. You MUST respond with EXACTLY THREE SENTENCES following this structure: 1) SCENE & CAMERA, 2) SUBJECT MOTION, 3) ENVIRONMENTAL DYNAMICS. Focus on natural motion that could emerge from this single image."
+
+        results = []
+        for i, (image_path, base_prompt) in enumerate(zip(image_paths, base_prompts)):
+            try:
+                dprint(f"[VLM_SINGLE_BATCH] Processing image {i+1}/{len(image_paths)}: {Path(image_path).name}")
+
+                # Load image
+                img = Image.open(image_path).convert("RGB")
+                dprint(f"[VLM_SINGLE_BATCH] Image {i}: dimensions={img.size}")
+
+                # Craft query with base_prompt context
+                base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "a cinematic video"
+
+                # Add duration info if available
+                duration_text = ""
+                if num_frames_list and i < len(num_frames_list) and num_frames_list[i]:
+                    num_frames = num_frames_list[i]
+                    duration_seconds = num_frames / fps
+                    duration_text = f" The video will be approximately {duration_seconds:.1f} seconds long ({num_frames} frames at {fps} FPS)."
+
+                query = f"""You are viewing a single image that will be the starting frame of a video sequence.
+
+{duration_text} Your goal is to create a THREE-SENTENCE prompt that describes the image and suggests NATURAL MOTION based on the user's description: '{base_prompt_text}'
+
+FOCUS ON MOTION: Describe what's in the image and how things could naturally move, animate, or change. Everything should suggest dynamic motion from this starting point.
+
+YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE:
+
+SENTENCE 1 (SCENE & CAMERA): Describe the scene and suggest camera movement (pan, zoom, tilt, tracking shot, etc.). What would a cinematographer do?
+
+SENTENCE 2 (SUBJECT MOTION): Describe the main subjects and how they could naturally move or animate. People breathe, blink, shift weight; animals move; plants sway; water flows.
+
+SENTENCE 3 (ENVIRONMENTAL DYNAMICS): Describe ambient motion - wind effects, lighting changes, particles, atmospheric effects, subtle movements that bring the scene to life.
+
+Examples of MOTION-FOCUSED single-image descriptions:
+
+- "The camera slowly pushes forward through the misty forest as the early morning light filters through the canopy. The tall pine trees sway gently in the breeze while a deer in the clearing lifts its head alertly and flicks its ears. Dust motes drift lazily through the golden light beams and fallen leaves rustle and tumble across the forest floor."
+
+- "The camera tracks slowly around the woman as she stands at the window gazing out at the city. She shifts her weight slightly and turns her head, her hair catching the warm light from the sunset outside. The curtains billow softly in a gentle breeze while city lights begin twinkling on in the darkening skyline."
+
+- "The camera zooms gradually into the vintage car parked on the empty desert road as heat waves shimmer off the asphalt. Chrome details on the car glint and sparkle as the harsh sun shifts position overhead. Tumbleweeds roll slowly across the cracked pavement while sand particles drift on the hot wind."
+
+Now create your THREE-SENTENCE MOTION-FOCUSED description based on: '{base_prompt_text}'"""
+
+                # Run inference
+                result = extender.extend_with_img(
+                    prompt=query,
+                    system_prompt=system_prompt,
+                    image=img
+                )
+
+                vlm_prompt = result.prompt.strip()
+                dprint(f"[VLM_SINGLE_BATCH] Generated: {vlm_prompt}")
+
+                results.append(vlm_prompt)
+
+            except Exception as e:
+                dprint(f"[VLM_SINGLE_BATCH] ERROR processing image {i+1}: {e}")
+                # Fallback to base_prompt
+                if base_prompt and base_prompt.strip():
+                    results.append(base_prompt)
+                else:
+                    results.append("cinematic video")
+
+        dprint(f"[VLM_SINGLE_BATCH] Completed {len(results)}/{len(image_paths)} prompts")
+
+        # Cleanup
+        if torch.cuda.is_available():
+            gpu_mem_before_cleanup = torch.cuda.memory_allocated() / 1024**3
+            print(f"[VLM_SINGLE_CLEANUP] GPU memory BEFORE cleanup: {gpu_mem_before_cleanup:.2f} GB")
+
+        print(f"[VLM_SINGLE_CLEANUP] Cleaning up VLM model and processor...")
+        try:
+            del extender.model
+            del extender.processor
+            del extender
+            print(f"[VLM_SINGLE_CLEANUP] ✅ Successfully deleted VLM objects")
+        except Exception as e:
+            print(f"[VLM_SINGLE_CLEANUP] ⚠️  Error during deletion: {e}")
+
+        import gc
+        collected = gc.collect()
+        print(f"[VLM_SINGLE_CLEANUP] Garbage collected {collected} objects")
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            gpu_mem_after = torch.cuda.memory_allocated() / 1024**3
+            gpu_freed = gpu_mem_before_cleanup - gpu_mem_after
+            print(f"[VLM_SINGLE_CLEANUP] GPU memory AFTER cleanup: {gpu_mem_after:.2f} GB")
+            print(f"[VLM_SINGLE_CLEANUP] GPU memory freed: {gpu_freed:.2f} GB")
+
+        print(f"[VLM_SINGLE_CLEANUP] ✅ VLM cleanup complete")
+
+        return results
+
+    except Exception as e:
+        dprint(f"[VLM_SINGLE_BATCH] CRITICAL ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        # Fallback to base prompts
+        return [bp if bp and bp.strip() else "cinematic video" for bp in base_prompts]
+
+
 def test_vlm_transition():
     """Test function for VLM transition prompt generation."""
     print("\n" + "="*80)
