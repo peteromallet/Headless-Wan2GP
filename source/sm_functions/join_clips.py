@@ -456,11 +456,6 @@ def _handle_join_clips_task(
             dprint(f"[JOIN_CLIPS] Task {task_id}: Using detected resolution: {parsed_res_wh}")
 
         # --- 5. Build Guide and Mask Videos (using shared helper) ---
-        # Get regenerate_anchors setting (default True - regenerate anchor frames for smoother transitions)
-        regenerate_anchors = task_params_from_db.get("regenerate_anchors", True)
-        # Number of anchor frames to regenerate on each side (default 3 for smooth blending)
-        num_anchor_frames = task_params_from_db.get("num_anchor_frames", 3)
-        dprint(f"[JOIN_CLIPS] Task {task_id}: regenerate_anchors={regenerate_anchors}, num_anchor_frames={num_anchor_frames}")
 
         # Calculate VACE quantization adjustments
         original_gap = gap_frame_count
@@ -516,8 +511,6 @@ def _handle_join_clips_task(
                 output_dir=join_clips_dir,
                 task_id=task_id,
                 filename_prefix="join",
-                regenerate_anchors=regenerate_anchors,
-                num_anchor_frames=num_anchor_frames,
                 replace_mode=replace_mode,
                 gap_inserted_frames=gap_inserted_frames,
                 dprint=dprint
@@ -634,48 +627,38 @@ def _handle_join_clips_task(
                         import subprocess
                         import tempfile
 
-                        # --- Calculate blend_frames for crossfade transitions ---
-                        # Default: num_anchor_frames (matches the regeneration strategy)
-                        # Logic: We regenerate N anchor frames as critical transition zones,
-                        # so we blend over those same N frames to complete the smoothing
-                        default_blend_frames = num_anchor_frames if regenerate_anchors else (context_frame_count // 3)
-                        blend_frames = task_params_from_db.get("blend_frames", default_blend_frames)
-
-                        # Calculate maximum safe blend
-                        if regenerate_anchors:
-                            max_safe_blend = context_frame_count - num_anchor_frames
-                        else:
-                            max_safe_blend = context_frame_count
-
-                        # Clamp blend_frames to safe range [0, max_safe_blend]
-                        blend_frames = max(0, min(blend_frames, max_safe_blend))
-
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: Blend frames: {blend_frames} (default: {default_blend_frames}, max safe: {max_safe_blend})")
-
                         # Create trimmed versions of the original clips
-                        # INSERT mode:
-                        #   Clip1: Keep extra blend_frames for crossfade with transition
-                        #   Clip2: Start earlier by blend_frames for crossfade with transition
-                        # REPLACE mode:
-                        #   Clip1: Remove more frames (context + replaced frames - blend)
-                        #   Clip2: Skip more frames (context + replaced frames - blend)
-
                         with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False, dir=join_clips_dir) as clip1_trimmed_file:
                             clip1_trimmed_path = Path(clip1_trimmed_file.name)
 
                         with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False, dir=join_clips_dir) as clip2_trimmed_file:
                             clip2_trimmed_path = Path(clip2_trimmed_file.name)
 
-                        # Both modes now use the same clip1 trimming logic:
-                        # VACE output starts with context_before frames, so remove (context - blend) from clip1
-                        # This leaves blend_frames for crossfade overlap
-                        frames_to_remove_clip1 = context_frame_count - blend_frames
-                        frames_to_keep_clip1 = start_frame_count - frames_to_remove_clip1
+                        # Trimming logic differs by mode:
+                        # REPLACE mode: Remove gap_frame_count frames from boundary (split between clips)
+                        #               Context frames remain in clips and blend with VACE output
+                        #               Net change: 0 frames (same video length)
+                        # INSERT mode:  Don't remove any frames, just insert new gap frames
+                        #               Context frames at boundaries blend with VACE output
+                        #               Net change: +gap_frame_count frames (video gets longer)
                         
-                        mode_name = "REPLACE" if replace_mode else "INSERT"
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: {mode_name} mode trimming clip1")
-                        dprint(f"[JOIN_CLIPS] Task {task_id}:   Removing last {frames_to_remove_clip1} frames, keeping {frames_to_keep_clip1}/{start_frame_count}")
-                        dprint(f"[JOIN_CLIPS] Task {task_id}:   This leaves {blend_frames} frames for crossfade overlap")
+                        # For proper blending, blend over the full context region
+                        blend_frames = context_frame_count
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: Blend frames set to context_frame_count: {blend_frames}")
+                        
+                        if replace_mode:
+                            # REPLACE: Remove gap/2 frames from each clip's boundary
+                            # Context frames (outside the gap) remain and blend with VACE context
+                            gap_from_clip1 = gap_for_guide // 2
+                            frames_to_remove_clip1 = gap_from_clip1
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - removing {gap_from_clip1} gap frames from clip1")
+                        else:
+                            # INSERT: Don't remove any frames, just insert transition between clips
+                            frames_to_remove_clip1 = 0
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode - keeping all frames from clip1")
+                        
+                        frames_to_keep_clip1 = start_frame_count - frames_to_remove_clip1
+                        dprint(f"[JOIN_CLIPS] Task {task_id}:   Keeping {frames_to_keep_clip1}/{start_frame_count} frames from clip1")
 
                         # Use common frame extraction: frames 0 to (frames_to_keep_clip1 - 1)
                         trimmed_clip1 = extract_frame_range_to_video(
@@ -689,17 +672,30 @@ def _handle_join_clips_task(
                         if not trimmed_clip1:
                             raise ValueError(f"Failed to trim clip1 (frames 0-{frames_to_keep_clip1 - 1})")
 
-                        # Both modes now use the same clip2 trimming logic:
-                        # VACE output ends with context_after frames, so skip (context - blend) from clip2
-                        # This leaves blend_frames for crossfade overlap
-                        frames_to_skip_clip2 = context_frame_count - blend_frames
-                        frames_remaining_clip2 = end_frame_count - frames_to_skip_clip2
+                        # Clip2 trimming also differs by mode
+                        if replace_mode:
+                            # REPLACE: Skip gap/2 frames from start of clip2 (ceiling for odd counts)
+                            gap_from_clip2 = gap_for_guide - (gap_for_guide // 2)  # ceiling division
+                            frames_to_skip_clip2 = gap_from_clip2
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - skipping {gap_from_clip2} gap frames from clip2")
+                        else:
+                            # INSERT: Don't skip any frames
+                            frames_to_skip_clip2 = 0
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode - keeping all frames from clip2")
                         
-                        mode_name = "REPLACE" if replace_mode else "INSERT"
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: {mode_name} mode trimming clip2")
-                        dprint(f"[JOIN_CLIPS] Task {task_id}:   Skipping first {frames_to_skip_clip2}/{end_frame_count} frames")
-                        dprint(f"[JOIN_CLIPS] Task {task_id}:   Keeping {frames_remaining_clip2} frames")
-                        dprint(f"[JOIN_CLIPS] Task {task_id}:   Crossfade: {blend_frames} frames starting at clip2[{frames_to_skip_clip2}]")
+                        frames_remaining_clip2 = end_frame_count - frames_to_skip_clip2
+                        dprint(f"[JOIN_CLIPS] Task {task_id}:   Keeping {frames_remaining_clip2}/{end_frame_count} frames from clip2")
+                        
+                        # Log net frame change summary
+                        total_gap_removed = frames_to_remove_clip1 + frames_to_skip_clip2
+                        # Transition = context + gap + context, but context regions overlap with clips via blend
+                        # Effective new frames = gap_for_guide (the middle portion)
+                        effective_frames_added = gap_for_guide
+                        net_frame_change = effective_frames_added - total_gap_removed
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: === NET FRAME CHANGE ===")
+                        dprint(f"[JOIN_CLIPS] Task {task_id}:   Gap frames removed from clips: {total_gap_removed}")
+                        dprint(f"[JOIN_CLIPS] Task {task_id}:   Gap frames generated by VACE: {effective_frames_added}")
+                        dprint(f"[JOIN_CLIPS] Task {task_id}:   Net change: {net_frame_change:+d} frames")
 
                         # Use common frame extraction: skip first frames_to_skip_clip2 frames
                         trimmed_clip2 = extract_frame_range_to_video(
