@@ -273,7 +273,8 @@ def stitch_videos_with_crossfade(
         final_stitched_frames,
         output_path,
         fps,
-        resolution_wh
+        resolution_wh,
+        dprint=dprint
     )
 
     if created_video is None:
@@ -572,14 +573,22 @@ def create_video_from_frames_list(
     frames_list: list[np.ndarray],
     output_path: str | Path,
     fps: int,
-    resolution: tuple[int, int]
+    resolution: tuple[int, int],
+    *,
+    dprint=None
 ) -> Path | None:
     """Creates a video from a list of NumPy BGR frames using FFmpeg subprocess.
     Returns the Path object of the successfully written file, or None if failed.
     """
+    # Use print if no dprint provided
+    log = dprint if dprint else print
+    
     output_path_obj = Path(output_path)
     output_path_mp4 = output_path_obj.with_suffix('.mp4')
     output_path_mp4.parent.mkdir(parents=True, exist_ok=True)
+
+    log(f"[CREATE_VIDEO] Creating video: {output_path_mp4}")
+    log(f"[CREATE_VIDEO] Input: {len(frames_list)} frames, resolution={resolution}, fps={fps}")
 
     ffmpeg_cmd = [
         "ffmpeg", "-y",
@@ -598,28 +607,45 @@ def create_video_from_frames_list(
     ]
 
     processed_frames = []
+    skipped_none = 0
+    skipped_resize = 0
     for frame_idx, frame_np in enumerate(frames_list):
         if frame_np is None or not isinstance(frame_np, np.ndarray):
+            skipped_none += 1
             continue
         if frame_np.dtype != np.uint8:
             frame_np = frame_np.astype(np.uint8)
         if frame_np.shape[0] != resolution[1] or frame_np.shape[1] != resolution[0] or frame_np.shape[2] != 3:
             try:
                 frame_np = cv2.resize(frame_np, resolution, interpolation=cv2.INTER_AREA)
-            except Exception:
+            except Exception as e:
+                log(f"[CREATE_VIDEO] WARNING: Failed to resize frame {frame_idx}: {e}")
+                skipped_resize += 1
                 continue
         processed_frames.append(frame_np)
 
+    if skipped_none > 0:
+        log(f"[CREATE_VIDEO] WARNING: Skipped {skipped_none} None/invalid frames")
+    if skipped_resize > 0:
+        log(f"[CREATE_VIDEO] WARNING: Skipped {skipped_resize} frames due to resize failure")
+
     if not processed_frames:
+        log(f"[CREATE_VIDEO] ERROR: No valid frames to process! Input had {len(frames_list)} frames, all were skipped")
         return None
+
+    log(f"[CREATE_VIDEO] Processing {len(processed_frames)} valid frames")
 
     try:
         raw_video_data = b''.join(frame.tobytes() for frame in processed_frames)
-    except Exception:
+    except Exception as e:
+        log(f"[CREATE_VIDEO] ERROR: Failed to convert frames to bytes: {e}")
         return None
 
     if not raw_video_data:
+        log(f"[CREATE_VIDEO] ERROR: raw_video_data is empty after byte conversion")
         return None
+
+    log(f"[CREATE_VIDEO] Raw video data: {len(raw_video_data)} bytes")
 
     try:
         proc = subprocess.run(
@@ -631,9 +657,14 @@ def create_video_from_frames_list(
 
         if proc.returncode == 0:
             if output_path_mp4.exists() and output_path_mp4.stat().st_size > 0:
+                log(f"[CREATE_VIDEO] SUCCESS: Created {output_path_mp4} ({output_path_mp4.stat().st_size} bytes)")
                 return output_path_mp4
+            log(f"[CREATE_VIDEO] ERROR: FFmpeg succeeded but output file missing or empty")
             return None
         else:
+            stderr = proc.stderr.decode('utf-8', errors='replace') if proc.stderr else "no stderr"
+            log(f"[CREATE_VIDEO] ERROR: FFmpeg failed with return code {proc.returncode}")
+            log(f"[CREATE_VIDEO] FFmpeg stderr: {stderr[:500]}")
             if output_path_mp4.exists():
                 try:
                     output_path_mp4.unlink()
@@ -642,10 +673,15 @@ def create_video_from_frames_list(
             return None
             
     except subprocess.TimeoutExpired:
+        log(f"[CREATE_VIDEO] ERROR: FFmpeg timed out after 60 seconds")
         return None
     except FileNotFoundError:
+        log(f"[CREATE_VIDEO] ERROR: FFmpeg not found - is it installed?")
         return None
-    except Exception:
+    except Exception as e:
+        log(f"[CREATE_VIDEO] ERROR: Unexpected exception: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def _apply_saturation_to_video_ffmpeg(
