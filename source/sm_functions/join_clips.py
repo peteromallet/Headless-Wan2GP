@@ -105,6 +105,7 @@ def _handle_join_clips_task(
             - resolution: Optional [width, height] override
             - use_input_video_resolution: Optional bool (default False). If True, uses the detected resolution from input video instead of resolution override
             - fps: Optional FPS override (defaults to 16)
+            - use_input_video_fps: Optional bool (default False). If True, uses input video's FPS. If False, downsamples to fps param (default 16)
             - max_wait_time: Optional timeout in seconds for generation (defaults to 1800s / 30 minutes)
             - additional_loras: Optional dict of additional LoRAs {name: weight}
             - Other standard VACE parameters (guidance_scale, flow_shift, etc.)
@@ -222,11 +223,17 @@ def _handle_join_clips_task(
         if aspect_ratio:
             dprint(f"[JOIN_CLIPS]   Target aspect ratio: {aspect_ratio}")
 
-        # --- 2a. Ensure Videos are at Target FPS (if specified) ---
-        # This is important when videos might come from different sources at different FPS
-        target_fps_param = task_params_from_db.get("fps")
-        if target_fps_param:
-            dprint(f"[JOIN_CLIPS] Task {task_id}: Ensuring videos are at target FPS {target_fps_param}...")
+        # --- 2a. Ensure Videos are at Target FPS ---
+        # use_input_video_fps: If True, keep original FPS. If False, downsample to fps param (default 16)
+        use_input_video_fps = task_params_from_db.get("use_input_video_fps", False)
+        
+        if use_input_video_fps:
+            dprint(f"[JOIN_CLIPS] Task {task_id}: use_input_video_fps=True, keeping original video FPS")
+            # Don't convert - will use input video's FPS
+        else:
+            # Downsample to target FPS (default 16)
+            target_fps_param = task_params_from_db.get("fps", 16)
+            dprint(f"[JOIN_CLIPS] Task {task_id}: use_input_video_fps=False, ensuring videos are at {target_fps_param} FPS...")
             
             starting_video_fps = ensure_video_fps(
                 video_path=starting_video,
@@ -396,8 +403,13 @@ def _handle_join_clips_task(
             dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
             return False, error_msg
 
-        # Use FPS from task params, or default to starting video FPS
-        target_fps = task_params_from_db.get("fps", start_fps)
+        # Set target FPS based on use_input_video_fps setting
+        if use_input_video_fps:
+            target_fps = start_fps
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Using input video FPS: {target_fps}")
+        else:
+            target_fps = task_params_from_db.get("fps", 16)
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Using target FPS: {target_fps}")
 
         # --- 4. Calculate gap sizes first (needed for REPLACE mode context extraction) ---
         # Calculate VACE quantization adjustments early so we know exact gap sizes
