@@ -647,42 +647,59 @@ def create_video_from_frames_list(
 
     log(f"[CREATE_VIDEO] Raw video data: {len(raw_video_data)} bytes")
 
-    try:
-        proc = subprocess.run(
-            ffmpeg_cmd,
-            input=raw_video_data,
-            capture_output=True,
-            timeout=60
-        )
+    # Use longer timeout (180s) and retry logic for slower instances
+    ffmpeg_timeout = 180
+    max_retries = 2
+    
+    for attempt in range(max_retries):
+        try:
+            log(f"[CREATE_VIDEO] Running FFmpeg (attempt {attempt + 1}/{max_retries}, timeout={ffmpeg_timeout}s)...")
+            proc = subprocess.run(
+                ffmpeg_cmd,
+                input=raw_video_data,
+                capture_output=True,
+                timeout=ffmpeg_timeout
+            )
 
-        if proc.returncode == 0:
-            if output_path_mp4.exists() and output_path_mp4.stat().st_size > 0:
-                log(f"[CREATE_VIDEO] SUCCESS: Created {output_path_mp4} ({output_path_mp4.stat().st_size} bytes)")
-                return output_path_mp4
-            log(f"[CREATE_VIDEO] ERROR: FFmpeg succeeded but output file missing or empty")
+            if proc.returncode == 0:
+                if output_path_mp4.exists() and output_path_mp4.stat().st_size > 0:
+                    log(f"[CREATE_VIDEO] SUCCESS: Created {output_path_mp4} ({output_path_mp4.stat().st_size} bytes)")
+                    return output_path_mp4
+                log(f"[CREATE_VIDEO] ERROR: FFmpeg succeeded but output file missing or empty")
+                # Don't retry if FFmpeg succeeded but file is missing - something else is wrong
+                return None
+            else:
+                stderr = proc.stderr.decode('utf-8', errors='replace') if proc.stderr else "no stderr"
+                log(f"[CREATE_VIDEO] ERROR: FFmpeg failed with return code {proc.returncode}")
+                log(f"[CREATE_VIDEO] FFmpeg stderr: {stderr[:500]}")
+                if output_path_mp4.exists():
+                    try:
+                        output_path_mp4.unlink()
+                    except Exception:
+                        pass
+                # Retry on FFmpeg failure
+                if attempt < max_retries - 1:
+                    log(f"[CREATE_VIDEO] Retrying...")
+                    continue
+                return None
+                
+        except subprocess.TimeoutExpired:
+            log(f"[CREATE_VIDEO] ERROR: FFmpeg timed out after {ffmpeg_timeout} seconds (attempt {attempt + 1}/{max_retries})")
+            if attempt < max_retries - 1:
+                log(f"[CREATE_VIDEO] Retrying with same timeout...")
+                continue
             return None
-        else:
-            stderr = proc.stderr.decode('utf-8', errors='replace') if proc.stderr else "no stderr"
-            log(f"[CREATE_VIDEO] ERROR: FFmpeg failed with return code {proc.returncode}")
-            log(f"[CREATE_VIDEO] FFmpeg stderr: {stderr[:500]}")
-            if output_path_mp4.exists():
-                try:
-                    output_path_mp4.unlink()
-                except Exception:
-                    pass
+        except FileNotFoundError:
+            log(f"[CREATE_VIDEO] ERROR: FFmpeg not found - is it installed?")
             return None
-            
-    except subprocess.TimeoutExpired:
-        log(f"[CREATE_VIDEO] ERROR: FFmpeg timed out after 60 seconds")
-        return None
-    except FileNotFoundError:
-        log(f"[CREATE_VIDEO] ERROR: FFmpeg not found - is it installed?")
-        return None
-    except Exception as e:
-        log(f"[CREATE_VIDEO] ERROR: Unexpected exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+        except Exception as e:
+            log(f"[CREATE_VIDEO] ERROR: Unexpected exception: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    # If we exhausted all retries without returning, return None
+    return None
 
 def _apply_saturation_to_video_ffmpeg(
     input_video_path: str | Path,
