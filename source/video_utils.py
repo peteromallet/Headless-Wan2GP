@@ -276,7 +276,16 @@ def stitch_videos_with_crossfade(
         resolution_wh
     )
 
-    dprint(f"[STITCH_VIDEOS] Created stitched video: {created_video}")
+    if created_video is None:
+        raise ValueError(f"Failed to create stitched video at {output_path} - create_video_from_frames_list returned None")
+    
+    if not created_video.exists():
+        raise ValueError(f"Stitched video file does not exist: {created_video}")
+    
+    if created_video.stat().st_size == 0:
+        raise ValueError(f"Stitched video file is empty: {created_video}")
+
+    dprint(f"[STITCH_VIDEOS] Created stitched video: {created_video} ({created_video.stat().st_size} bytes)")
 
     return created_video
 

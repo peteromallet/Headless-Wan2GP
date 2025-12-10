@@ -652,10 +652,32 @@ def _handle_join_clips_task(
                     # IMPORTANT: Check actual frame count vs expected
                     # VACE may generate fewer frames than requested (e.g., 45 instead of 48)
                     actual_transition_frames, _ = get_video_frame_count_and_fps(transition_video_path)
-                    if actual_transition_frames != total_frames:
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: ⚠️  Frame count mismatch! Expected {total_frames}, got {actual_transition_frames}")
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: Adjusting calculations for actual frame count")
-                        total_frames = actual_transition_frames  # Use actual count for subsequent calculations
+                    
+                    # Calculate safe blend_frames based on actual transition length
+                    # Transition structure: [context_before][gap][context_after]
+                    # We need at least blend_frames at each end for crossfading
+                    expected_total = total_frames
+                    
+                    if actual_transition_frames != expected_total:
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: ⚠️  Frame count mismatch! Expected {expected_total}, got {actual_transition_frames}")
+                        
+                        # Calculate the difference
+                        frame_diff = expected_total - actual_transition_frames
+                        
+                        if frame_diff > 0:
+                            # VACE generated fewer frames than expected
+                            # This could cause misalignment - we need to adjust blend_frames
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: VACE generated {frame_diff} fewer frames than expected")
+                            
+                            # Maximum safe blend = half of actual transition (to leave room for gap)
+                            max_safe_blend = actual_transition_frames // 4  # Conservative: 1/4 of total at each end
+                            
+                            if context_frame_count > max_safe_blend:
+                                dprint(f"[JOIN_CLIPS] Task {task_id}: ⚠️  Reducing blend_frames from {context_frame_count} to {max_safe_blend} for safety")
+                        
+                        total_frames = actual_transition_frames  # Use actual count
+                    else:
+                        max_safe_blend = context_frame_count
 
                     # --- 8. Concatenate Full Clips with Transition ---
                     dprint(f"[JOIN_CLIPS] Task {task_id}: Concatenating full clips with transition...")
@@ -675,9 +697,9 @@ def _handle_join_clips_task(
                         # REPLACE mode: Remove gap frames from boundary, context remains and blends
                         # INSERT mode: Don't remove any frames, just insert transition
                         
-                        # For proper blending, blend over the full context region
-                        blend_frames = context_frame_count
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: Blend frames set to context_frame_count: {blend_frames}")
+                        # For proper blending, blend over the full context region (or max safe if VACE returned fewer frames)
+                        blend_frames = min(context_frame_count, max_safe_blend)
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: Blend frames: {blend_frames} (context={context_frame_count}, max_safe={max_safe_blend})")
                         
                         # Use pre-calculated gap sizes (gap_from_clip1, gap_from_clip2 from step 4)
                         frames_to_remove_clip1 = gap_from_clip1  # 0 for INSERT mode
@@ -766,13 +788,24 @@ def _handle_join_clips_task(
                                 crossfade_sharp_amt=0.3,
                                 dprint=dprint
                             )
+                            
+                            # Validate the stitch succeeded
+                            if created_video is None:
+                                raise ValueError("stitch_videos_with_crossfade returned None")
+                            
                             dprint(f"[JOIN_CLIPS] Task {task_id}: Successfully stitched videos with crossfade blending")
                         except Exception as e:
                             raise ValueError(f"Failed to stitch videos with crossfade: {e}") from e
 
-                        # Verify final output exists
-                        if not final_output_path.exists() or final_output_path.stat().st_size == 0:
-                            raise ValueError(f"Final concatenated video is missing or empty")
+                        # Verify final output exists and is valid
+                        if not final_output_path.exists():
+                            raise ValueError(f"Final concatenated video does not exist: {final_output_path}")
+                        
+                        file_size = final_output_path.stat().st_size
+                        if file_size == 0:
+                            raise ValueError(f"Final concatenated video is empty (0 bytes)")
+                        
+                        dprint(f"[JOIN_CLIPS] Task {task_id}: Final video validated: {file_size} bytes")
 
                         # Extract poster image/thumbnail from the final video
                         poster_output_path = final_output_path.with_suffix('.jpg')
