@@ -399,35 +399,85 @@ def _handle_join_clips_task(
         # Use FPS from task params, or default to starting video FPS
         target_fps = task_params_from_db.get("fps", start_fps)
 
-        # --- 4. Extract Context Frames ---
+        # --- 4. Calculate gap sizes first (needed for REPLACE mode context extraction) ---
+        # Calculate VACE quantization adjustments early so we know exact gap sizes
+        quantization_result = _calculate_vace_quantization(
+            context_frame_count=context_frame_count,
+            gap_frame_count=gap_frame_count,
+            replace_mode=replace_mode
+        )
+        gap_for_guide = quantization_result['gap_for_guide']
+        quantization_shift = quantization_result['quantization_shift']
+        
+        # Calculate gap split for REPLACE mode
+        gap_from_clip1 = gap_for_guide // 2 if replace_mode else 0
+        gap_from_clip2 = (gap_for_guide - gap_from_clip1) if replace_mode else 0
+        
+        dprint(f"[JOIN_CLIPS] Task {task_id}: Mode={'REPLACE' if replace_mode else 'INSERT'}, gap_for_guide={gap_for_guide}")
+        if replace_mode:
+            dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE will remove {gap_from_clip1} from clip1, {gap_from_clip2} from clip2")
+
+        # --- 5. Extract Context Frames ---
         dprint(f"[JOIN_CLIPS] Task {task_id}: Extracting context frames...")
 
         try:
-            # Extract all frames from starting video, take last N
+            # Extract all frames from both videos
             start_all_frames = sm_extract_frames_from_video(str(starting_video), dprint_func=dprint)
             if not start_all_frames or len(start_all_frames) < context_frame_count:
                 error_msg = f"Failed to extract {context_frame_count} frames from starting video"
                 dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
                 return False, error_msg
 
-            start_context_frames = start_all_frames[-context_frame_count:]
-            dprint(f"[JOIN_CLIPS] Task {task_id}: Extracted {len(start_context_frames)} frames from end of starting video")
-            dprint(f"[JOIN_CLIPS_ALIGNMENT] Start context frame indices in original video: [{start_frame_count - context_frame_count}:{start_frame_count}]")
-            dprint(f"[JOIN_CLIPS_ALIGNMENT]   Example: frame index {start_frame_count - context_frame_count} → position 0 in context")
-            dprint(f"[JOIN_CLIPS_ALIGNMENT]   Example: frame index {start_frame_count - 1} → position {context_frame_count - 1} in context")
-
-            # Extract all frames from ending video, take first N
             end_all_frames = sm_extract_frames_from_video(str(ending_video), dprint_func=dprint)
             if not end_all_frames or len(end_all_frames) < context_frame_count:
                 error_msg = f"Failed to extract {context_frame_count} frames from ending video"
                 dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
                 return False, error_msg
 
-            end_context_frames = end_all_frames[:context_frame_count]
-            dprint(f"[JOIN_CLIPS] Task {task_id}: Extracted {len(end_context_frames)} frames from beginning of ending video")
-            dprint(f"[JOIN_CLIPS_ALIGNMENT] End context frame indices in original video: [0:{context_frame_count}]")
-            dprint(f"[JOIN_CLIPS_ALIGNMENT]   Example: frame index 0 → position 0 in context")
-            dprint(f"[JOIN_CLIPS_ALIGNMENT]   Example: frame index {context_frame_count - 1} → position {context_frame_count - 1} in context")
+            if replace_mode:
+                # REPLACE mode: Context comes from OUTSIDE the gap region
+                # Gap is removed from boundary, context is adjacent to (but outside) the gap
+                #
+                # clip1: [...][context 8][gap N removed]
+                # clip2: [gap M removed][context 8][...]
+                #
+                # Validate we have enough frames
+                min_clip1_frames = context_frame_count + gap_from_clip1
+                min_clip2_frames = context_frame_count + gap_from_clip2
+                
+                if len(start_all_frames) < min_clip1_frames:
+                    error_msg = f"Starting video too short for REPLACE mode: need {min_clip1_frames} frames, have {len(start_all_frames)}"
+                    dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
+                    return False, error_msg
+                
+                if len(end_all_frames) < min_clip2_frames:
+                    error_msg = f"Ending video too short for REPLACE mode: need {min_clip2_frames} frames, have {len(end_all_frames)}"
+                    dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
+                    return False, error_msg
+                
+                # Context from clip1: frames BEFORE the gap (not the last frames)
+                # If removing last N frames, context is the 8 frames before that
+                context_start_idx = len(start_all_frames) - gap_from_clip1 - context_frame_count
+                context_end_idx = len(start_all_frames) - gap_from_clip1
+                start_context_frames = start_all_frames[context_start_idx:context_end_idx]
+                
+                dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - clip1 context from frames [{context_start_idx}:{context_end_idx}]")
+                dprint(f"[JOIN_CLIPS] Task {task_id}:   (frames {context_end_idx} to {len(start_all_frames)-1} will be removed as gap)")
+                
+                # Context from clip2: frames AFTER the gap (not the first frames)
+                # If removing first M frames, context is the 8 frames after that
+                end_context_frames = end_all_frames[gap_from_clip2:gap_from_clip2 + context_frame_count]
+                
+                dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - clip2 context from frames [{gap_from_clip2}:{gap_from_clip2 + context_frame_count}]")
+                dprint(f"[JOIN_CLIPS] Task {task_id}:   (frames 0 to {gap_from_clip2-1} will be removed as gap)")
+            else:
+                # INSERT mode: Context is at the boundary (last/first frames)
+                # No frames are removed, we're just inserting new frames between clips
+                start_context_frames = start_all_frames[-context_frame_count:]
+                end_context_frames = end_all_frames[:context_frame_count]
+                
+                dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode - clip1 context from last {context_frame_count} frames")
+                dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode - clip2 context from first {context_frame_count} frames")
 
         except Exception as e:
             error_msg = f"Failed to extract context frames: {e}"
@@ -455,24 +505,11 @@ def _handle_join_clips_task(
             parsed_res_wh = detected_res_wh
             dprint(f"[JOIN_CLIPS] Task {task_id}: Using detected resolution: {parsed_res_wh}")
 
-        # --- 5. Build Guide and Mask Videos (using shared helper) ---
-
-        # Calculate VACE quantization adjustments
-        original_gap = gap_frame_count
-        quantization_result = _calculate_vace_quantization(
-            context_frame_count=context_frame_count,
-            gap_frame_count=gap_frame_count,
-            replace_mode=replace_mode
-        )
-
+        # --- 6. Build Guide and Mask Videos (using shared helper) ---
+        # (quantization already calculated above in step 4)
         quantized_total_frames = quantization_result['total_frames']
-        gap_for_guide = quantization_result['gap_for_guide']
-        quantization_shift = quantization_result['quantization_shift']
-
-        mode_name = "REPLACE" if replace_mode else "INSERT"
-        dprint(f"[JOIN_CLIPS] Task {task_id}: {mode_name} mode - context={context_frame_count}, gap={gap_frame_count}")
-        dprint(f"[JOIN_CLIPS] Task {task_id}: Total VACE frames: {quantized_total_frames} (context + gap + context)")
         
+        dprint(f"[JOIN_CLIPS] Task {task_id}: Total VACE frames: {quantized_total_frames} (context + gap + context)")
         if quantization_shift > 0:
             dprint(f"[JOIN_CLIPS] Task {task_id}: VACE quantization applied: gap adjusted {gap_frame_count} → {gap_for_guide} frames")
 
@@ -634,30 +671,22 @@ def _handle_join_clips_task(
                         with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False, dir=join_clips_dir) as clip2_trimmed_file:
                             clip2_trimmed_path = Path(clip2_trimmed_file.name)
 
-                        # Trimming logic differs by mode:
-                        # REPLACE mode: Remove gap_frame_count frames from boundary (split between clips)
-                        #               Context frames remain in clips and blend with VACE output
-                        #               Net change: 0 frames (same video length)
-                        # INSERT mode:  Don't remove any frames, just insert new gap frames
-                        #               Context frames at boundaries blend with VACE output
-                        #               Net change: +gap_frame_count frames (video gets longer)
+                        # Trimming uses gap_from_clip1 and gap_from_clip2 calculated earlier
+                        # REPLACE mode: Remove gap frames from boundary, context remains and blends
+                        # INSERT mode: Don't remove any frames, just insert transition
                         
                         # For proper blending, blend over the full context region
                         blend_frames = context_frame_count
                         dprint(f"[JOIN_CLIPS] Task {task_id}: Blend frames set to context_frame_count: {blend_frames}")
                         
+                        # Use pre-calculated gap sizes (gap_from_clip1, gap_from_clip2 from step 4)
+                        frames_to_remove_clip1 = gap_from_clip1  # 0 for INSERT mode
+                        frames_to_keep_clip1 = start_frame_count - frames_to_remove_clip1
+                        
                         if replace_mode:
-                            # REPLACE: Remove gap/2 frames from each clip's boundary
-                            # Context frames (outside the gap) remain and blend with VACE context
-                            gap_from_clip1 = gap_for_guide // 2
-                            frames_to_remove_clip1 = gap_from_clip1
                             dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - removing {gap_from_clip1} gap frames from clip1")
                         else:
-                            # INSERT: Don't remove any frames, just insert transition between clips
-                            frames_to_remove_clip1 = 0
                             dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode - keeping all frames from clip1")
-                        
-                        frames_to_keep_clip1 = start_frame_count - frames_to_remove_clip1
                         dprint(f"[JOIN_CLIPS] Task {task_id}:   Keeping {frames_to_keep_clip1}/{start_frame_count} frames from clip1")
 
                         # Use common frame extraction: frames 0 to (frames_to_keep_clip1 - 1)
@@ -672,15 +701,12 @@ def _handle_join_clips_task(
                         if not trimmed_clip1:
                             raise ValueError(f"Failed to trim clip1 (frames 0-{frames_to_keep_clip1 - 1})")
 
-                        # Clip2 trimming also differs by mode
+                        # Clip2 trimming uses pre-calculated gap_from_clip2
+                        frames_to_skip_clip2 = gap_from_clip2  # 0 for INSERT mode
+                        
                         if replace_mode:
-                            # REPLACE: Skip gap/2 frames from start of clip2 (ceiling for odd counts)
-                            gap_from_clip2 = gap_for_guide - (gap_for_guide // 2)  # ceiling division
-                            frames_to_skip_clip2 = gap_from_clip2
                             dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - skipping {gap_from_clip2} gap frames from clip2")
                         else:
-                            # INSERT: Don't skip any frames
-                            frames_to_skip_clip2 = 0
                             dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode - keeping all frames from clip2")
                         
                         frames_remaining_clip2 = end_frame_count - frames_to_skip_clip2
