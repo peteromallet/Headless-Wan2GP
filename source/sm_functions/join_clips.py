@@ -103,6 +103,7 @@ def _handle_join_clips_task(
             - aspect_ratio: Optional aspect ratio (e.g., "16:9", "9:16", "1:1") to standardize both videos
             - model: Optional model override (defaults to wan_2_2_vace_lightning_baseline_2_2_2)
             - resolution: Optional [width, height] override
+            - use_input_video_resolution: Optional bool (default False). If True, uses the detected resolution from input video instead of resolution override
             - fps: Optional FPS override (defaults to 16)
             - max_wait_time: Optional timeout in seconds for generation (defaults to 1800s / 30 minutes)
             - additional_loras: Optional dict of additional LoRAs {name: weight}
@@ -438,14 +439,20 @@ def _handle_join_clips_task(
         # Get resolution from first frame or task params
         first_frame = start_context_frames[0]
         frame_height, frame_width = first_frame.shape[:2]
+        detected_res_wh = (frame_width, frame_height)
 
-        # Allow resolution override from task params
-        if "resolution" in task_params_from_db:
+        # Determine resolution: check use_input_video_resolution flag first, then explicit resolution param
+        use_input_video_resolution = task_params_from_db.get("use_input_video_resolution", False)
+        
+        if use_input_video_resolution:
+            parsed_res_wh = detected_res_wh
+            dprint(f"[JOIN_CLIPS] Task {task_id}: use_input_video_resolution=True, using detected resolution: {parsed_res_wh}")
+        elif "resolution" in task_params_from_db:
             resolution_list = task_params_from_db["resolution"]
             parsed_res_wh = (resolution_list[0], resolution_list[1])
             dprint(f"[JOIN_CLIPS] Task {task_id}: Using resolution override: {parsed_res_wh}")
         else:
-            parsed_res_wh = (frame_width, frame_height)
+            parsed_res_wh = detected_res_wh
             dprint(f"[JOIN_CLIPS] Task {task_id}: Using detected resolution: {parsed_res_wh}")
 
         # --- 5. Build Guide and Mask Videos (using shared helper) ---

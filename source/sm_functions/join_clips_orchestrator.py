@@ -388,6 +388,7 @@ def _extract_join_settings_from_payload(orchestrator_payload: dict) -> dict:
         "num_anchor_frames": orchestrator_payload.get("num_anchor_frames", 3),
         "aspect_ratio": orchestrator_payload.get("aspect_ratio"),
         "resolution": orchestrator_payload.get("resolution"),
+        "use_input_video_resolution": orchestrator_payload.get("use_input_video_resolution", False),
         "phase_config": orchestrator_payload.get("phase_config"),
         "num_inference_steps": orchestrator_payload.get("num_inference_steps"),
         "guidance_scale": orchestrator_payload.get("guidance_scale"),
