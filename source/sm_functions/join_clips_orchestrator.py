@@ -36,29 +36,43 @@ def _extract_boundary_frames_for_vlm(
     clip_list: List[dict],
     temp_dir: Path,
     orchestrator_task_id: str,
+    replace_mode: bool,
+    gap_frame_count: int,
     dprint
-) -> List[Tuple[str, str]]:
+) -> List[Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]]:
     """
     Extract boundary frames from clips for VLM prompt generation.
     
-    For each join (clip[i] → clip[i+1]), extracts:
-    - Last frame from clip[i]
-    - First frame from clip[i+1]
+    For each join (clip[i] → clip[i+1]), extracts 4 frames:
+    - First frame from clip[i] (scene context)
+    - Boundary frame from clip[i] (last frame before gap, adjusted for REPLACE mode)
+    - Boundary frame from clip[i+1] (first frame after gap, adjusted for REPLACE mode)
+    - Last frame from clip[i+1] (scene context)
     
     Args:
         clip_list: List of clip dicts with 'url' keys
         temp_dir: Directory to save temporary frame images
         orchestrator_task_id: Task ID for logging
+        replace_mode: Whether REPLACE mode is enabled (affects boundary frame selection)
+        gap_frame_count: Number of gap frames (used for REPLACE mode boundary calculation)
         dprint: Debug print function
         
     Returns:
-        List of (start_frame_path, end_frame_path) tuples for each join
+        List of (start_first, start_boundary, end_boundary, end_last) tuples for each join
     """
-    image_pairs = []
+    image_quads = []
     num_joins = len(clip_list) - 1
     
-    # Cache downloaded videos and their frames to avoid re-downloading
-    clip_frames_cache = {}  # url -> (first_frame_path, last_frame_path)
+    # Calculate gap split for REPLACE mode (same logic as join_clips.py)
+    gap_from_clip1 = gap_frame_count // 2 if replace_mode else 0
+    gap_from_clip2 = (gap_frame_count - gap_from_clip1) if replace_mode else 0
+    
+    if replace_mode:
+        dprint(f"[VLM_EXTRACT] REPLACE mode: gap_from_clip1={gap_from_clip1}, gap_from_clip2={gap_from_clip2}")
+    
+    # Cache downloaded videos and their extracted frames to avoid re-downloading
+    # url -> (frames_list, first_path, last_path)
+    clip_data_cache = {}
     
     for idx in range(num_joins):
         clip_start = clip_list[idx]
@@ -69,13 +83,13 @@ def _extract_boundary_frames_for_vlm(
         
         if not start_url or not end_url:
             dprint(f"[VLM_EXTRACT] Join {idx}: Missing URL, skipping")
-            image_pairs.append((None, None))
+            image_quads.append((None, None, None, None))
             continue
             
         try:
-            # Get last frame from clip_start
-            if start_url in clip_frames_cache:
-                _, start_last_frame_path = clip_frames_cache[start_url]
+            # === Extract frames from clip_start ===
+            if start_url in clip_data_cache:
+                start_frames, start_first_path, start_last_path = clip_data_cache[start_url]
             else:
                 dprint(f"[VLM_EXTRACT] Join {idx}: Downloading clip_start: {start_url[:80]}...")
                 local_start_path = download_video_if_url(
@@ -85,25 +99,38 @@ def _extract_boundary_frames_for_vlm(
                     descriptive_name=f"clip_{idx}_start"
                 )
                 
-                # Extract all frames and get last one
+                # Extract all frames
                 start_frames = extract_frames_from_video(local_start_path, dprint_func=dprint)
                 if not start_frames:
                     dprint(f"[VLM_EXTRACT] Join {idx}: Failed to extract frames from start clip")
-                    image_pairs.append((None, None))
+                    image_quads.append((None, None, None, None))
                     continue
                     
-                # Save first and last frames
-                start_first_frame_path = temp_dir / f"vlm_clip{idx}_first.jpg"
-                start_last_frame_path = temp_dir / f"vlm_clip{idx}_last.jpg"
-                cv2.imwrite(str(start_first_frame_path), cv2.cvtColor(start_frames[0], cv2.COLOR_RGB2BGR))
-                cv2.imwrite(str(start_last_frame_path), cv2.cvtColor(start_frames[-1], cv2.COLOR_RGB2BGR))
-                clip_frames_cache[start_url] = (str(start_first_frame_path), str(start_last_frame_path))
-                start_last_frame_path = str(start_last_frame_path)
+                # Save first and absolute last frames (for context)
+                start_first_path = temp_dir / f"vlm_clip{idx}_first.jpg"
+                start_last_path = temp_dir / f"vlm_clip{idx}_last.jpg"
+                cv2.imwrite(str(start_first_path), cv2.cvtColor(start_frames[0], cv2.COLOR_RGB2BGR))
+                cv2.imwrite(str(start_last_path), cv2.cvtColor(start_frames[-1], cv2.COLOR_RGB2BGR))
+                
+                clip_data_cache[start_url] = (start_frames, str(start_first_path), str(start_last_path))
                 dprint(f"[VLM_EXTRACT] Join {idx}: Extracted {len(start_frames)} frames from start clip")
             
-            # Get first frame from clip_end
-            if end_url in clip_frames_cache:
-                end_first_frame_path, _ = clip_frames_cache[end_url]
+            # Calculate boundary frame index for clip_start
+            # In REPLACE mode: boundary is the last frame BEFORE the gap region
+            # In INSERT mode: boundary is the absolute last frame
+            if replace_mode and gap_from_clip1 > 0:
+                start_boundary_idx = max(0, len(start_frames) - gap_from_clip1 - 1)
+                dprint(f"[VLM_EXTRACT] Join {idx}: REPLACE mode - start boundary at frame {start_boundary_idx} (not {len(start_frames)-1})")
+            else:
+                start_boundary_idx = len(start_frames) - 1
+            
+            # Save boundary frame
+            start_boundary_path = temp_dir / f"vlm_clip{idx}_boundary.jpg"
+            cv2.imwrite(str(start_boundary_path), cv2.cvtColor(start_frames[start_boundary_idx], cv2.COLOR_RGB2BGR))
+            
+            # === Extract frames from clip_end ===
+            if end_url in clip_data_cache:
+                end_frames, end_first_path, end_last_path = clip_data_cache[end_url]
             else:
                 dprint(f"[VLM_EXTRACT] Join {idx}: Downloading clip_end: {end_url[:80]}...")
                 local_end_path = download_video_if_url(
@@ -113,35 +140,56 @@ def _extract_boundary_frames_for_vlm(
                     descriptive_name=f"clip_{idx+1}_end"
                 )
                 
-                # Extract all frames and get first one
+                # Extract all frames
                 end_frames = extract_frames_from_video(local_end_path, dprint_func=dprint)
                 if not end_frames:
                     dprint(f"[VLM_EXTRACT] Join {idx}: Failed to extract frames from end clip")
-                    image_pairs.append((None, None))
+                    image_quads.append((None, None, None, None))
                     continue
                     
-                # Save first and last frames
-                end_first_frame_path = temp_dir / f"vlm_clip{idx+1}_first.jpg"
-                end_last_frame_path = temp_dir / f"vlm_clip{idx+1}_last.jpg"
-                cv2.imwrite(str(end_first_frame_path), cv2.cvtColor(end_frames[0], cv2.COLOR_RGB2BGR))
-                cv2.imwrite(str(end_last_frame_path), cv2.cvtColor(end_frames[-1], cv2.COLOR_RGB2BGR))
-                clip_frames_cache[end_url] = (str(end_first_frame_path), str(end_last_frame_path))
-                end_first_frame_path = str(end_first_frame_path)
+                # Save first and absolute last frames (for context)
+                end_first_path = temp_dir / f"vlm_clip{idx+1}_first.jpg"
+                end_last_path = temp_dir / f"vlm_clip{idx+1}_last.jpg"
+                cv2.imwrite(str(end_first_path), cv2.cvtColor(end_frames[0], cv2.COLOR_RGB2BGR))
+                cv2.imwrite(str(end_last_path), cv2.cvtColor(end_frames[-1], cv2.COLOR_RGB2BGR))
+                
+                clip_data_cache[end_url] = (end_frames, str(end_first_path), str(end_last_path))
                 dprint(f"[VLM_EXTRACT] Join {idx}: Extracted {len(end_frames)} frames from end clip")
             
-            image_pairs.append((start_last_frame_path, end_first_frame_path))
-            dprint(f"[VLM_EXTRACT] Join {idx}: Boundary frames ready")
+            # Calculate boundary frame index for clip_end
+            # In REPLACE mode: boundary is the first frame AFTER the gap region
+            # In INSERT mode: boundary is the absolute first frame
+            if replace_mode and gap_from_clip2 > 0:
+                end_boundary_idx = min(gap_from_clip2, len(end_frames) - 1)
+                dprint(f"[VLM_EXTRACT] Join {idx}: REPLACE mode - end boundary at frame {end_boundary_idx} (not 0)")
+            else:
+                end_boundary_idx = 0
+            
+            # Save boundary frame
+            end_boundary_path = temp_dir / f"vlm_clip{idx+1}_boundary.jpg"
+            cv2.imwrite(str(end_boundary_path), cv2.cvtColor(end_frames[end_boundary_idx], cv2.COLOR_RGB2BGR))
+            
+            # Return quad: (start_first, start_boundary, end_boundary, end_last)
+            image_quads.append((
+                str(clip_data_cache[start_url][1]),  # start first
+                str(start_boundary_path),             # start boundary
+                str(end_boundary_path),               # end boundary
+                str(clip_data_cache[end_url][2])      # end last
+            ))
+            dprint(f"[VLM_EXTRACT] Join {idx}: 4 frames ready (first, boundary, boundary, last)")
             
         except Exception as e:
             dprint(f"[VLM_EXTRACT] Join {idx}: ERROR extracting frames: {e}")
-            image_pairs.append((None, None))
+            image_quads.append((None, None, None, None))
             
-    return image_pairs
+    return image_quads
 
 
 def _generate_join_transition_prompt(
-    start_image_path: str,
-    end_image_path: str,
+    start_first_path: str,
+    start_boundary_path: str,
+    end_boundary_path: str,
+    end_last_path: str,
     base_prompt: str,
     num_frames: int,
     fps: int,
@@ -154,9 +202,17 @@ def _generate_join_transition_prompt(
     2. Visual style (anime, illustrated, photorealistic, etc.)
     3. Scene details (flowers, particles, lighting, environment)
     
+    Uses 4 images side-by-side for full context:
+    - First frame of clip A (scene context)
+    - Boundary frame of clip A (transition start point)
+    - Boundary frame of clip B (transition end point)  
+    - Last frame of clip B (scene context)
+    
     Args:
-        start_image_path: Path to the starting frame
-        end_image_path: Path to the ending frame
+        start_first_path: Path to first frame of starting clip (scene context)
+        start_boundary_path: Path to boundary frame of starting clip (transition start)
+        end_boundary_path: Path to boundary frame of ending clip (transition end)
+        end_last_path: Path to last frame of ending clip (scene context)
         base_prompt: Base prompt for context
         num_frames: Number of transition frames
         fps: Frames per second
@@ -168,47 +224,51 @@ def _generate_join_transition_prompt(
     """
     from PIL import Image
     
-    # Load and combine images side by side
-    start_img = Image.open(start_image_path).convert("RGB")
-    end_img = Image.open(end_image_path).convert("RGB")
+    # Load all 4 images
+    start_first = Image.open(start_first_path).convert("RGB")
+    start_boundary = Image.open(start_boundary_path).convert("RGB")
+    end_boundary = Image.open(end_boundary_path).convert("RGB")
+    end_last = Image.open(end_last_path).convert("RGB")
     
-    combined_width = start_img.width + end_img.width
-    combined_height = max(start_img.height, end_img.height)
+    # Combine all 4 images side by side
+    images = [start_first, start_boundary, end_boundary, end_last]
+    combined_width = sum(img.width for img in images)
+    combined_height = max(img.height for img in images)
     combined_img = Image.new('RGB', (combined_width, combined_height))
-    combined_img.paste(start_img, (0, 0))
-    combined_img.paste(end_img, (start_img.width, 0))
+    
+    x_offset = 0
+    for img in images:
+        combined_img.paste(img, (x_offset, 0))
+        x_offset += img.width
     
     # Calculate duration
     duration_text = ""
     if num_frames and fps:
         duration_seconds = num_frames / fps
-        duration_text = f"This transition occurs over approximately {duration_seconds:.1f} seconds ({num_frames} frames at {fps} FPS)."
+        duration_text = f"The transition between the two middle frames occurs over approximately {duration_seconds:.1f} seconds ({num_frames} frames at {fps} FPS)."
     
     base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "a video sequence"
     
-    query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence.
+    query = f"""Look at these 4 frames from a video, left to right in time order.
 
-{duration_text} Your goal is to create a THREE-SENTENCE prompt that describes this transition. Use the user's context if provided: '{base_prompt_text}'
+The MIDDLE TWO frames show where we need to generate a transition.
 
-YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE:
+Context from user: {base_prompt_text}
 
-SENTENCE 1 (MAIN MOTION): Describe the primary action or movement happening - what are characters doing (running, walking, turning), what is the camera doing (panning, zooming, tracking), what major changes occur between the frames.
+Write a short video prompt describing what happens between the middle frames. Include:
+1. The motion or action
+2. The visual style
+3. Key details in the scene
 
-SENTENCE 2 (VISUAL STYLE): Describe the unique visual style of the footage - is it photorealistic, anime, illustrated, cel-shaded, watercolor, 3D rendered, vintage film, etc. Include the overall mood and color palette.
+Keep it under 50 words total. Just write the prompt, nothing else.
 
-SENTENCE 3 (SCENE DETAILS): Describe the specific elements and details in the scene - objects, environment features, particles (dust, snow, petals), lighting effects, background elements, and any small details that make the scene rich.
+Example: "A cat jumps from table to chair. Realistic home video style. Sunny kitchen with wooden furniture."
 
-Examples following this structure:
+Example: "Camera pans right across city skyline. Cinematic drone footage at sunset. Skyscrapers with orange light reflections."
 
-- "A woman runs through an open field, her arms pumping as the camera tracks alongside her moving figure. The scene has a dreamy, soft-focus aesthetic with warm golden hour lighting and muted pastel tones reminiscent of indie film photography. Tall grass sways in waves around her feet, dandelion seeds drift lazily through the air, and distant mountains are silhouetted against the glowing orange sky."
+Your prompt:"""
 
-- "The camera slowly zooms into the character's face as their expression shifts from surprise to determination. The visual style is vibrant anime with bold outlines, cel-shading, and dramatic speed lines radiating outward. Cherry blossom petals swirl in the foreground, glowing magical particles orbit their raised hand, and detailed mechanical gears spin in the steampunk background."
-
-- "A bat spreads its wings and takes flight from a gnarled tree branch while the camera follows its ascending path. The footage has a dark gothic illustration style with crosshatching textures and deep purple and black color schemes. A full moon glows behind thin clouds, bare twisted branches frame the composition, and tiny moths flutter near flickering lantern light below."
-
-Now create your THREE-SENTENCE description (MOTION, STYLE, DETAILS) based on what you see in the frames."""
-
-    system_prompt = "You are a video description assistant. Respond with EXACTLY THREE SENTENCES: 1) Main motion/action, 2) Visual style/aesthetic, 3) Scene details/elements. Be specific and descriptive."
+    system_prompt = "Write a short video description prompt. Under 50 words. No explanations, just the prompt."
     
     result = extender.extend_with_img(
         prompt=query,
@@ -220,7 +280,7 @@ Now create your THREE-SENTENCE description (MOTION, STYLE, DETAILS) based on wha
 
 
 def _generate_vlm_prompts_for_joins(
-    image_pairs: List[Tuple[Optional[str], Optional[str]]],
+    image_quads: List[Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]],
     base_prompt: str,
     gap_frame_count: int,
     fps: int,
@@ -228,7 +288,7 @@ def _generate_vlm_prompts_for_joins(
     dprint
 ) -> List[Optional[str]]:
     """
-    Generate VLM-enhanced prompts for ALL joins using boundary frame pairs.
+    Generate VLM-enhanced prompts for ALL joins using 4-image quads.
     
     Uses custom join_clips prompt structure:
     1. Main motion (running, walking, camera movement)
@@ -236,7 +296,7 @@ def _generate_vlm_prompts_for_joins(
     3. Scene details (flowers, particles, environment)
     
     Args:
-        image_pairs: List of (start_frame_path, end_frame_path) tuples
+        image_quads: List of (start_first, start_boundary, end_boundary, end_last) tuples
         base_prompt: Base prompt to use as VLM context (from orchestrator payload)
         gap_frame_count: Number of transition frames (for duration context)
         fps: Frames per second
@@ -244,32 +304,33 @@ def _generate_vlm_prompts_for_joins(
         dprint: Debug print function
         
     Returns:
-        List of enhanced prompts (None for joins with missing image pairs)
+        List of enhanced prompts (None for joins with missing image quads)
     """
     import sys
     from pathlib import Path
     import torch
     
-    num_joins = len(image_pairs)
+    num_joins = len(image_quads)
     result = [None] * num_joins
     
-    # Filter out invalid pairs, track their indices
-    valid_pairs = []
+    # Filter out invalid quads, track their indices
+    valid_quads = []
     valid_indices = []
     
     for idx in range(num_joins):
-        start_path, end_path = image_pairs[idx]
-        if start_path and end_path:
-            valid_pairs.append((start_path, end_path))
+        quad = image_quads[idx]
+        # All 4 images must be present
+        if all(path is not None for path in quad):
+            valid_quads.append(quad)
             valid_indices.append(idx)
         else:
-            dprint(f"[VLM_PROMPTS] Join {idx}: Skipping - missing image pair")
+            dprint(f"[VLM_PROMPTS] Join {idx}: Skipping - missing image(s) in quad")
     
-    if not valid_pairs:
-        dprint(f"[VLM_PROMPTS] No valid image pairs for VLM processing")
+    if not valid_quads:
+        dprint(f"[VLM_PROMPTS] No valid image quads for VLM processing")
         return result
     
-    dprint(f"[VLM_PROMPTS] Processing {len(valid_pairs)}/{num_joins} joins with VLM")
+    dprint(f"[VLM_PROMPTS] Processing {len(valid_quads)}/{num_joins} joins with VLM (4 images each)")
     dprint(f"[VLM_PROMPTS] Base prompt context: '{base_prompt[:80]}...'" if base_prompt else "[VLM_PROMPTS] No base prompt (VLM will infer from frames)")
     
     try:
@@ -286,7 +347,7 @@ def _generate_vlm_prompts_for_joins(
             gpu_mem_before = torch.cuda.memory_allocated() / 1024**3
             dprint(f"[VLM_PROMPTS] GPU memory BEFORE VLM load: {gpu_mem_before:.2f} GB")
         
-        # Initialize VLM ONCE for all pairs (batch efficiency)
+        # Initialize VLM ONCE for all quads (batch efficiency)
         local_model_path = wan_dir / "ckpts" / "Qwen2.5-VL-7B-Instruct"
         dprint(f"[VLM_PROMPTS] Checking for model at {local_model_path}...")
         download_qwen_vlm_if_needed(local_model_path)
@@ -299,15 +360,18 @@ def _generate_vlm_prompts_for_joins(
         )
         dprint(f"[VLM_PROMPTS] Model loaded (initially on CPU, moves to {vlm_device} for inference)")
         
-        # Process each pair
-        for i, (start_path, end_path) in enumerate(valid_pairs):
+        # Process each quad
+        for i, quad in enumerate(valid_quads):
             idx = valid_indices[i]
+            start_first, start_boundary, end_boundary, end_last = quad
             try:
-                dprint(f"[VLM_PROMPTS] Processing join {idx} ({i+1}/{len(valid_pairs)})...")
+                dprint(f"[VLM_PROMPTS] Processing join {idx} ({i+1}/{len(valid_quads)})...")
                 
                 enhanced = _generate_join_transition_prompt(
-                    start_image_path=start_path,
-                    end_image_path=end_path,
+                    start_first_path=start_first,
+                    start_boundary_path=start_boundary,
+                    end_boundary_path=end_boundary,
+                    end_last_path=end_last,
                     base_prompt=base_prompt,
                     num_frames=gap_frame_count,
                     fps=fps,
@@ -320,7 +384,7 @@ def _generate_vlm_prompts_for_joins(
                 
             except Exception as e:
                 dprint(f"[VLM_PROMPTS] Join {idx}: ERROR - {e}")
-                # Continue with other pairs
+                # Continue with other quads
         
         # Cleanup VLM (same pattern as vlm_utils.py)
         # Log memory BEFORE cleanup
@@ -653,24 +717,29 @@ def _handle_join_clips_orchestrator_task(
             vlm_temp_dir = current_run_output_dir / "vlm_temp"
             vlm_temp_dir.mkdir(parents=True, exist_ok=True)
             
+            # Get settings needed for VLM frame extraction
+            replace_mode = join_settings.get("replace_mode", False)
+            gap_frame_count = join_settings.get("gap_frame_count", 53)
+            base_prompt = join_settings.get("prompt", "")
+            fps = orchestrator_payload.get("fps", 16)
+            
             try:
-                # Step 1: Extract boundary frames from all clips
-                dprint(f"[JOIN_ORCHESTRATOR] Extracting boundary frames from {len(clip_list)} clips...")
-                image_pairs = _extract_boundary_frames_for_vlm(
+                # Step 1: Extract boundary frames from all clips (4 images per join)
+                dprint(f"[JOIN_ORCHESTRATOR] Extracting 4 frames per join from {len(clip_list)} clips...")
+                dprint(f"[JOIN_ORCHESTRATOR]   replace_mode={replace_mode}, gap_frame_count={gap_frame_count}")
+                image_quads = _extract_boundary_frames_for_vlm(
                     clip_list=clip_list,
                     temp_dir=vlm_temp_dir,
                     orchestrator_task_id=orchestrator_task_id_str,
+                    replace_mode=replace_mode,
+                    gap_frame_count=gap_frame_count,
                     dprint=dprint
                 )
                 
                 # Step 2: Generate VLM prompts for all joins
-                base_prompt = join_settings.get("prompt", "")
-                gap_frame_count = join_settings.get("gap_frame_count", 53)
-                fps = orchestrator_payload.get("fps", 16)
-                
-                dprint(f"[JOIN_ORCHESTRATOR] Running VLM batch on {len(image_pairs)} pairs...")
+                dprint(f"[JOIN_ORCHESTRATOR] Running VLM batch on {len(image_quads)} quads (4 images each)...")
                 vlm_enhanced_prompts = _generate_vlm_prompts_for_joins(
-                    image_pairs=image_pairs,
+                    image_quads=image_quads,
                     base_prompt=base_prompt,
                     gap_frame_count=gap_frame_count,
                     fps=fps,
