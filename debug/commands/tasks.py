@@ -10,14 +10,12 @@ def run(client: DebugClient, options: dict):
         limit = options.get('limit', 50)
         status = options.get('status')
         task_type = options.get('type')
-        worker_id = options.get('worker')
         hours = options.get('hours')
         
         summary = client.get_recent_tasks(
             limit=limit,
             status=status,
             task_type=task_type,
-            worker_id=worker_id,
             hours=hours
         )
         
