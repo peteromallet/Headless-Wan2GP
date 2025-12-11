@@ -232,7 +232,8 @@ def _handle_join_clips_task(
             # Don't convert - will use input video's FPS
         else:
             # Downsample to target FPS (default 16)
-            target_fps_param = task_params_from_db.get("fps", 16)
+            # Note: Use 'or' to handle explicit None values (get() only returns default if key is missing)
+            target_fps_param = task_params_from_db.get("fps") or 16
             dprint(f"[JOIN_CLIPS] Task {task_id}: use_input_video_fps=False, ensuring videos are at {target_fps_param} FPS...")
             
             starting_video_fps = ensure_video_fps(
@@ -408,7 +409,7 @@ def _handle_join_clips_task(
             target_fps = start_fps
             dprint(f"[JOIN_CLIPS] Task {task_id}: Using input video FPS: {target_fps}")
         else:
-            target_fps = task_params_from_db.get("fps", 16)
+            target_fps = task_params_from_db.get("fps") or 16
             dprint(f"[JOIN_CLIPS] Task {task_id}: Using target FPS: {target_fps}")
 
         # --- 4. Calculate gap sizes first (needed for REPLACE mode context extraction) ---

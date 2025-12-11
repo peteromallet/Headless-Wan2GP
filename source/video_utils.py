@@ -373,21 +373,21 @@ def ensure_video_fps(
 ) -> Path | None:
     """
     Ensure a video is at the target FPS, resampling if necessary.
-    
+
     This is important when frame indices are calculated for a specific FPS
     (e.g., from frontend) but the actual video file may be at a different FPS.
-    
+
     Args:
         video_path: Path to source video
         target_fps: Desired FPS (e.g., 16)
         output_dir: Directory for resampled video (defaults to same dir as source)
         fps_tolerance: Maximum FPS difference before resampling (default 0.5)
         dprint_func: Debug print function
-        
+
     Returns:
         Path to video at target FPS (original if already correct, resampled if not),
         or None on error
-        
+
     Example:
         # Ensure video is at 16fps before frame-based extraction
         video_16fps = ensure_video_fps(downloaded_video, 16, work_dir)
@@ -395,7 +395,12 @@ def ensure_video_fps(
             extract_frame_range_to_video(video_16fps, output, 0, 252, 16)
     """
     video_path = Path(video_path)
-    
+
+    # Validate target_fps is not None
+    if target_fps is None:
+        dprint_func(f"[ENSURE_FPS_ERROR] target_fps is None, defaulting to 16")
+        target_fps = 16
+
     if not video_path.exists():
         dprint_func(f"[ENSURE_FPS_ERROR] Video does not exist: {video_path}")
         return None
