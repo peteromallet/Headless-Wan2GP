@@ -1,10 +1,1 @@
-"""Command handlers for debug tool."""
-
-
-
-
-
-
-
-
-
+"""Debug command handlers."""
