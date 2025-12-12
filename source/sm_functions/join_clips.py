@@ -36,6 +36,7 @@ from ..video_utils import (
     ensure_video_fps,
     standardize_video_aspect_ratio,
     stitch_videos_with_crossfade as sm_stitch_videos_with_crossfade,
+    create_video_from_frames_list as sm_create_video_from_frames_list,
 )
 from ..vace_frame_utils import (
     create_guide_and_mask_for_generation,
@@ -447,6 +448,9 @@ def _handle_join_clips_task(
                 dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
                 return False, error_msg
 
+            # Initialize vid2vid source video path (will be set in REPLACE mode if enabled)
+            vid2vid_source_video_path = None
+            
             if replace_mode:
                 # REPLACE mode: Context comes from OUTSIDE the gap region
                 # Gap is removed from boundary, context is adjacent to (but outside) the gap
@@ -483,6 +487,57 @@ def _handle_join_clips_task(
                 
                 dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - clip2 context from frames [{gap_from_clip2}:{gap_from_clip2 + context_frame_count}]")
                 dprint(f"[JOIN_CLIPS] Task {task_id}:   (frames 0 to {gap_from_clip2-1} will be removed as gap)")
+                
+                # --- VID2VID SOURCE: Extract gap frames for vid2vid initialization ---
+                # If vid2vid_init_strength is set, create a source video from the gap frames
+                vid2vid_init_strength = task_params_from_db.get("vid2vid_init_strength")
+                if vid2vid_init_strength is not None and vid2vid_init_strength < 1.0:
+                    dprint(f"[JOIN_CLIPS] Task {task_id}: Vid2vid mode enabled (strength={vid2vid_init_strength})")
+                    
+                    # Extract gap frames that are being replaced
+                    # Gap from clip1: last N frames of starting video
+                    gap_frames_clip1 = start_all_frames[context_end_idx:]  # frames from context_end_idx to end
+                    # Gap from clip2: first M frames of ending video
+                    gap_frames_clip2 = end_all_frames[:gap_from_clip2]  # frames 0 to gap_from_clip2-1
+                    
+                    dprint(f"[JOIN_CLIPS] Task {task_id}: Extracted {len(gap_frames_clip1)} gap frames from clip1")
+                    dprint(f"[JOIN_CLIPS] Task {task_id}: Extracted {len(gap_frames_clip2)} gap frames from clip2")
+                    
+                    # Build vid2vid source video with same structure as guide: context + gap + context
+                    vid2vid_frames = []
+                    vid2vid_frames.extend(start_context_frames)  # Context before
+                    vid2vid_frames.extend(gap_frames_clip1)      # Gap from clip1
+                    vid2vid_frames.extend(gap_frames_clip2)      # Gap from clip2
+                    vid2vid_frames.extend(end_context_frames)    # Context after
+                    
+                    dprint(f"[JOIN_CLIPS] Task {task_id}: Vid2vid source video structure:")
+                    dprint(f"[JOIN_CLIPS]   Context before: {len(start_context_frames)} frames")
+                    dprint(f"[JOIN_CLIPS]   Gap (clip1): {len(gap_frames_clip1)} frames")
+                    dprint(f"[JOIN_CLIPS]   Gap (clip2): {len(gap_frames_clip2)} frames")
+                    dprint(f"[JOIN_CLIPS]   Context after: {len(end_context_frames)} frames")
+                    dprint(f"[JOIN_CLIPS]   Total: {len(vid2vid_frames)} frames")
+                    
+                    # Get resolution from first context frame
+                    first_frame = start_context_frames[0]
+                    vid2vid_res_wh = (first_frame.shape[1], first_frame.shape[0])  # (width, height)
+                    
+                    # Create vid2vid source video file
+                    vid2vid_source_video_path = join_clips_dir / f"vid2vid_source_{task_id}.mp4"
+                    try:
+                        created_vid2vid_video = sm_create_video_from_frames_list(
+                            vid2vid_frames,
+                            vid2vid_source_video_path,
+                            target_fps,
+                            vid2vid_res_wh
+                        )
+                        if created_vid2vid_video:
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: Created vid2vid source video: {vid2vid_source_video_path}")
+                        else:
+                            dprint(f"[JOIN_CLIPS_WARNING] Task {task_id}: Failed to create vid2vid source video, will use random noise")
+                            vid2vid_source_video_path = None
+                    except Exception as v2v_err:
+                        dprint(f"[JOIN_CLIPS_WARNING] Task {task_id}: Error creating vid2vid source video: {v2v_err}")
+                        vid2vid_source_video_path = None
             else:
                 # INSERT mode: Context is at the boundary (last/first frames)
                 # No frames are removed, we're just inserting new frames between clips
@@ -612,6 +667,12 @@ def _handle_join_clips_task(
             seed=task_params_from_db.get("seed", -1),
             task_params=task_params_from_db  # Pass through for optional param merging (includes additional_loras)
         )
+        
+        # Add vid2vid source video if we created one in replace mode
+        if vid2vid_source_video_path is not None:
+            generation_params["vid2vid_init_video"] = str(vid2vid_source_video_path.resolve())
+            # vid2vid_init_strength should already be in generation_params from task_params
+            dprint(f"[JOIN_CLIPS] Task {task_id}: Added vid2vid source video to generation params")
 
         dprint(f"[JOIN_CLIPS] Task {task_id}: Generation parameters prepared")
         dprint(f"[JOIN_CLIPS]   Model: {model}")
@@ -847,11 +908,16 @@ def _handle_join_clips_task(
                             dprint(f"[JOIN_CLIPS]   Clip1 trimmed: {clip1_trimmed_path}")
                             dprint(f"[JOIN_CLIPS]   Transition: {transition_video_path}")
                             dprint(f"[JOIN_CLIPS]   Clip2 trimmed: {clip2_trimmed_path}")
+                            if vid2vid_source_video_path is not None:
+                                dprint(f"[JOIN_CLIPS]   Vid2vid source: {vid2vid_source_video_path}")
                         else:
                             try:
                                 clip1_trimmed_path.unlink()
                                 clip2_trimmed_path.unlink()
                                 Path(transition_video_path).unlink()  # Remove transition-only video
+                                # Clean up vid2vid source video if it was created
+                                if vid2vid_source_video_path is not None and vid2vid_source_video_path.exists():
+                                    vid2vid_source_video_path.unlink()
                                 dprint(f"[JOIN_CLIPS] Task {task_id}: Cleaned up temporary files")
                             except Exception as cleanup_error:
                                 dprint(f"[JOIN_CLIPS] Warning: Cleanup failed: {cleanup_error}")
