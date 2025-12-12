@@ -1301,8 +1301,11 @@ class WanOrchestrator:
             'sliding_window_color_correction_strength': 0.0,
             'sliding_window_overlap_noise': 0.1,
             'sliding_window_discard_last_frames': 0,
+            'latent_noise_mask_strength': 0.0,  # 0.0 = disabled, 1.0 = full latent noise masking
+            'vid2vid_init_video': None,  # Path to video for vid2vid initialization
+            'vid2vid_init_strength': 0.7,  # 0.0 = keep original, 1.0 = random noise (default)
             'image_refs_relative_size': image_refs_relative_size_value,
-            
+
             # Post-processing
             'remove_background_images_ref': 0,
             'temporal_upsampling': "",

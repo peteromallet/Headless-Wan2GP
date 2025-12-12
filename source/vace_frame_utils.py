@@ -443,7 +443,10 @@ def prepare_vace_generation_params(
             "flow_shift", "audio_guidance_scale", "cfg_zero_step",
             "guidance2_scale", "guidance3_scale", "guidance_phases",
             "switch_threshold", "switch_threshold2", "model_switch_phase",
-            "sample_solver", "additional_loras", "phase_config"
+            "sample_solver", "additional_loras", "phase_config",
+            "latent_noise_mask_strength",  # 0.0 = disabled, 1.0 = full latent noise masking
+            "vid2vid_init_video",  # Path to video for vid2vid initialization
+            "vid2vid_init_strength"  # 0.0 = keep original, 1.0 = random noise
         ]
 
         for param in optional_params:

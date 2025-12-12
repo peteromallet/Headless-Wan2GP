@@ -1098,6 +1098,13 @@ class HeadlessTaskQueue:
             "sliding_window_overlap_noise": "sliding_window_overlap_noise",
             "sliding_window_discard_last_frames": "sliding_window_discard_last_frames",
             
+            # Latent Noise Mask (improved VACE masking)
+            "latent_noise_mask_strength": "latent_noise_mask_strength",
+
+            # Vid2vid initialization (for VACE replace mode)
+            "vid2vid_init_video": "vid2vid_init_video",
+            "vid2vid_init_strength": "vid2vid_init_strength",
+
             # Upscaling/Post-processing
             "temporal_upsampling": "temporal_upsampling",
             "spatial_upsampling": "spatial_upsampling",
