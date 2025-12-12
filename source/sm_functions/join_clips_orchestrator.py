@@ -460,6 +460,8 @@ def _extract_join_settings_from_payload(orchestrator_payload: dict) -> dict:
         "additional_loras": orchestrator_payload.get("additional_loras", {}),
         # Keep bridging image param
         "keep_bridging_images": orchestrator_payload.get("keep_bridging_images", False),
+        # Vid2vid initialization for replace mode
+        "vid2vid_init_strength": orchestrator_payload.get("vid2vid_init_strength"),
     }
 
 
