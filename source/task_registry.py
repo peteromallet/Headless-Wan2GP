@@ -308,8 +308,12 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         if mask_video_path_for_wgp: generation_params["video_mask"] = str(mask_video_path_for_wgp.resolve())
         generation_params["video_prompt_type"] = video_prompt_type_str
         
+        # IMPORTANT: Use the DB task_id as the queue task id.
+        # This keeps logs, fatal error handling, and debug tooling consistent (no "travel_seg_" indirection).
+        # We still include a hint in parameters so the queue can apply any task-type specific behavior.
+        generation_params["_source_task_type"] = "travel_segment"
         generation_task = GenerationTask(
-            id=f"travel_seg_{task_id}",
+            id=task_id,
             model=model_name,
             prompt=prompt_for_wgp,
             parameters=generation_params
@@ -322,7 +326,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         elapsed_time = 0
         
         while elapsed_time < max_wait_time:
-            status = task_queue.get_task_status(f"travel_seg_{task_id}")
+            status = task_queue.get_task_status(task_id)
             if status is None: return False, f"Travel segment {task_id}: Task status became None"
             
             if status.status == "completed":

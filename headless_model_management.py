@@ -613,6 +613,14 @@ class HeadlessTaskQueue:
         This is where we delegate to headless_wgp.py while managing
         model persistence and state.
         """
+        # Ensure logs emitted during this generation are attributed to this task.
+        # This runs inside the GenerationWorker thread, which is where wgp/headless_wgp runs.
+        try:
+            from source.logging_utils import set_current_task_context  # local import to avoid cycles
+            set_current_task_context(task.id)
+        except Exception:
+            pass
+
         with self.queue_lock:
             self.current_task = task
             task.status = "processing"
@@ -704,6 +712,11 @@ class HeadlessTaskQueue:
         finally:
             with self.queue_lock:
                 self.current_task = None
+            try:
+                from source.logging_utils import set_current_task_context  # local import to avoid cycles
+                set_current_task_context(None)
+            except Exception:
+                pass
     
     def _switch_model(self, model_key: str, worker_name: str):
         """
@@ -844,7 +857,7 @@ class HeadlessTaskQueue:
 
             # Post-process single frame videos to PNG for single_image tasks
             # BUT: Skip PNG conversion for travel segments (they must remain as videos for stitching)
-            is_travel_segment = task.id.startswith("travel_seg_")
+            is_travel_segment = task.parameters.get("_source_task_type") == "travel_segment"
             if self._is_single_image_task(task) and not is_travel_segment:
                 png_result = self._convert_single_frame_video_to_png(task, result, worker_name)
                 if png_result:

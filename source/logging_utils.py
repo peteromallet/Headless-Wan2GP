@@ -454,6 +454,21 @@ def set_log_interceptor(interceptor: Optional[CustomLogInterceptor]):
     _log_interceptor = interceptor
 
 
+def set_current_task_context(task_id: Optional[str]):
+    """
+    Set/clear the task context used for associating intercepted logs with a task_id.
+
+    This is intentionally a thin wrapper around the active interceptor instance so that
+    worker threads (e.g. the headless generation queue) can correctly tag logs even if
+    the main polling thread is busy or if the queue is multi-threaded.
+    """
+    if _log_interceptor:
+        try:
+            _log_interceptor.set_current_task(task_id)
+        except Exception:
+            pass
+
+
 # Update logging functions to use interceptor
 def _intercept_log(level: str, message: str, task_id: Optional[str] = None):
     """Send log to interceptor if enabled."""
