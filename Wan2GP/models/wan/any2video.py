@@ -981,7 +981,11 @@ class WanAny2V:
         if vid2vid_init_video is not None and vid2vid_init_strength < 1.0:
             try:
                 import cv2
-                import numpy as np
+                # NOTE:
+                # numpy is already imported at module scope as `np`.
+                # Re-importing it here makes `np` a *local* variable in this whole function,
+                # which can crash earlier code paths (e.g. euler timesteps) with:
+                #   UnboundLocalError: local variable 'np' referenced before assignment
                 
                 print(f"[VID2VID_INIT] Loading video for initialization: {vid2vid_init_video}")
                 print(f"[VID2VID_INIT] Strength: {vid2vid_init_strength} (0=keep original, 1=random noise)")
