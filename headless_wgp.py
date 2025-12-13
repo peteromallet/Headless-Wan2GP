@@ -1363,6 +1363,10 @@ class WanOrchestrator:
         if activated_loras:
             generation_logger.debug(f"LoRAs: {activated_loras}")
 
+        # Initialize stdout/stderr capture variables at outer scope for exception handling
+        captured_stdout = None
+        captured_stderr = None
+        
         try:
             generation_logger.debug("Calling WGP generate_video with VACE module support")
             
@@ -1518,7 +1522,36 @@ class WanOrchestrator:
                         generation_logger.info(f"[FINAL_PARAMS] {key}: {value}")
                 generation_logger.info("=" * 80)
 
-                result = self._generate_video(**_filtered_params)
+                # Capture stdout/stderr during generation to catch upstream WGP errors
+                import io
+                import contextlib
+                
+                captured_stdout = io.StringIO()
+                captured_stderr = io.StringIO()
+                
+                # Use a tee approach: capture while still printing to console
+                class TeeWriter:
+                    def __init__(self, original, capture):
+                        self.original = original
+                        self.capture = capture
+                    def write(self, text):
+                        self.original.write(text)
+                        self.capture.write(text)
+                    def flush(self):
+                        self.original.flush()
+                        self.capture.flush()
+                
+                original_stdout = sys.stdout
+                original_stderr = sys.stderr
+                
+                try:
+                    sys.stdout = TeeWriter(original_stdout, captured_stdout)
+                    sys.stderr = TeeWriter(original_stderr, captured_stderr)
+                    
+                    result = self._generate_video(**_filtered_params)
+                finally:
+                    sys.stdout = original_stdout
+                    sys.stderr = original_stderr
 
                 # Verify directory after generation (wgp may have changed it during file operations)
                 _verify_wgp_directory(generation_logger, "after wgp.generate_video()")
@@ -1539,6 +1572,19 @@ class WanOrchestrator:
                     generation_logger.essential(f"Output saved to: {output_path}")
                 else:
                     generation_logger.warning(f"{model_type_desc} generation completed but no output path found in file_list")
+                    # Log captured output to help debug silent failures
+                    stdout_content = captured_stdout.getvalue()
+                    stderr_content = captured_stderr.getvalue()
+                    if stderr_content:
+                        # Log last 2000 chars of stderr (most likely to contain the error)
+                        stderr_tail = stderr_content[-2000:] if len(stderr_content) > 2000 else stderr_content
+                        generation_logger.error(f"[WGP_STDERR] Generation produced no output. Captured stderr:\n{stderr_tail}")
+                    if stdout_content:
+                        # Check for error patterns in stdout
+                        stdout_lower = stdout_content.lower()
+                        if any(err in stdout_lower for err in ['error', 'exception', 'traceback', 'failed', 'cuda', 'oom', 'out of memory']):
+                            stdout_tail = stdout_content[-2000:] if len(stdout_content) > 2000 else stdout_content
+                            generation_logger.error(f"[WGP_STDOUT] Error patterns found in stdout:\n{stdout_tail}")
             except Exception as e:
                 generation_logger.warning(f"Could not retrieve output path from state: {e}")
 
@@ -1570,6 +1616,22 @@ class WanOrchestrator:
             
         except Exception as e:
             generation_logger.error(f"Generation failed: {e}")
+            # Try to log any captured output that might help debug
+            try:
+                if captured_stderr is not None:
+                    stderr_content = captured_stderr.getvalue()
+                    if stderr_content:
+                        stderr_tail = stderr_content[-2000:] if len(stderr_content) > 2000 else stderr_content
+                        generation_logger.error(f"[WGP_STDERR] Exception occurred. Captured stderr:\n{stderr_tail}")
+                if captured_stdout is not None:
+                    stdout_content = captured_stdout.getvalue()
+                    if stdout_content:
+                        stdout_lower = stdout_content.lower()
+                        if any(err in stdout_lower for err in ['error', 'exception', 'traceback', 'failed', 'cuda', 'oom', 'out of memory']):
+                            stdout_tail = stdout_content[-2000:] if len(stdout_content) > 2000 else stdout_content
+                            generation_logger.error(f"[WGP_STDOUT] Error context from stdout:\n{stdout_tail}")
+            except Exception:
+                pass  # Don't let logging errors mask the original exception
             raise
 
     # Convenience methods for specific generation types
