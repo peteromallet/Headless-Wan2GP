@@ -177,11 +177,15 @@ def main():
     main_output_dir.mkdir(parents=True, exist_ok=True)
 
     # Centralized Logging
+    # Global reference to log interceptor for setting current task context
+    _log_interceptor_instance = None
+    
     if cli_args.worker:
         guardian_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or client_key
         guardian_process, log_queue = start_heartbeat_guardian_process(cli_args.worker, cli_args.supabase_url, guardian_key)
         _global_log_buffer = LogBuffer(max_size=100, shared_queue=log_queue)
-        set_log_interceptor(CustomLogInterceptor(_global_log_buffer))
+        _log_interceptor_instance = CustomLogInterceptor(_global_log_buffer)
+        set_log_interceptor(_log_interceptor_instance)
 
     # Apply WGP Overrides
     wan_dir = str((Path(__file__).parent / "Wan2GP").resolve())
@@ -253,6 +257,10 @@ def main():
                 if "orchestrator_details" in current_task_params:
                     current_task_params["orchestrator_details"]["orchestrator_task_id"] = current_task_id
 
+            # Set current task context for log interceptor so all logs are associated with this task
+            if _log_interceptor_instance:
+                _log_interceptor_instance.set_current_task(current_task_id)
+
             task_succeeded, output_location = process_single_task(
                 current_task_params, main_output_dir, current_task_type, current_project_id,
                 image_download_dir=current_task_params.get("segment_image_download_dir"),
@@ -289,6 +297,10 @@ def main():
                     cleanup_generated_files(output_location, current_task_id, debug_mode)
             else:
                 db_ops.update_task_status_supabase(current_task_id, db_ops.STATUS_FAILED, output_location)
+            
+            # Clear task context from log interceptor
+            if _log_interceptor_instance:
+                _log_interceptor_instance.set_current_task(None)
             
             time.sleep(1)
 
