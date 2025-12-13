@@ -1533,7 +1533,7 @@ class WanOrchestrator:
                 # Keep tails only (avoid unbounded memory growth)
                 _CAPTURE_STDOUT_CHARS = 20_000
                 _CAPTURE_STDERR_CHARS = 20_000
-                _CAPTURE_PYLOG_RECORDS = 500  # keep last N warning+ records
+                _CAPTURE_PYLOG_RECORDS = 1000  # keep last N log records (all levels)
 
                 class TailBuffer:
                     def __init__(self, max_chars: int):
@@ -1602,17 +1602,15 @@ class WanOrchestrator:
                         # Proxy everything else to the underlying stream
                         return getattr(self._original, name)
 
-                # Custom logging handler to capture Python logging (WARNING+ only)
+                # Custom logging handler to capture Python logging (all levels)
                 class CaptureHandler(py_logging.Handler):
                     def __init__(self, log_deque):
-                        super().__init__(level=py_logging.WARNING)
+                        super().__init__(level=py_logging.DEBUG)
                         self._log_deque = log_deque
                         self._dedupe = deque(maxlen=200)  # avoid spamming duplicates
 
                     def emit(self, record):
                         try:
-                            if record.levelno < py_logging.WARNING:
-                                return
                             msg = self.format(record)
                             key = (record.levelname, record.name, msg)
                             if key in self._dedupe:
@@ -1652,9 +1650,9 @@ class WanOrchestrator:
                 for logger in loggers_to_capture:
                     original_levels[logger.name] = logger.level
                     logger.addHandler(capture_handler)
-                    # Ensure we capture WARNING and above even if logger is set to ERROR/CRITICAL
-                    if logger.level > py_logging.WARNING:
-                        logger.setLevel(py_logging.WARNING)
+                    # Ensure we capture all logs even if logger is set to a higher level
+                    if logger.level > py_logging.DEBUG:
+                        logger.setLevel(py_logging.DEBUG)
                 
                 try:
                     sys.stdout = TeeWriter(original_stdout, captured_stdout)
@@ -1694,12 +1692,19 @@ class WanOrchestrator:
                     stdout_content = captured_stdout.getvalue() if captured_stdout is not None else ""
                     stderr_content = captured_stderr.getvalue() if captured_stderr is not None else ""
                     
-                    # Log captured Python logs (errors and warnings from diffusers/transformers/torch)
+                    # Log captured Python logs from diffusers/transformers/torch
                     if captured_logs:
-                        error_logs = [log for log in list(captured_logs) if log['level'] in ['ERROR', 'CRITICAL', 'WARNING']]
+                        all_logs = list(captured_logs)
+                        # Show errors/warnings first (most important)
+                        error_logs = [log for log in all_logs if log['level'] in ['ERROR', 'CRITICAL', 'WARNING']]
                         if error_logs:
-                            log_summary = '\n'.join([f"  [{log['level']}] {log['name']}: {log['message'][:200]}" for log in error_logs[-20:]])
-                            generation_logger.error(f"[WGP_PYLOG] Python logging errors/warnings captured:\n{log_summary}")
+                            log_summary = '\n'.join([f"  [{log['level']}] {log['name']}: {log['message'][:200]}" for log in error_logs[-30:]])
+                            generation_logger.error(f"[WGP_PYLOG] Python errors/warnings ({len(error_logs)} total):\n{log_summary}")
+                        
+                        # Show all recent logs for context
+                        recent_logs = all_logs[-50:]  # Last 50 logs of any level
+                        log_summary = '\n'.join([f"  [{log['level']}] {log['name']}: {log['message'][:150]}" for log in recent_logs])
+                        generation_logger.error(f"[WGP_PYLOG] Recent Python logs ({len(all_logs)} total):\n{log_summary}")
                     
                     if stderr_content:
                         # Log last 2000 chars of stderr (most likely to contain the error)
@@ -1744,12 +1749,19 @@ class WanOrchestrator:
             generation_logger.error(f"Generation failed: {e}")
             # Try to log any captured output that might help debug
             try:
-                # Log captured Python logs first (from diffusers/transformers/torch)
+                # Log captured Python logs (from diffusers/transformers/torch)
                 if captured_logs:
-                    error_logs = [log for log in list(captured_logs) if log['level'] in ['ERROR', 'CRITICAL', 'WARNING']]
+                    all_logs = list(captured_logs)
+                    # Show errors/warnings first
+                    error_logs = [log for log in all_logs if log['level'] in ['ERROR', 'CRITICAL', 'WARNING']]
                     if error_logs:
-                        log_summary = '\n'.join([f"  [{log['level']}] {log['name']}: {log['message'][:200]}" for log in error_logs[-20:]])
-                        generation_logger.error(f"[WGP_PYLOG] Python logging errors/warnings:\n{log_summary}")
+                        log_summary = '\n'.join([f"  [{log['level']}] {log['name']}: {log['message'][:200]}" for log in error_logs[-30:]])
+                        generation_logger.error(f"[WGP_PYLOG] Python errors/warnings ({len(error_logs)} total):\n{log_summary}")
+                    
+                    # Show all recent logs for context
+                    recent_logs = all_logs[-50:]
+                    log_summary = '\n'.join([f"  [{log['level']}] {log['name']}: {log['message'][:150]}" for log in recent_logs])
+                    generation_logger.error(f"[WGP_PYLOG] Recent Python logs ({len(all_logs)} total):\n{log_summary}")
                 
                 if captured_stderr is not None:
                     stderr_content = captured_stderr.getvalue()
