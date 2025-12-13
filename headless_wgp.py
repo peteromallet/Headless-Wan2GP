@@ -1524,39 +1524,104 @@ class WanOrchestrator:
                 generation_logger.info("=" * 80)
 
                 # Comprehensive capture of all WGP output: stdout, stderr, and Python logging
-                import io
+                # NOTE: This monkeypatches sys.stdout/sys.stderr for the duration of a single generation.
+                # That is process-global and can capture output from other threads. In this repo, generation
+                # is effectively single-task-at-a-time per worker process, so this is acceptable.
                 import logging as py_logging
-                
-                captured_stdout = io.StringIO()
-                captured_stderr = io.StringIO()
-                captured_logs = []
-                
-                # TeeWriter: capture while still printing to console
+                from collections import deque
+
+                # Keep tails only (avoid unbounded memory growth)
+                _CAPTURE_STDOUT_CHARS = 20_000
+                _CAPTURE_STDERR_CHARS = 20_000
+                _CAPTURE_PYLOG_RECORDS = 500  # keep last N warning+ records
+
+                class TailBuffer:
+                    def __init__(self, max_chars: int):
+                        self.max_chars = max_chars
+                        self._buf = ""
+
+                    def write(self, text: str):
+                        if not text:
+                            return
+                        try:
+                            self._buf += str(text)
+                            if len(self._buf) > self.max_chars:
+                                self._buf = self._buf[-self.max_chars :]
+                        except Exception:
+                            # Never let logging capture break generation
+                            pass
+
+                    def getvalue(self) -> str:
+                        return self._buf
+
+                captured_stdout = TailBuffer(_CAPTURE_STDOUT_CHARS)
+                captured_stderr = TailBuffer(_CAPTURE_STDERR_CHARS)
+                captured_logs = deque(maxlen=_CAPTURE_PYLOG_RECORDS)
+
+                # TeeWriter: capture while still printing to console.
+                # Must proxy common file-like attributes (encoding/isatty/fileno/etc) to avoid breaking libs.
                 class TeeWriter:
                     def __init__(self, original, capture):
-                        self.original = original
-                        self.capture = capture
+                        self._original = original
+                        self._capture = capture
+
                     def write(self, text):
-                        self.original.write(text)
-                        self.capture.write(text)
+                        try:
+                            self._original.write(text)
+                        except Exception:
+                            pass
+                        try:
+                            self._capture.write(text)
+                        except Exception:
+                            pass
+
+                    def writelines(self, lines):
+                        for line in lines:
+                            self.write(line)
+
                     def flush(self):
-                        self.original.flush()
-                        self.capture.flush()
-                
-                # Custom logging handler to capture Python logging
+                        try:
+                            self._original.flush()
+                        except Exception:
+                            pass
+
+                    def isatty(self):
+                        try:
+                            return self._original.isatty()
+                        except Exception:
+                            return False
+
+                    def fileno(self):
+                        return self._original.fileno()
+
+                    @property
+                    def encoding(self):
+                        return getattr(self._original, "encoding", None)
+
+                    def __getattr__(self, name):
+                        # Proxy everything else to the underlying stream
+                        return getattr(self._original, name)
+
+                # Custom logging handler to capture Python logging (WARNING+ only)
                 class CaptureHandler(py_logging.Handler):
-                    def __init__(self, log_list):
-                        super().__init__()
-                        self.log_list = log_list
-                        self.setLevel(py_logging.DEBUG)  # Capture all levels
-                        
+                    def __init__(self, log_deque):
+                        super().__init__(level=py_logging.WARNING)
+                        self._log_deque = log_deque
+                        self._dedupe = deque(maxlen=200)  # avoid spamming duplicates
+
                     def emit(self, record):
                         try:
+                            if record.levelno < py_logging.WARNING:
+                                return
                             msg = self.format(record)
-                            self.log_list.append({
-                                'level': record.levelname,
-                                'name': record.name,
-                                'message': msg
+                            key = (record.levelname, record.name, msg)
+                            if key in self._dedupe:
+                                return
+                            self._dedupe.append(key)
+                            self._log_deque.append({
+                                "level": record.levelname,
+                                "name": record.name,
+                                "message": msg,
                             })
                         except Exception:
                             pass
@@ -1564,25 +1629,30 @@ class WanOrchestrator:
                 original_stdout = sys.stdout
                 original_stderr = sys.stderr
                 
-                # Add capture handler to root logger and common WGP loggers
+                # Add capture handler to root logger and any libraries that don't propagate.
                 capture_handler = CaptureHandler(captured_logs)
-                capture_handler.setFormatter(py_logging.Formatter('%(levelname)s:%(name)s: %(message)s'))
-                
-                # Loggers used by WGP and its dependencies
-                loggers_to_capture = [
-                    py_logging.getLogger(),  # Root logger
-                    py_logging.getLogger('diffusers'),
-                    py_logging.getLogger('transformers'),
-                    py_logging.getLogger('torch'),
-                    py_logging.getLogger('PIL'),
+                capture_handler.setFormatter(py_logging.Formatter("%(levelname)s:%(name)s: %(message)s"))
+
+                root_logger = py_logging.getLogger()
+                candidate_loggers = [
+                    py_logging.getLogger("diffusers"),
+                    py_logging.getLogger("transformers"),
+                    py_logging.getLogger("torch"),
+                    py_logging.getLogger("PIL"),
                 ]
+
+                loggers_to_capture = [root_logger]
+                for lg in candidate_loggers:
+                    # Only attach to non-propagating loggers to avoid duplicates (root already captures propagated logs)
+                    if getattr(lg, "propagate", True) is False:
+                        loggers_to_capture.append(lg)
                 
                 # Store original levels and add handler
                 original_levels = {}
                 for logger in loggers_to_capture:
                     original_levels[logger.name] = logger.level
                     logger.addHandler(capture_handler)
-                    # Ensure we capture WARNING and above
+                    # Ensure we capture WARNING and above even if logger is set to ERROR/CRITICAL
                     if logger.level > py_logging.WARNING:
                         logger.setLevel(py_logging.WARNING)
                 
@@ -1621,12 +1691,12 @@ class WanOrchestrator:
                 else:
                     generation_logger.warning(f"{model_type_desc} generation completed but no output path found in file_list")
                     # Log captured output to help debug silent failures
-                    stdout_content = captured_stdout.getvalue()
-                    stderr_content = captured_stderr.getvalue()
+                    stdout_content = captured_stdout.getvalue() if captured_stdout is not None else ""
+                    stderr_content = captured_stderr.getvalue() if captured_stderr is not None else ""
                     
                     # Log captured Python logs (errors and warnings from diffusers/transformers/torch)
                     if captured_logs:
-                        error_logs = [log for log in captured_logs if log['level'] in ['ERROR', 'CRITICAL', 'WARNING']]
+                        error_logs = [log for log in list(captured_logs) if log['level'] in ['ERROR', 'CRITICAL', 'WARNING']]
                         if error_logs:
                             log_summary = '\n'.join([f"  [{log['level']}] {log['name']}: {log['message'][:200]}" for log in error_logs[-20:]])
                             generation_logger.error(f"[WGP_PYLOG] Python logging errors/warnings captured:\n{log_summary}")
@@ -1676,7 +1746,7 @@ class WanOrchestrator:
             try:
                 # Log captured Python logs first (from diffusers/transformers/torch)
                 if captured_logs:
-                    error_logs = [log for log in captured_logs if log['level'] in ['ERROR', 'CRITICAL', 'WARNING']]
+                    error_logs = [log for log in list(captured_logs) if log['level'] in ['ERROR', 'CRITICAL', 'WARNING']]
                     if error_logs:
                         log_summary = '\n'.join([f"  [{log['level']}] {log['name']}: {log['message'][:200]}" for log in error_logs[-20:]])
                         generation_logger.error(f"[WGP_PYLOG] Python logging errors/warnings:\n{log_summary}")
