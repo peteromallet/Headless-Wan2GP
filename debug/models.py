@@ -11,13 +11,17 @@ class TaskInfo:
     task_id: str
     state: Optional[Dict[str, Any]]
     logs: List[Dict[str, Any]]
+    child_task_info: Optional['TaskInfo'] = None  # For cascaded failures
     
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             'task_id': self.task_id,
             'state': self.state,
             'logs': self.logs
         }
+        if self.child_task_info:
+            result['child_task_info'] = self.child_task_info.to_dict()
+        return result
 
 
 @dataclass

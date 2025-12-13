@@ -104,8 +104,12 @@ class DebugClient:
     
     # ==================== TASK METHODS ====================
     
-    def get_task_info(self, task_id: str) -> TaskInfo:
-        """Get complete task information: logs + DB state."""
+    def get_task_info(self, task_id: str, follow_cascade: bool = True) -> TaskInfo:
+        """Get complete task information: logs + DB state.
+        
+        If follow_cascade is True and this is an orchestrator that failed due to
+        a child task, also fetch the child task info.
+        """
         # Get logs for this task
         logs = self.log_client.get_task_timeline(task_id)
         
@@ -113,10 +117,29 @@ class DebugClient:
         result = self.supabase.table('tasks').select('*').eq('id', task_id).execute()
         state = result.data[0] if result.data else None
         
+        # Check for cascaded failure and fetch child task
+        child_task_info = None
+        if follow_cascade and state:
+            error_msg = state.get('error_message', '') or ''
+            output_loc = state.get('output_location', '') or ''
+            
+            # Look for "Cascaded failed from related task <uuid>" pattern
+            import re
+            cascade_pattern = r'[Cc]ascad(?:ed|e) (?:failed |failure )?(?:from )?(?:related )?task[:\s]+([a-f0-9-]{36})'
+            
+            for text in [error_msg, output_loc]:
+                match = re.search(cascade_pattern, text)
+                if match:
+                    child_task_id = match.group(1)
+                    if child_task_id != task_id:  # Avoid infinite recursion
+                        child_task_info = self.get_task_info(child_task_id, follow_cascade=False)
+                    break
+        
         return TaskInfo(
             task_id=task_id,
             state=state,
-            logs=logs
+            logs=logs,
+            child_task_info=child_task_info
         )
     
     # ==================== WORKER METHODS ====================

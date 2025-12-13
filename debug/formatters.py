@@ -228,10 +228,19 @@ class Formatter:
         # Related Resources
         lines.append("\n💡 Related Resources")
         if task.get('worker_id'):
-            lines.append(f"   Worker: python scripts/debug.py worker {task['worker_id']}")
-        lines.append(f"   All logs: python scripts/query_logs.py --task {info.task_id}")
+            lines.append(f"   Worker: python debug.py worker {task['worker_id']}")
+        lines.append(f"   All logs: python debug.py task {info.task_id} --logs-only")
         
         lines.append("\n" + "=" * 80)
+        
+        # If there's a child task (cascaded failure), show its details
+        if info.child_task_info:
+            lines.append("")
+            lines.append("⬇️  CASCADED FROM CHILD TASK (showing root cause):")
+            lines.append("")
+            # Recursively format the child task
+            child_output = Formatter._format_task_text(info.child_task_info)
+            lines.append(child_output)
         
         return "\n".join(lines)
     
