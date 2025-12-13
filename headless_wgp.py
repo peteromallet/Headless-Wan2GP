@@ -1363,9 +1363,10 @@ class WanOrchestrator:
         if activated_loras:
             generation_logger.debug(f"LoRAs: {activated_loras}")
 
-        # Initialize stdout/stderr capture variables at outer scope for exception handling
+        # Initialize capture variables at outer scope for exception handling
         captured_stdout = None
         captured_stderr = None
+        captured_logs = []
         
         try:
             generation_logger.debug("Calling WGP generate_video with VACE module support")
@@ -1522,14 +1523,15 @@ class WanOrchestrator:
                         generation_logger.info(f"[FINAL_PARAMS] {key}: {value}")
                 generation_logger.info("=" * 80)
 
-                # Capture stdout/stderr during generation to catch upstream WGP errors
+                # Comprehensive capture of all WGP output: stdout, stderr, and Python logging
                 import io
-                import contextlib
+                import logging as py_logging
                 
                 captured_stdout = io.StringIO()
                 captured_stderr = io.StringIO()
+                captured_logs = []
                 
-                # Use a tee approach: capture while still printing to console
+                # TeeWriter: capture while still printing to console
                 class TeeWriter:
                     def __init__(self, original, capture):
                         self.original = original
@@ -1541,8 +1543,48 @@ class WanOrchestrator:
                         self.original.flush()
                         self.capture.flush()
                 
+                # Custom logging handler to capture Python logging
+                class CaptureHandler(py_logging.Handler):
+                    def __init__(self, log_list):
+                        super().__init__()
+                        self.log_list = log_list
+                        self.setLevel(py_logging.DEBUG)  # Capture all levels
+                        
+                    def emit(self, record):
+                        try:
+                            msg = self.format(record)
+                            self.log_list.append({
+                                'level': record.levelname,
+                                'name': record.name,
+                                'message': msg
+                            })
+                        except Exception:
+                            pass
+                
                 original_stdout = sys.stdout
                 original_stderr = sys.stderr
+                
+                # Add capture handler to root logger and common WGP loggers
+                capture_handler = CaptureHandler(captured_logs)
+                capture_handler.setFormatter(py_logging.Formatter('%(levelname)s:%(name)s: %(message)s'))
+                
+                # Loggers used by WGP and its dependencies
+                loggers_to_capture = [
+                    py_logging.getLogger(),  # Root logger
+                    py_logging.getLogger('diffusers'),
+                    py_logging.getLogger('transformers'),
+                    py_logging.getLogger('torch'),
+                    py_logging.getLogger('PIL'),
+                ]
+                
+                # Store original levels and add handler
+                original_levels = {}
+                for logger in loggers_to_capture:
+                    original_levels[logger.name] = logger.level
+                    logger.addHandler(capture_handler)
+                    # Ensure we capture WARNING and above
+                    if logger.level > py_logging.WARNING:
+                        logger.setLevel(py_logging.WARNING)
                 
                 try:
                     sys.stdout = TeeWriter(original_stdout, captured_stdout)
@@ -1552,6 +1594,12 @@ class WanOrchestrator:
                 finally:
                     sys.stdout = original_stdout
                     sys.stderr = original_stderr
+                    
+                    # Remove capture handler and restore levels
+                    for logger in loggers_to_capture:
+                        logger.removeHandler(capture_handler)
+                        if logger.name in original_levels:
+                            logger.setLevel(original_levels[logger.name])
 
                 # Verify directory after generation (wgp may have changed it during file operations)
                 _verify_wgp_directory(generation_logger, "after wgp.generate_video()")
@@ -1575,6 +1623,14 @@ class WanOrchestrator:
                     # Log captured output to help debug silent failures
                     stdout_content = captured_stdout.getvalue()
                     stderr_content = captured_stderr.getvalue()
+                    
+                    # Log captured Python logs (errors and warnings from diffusers/transformers/torch)
+                    if captured_logs:
+                        error_logs = [log for log in captured_logs if log['level'] in ['ERROR', 'CRITICAL', 'WARNING']]
+                        if error_logs:
+                            log_summary = '\n'.join([f"  [{log['level']}] {log['name']}: {log['message'][:200]}" for log in error_logs[-20:]])
+                            generation_logger.error(f"[WGP_PYLOG] Python logging errors/warnings captured:\n{log_summary}")
+                    
                     if stderr_content:
                         # Log last 2000 chars of stderr (most likely to contain the error)
                         stderr_tail = stderr_content[-2000:] if len(stderr_content) > 2000 else stderr_content
@@ -1618,6 +1674,13 @@ class WanOrchestrator:
             generation_logger.error(f"Generation failed: {e}")
             # Try to log any captured output that might help debug
             try:
+                # Log captured Python logs first (from diffusers/transformers/torch)
+                if captured_logs:
+                    error_logs = [log for log in captured_logs if log['level'] in ['ERROR', 'CRITICAL', 'WARNING']]
+                    if error_logs:
+                        log_summary = '\n'.join([f"  [{log['level']}] {log['name']}: {log['message'][:200]}" for log in error_logs[-20:]])
+                        generation_logger.error(f"[WGP_PYLOG] Python logging errors/warnings:\n{log_summary}")
+                
                 if captured_stderr is not None:
                     stderr_content = captured_stderr.getvalue()
                     if stderr_content:
