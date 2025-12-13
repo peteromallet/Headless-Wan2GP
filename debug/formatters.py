@@ -114,27 +114,54 @@ class Formatter:
         if info.logs:
             lines.append("\n📜 Event Timeline (from system_logs)")
             lines.append(f"   Found {len(info.logs)} log entries")
-            lines.append("")
             
-            for log in info.logs[:50]:  # Show first 50
-                timestamp = log['timestamp'][11:19] if len(log['timestamp']) >= 19 else log['timestamp']
-                level = log['log_level']
+            # Separate error/warning logs from others
+            error_logs = [log for log in info.logs if log.get('log_level') in ['ERROR', 'CRITICAL']]
+            warning_logs = [log for log in info.logs if log.get('log_level') == 'WARNING']
+            
+            # Show errors first (if any)
+            if error_logs:
+                lines.append(f"\n   ❌ ERRORS ({len(error_logs)} found):")
+                for log in error_logs:
+                    timestamp = log['timestamp'][11:19] if len(log.get('timestamp', '')) >= 19 else log.get('timestamp', '')
+                    source = log.get('source_id', 'unknown')[:20]
+                    message = log.get('message', '')
+                    # Show full message for errors (up to 500 chars)
+                    if len(message) > 500:
+                        message = message[:500] + "..."
+                    lines.append(f"   [{timestamp}] [{source:20}] {message}")
+            
+            # Show warnings (if any)
+            if warning_logs:
+                lines.append(f"\n   ⚠️  WARNINGS ({len(warning_logs)} found):")
+                for log in warning_logs[:10]:  # Limit to 10 warnings
+                    timestamp = log['timestamp'][11:19] if len(log.get('timestamp', '')) >= 19 else log.get('timestamp', '')
+                    source = log.get('source_id', 'unknown')[:20]
+                    message = log.get('message', '')[:150]
+                    lines.append(f"   [{timestamp}] [{source:20}] {message}")
+                if len(warning_logs) > 10:
+                    lines.append(f"   ... and {len(warning_logs) - 10} more warnings")
+            
+            # Show timeline (non-error logs)
+            other_logs = [log for log in info.logs if log.get('log_level') not in ['ERROR', 'CRITICAL', 'WARNING']]
+            lines.append(f"\n   📋 Timeline ({len(other_logs)} info/debug entries):")
+            
+            for log in other_logs[:50]:  # Show first 50
+                timestamp = log['timestamp'][11:19] if len(log.get('timestamp', '')) >= 19 else log.get('timestamp', '')
+                level = log.get('log_level', 'INFO')
                 source = log.get('source_id', 'unknown')[:20]
-                message = log['message'][:100]
+                message = log.get('message', '')[:100]
                 
                 # Color code by level
                 level_symbol = {
-                    'ERROR': '❌',
-                    'WARNING': '⚠️',
                     'INFO': 'ℹ️',
                     'DEBUG': '🔍',
-                    'CRITICAL': '🔥'
                 }.get(level, '  ')
                 
                 lines.append(f"   [{timestamp}] {level_symbol} [{level:8}] [{source:20}] {message}")
             
-            if len(info.logs) > 50:
-                lines.append(f"\n   ... and {len(info.logs) - 50} more log entries")
+            if len(other_logs) > 50:
+                lines.append(f"\n   ... and {len(other_logs) - 50} more log entries")
         else:
             lines.append("\n📜 Event Timeline")
             lines.append("   No logs found for this task")
