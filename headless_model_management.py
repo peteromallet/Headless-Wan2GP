@@ -28,6 +28,7 @@ Usage:
 import os
 import sys
 import time
+import traceback
 
 # Import debug print function from worker
 try:
@@ -48,6 +49,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 from contextlib import contextmanager
 from source.lora_utils import cleanup_legacy_lora_collisions
+from source.logging_utils import queue_logger
 
 # Add WanGP to path for imports
 def setup_wgp_path(wan_dir: str):
@@ -96,19 +98,20 @@ class HeadlessTaskQueue:
     while providing a clean API for headless operation.
     """
     
-    def __init__(self, wan_dir: str, max_workers: int = 1):
+    def __init__(self, wan_dir: str, max_workers: int = 1, debug_mode: bool = False):
         """
         Initialize the headless task queue.
 
         Args:
             wan_dir: Path to WanGP directory
             max_workers: Number of concurrent generation workers (recommend 1 for GPU)
+            debug_mode: Enable verbose debug logging (should match worker's --debug flag)
         """
         self.wan_dir = setup_wgp_path(wan_dir)
         self.max_workers = max_workers
         self.running = False
         self.start_time = time.time()
-        self.debug_mode = False  # Disabled to match October 2 baseline
+        self.debug_mode = debug_mode  # Now controlled by caller
         
         # Import wgp after path setup (protect sys.argv to prevent argument conflicts)
         _saved_argv = sys.argv[:]
@@ -181,7 +184,8 @@ class HeadlessTaskQueue:
         self.logger.info(f"HeadlessTaskQueue initialized with WanGP at {wan_dir}")
     
     def _setup_logging(self):
-        """Setup structured logging."""
+        """Setup structured logging that goes to Supabase via the log interceptor."""
+        # Keep Python's basic logging for local file backup
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
@@ -190,7 +194,11 @@ class HeadlessTaskQueue:
                 logging.FileHandler('headless.log')
             ]
         )
-        self.logger = logging.getLogger('HeadlessQueue')
+        self._file_logger = logging.getLogger('HeadlessQueue')
+        
+        # Use queue_logger (ComponentLogger) as main logger - this goes to Supabase
+        # ComponentLogger has compatible interface: .info(), .error(), .warning(), .debug()
+        self.logger = queue_logger
     
     def _ensure_orchestrator(self):
         """
@@ -252,7 +260,7 @@ class HeadlessTaskQueue:
                             raise
 
                     except Exception as e:
-                        self.logger.error(f"[CUDA_DEBUG] ❌ Error during CUDA diagnostics: {e}", exc_info=True)
+                        self.logger.error(f"[CUDA_DEBUG] ❌ Error during CUDA diagnostics: {e}\n{traceback.format_exc()}")
                         raise
 
             else:
@@ -335,9 +343,10 @@ class HeadlessTaskQueue:
             self._init_wgp_integration()
 
         except Exception as e:
+            # Always log orchestrator init failures - this is critical for debugging!
+            self.logger.error(f"[LAZY_INIT] ❌ Failed to initialize WanOrchestrator: {e}")
             if self.debug_mode:
-                self.logger.error(f"[LAZY_INIT] ❌ Failed to initialize WanOrchestrator: {e}")
-                self.logger.error("[LAZY_INIT] Traceback:", exc_info=True)
+                self.logger.error(f"[LAZY_INIT] Traceback:\n{traceback.format_exc()}")
             raise
     
     def _init_wgp_integration(self):
@@ -477,8 +486,16 @@ class HeadlessTaskQueue:
                 self.current_model = preload_model
                 self.logger.info(f"✅ Model {preload_model} pre-loaded successfully")
             except Exception as e:
-                self.logger.error(f"Failed to pre-load model {preload_model}: {e}")
-                self.logger.warning("Worker will continue without pre-loaded model")
+                # Log the full error with traceback
+                self.logger.error(f"❌ FATAL: Failed to pre-load model {preload_model}: {e}\n{traceback.format_exc()}")
+                
+                # If orchestrator failed to initialize, this is fatal - worker cannot function
+                if self.orchestrator is None:
+                    self.logger.error("Orchestrator failed to initialize - worker cannot process tasks. Exiting.")
+                    raise RuntimeError(f"Orchestrator initialization failed during preload: {e}") from e
+                else:
+                    # Orchestrator is OK but model load failed - this is recoverable
+                    self.logger.warning(f"Model {preload_model} failed to load, but orchestrator is ready. Worker will continue.")
     
     def stop(self, timeout: float = 30.0):
         """Stop the task queue processing service."""
@@ -601,7 +618,7 @@ class HeadlessTaskQueue:
                 self._process_task(task, worker_name)
                 
             except Exception as e:
-                self.logger.error(f"{worker_name} error: {e}", exc_info=True)
+                self.logger.error(f"{worker_name} error: {e}\n{traceback.format_exc()}")
                 time.sleep(1.0)
         
         self.logger.info(f"{worker_name} stopped")
@@ -1030,7 +1047,7 @@ class HeadlessTaskQueue:
                 time.sleep(10.0)  # Monitor every 10 seconds
                 
             except Exception as e:
-                self.logger.error(f"Monitor error: {e}", exc_info=True)
+                self.logger.error(f"Monitor error: {e}\n{traceback.format_exc()}")
                 time.sleep(5.0)
         
         self.logger.info("Queue monitor stopped")

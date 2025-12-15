@@ -225,7 +225,7 @@ def main():
 
     # Initialize Task Queue
     try:
-        task_queue = HeadlessTaskQueue(wan_dir=wan_dir, max_workers=cli_args.queue_workers)
+        task_queue = HeadlessTaskQueue(wan_dir=wan_dir, max_workers=cli_args.queue_workers, debug_mode=debug_mode)
         preload_model = cli_args.preload_model if cli_args.preload_model else None
         task_queue.start(preload_model=preload_model)
     except Exception as e:
