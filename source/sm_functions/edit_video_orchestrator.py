@@ -47,7 +47,8 @@ from .join_clips_orchestrator import (
 def _calculate_keeper_segments(
     portions: List[dict],
     total_frames: int,
-    dprint
+    dprint,
+    replace_mode: bool = False
 ) -> List[dict]:
     """
     Calculate keeper segments (parts NOT being regenerated).
@@ -56,6 +57,9 @@ def _calculate_keeper_segments(
         portions: List of portions to regenerate with start_frame, end_frame
         total_frames: Total frames in source video
         dprint: Debug print function
+        replace_mode: If True, the start and end frames of each portion become
+                      ANCHORS that are preserved, and only content BETWEEN them
+                      is regenerated. If False, the entire portion is regenerated.
         
     Returns:
         List of {start_frame, end_frame, frame_count} dicts for keeper segments
@@ -63,12 +67,18 @@ def _calculate_keeper_segments(
     # Sort portions by start_frame
     sorted_portions = sorted(portions, key=lambda p: p["start_frame"])
     
-    dprint(f"[EDIT_VIDEO] === Keeper Segment Calculation ===")
+    mode_desc = "REPLACE MODE (anchors preserved)" if replace_mode else "STANDARD MODE (full replacement)"
+    dprint(f"[EDIT_VIDEO] === Keeper Segment Calculation ({mode_desc}) ===")
     dprint(f"[EDIT_VIDEO] Source video: {total_frames} total frames")
     dprint(f"[EDIT_VIDEO] Portions to regenerate ({len(sorted_portions)}):")
     for i, p in enumerate(sorted_portions):
         frame_count = p.get("frame_count") or (p["end_frame"] - p["start_frame"] + 1)
-        dprint(f"[EDIT_VIDEO]   Portion {i}: frames {p['start_frame']}-{p['end_frame']} ({frame_count} frames)")
+        if replace_mode:
+            # In replace mode, anchors are kept, only middle is regenerated
+            dprint(f"[EDIT_VIDEO]   Portion {i}: frames {p['start_frame']}-{p['end_frame']} "
+                   f"(anchors {p['start_frame']} & {p['end_frame']} kept, regenerate {p['start_frame']+1}-{p['end_frame']-1})")
+        else:
+            dprint(f"[EDIT_VIDEO]   Portion {i}: frames {p['start_frame']}-{p['end_frame']} ({frame_count} frames)")
     
     # Validate portions don't overlap
     for i in range(len(sorted_portions) - 1):
@@ -80,20 +90,44 @@ def _calculate_keeper_segments(
     
     keepers = []
     
-    # Keeper before first portion (if first portion doesn't start at frame 0)
-    if sorted_portions[0]["start_frame"] > 0:
+    # In replace_mode:
+    #   - start_frame becomes the END of the previous keeper (anchor preserved)
+    #   - end_frame becomes the START of the next keeper (anchor preserved)
+    #   - Only frames BETWEEN anchors are regenerated
+    #
+    # Example: portion start_frame=417, end_frame=427 in replace_mode:
+    #   - Keeper 0: frames 0-417 (includes anchor frame 417)
+    #   - Regenerate: frames 418-426 (between anchors)
+    #   - Keeper 1: frames 427-end (includes anchor frame 427)
+    
+    # Keeper before first portion
+    first_start = sorted_portions[0]["start_frame"]
+    if replace_mode:
+        # In replace mode, include start_frame as anchor in keeper
+        keeper_end = first_start  # Include the anchor
+    else:
+        # Standard mode: keeper ends before portion starts
+        keeper_end = first_start - 1
+    
+    if keeper_end >= 0:
         keeper = {
             "start_frame": 0,
-            "end_frame": sorted_portions[0]["start_frame"] - 1,
-            "frame_count": sorted_portions[0]["start_frame"]
+            "end_frame": keeper_end,
+            "frame_count": keeper_end + 1
         }
         keepers.append(keeper)
         dprint(f"[EDIT_VIDEO] Keeper 0 (before first portion): frames 0-{keeper['end_frame']} ({keeper['frame_count']} frames)")
     
     # Keepers between portions
     for i in range(len(sorted_portions) - 1):
-        gap_start = sorted_portions[i]["end_frame"] + 1
-        gap_end = sorted_portions[i + 1]["start_frame"] - 1
+        if replace_mode:
+            # Include end_frame of portion i as start (anchor)
+            # Include start_frame of portion i+1 as end (anchor)
+            gap_start = sorted_portions[i]["end_frame"]  # Anchor from portion i
+            gap_end = sorted_portions[i + 1]["start_frame"]  # Anchor from portion i+1
+        else:
+            gap_start = sorted_portions[i]["end_frame"] + 1
+            gap_end = sorted_portions[i + 1]["start_frame"] - 1
         
         if gap_end >= gap_start:
             keeper = {
@@ -107,13 +141,19 @@ def _calculate_keeper_segments(
             # Adjacent portions with no gap - insert empty keeper marker
             dprint(f"[EDIT_VIDEO] No keeper between portions {i} and {i+1} (adjacent)")
     
-    # Keeper after last portion (if last portion doesn't end at last frame)
-    last_portion_end = sorted_portions[-1]["end_frame"]
-    if last_portion_end < total_frames - 1:
+    # Keeper after last portion
+    last_end = sorted_portions[-1]["end_frame"]
+    if replace_mode:
+        # In replace mode, include end_frame as anchor in keeper
+        keeper_start = last_end  # Include the anchor
+    else:
+        keeper_start = last_end + 1
+    
+    if keeper_start < total_frames:
         keeper = {
-            "start_frame": last_portion_end + 1,
+            "start_frame": keeper_start,
             "end_frame": total_frames - 1,
-            "frame_count": total_frames - 1 - last_portion_end
+            "frame_count": total_frames - keeper_start
         }
         keepers.append(keeper)
         dprint(f"[EDIT_VIDEO] Keeper {len(keepers)-1} (after last portion): frames {keeper['start_frame']}-{keeper['end_frame']} ({keeper['frame_count']} frames)")
@@ -198,11 +238,12 @@ def _preprocess_portions_to_regenerate(
     work_dir: Path,
     orchestrator_task_id: str,
     orchestrator_project_id: str | None,
-    dprint
+    dprint,
+    replace_mode: bool = False
 ) -> Dict:
     """
     Pre-process portions_to_regenerate into keeper clips for join orchestration.
-    
+
     Args:
         source_video_url: URL or path to source video
         source_video_fps: FPS of source video
@@ -213,7 +254,8 @@ def _preprocess_portions_to_regenerate(
         orchestrator_task_id: Task ID for logging
         orchestrator_project_id: Project ID for Supabase uploads
         dprint: Debug print function
-        
+        replace_mode: If True, keep start/end frames as anchors, regenerate between
+
     Returns:
         {
             "success": bool,
@@ -271,7 +313,8 @@ def _preprocess_portions_to_regenerate(
         keeper_segments = _calculate_keeper_segments(
             portions=portions_to_regenerate,
             total_frames=source_video_total_frames,
-            dprint=dprint
+            dprint=dprint,
+            replace_mode=replace_mode
         )
         
         if len(keeper_segments) < 2:
@@ -435,6 +478,7 @@ def _handle_edit_video_orchestrator_task(
         dprint(f"[EDIT_VIDEO] Run output directory: {current_run_output_dir}")
         
         # === 2. PREPROCESS: Extract keeper clips ===
+        replace_mode = orchestrator_payload.get("replace_mode", False)
         preprocess_result = _preprocess_portions_to_regenerate(
             source_video_url=source_video_url,
             source_video_fps=orchestrator_payload.get("source_video_fps", 16),
@@ -444,7 +488,8 @@ def _handle_edit_video_orchestrator_task(
             work_dir=current_run_output_dir,
             orchestrator_task_id=orchestrator_task_id_str,
             orchestrator_project_id=orchestrator_project_id,
-            dprint=dprint
+            dprint=dprint,
+            replace_mode=replace_mode
         )
         
         if not preprocess_result["success"]:
