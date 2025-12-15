@@ -241,10 +241,14 @@ def _preprocess_portions_to_regenerate(
         target_fps = source_video_fps or 16
         dprint(f"[EDIT_VIDEO] Expected (from payload): {source_video_total_frames} frames @ {target_fps} fps")
         
+        # Use tight FPS tolerance (0.01) to force resampling when there's any meaningful FPS difference
+        # This is critical because frame indices are calculated for target_fps - even a 0.3 FPS difference
+        # causes ~0.5s drift over 400 frames, making extracted frames appear "too early" or "too late"
         source_video = ensure_video_fps(
             video_path=source_video,
             target_fps=target_fps,
             output_dir=work_dir,
+            fps_tolerance=0.01,  # Tight tolerance to ensure frame-accurate extraction
             dprint_func=dprint
         )
         if not source_video:

@@ -428,10 +428,13 @@ def ensure_video_fps(
     
     resampled_path = output_dir / f"{video_path.stem}_resampled_{int(target_fps)}fps.mp4"
     
+    # Use fps filter (not -r output option) for accurate frame-based resampling
+    # The fps filter selects frames based on timestamps, ensuring frame N = time N/fps
+    # This is critical for frame-accurate extraction where frame indices must match timestamps
     resample_cmd = [
         'ffmpeg', '-y',
         '-i', str(video_path),
-        '-r', str(target_fps),
+        '-vf', f'fps={target_fps}',
         '-an',  # No audio for now
         str(resampled_path)
     ]
