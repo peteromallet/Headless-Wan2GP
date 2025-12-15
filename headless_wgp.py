@@ -7,6 +7,7 @@ Supports T2V, VACE, and Flux generation without running the Gradio UI.
 
 import os
 import sys
+import traceback
 from typing import Optional, List, Union
 
 # Import structured logging
@@ -377,23 +378,29 @@ class WanOrchestrator:
 
             # Upstream apply_changes signature accepts a single save_path_choice
             outputs_dir = "outputs/"
-            self._apply_changes(
-                self.state,
-                transformer_types_choices=["t2v"],
-                transformer_dtype_policy_choice="auto",
-                text_encoder_quantization_choice="bf16",
-                VAE_precision_choice="fp32",
-                mixed_precision_choice=0,
-                save_path_choice=outputs_dir,
-                image_save_path_choice=outputs_dir,
-                attention_choice="auto",
-                compile_choice=0,
-                profile_choice=4,
-                vae_config_choice="default",
-                metadata_choice="none",
-                quantization_choice="int8",
-                preload_model_policy_choice=[]
-            )
+            try:
+                orchestrator_logger.debug("Calling wgp.apply_changes() to initialize defaults...")
+                self._apply_changes(
+                    self.state,
+                    transformer_types_choices=["t2v"],
+                    transformer_dtype_policy_choice="auto",
+                    text_encoder_quantization_choice="bf16",
+                    VAE_precision_choice="fp32",
+                    mixed_precision_choice=0,
+                    save_path_choice=outputs_dir,
+                    image_save_path_choice=outputs_dir,
+                    attention_choice="auto",
+                    compile_choice=0,
+                    profile_choice=4,
+                    vae_config_choice="default",
+                    metadata_choice="none",
+                    quantization_choice="int8",
+                    preload_model_policy_choice=[]
+                )
+                orchestrator_logger.debug("wgp.apply_changes() completed successfully")
+            except Exception as e:
+                orchestrator_logger.error(f"❌ FATAL: wgp.apply_changes() failed: {e}\n{traceback.format_exc()}")
+                raise RuntimeError(f"Failed to apply WGP defaults during orchestrator init: {e}") from e
 
             # Verify directory after apply_changes (it may have done file operations)
             _verify_wgp_directory(orchestrator_logger, "after apply_changes()")
