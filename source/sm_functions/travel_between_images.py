@@ -1455,15 +1455,30 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     dprint(f"[PROMPT_FALLBACK] Segment {idx}: Using orchestrator negative_prompt (segment negative_prompt was empty)")
 
             # Calculate segment_frames_target with context frames for segments after the first
+            # Context frames are ONLY needed for sequential (non-independent) segments that continue
+            # from the previous segment's video. Independent segments generate from scratch using keyframes.
             base_segment_frames = expanded_segment_frames[idx]
-            if idx > 0 and current_frame_overlap_from_previous > 0:
-                # For segments after the first, add context frames from previous segment
+            if idx > 0 and current_frame_overlap_from_previous > 0 and not independent_segments:
+                # Sequential mode: add context frames for continuity with previous segment
                 segment_frames_target_with_context = base_segment_frames + current_frame_overlap_from_previous
                 dprint(f"[CONTEXT_FRAMES] Segment {idx}: base={base_segment_frames}, context={current_frame_overlap_from_previous}, total={segment_frames_target_with_context}")
             else:
-                # First segment doesn't need context frames
+                # First segment OR independent mode: no context frames needed
                 segment_frames_target_with_context = base_segment_frames
-                dprint(f"[CONTEXT_FRAMES] Segment {idx}: base={base_segment_frames}, no context needed")
+                if independent_segments and idx > 0:
+                    dprint(f"[CONTEXT_FRAMES] Segment {idx}: base={base_segment_frames}, no context (independent mode)")
+                else:
+                    dprint(f"[CONTEXT_FRAMES] Segment {idx}: base={base_segment_frames}, no context needed")
+            
+            # Ensure frame count is valid 4N+1 (VAE temporal quantization requirement)
+            # Invalid counts cause mask/guide vs output frame count mismatches
+            if (segment_frames_target_with_context - 1) % 4 != 0:
+                old_count = segment_frames_target_with_context
+                segment_frames_target_with_context = ((segment_frames_target_with_context - 1) // 4) * 4 + 1
+                dprint(f"[FRAME_QUANTIZATION] Segment {idx}: {old_count} -> {segment_frames_target_with_context} (enforcing 4N+1 rule)")
+            
+            # Consolidated segment frame count log for easy debugging
+            dprint(f"[SEGMENT_FRAMES] Segment {idx}: FINAL frame target = {segment_frames_target_with_context} (valid 4N+1: ✓)")
 
             segment_payload = {
                 "orchestrator_task_id_ref": orchestrator_task_id_str,

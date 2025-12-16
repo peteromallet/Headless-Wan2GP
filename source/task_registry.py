@@ -308,6 +308,18 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         if mask_video_path_for_wgp: generation_params["video_mask"] = str(mask_video_path_for_wgp.resolve())
         generation_params["video_prompt_type"] = video_prompt_type_str
         
+        # === WGP SUBMISSION DIAGNOSTIC SUMMARY ===
+        # Log key frame-related parameters before WGP submission
+        dprint_func(f"[WGP_SUBMIT] Task {task_id}: ========== WGP GENERATION REQUEST ==========")
+        dprint_func(f"[WGP_SUBMIT] Task {task_id}: video_length (target frames): {generation_params.get('video_length')}")
+        is_valid_4n1 = (generation_params.get('video_length', 0) - 1) % 4 == 0
+        dprint_func(f"[WGP_SUBMIT] Task {task_id}: Valid 4N+1: {is_valid_4n1} {'✓' if is_valid_4n1 else '✗ WARNING'}")
+        dprint_func(f"[WGP_SUBMIT] Task {task_id}: video_guide: {generation_params.get('video_guide', 'None')}")
+        dprint_func(f"[WGP_SUBMIT] Task {task_id}: video_mask: {generation_params.get('video_mask', 'None')}")
+        dprint_func(f"[WGP_SUBMIT] Task {task_id}: model: {model_name}")
+        dprint_func(f"[WGP_SUBMIT] Task {task_id}: resolution: {generation_params.get('resolution')}")
+        dprint_func(f"[WGP_SUBMIT] Task {task_id}: =============================================")
+        
         # IMPORTANT: Use the DB task_id as the queue task id.
         # This keeps logs, fatal error handling, and debug tooling consistent (no "travel_seg_" indirection).
         # We still include a hint in parameters so the queue can apply any task-type specific behavior.
