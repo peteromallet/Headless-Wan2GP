@@ -577,9 +577,17 @@ def _handle_join_clips_task(
         # (quantization already calculated above in step 4)
         quantized_total_frames = quantization_result['total_frames']
         
-        dprint(f"[JOIN_CLIPS] Task {task_id}: Total VACE frames: {quantized_total_frames} (context + gap + context)")
+        # === QUANTIZATION DIAGNOSTIC SUMMARY ===
+        dprint(f"[FRAME_COUNTS] Task {task_id}: ========== QUANTIZATION SUMMARY ==========")
+        dprint(f"[FRAME_COUNTS] Task {task_id}: Context frames: {context_frame_count} (each side)")
+        dprint(f"[FRAME_COUNTS] Task {task_id}: Requested gap: {gap_frame_count}")
+        dprint(f"[FRAME_COUNTS] Task {task_id}: Desired total: {context_frame_count * 2 + gap_frame_count}")
+        dprint(f"[FRAME_COUNTS] Task {task_id}: Quantized total: {quantized_total_frames} (4N+1 enforced)")
         if quantization_shift > 0:
-            dprint(f"[JOIN_CLIPS] Task {task_id}: VACE quantization applied: gap adjusted {gap_frame_count} → {gap_for_guide} frames")
+            dprint(f"[FRAME_COUNTS] Task {task_id}: Gap adjusted: {gap_frame_count} → {gap_for_guide} (shift: -{quantization_shift})")
+        else:
+            dprint(f"[FRAME_COUNTS] Task {task_id}: No quantization needed (already valid 4N+1)")
+        dprint(f"[FRAME_COUNTS] Task {task_id}: ===========================================")
 
         # Determine inserted frames for gap preservation (if enabled)
         # Both modes now use the same logic: insert boundary frames at 1/3 and 2/3 of gap
@@ -627,11 +635,19 @@ def _handle_join_clips_task(
             traceback.print_exc()
             return False, error_msg
 
-        if guide_frame_count != quantized_total_frames:
-            dprint(f"[JOIN_CLIPS] Task {task_id}: Guide/mask total frame count ({guide_frame_count}) "
-                   f"differs from quantized expectation ({quantized_total_frames}). Using actual count.")
-
         total_frames = guide_frame_count
+        
+        # === FRAME COUNT VERIFICATION ===
+        dprint(f"[FRAME_COUNTS] Task {task_id}: ========== GUIDE/MASK VERIFICATION ==========")
+        dprint(f"[FRAME_COUNTS] Task {task_id}: Expected total: {quantized_total_frames}")
+        dprint(f"[FRAME_COUNTS] Task {task_id}: Guide video frames: {guide_frame_count}")
+        is_valid_4n1 = (total_frames - 1) % 4 == 0
+        dprint(f"[FRAME_COUNTS] Task {task_id}: Valid 4N+1: {is_valid_4n1} {'✓' if is_valid_4n1 else '✗ WARNING'}")
+        if guide_frame_count != quantized_total_frames:
+            dprint(f"[FRAME_COUNTS] Task {task_id}: ⚠️  MISMATCH: Guide ({guide_frame_count}) != Expected ({quantized_total_frames})")
+        else:
+            dprint(f"[FRAME_COUNTS] Task {task_id}: ✓ Frame counts match")
+        dprint(f"[FRAME_COUNTS] Task {task_id}: =============================================")
 
         # --- 6. Prepare Generation Parameters (using shared helper) ---
         dprint(f"[JOIN_CLIPS] Task {task_id}: Preparing generation parameters...")
@@ -684,7 +700,16 @@ def _handle_join_clips_task(
             dprint(f"[JOIN_CLIPS]   Additional LoRAs: {len(generation_params['additional_loras'])} configured")
 
         # --- 7. Submit to Generation Queue ---
-        dprint(f"[JOIN_CLIPS] Task {task_id}: Submitting to generation queue...")
+        # === WGP SUBMISSION DIAGNOSTIC SUMMARY ===
+        dprint(f"[WGP_SUBMIT] Task {task_id}: ========== WGP GENERATION REQUEST ==========")
+        dprint(f"[WGP_SUBMIT] Task {task_id}: video_length (target frames): {total_frames}")
+        is_valid_4n1 = (total_frames - 1) % 4 == 0
+        dprint(f"[WGP_SUBMIT] Task {task_id}: Valid 4N+1: {is_valid_4n1} {'✓' if is_valid_4n1 else '✗ WARNING'}")
+        dprint(f"[WGP_SUBMIT] Task {task_id}: video_guide: {created_guide_video}")
+        dprint(f"[WGP_SUBMIT] Task {task_id}: video_mask: {created_mask_video}")
+        dprint(f"[WGP_SUBMIT] Task {task_id}: model: {model}")
+        dprint(f"[WGP_SUBMIT] Task {task_id}: resolution: {parsed_res_wh}")
+        dprint(f"[WGP_SUBMIT] Task {task_id}: =============================================")
 
         try:
             # Import GenerationTask from correct location
