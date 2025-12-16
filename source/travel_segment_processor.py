@@ -394,6 +394,8 @@ class TravelSegmentProcessor:
     
     def process_segment(self) -> Dict[str, Any]:
         """Main processing method that orchestrates all segment operations."""
+        ctx = self.ctx
+        
         # Create guide video
         guide_video_path = self.create_guide_video()
         
@@ -402,6 +404,44 @@ class TravelSegmentProcessor:
         
         # Create video_prompt_type
         video_prompt_type = self.create_video_prompt_type(mask_video_path)
+        
+        # === FRAME COUNT DIAGNOSTIC SUMMARY ===
+        # This consolidated log helps quickly diagnose frame count mismatches
+        ctx.dprint(f"[FRAME_COUNTS] Seg {ctx.segment_idx}: ========== FRAME COUNT SUMMARY ==========")
+        ctx.dprint(f"[FRAME_COUNTS] Seg {ctx.segment_idx}: Target frames for segment: {ctx.total_frames_for_segment}")
+        ctx.dprint(f"[FRAME_COUNTS] Seg {ctx.segment_idx}: Valid 4N+1 check: {(ctx.total_frames_for_segment - 1) % 4 == 0}")
+        
+        # Verify guide video frame count
+        guide_frames = None
+        if guide_video_path:
+            try:
+                guide_frames, _ = get_video_frame_count_and_fps(str(guide_video_path))
+                match_status = "✓" if guide_frames == ctx.total_frames_for_segment else "✗ MISMATCH"
+                ctx.dprint(f"[FRAME_COUNTS] Seg {ctx.segment_idx}: Guide video frames: {guide_frames} {match_status}")
+            except Exception as e:
+                ctx.dprint(f"[FRAME_COUNTS] Seg {ctx.segment_idx}: Guide video frames: ERROR ({e})")
+        else:
+            ctx.dprint(f"[FRAME_COUNTS] Seg {ctx.segment_idx}: Guide video: None")
+        
+        # Verify mask video frame count
+        mask_frames = None
+        if mask_video_path:
+            try:
+                mask_frames, _ = get_video_frame_count_and_fps(str(mask_video_path))
+                match_status = "✓" if mask_frames == ctx.total_frames_for_segment else "✗ MISMATCH"
+                ctx.dprint(f"[FRAME_COUNTS] Seg {ctx.segment_idx}: Mask video frames: {mask_frames} {match_status}")
+            except Exception as e:
+                ctx.dprint(f"[FRAME_COUNTS] Seg {ctx.segment_idx}: Mask video frames: ERROR ({e})")
+        else:
+            ctx.dprint(f"[FRAME_COUNTS] Seg {ctx.segment_idx}: Mask video: None")
+        
+        # Warn if any mismatch detected
+        if guide_frames and guide_frames != ctx.total_frames_for_segment:
+            ctx.dprint(f"[FRAME_COUNTS] ⚠️  WARNING: Guide frames ({guide_frames}) != target ({ctx.total_frames_for_segment})")
+        if mask_frames and mask_frames != ctx.total_frames_for_segment:
+            ctx.dprint(f"[FRAME_COUNTS] ⚠️  WARNING: Mask frames ({mask_frames}) != target ({ctx.total_frames_for_segment})")
+        
+        ctx.dprint(f"[FRAME_COUNTS] Seg {ctx.segment_idx}: ==========================================")
         
         return {
             "video_guide": str(guide_video_path) if guide_video_path else None,
