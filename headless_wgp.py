@@ -60,11 +60,13 @@ def _verify_wgp_directory(logger, context: str = ""):
 class WanOrchestrator:
     """Thin adapter around `wgp.generate_video` for easier programmatic use."""
 
-    def __init__(self, wan_root: str):
+    def __init__(self, wan_root: str, main_output_dir: Optional[str] = None):
         """Initialize orchestrator with WanGP directory.
 
         Args:
             wan_root: Path to WanGP repository root directory (MUST be absolute path to Wan2GP/)
+            main_output_dir: Optional path for output directory. If not provided, defaults to
+                           'outputs' directory next to wan_root (preserves backwards compatibility)
 
         IMPORTANT: Caller MUST have already changed to wan_root directory before calling this.
         wgp.py uses relative paths and expects to run from Wan2GP/.
@@ -306,7 +308,14 @@ class WanOrchestrator:
                 # Initialize WGP global state (normally done by UI)
                 import wgp
                 # Set absolute output path to avoid issues when working directory changes
-                absolute_outputs_path = os.path.abspath(os.path.join(os.path.dirname(self.wan_root), 'outputs'))
+                # Use main_output_dir if provided, otherwise default to 'outputs' next to wan_root
+                if main_output_dir is not None:
+                    absolute_outputs_path = os.path.abspath(main_output_dir)
+                    model_logger.debug(f"[OUTPUT_DIR] Using provided main_output_dir: {absolute_outputs_path}")
+                else:
+                    absolute_outputs_path = os.path.abspath(os.path.join(os.path.dirname(self.wan_root), 'outputs'))
+                    model_logger.debug(f"[OUTPUT_DIR] Using default output directory: {absolute_outputs_path}")
+
                 for attr, default in {
                     'wan_model': None, 'offloadobj': None, 'reload_needed': True,
                     'transformer_type': None, 'server_config': {'save_path': absolute_outputs_path}
