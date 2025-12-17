@@ -2453,10 +2453,14 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
         timestamp_short = datetime.now().strftime("%H%M%S")
         unique_suffix = uuid.uuid4().hex[:6]
         moved_filename = f"seg{segment_idx_completed:02d}_output_{timestamp_short}_{unique_suffix}{video_to_process_abs_path.suffix}"
-        
-        # Use segment processing dir directly without task_id prefixing since UUID guarantees uniqueness
-        moved_video_abs_path = Path(segment_processing_dir_for_saturation_str) / moved_filename
-        moved_video_abs_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Use prepare_output_path to ensure WGP output moves to task-type directory (Phase 2)
+        moved_video_abs_path, _ = prepare_output_path(
+            task_id=wgp_task_id,
+            filename=moved_filename,
+            main_output_dir_base=output_base_for_files,
+            task_type="travel_segment"
+        )
         
         # MOVE (not copy) the WGP output to avoid creating duplicates
         try:
