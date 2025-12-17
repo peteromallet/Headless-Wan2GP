@@ -701,15 +701,33 @@ def create_video_from_frames_list(
         # Close stdin to signal end of input
         proc.stdin.close()
         
+        log(f"[CREATE_VIDEO] Wrote {frames_written} frames to FFmpeg, waiting for encoding...")
+        
         # Wait for FFmpeg to finish (with timeout)
+        # Use wait() instead of communicate() since stdin is already closed
+        import threading
+        
+        # Read stderr in background thread to avoid blocking
+        stderr_output = []
+        def read_stderr():
+            try:
+                stderr_output.append(proc.stderr.read())
+            except Exception:
+                pass
+        
+        stderr_thread = threading.Thread(target=read_stderr)
+        stderr_thread.start()
+        
         try:
-            stdout, stderr = proc.communicate(timeout=300)  # 5 minute timeout for encoding
+            proc.wait(timeout=300)  # 5 minute timeout for encoding
         except subprocess.TimeoutExpired:
             proc.kill()
             log(f"[CREATE_VIDEO] ERROR: FFmpeg timed out after 300 seconds")
             return None
+        finally:
+            stderr_thread.join(timeout=5)
         
-        log(f"[CREATE_VIDEO] Wrote {frames_written} frames to FFmpeg")
+        stderr = stderr_output[0] if stderr_output else b""
         
         if proc.returncode == 0:
             if output_path_mp4.exists() and output_path_mp4.stat().st_size > 0:
