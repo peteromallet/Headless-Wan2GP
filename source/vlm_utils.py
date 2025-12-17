@@ -131,7 +131,7 @@ def generate_transition_prompt(
         )
 
         # Craft the query prompt with examples
-        base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "a cinematic sequence"
+        base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "the objects/people inside the scene move excitingly and things transform or shift with the camera"
 
         # Add duration info if available
         duration_text = ""
@@ -307,7 +307,7 @@ def generate_transition_prompts_batch(
                     dprint(f"[VLM_DEBUG_SAVE] Could not save debug image: {e_save}")
 
                 # Craft query with base_prompt context
-                base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "a cinematic sequence"
+                base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "the objects/people inside the scene move excitingly and things transform or shift with the camera"
 
                 # Add duration info if available
                 duration_text = ""
@@ -455,7 +455,7 @@ def generate_single_image_prompt(
         )
 
         # Craft the query prompt
-        base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "a cinematic video"
+        base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "the objects/people inside the scene move excitingly and things transform or shift with the camera"
 
         # Add duration info if available
         duration_text = ""
@@ -602,7 +602,7 @@ def generate_single_image_prompts_batch(
                 dprint(f"[VLM_SINGLE_BATCH] Image {i}: dimensions={img.size}")
 
                 # Craft query with base_prompt context
-                base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "a cinematic video"
+                base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "the objects/people inside the scene move excitingly and things transform or shift with the camera"
 
                 # Add duration info if available
                 duration_text = ""
