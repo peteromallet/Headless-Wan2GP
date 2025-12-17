@@ -32,7 +32,7 @@ from typing import Tuple, List, Optional, Dict
 
 from .. import db_operations as db_ops
 from ..common_utils import download_video_if_url, get_video_frame_count_and_fps
-from ..video_utils import extract_frame_range_to_video, ensure_video_fps
+from ..video_utils import extract_frame_range_to_video, ensure_video_fps, get_video_frame_count_ffprobe
 
 # Import shared functions from join_clips_orchestrator
 from .join_clips_orchestrator import (
@@ -297,13 +297,30 @@ def _preprocess_portions_to_regenerate(
             return {"success": False, "error": f"Failed to ensure video is at {target_fps} fps"}
         
         # Get actual frame count from the (potentially resampled) video
-        actual_frames, actual_fps = get_video_frame_count_and_fps(str(source_video))
+        # Use ffprobe for accuracy - OpenCV's CAP_PROP_FRAME_COUNT is unreliable
+        actual_frames_ffprobe = get_video_frame_count_ffprobe(str(source_video), dprint=dprint)
+        actual_frames_opencv, actual_fps = get_video_frame_count_and_fps(str(source_video))
+        
+        # Prefer ffprobe count, fall back to OpenCV
+        actual_frames = actual_frames_ffprobe or actual_frames_opencv
         if not actual_frames:
             return {"success": False, "error": "Could not determine source video frame count"}
         
-        # Use actual frame count (may differ slightly from payload due to resampling)
-        if source_video_total_frames and source_video_total_frames != actual_frames:
-            dprint(f"[EDIT_VIDEO] Note: Payload frame count ({source_video_total_frames}) differs from actual ({actual_frames})")
+        # Log discrepancies for debugging
+        if actual_frames_ffprobe and actual_frames_opencv and actual_frames_ffprobe != actual_frames_opencv:
+            dprint(f"[EDIT_VIDEO] Frame count: ffprobe={actual_frames_ffprobe}, OpenCV={actual_frames_opencv} (using ffprobe)")
+        
+        # Trust payload's frame count if close to actual - it was calculated for this video
+        # Only use actual if significantly different (e.g., after resampling changed frame count)
+        if source_video_total_frames:
+            diff = abs(source_video_total_frames - actual_frames)
+            if diff <= 3:
+                # Small difference - trust payload (frontend calculated correctly)
+                dprint(f"[EDIT_VIDEO] Using payload frame count: {source_video_total_frames} (actual: {actual_frames}, diff: {diff})")
+                actual_frames = source_video_total_frames
+            else:
+                dprint(f"[EDIT_VIDEO] Note: Payload frame count ({source_video_total_frames}) differs significantly from actual ({actual_frames})")
+        
         source_video_total_frames = actual_frames
         source_video_fps = actual_fps or target_fps
         
