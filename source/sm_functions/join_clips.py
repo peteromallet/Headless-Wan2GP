@@ -28,7 +28,9 @@ from ..common_utils import (
     ensure_valid_negative_prompt,
     get_video_frame_count_and_fps,
     download_video_if_url,
-    save_frame_from_video
+    save_frame_from_video,
+    prepare_output_path_with_upload,
+    upload_and_get_final_output_location
 )
 from ..video_utils import (
     extract_frames_from_video as sm_extract_frames_from_video,
@@ -856,8 +858,14 @@ def _handle_join_clips_task(
                         if not trimmed_clip2:
                             raise ValueError(f"Failed to trim clip2 (skip first {frames_to_skip_clip2} frames)")
 
-                        # Final concatenated output
-                        final_output_path = join_clips_dir / f"joined_{task_id}.mp4"
+                        # Final concatenated output - use standardized path
+                        final_output_path, initial_db_location = prepare_output_path_with_upload(
+                            task_id=task_id,
+                            filename=f"{task_id}_joined.mp4",
+                            main_output_dir_base=main_output_dir_base,
+                            task_type="join_clips_segment",
+                            dprint=dprint
+                        )
 
                         # Use generalized stitch function with frame-level crossfade blending
                         # This matches the approach used in travel_between_images.py
@@ -950,7 +958,15 @@ def _handle_join_clips_task(
                         dprint(f"[JOIN_CLIPS] Task {task_id}: Successfully created final joined video")
                         dprint(f"[JOIN_CLIPS] Task {task_id}: Output: {final_output_path}")
 
-                        return True, str(final_output_path)
+                        # Handle upload and get final DB location
+                        final_db_location = upload_and_get_final_output_location(
+                            local_file_path=final_output_path,
+                            supabase_object_name=task_id,
+                            initial_db_location=initial_db_location,
+                            dprint=dprint
+                        )
+
+                        return True, final_db_location
 
                     except Exception as concat_error:
                         error_msg = f"Failed to concatenate full clips: {concat_error}"

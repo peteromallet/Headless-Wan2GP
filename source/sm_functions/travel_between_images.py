@@ -2464,11 +2464,12 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
             if sat_level is not None and isinstance(sat_level, (float, int)) and sat_level >= 0.0 and abs(sat_level - 1.0) > 1e-6:
                 dprint(f"Chain (Seg {segment_idx_completed}): Applying post-gen saturation {sat_level} to {video_to_process_abs_path}")
 
-                sat_filename = f"s{segment_idx_completed}_sat_{sat_level:.2f}{video_to_process_abs_path.suffix}"
+                sat_filename = f"{wgp_task_id}_seg{segment_idx_completed}_saturated.mp4"
                 saturated_video_output_abs_path, new_db_path = prepare_output_path(
                     task_id=wgp_task_id,
                     filename=sat_filename,
-                    main_output_dir_base=Path(segment_processing_dir_for_saturation_str)
+                    main_output_dir_base=Path(full_orchestrator_payload.get("main_output_dir_for_run")),
+                    task_type="travel_segment"
                 )
                 
                 if sm_apply_saturation_to_video_ffmpeg(str(video_to_process_abs_path), saturated_video_output_abs_path, sat_level):
@@ -2488,11 +2489,12 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
             if isinstance(brightness_adjust, (float, int)) and abs(brightness_adjust) > 1e-6:
                 dprint(f"Chain (Seg {segment_idx_completed}): Applying post-gen brightness {brightness_adjust} to {video_to_process_abs_path}")
                 
-                bright_filename = f"s{segment_idx_completed}_bright_{brightness_adjust:+.2f}{video_to_process_abs_path.suffix}"
+                bright_filename = f"{wgp_task_id}_seg{segment_idx_completed}_brightened.mp4"
                 brightened_video_output_abs_path, new_db_path = prepare_output_path(
                     task_id=wgp_task_id,
                     filename=bright_filename,
-                    main_output_dir_base=Path(segment_processing_dir_for_saturation_str)
+                    main_output_dir_base=Path(full_orchestrator_payload.get("main_output_dir_for_run")),
+                    task_type="travel_segment"
                 )
                 
                 processed_video = apply_brightness_to_video_frames(str(video_to_process_abs_path), brightened_video_output_abs_path, brightness_adjust, wgp_task_id)
@@ -2519,11 +2521,12 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
             dprint(f"Chain (Seg {segment_idx_completed}): Color matching requested. Start Ref: {start_ref}, End Ref: {end_ref}")
 
             if start_ref and end_ref and Path(start_ref).exists() and Path(end_ref).exists():
-                cm_filename = f"s{segment_idx_completed}_colormatched{video_to_process_abs_path.suffix}"
+                cm_filename = f"{wgp_task_id}_seg{segment_idx_completed}_colormatched.mp4"
                 cm_video_output_abs_path, new_db_path = prepare_output_path(
                     task_id=wgp_task_id,
                     filename=cm_filename,
-                    main_output_dir_base=Path(segment_processing_dir_for_saturation_str)
+                    main_output_dir_base=Path(full_orchestrator_payload.get("main_output_dir_for_run")),
+                    task_type="travel_segment"
                 )
 
                 matched_video_path = sm_apply_color_matching_to_video(
@@ -2554,11 +2557,12 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
             banner_start = chain_details.get("start_image_path")
             banner_end = chain_details.get("end_image_path")
             if banner_start and banner_end and Path(banner_start).exists() and Path(banner_end).exists():
-                banner_filename = f"s{segment_idx_completed}_with_inputs{video_to_process_abs_path.suffix}"
+                banner_filename = f"{wgp_task_id}_seg{segment_idx_completed}_banner{video_to_process_abs_path.suffix}"
                 banner_video_abs_path, new_db_path = prepare_output_path(
                     task_id=wgp_task_id,
                     filename=banner_filename,
-                    main_output_dir_base=Path(segment_processing_dir_for_saturation_str)
+                    main_output_dir_base=Path(full_orchestrator_payload.get("main_output_dir_for_run")),
+                    task_type="travel_segment"
                 )
 
                 if sm_overlay_start_end_images_above_video(
@@ -2999,12 +3003,13 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         if len(segment_video_paths_for_stitch) == 1:
             # If only one video, copy it directly using prepare_output_path
             source_single_video_path = Path(segment_video_paths_for_stitch[0])
-            single_video_filename = f"{orchestrator_run_id}_final{source_single_video_path.suffix}"
-            
+            single_video_filename = f"{stitch_task_id_str}_single_video{source_single_video_path.suffix}"
+
             current_stitched_video_path, _ = prepare_output_path(
                 task_id=stitch_task_id_str,
                 filename=single_video_filename,
-                main_output_dir_base=stitch_processing_dir
+                main_output_dir_base=Path(full_orchestrator_payload.get("main_output_dir_for_run")),
+                task_type="travel_stitch"
             )
             shutil.copy2(str(source_single_video_path), str(current_stitched_video_path))
             dprint(f"Stitch: Only one video found. Copied {source_single_video_path} to {current_stitched_video_path}")
@@ -3027,11 +3032,12 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             
             any_positive_overlap = any(o > 0 for o in actual_overlaps_for_stitching)
 
-            raw_stitched_video_filename = f"{orchestrator_run_id}_stitched.mp4"
+            raw_stitched_video_filename = f"{stitch_task_id_str}_stitched_intermediate.mp4"
             path_for_raw_stitched_video, _ = prepare_output_path(
                 task_id=stitch_task_id_str,
                 filename=raw_stitched_video_filename,
-                main_output_dir_base=stitch_processing_dir
+                main_output_dir_base=Path(full_orchestrator_payload.get("main_output_dir_for_run")),
+                task_type="travel_stitch"
             )
 
             if any_positive_overlap:
@@ -3488,14 +3494,15 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         timestamp_short = datetime.now().strftime("%H%M%S")
         unique_suffix = uuid.uuid4().hex[:6]
         if upscale_factor > 1.0:
-            final_video_filename = f"travel_final_upscaled_{upscale_factor:.1f}x_{timestamp_short}_{unique_suffix}{video_path_after_optional_upscale.suffix}"
+            final_video_filename = f"{stitch_task_id_str}_upscaled_{upscale_factor:.1f}x_{timestamp_short}_{unique_suffix}{video_path_after_optional_upscale.suffix}"
         else:
-            final_video_filename = f"travel_final_{timestamp_short}_{unique_suffix}{video_path_after_optional_upscale.suffix}"
+            final_video_filename = f"{stitch_task_id_str}_output_{timestamp_short}_{unique_suffix}{video_path_after_optional_upscale.suffix}"
         
         final_video_path, initial_db_location = prepare_output_path_with_upload(
             task_id=stitch_task_id_str,
             filename=final_video_filename,
             main_output_dir_base=stitch_processing_dir,
+            task_type="travel_stitch",
             dprint=dprint
         )
         

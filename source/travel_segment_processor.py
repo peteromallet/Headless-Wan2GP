@@ -30,7 +30,8 @@ from .common_utils import (
     ensure_valid_prompt,
     ensure_valid_negative_prompt,
     create_mask_video_from_inactive_indices,
-    get_video_frame_count_and_fps
+    get_video_frame_count_and_fps,
+    prepare_output_path
 )
 from .video_utils import create_guide_video_for_travel_segment as sm_create_guide_video_for_travel_segment
 from . import db_operations as db_ops
@@ -98,9 +99,17 @@ class TravelSegmentProcessor:
             # Generate unique guide video filename
             timestamp_short = datetime.now().strftime("%H%M%S")
             unique_suffix = uuid.uuid4().hex[:6]
-            guide_video_filename = f"seg{ctx.segment_idx:02d}_vace_guide_{timestamp_short}_{unique_suffix}.mp4"
-            guide_video_base_name = f"seg{ctx.segment_idx:02d}_vace_guide_{timestamp_short}_{unique_suffix}"
-            guide_video_final_path = ctx.segment_processing_dir / guide_video_filename
+            guide_video_filename = f"{ctx.task_id}_seg{ctx.segment_idx:02d}_guide_{timestamp_short}_{unique_suffix}.mp4"
+            guide_video_base_name = f"{ctx.task_id}_seg{ctx.segment_idx:02d}_guide_{timestamp_short}_{unique_suffix}"
+
+            # Use prepare_output_path to ensure guide video goes to task_type directory
+            main_output_dir = Path(ctx.full_orchestrator_payload.get("main_output_dir_for_run"))
+            guide_video_final_path, _ = prepare_output_path(
+                task_id=ctx.task_id,
+                filename=guide_video_filename,
+                main_output_dir_base=main_output_dir,
+                task_type="travel_segment"
+            )
             
             # Get previous segment video for guide creation
             path_to_previous_segment_video_output_for_guide = self._get_previous_segment_video()
@@ -288,8 +297,16 @@ class TravelSegmentProcessor:
             # Create mask video output path
             timestamp_short = datetime.now().strftime("%H%M%S")
             unique_suffix = uuid.uuid4().hex[:6]
-            mask_filename = f"seg{ctx.segment_idx:02d}_mask_{timestamp_short}_{unique_suffix}.mp4"
-            mask_out_path_tmp = ctx.segment_processing_dir / mask_filename
+            mask_filename = f"{ctx.task_id}_seg{ctx.segment_idx:02d}_mask_{timestamp_short}_{unique_suffix}.mp4"
+
+            # Use prepare_output_path to ensure mask video goes to task_type directory
+            main_output_dir = Path(ctx.full_orchestrator_payload.get("main_output_dir_for_run"))
+            mask_out_path_tmp, _ = prepare_output_path(
+                task_id=ctx.task_id,
+                filename=mask_filename,
+                main_output_dir_base=main_output_dir,
+                task_type="travel_segment"
+            )
             
             ctx.dprint(f"Seg {ctx.segment_idx}: Creating mask video with {len(inactive_indices)} inactive frames: {sorted(inactive_indices)}")
             

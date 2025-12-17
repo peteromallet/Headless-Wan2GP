@@ -47,6 +47,7 @@ def handle_extract_frame_task(task_params_dict: dict, main_output_dir_base: Path
             task_id,
             output_filename,
             main_output_dir_base,
+            task_type="extract_frame",
             dprint=dprint,
             custom_output_dir=custom_output_dir
         )
@@ -124,8 +125,9 @@ def handle_rife_interpolate_task(task_params_dict: dict, main_output_dir_base: P
 
     final_save_path_for_video, initial_db_location_for_rife = prepare_output_path_with_upload(
         task_id,
-        f"{task_id}_rife_interpolated.mp4",
+        f"{task_id}_interpolated.mp4",
         main_output_dir_base,
+        task_type="rife_interpolate_images",
         dprint=dprint,
         custom_output_dir=custom_output_dir
     )
