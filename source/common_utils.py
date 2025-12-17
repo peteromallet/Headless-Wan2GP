@@ -2197,6 +2197,105 @@ def upload_and_get_final_output_location(
     dprint(f"File ready for edge function upload: {local_file_path}")
     return str(local_file_path.resolve())
 
+
+def upload_intermediate_file_to_storage(
+    local_file_path: Path,
+    task_id: str,
+    filename: str,
+    *,
+    dprint=lambda *_: None
+) -> str | None:
+    """
+    Upload an intermediate file to Supabase storage for cross-worker access.
+    
+    This is used when orchestrators create intermediate files (like reversed videos)
+    that need to be accessible by child tasks running on different workers.
+    
+    Args:
+        local_file_path: Path to the local file to upload
+        task_id: Task ID for organizing uploads
+        filename: Filename to use in storage
+        dprint: Debug print function
+        
+    Returns:
+        Public URL of the uploaded file, or None on failure
+    """
+    import httpx
+    import mimetypes
+    
+    # Check if Supabase is configured
+    SUPABASE_URL = os.environ.get("SUPABASE_URL")
+    SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+    
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        dprint(f"[UPLOAD_INTERMEDIATE] Supabase not configured, returning local path")
+        return str(local_file_path.resolve())
+    
+    if not local_file_path.exists():
+        dprint(f"[UPLOAD_INTERMEDIATE] File not found: {local_file_path}")
+        return None
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "apikey": SUPABASE_KEY,
+            "Content-Type": "application/json"
+        }
+        
+        # Step 1: Get signed upload URL
+        generate_url_edge = f"{SUPABASE_URL.rstrip('/')}/functions/v1/generate-upload-url"
+        content_type = mimetypes.guess_type(str(local_file_path))[0] or 'application/octet-stream'
+        
+        upload_url_resp = httpx.post(
+            generate_url_edge,
+            headers=headers,
+            json={
+                "task_id": task_id,
+                "filename": filename,
+                "content_type": content_type
+            },
+            timeout=30
+        )
+        
+        if upload_url_resp.status_code != 200:
+            dprint(f"[UPLOAD_INTERMEDIATE] Failed to get upload URL: {upload_url_resp.status_code} - {upload_url_resp.text[:200]}")
+            return None
+        
+        upload_data = upload_url_resp.json()
+        upload_url = upload_data.get("upload_url")
+        storage_path = upload_data.get("storage_path")
+        
+        if not upload_url:
+            dprint(f"[UPLOAD_INTERMEDIATE] No upload_url in response")
+            return None
+        
+        # Step 2: Upload file via signed URL
+        dprint(f"[UPLOAD_INTERMEDIATE] Uploading {local_file_path.name} ({local_file_path.stat().st_size / 1024 / 1024:.1f} MB)")
+        
+        with open(local_file_path, 'rb') as f:
+            put_resp = httpx.put(
+                upload_url,
+                headers={"Content-Type": content_type},
+                content=f,
+                timeout=300  # 5 min timeout for large files
+            )
+        
+        if put_resp.status_code not in [200, 201]:
+            dprint(f"[UPLOAD_INTERMEDIATE] Upload failed: {put_resp.status_code} - {put_resp.text[:200]}")
+            return None
+        
+        # Construct public URL
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/image_uploads/{storage_path}"
+        dprint(f"[UPLOAD_INTERMEDIATE] ✅ Uploaded to: {public_url}")
+        
+        return public_url
+        
+    except Exception as e:
+        dprint(f"[UPLOAD_INTERMEDIATE] Exception: {e}")
+        traceback.print_exc()
+        return None
+
+
 def create_mask_video_from_inactive_indices(
     total_frames: int,
     resolution_wh: tuple[int, int], 

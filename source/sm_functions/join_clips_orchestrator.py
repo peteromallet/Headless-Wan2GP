@@ -28,7 +28,7 @@ from typing import Tuple, List, Optional
 import cv2
 
 from .. import db_operations as db_ops
-from ..common_utils import download_video_if_url, get_video_frame_count_and_fps
+from ..common_utils import download_video_if_url, get_video_frame_count_and_fps, upload_intermediate_file_to_storage
 from ..video_utils import extract_frames_from_video, reverse_video
 
 
@@ -737,12 +737,28 @@ def _handle_join_clips_orchestrator_task(
             if not reversed_path or not reversed_path.exists():
                 return False, f"Failed to reverse first clip: {local_first_clip_path}"
             
-            dprint(f"[JOIN_ORCHESTRATOR] ✅ Created reversed clip: {reversed_path}")
+            dprint(f"[JOIN_ORCHESTRATOR] ✅ Created reversed clip locally: {reversed_path}")
+            
+            # Upload reversed clip to storage for cross-worker access
+            reversed_filename = f"{first_clip_name}_reversed.mp4"
+            reversed_url = upload_intermediate_file_to_storage(
+                local_file_path=reversed_path,
+                task_id=orchestrator_task_id_str,
+                filename=reversed_filename,
+                dprint=dprint
+            )
+            
+            if not reversed_url:
+                # Fallback to local path if upload fails (works for single-worker setups)
+                dprint(f"[JOIN_ORCHESTRATOR] ⚠️  Upload failed, using local path (may fail on multi-worker)")
+                reversed_url = str(reversed_path.resolve())
+            else:
+                dprint(f"[JOIN_ORCHESTRATOR] ✅ Reversed clip uploaded: {reversed_url}")
             
             # Build new clip_list: [original_first_clip, reversed_first_clip]
             # The reversed clip becomes the "second" clip
             reversed_clip_dict = {
-                "url": str(reversed_path.resolve()),
+                "url": reversed_url,
                 "name": f"{first_clip_name}_reversed"
             }
             
