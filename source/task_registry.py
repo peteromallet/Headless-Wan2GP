@@ -132,8 +132,16 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         current_run_base_output_dir_str = segment_params.get("current_run_base_output_dir")
         if not current_run_base_output_dir_str:
             current_run_base_output_dir_str = full_orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
-        
-        current_run_base_output_dir = Path(current_run_base_output_dir_str)
+
+        # Convert to Path and resolve relative paths against main_output_dir_base
+        base_dir_path = Path(current_run_base_output_dir_str)
+        if not base_dir_path.is_absolute():
+            # Relative path - resolve against main_output_dir_base
+            current_run_base_output_dir = main_output_dir_base / base_dir_path
+        else:
+            # Already absolute - use as is
+            current_run_base_output_dir = base_dir_path
+
         segment_processing_dir = current_run_base_output_dir
         segment_processing_dir.mkdir(parents=True, exist_ok=True)
         
@@ -210,6 +218,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                     total_frames_for_segment=total_frames_for_segment,
                     parsed_res_wh=parsed_res_wh,
                     segment_processing_dir=segment_processing_dir,
+                    main_output_dir_base=main_output_dir_base,
                     full_orchestrator_payload=full_orchestrator_payload,
                     segment_params=segment_params,
                     mask_active_frames=mask_active_frames,

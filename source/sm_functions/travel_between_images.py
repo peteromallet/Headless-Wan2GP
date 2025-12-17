@@ -290,9 +290,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
 
         run_id = orchestrator_payload.get("run_id", orchestrator_task_id_str)
         base_dir_for_this_run_str = orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
-        
-        # Use the base directory directly without creating run-specific subdirectories
-        current_run_output_dir = Path(base_dir_for_this_run_str)
+
+        # Convert to Path and resolve relative paths against main_output_dir_base
+        base_dir_path = Path(base_dir_for_this_run_str)
+        if not base_dir_path.is_absolute():
+            # Relative path - resolve against main_output_dir_base
+            current_run_output_dir = main_output_dir_base / base_dir_path
+        else:
+            # Already absolute - use as is
+            current_run_output_dir = base_dir_path
+
         current_run_output_dir.mkdir(parents=True, exist_ok=True)
         dprint(f"Orchestrator {orchestrator_task_id_str}: Base output directory for this run: {current_run_output_dir.resolve()}")
 
