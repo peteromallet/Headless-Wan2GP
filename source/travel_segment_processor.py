@@ -46,6 +46,7 @@ class TravelSegmentContext:
     total_frames_for_segment: int
     parsed_res_wh: Tuple[int, int]
     segment_processing_dir: Path
+    main_output_dir_base: Path  # Base output directory from worker
     full_orchestrator_payload: Dict[str, Any]
     segment_params: Dict[str, Any]
     mask_active_frames: bool
@@ -103,11 +104,10 @@ class TravelSegmentProcessor:
             guide_video_base_name = f"{ctx.task_id}_seg{ctx.segment_idx:02d}_guide_{timestamp_short}_{unique_suffix}"
 
             # Use prepare_output_path to ensure guide video goes to task_type directory
-            main_output_dir = Path(ctx.full_orchestrator_payload.get("main_output_dir_for_run"))
             guide_video_final_path, _ = prepare_output_path(
                 task_id=ctx.task_id,
                 filename=guide_video_filename,
-                main_output_dir_base=main_output_dir,
+                main_output_dir_base=ctx.main_output_dir_base,
                 task_type="travel_segment"
             )
             
@@ -300,11 +300,10 @@ class TravelSegmentProcessor:
             mask_filename = f"{ctx.task_id}_seg{ctx.segment_idx:02d}_mask_{timestamp_short}_{unique_suffix}.mp4"
 
             # Use prepare_output_path to ensure mask video goes to task_type directory
-            main_output_dir = Path(ctx.full_orchestrator_payload.get("main_output_dir_for_run"))
             mask_out_path_tmp, _ = prepare_output_path(
                 task_id=ctx.task_id,
                 filename=mask_filename,
-                main_output_dir_base=main_output_dir,
+                main_output_dir_base=ctx.main_output_dir_base,
                 task_type="travel_segment"
             )
             
