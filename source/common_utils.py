@@ -404,88 +404,18 @@ def create_video_from_frames_list(
 ):
     """Creates an MP4 video from a list of NumPy BGR frames.
     
-    Uses streaming to pipe frames to FFmpeg incrementally, avoiding loading
-    all frame data into memory at once.
+    This is a wrapper around video_utils.create_video_from_frames_list
+    with BT.709 colorspace standardization enabled by default.
     """
-    output_path_obj = Path(output_path)
-    output_path_mp4 = output_path_obj.with_suffix('.mp4')
-    output_path_mp4.parent.mkdir(parents=True, exist_ok=True)
-
-    ffmpeg_cmd = [
-        "ffmpeg", "-y",
-        "-loglevel", "error",
-        "-f", "rawvideo",
-        "-vcodec", "rawvideo",
-        "-pix_fmt", "bgr24",
-        "-s", f"{resolution[0]}x{resolution[1]}",
-        "-r", str(fps),
-        "-i", "-",
-        "-c:v", "libx264",
-        "-pix_fmt", "yuv420p",
-        "-preset", "medium",
-        "-crf", "18",  # Visually lossless quality
-        "-vf", "format=yuv420p,colorspace=bt709:iall=bt709:fast=1",
-        "-color_primaries", "bt709",
-        "-color_trc", "bt709",
-        "-colorspace", "bt709",
-        str(output_path_mp4.resolve())
-    ]
-
-    # Count valid frames first
-    valid_count = sum(1 for f in frames_list 
-                      if f is not None and isinstance(f, np.ndarray) 
-                      and len(f.shape) == 3 and f.shape[2] == 3)
-    
-    if valid_count == 0:
-        print(f"No valid frames to write for {output_path_mp4}")
-        return None
-
-    try:
-        # Use Popen to stream frames incrementally
-        proc = subprocess.Popen(
-            ffmpeg_cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        
-        frames_written = 0
-        for frame_np in frames_list:
-            if frame_np is None or not isinstance(frame_np, np.ndarray):
-                continue
-            if len(frame_np.shape) != 3 or frame_np.shape[2] != 3:
-                continue
-            if frame_np.dtype != np.uint8:
-                frame_np = frame_np.astype(np.uint8)
-            if frame_np.shape[0] != resolution[1] or frame_np.shape[1] != resolution[0]:
-                try:
-                    frame_np = cv2.resize(frame_np, resolution, interpolation=cv2.INTER_AREA)
-                except Exception:
-                    continue
-            
-            try:
-                proc.stdin.write(frame_np.tobytes())
-                frames_written += 1
-            except BrokenPipeError:
-                break
-        
-        proc.stdin.close()
-        
-        # Wait for FFmpeg to finish
-        try:
-            proc.wait(timeout=300)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            print(f"FFmpeg timed out for {output_path_mp4}")
-            return None
-        
-        if proc.returncode != 0:
-            print(f"FFmpeg failed with return code {proc.returncode}")
-            return None
-        return output_path_mp4
-    except Exception as e:
-        print(f"Error during FFmpeg encoding: {e}")
-        return None
+    # Import here to avoid circular imports
+    from .video_utils import create_video_from_frames_list as _create_video
+    return _create_video(
+        frames_list, 
+        output_path, 
+        fps, 
+        resolution, 
+        standardize_colorspace=True
+    )
 
 def extract_video_segment_ffmpeg(
     input_video_path: str | Path,
