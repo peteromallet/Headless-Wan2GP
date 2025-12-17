@@ -371,6 +371,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                     }},
                     actual_wgp_output_video_path=status.result_path,
                     image_download_dir=segment_processing_dir,
+                    main_output_dir_base=main_output_dir_base,
                     dprint=dprint_func
                 )
                 if chain_success and final_chained_path:
