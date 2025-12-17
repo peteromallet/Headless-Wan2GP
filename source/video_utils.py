@@ -609,8 +609,8 @@ def create_video_from_frames_list(
         "-i", "-",
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
-        "-preset", "veryfast",
-        "-crf", "23",
+        "-preset", "medium",
+        "-crf", "18",  # Visually lossless quality
         str(output_path_mp4.resolve())
     ]
 
@@ -713,7 +713,7 @@ def _apply_saturation_to_video_ffmpeg(
     input_video_path: str | Path,
     output_video_path: str | Path,
     saturation_level: float,
-    preset: str = "veryfast"
+    preset: str = "medium"
 ) -> bool:
     """Applies a saturation adjustment to the full video using FFmpeg's eq filter.
     Returns: True if FFmpeg succeeds and the output file exists & is non-empty, else False.

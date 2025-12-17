@@ -418,8 +418,8 @@ def create_video_from_frames_list(
         "-i", "-",
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
-        "-preset", "veryfast",
-        "-crf", "23",
+        "-preset", "medium",
+        "-crf", "18",  # Visually lossless quality
         "-vf", "format=yuv420p,colorspace=bt709:iall=bt709:fast=1",
         "-color_primaries", "bt709",
         "-color_trc", "bt709",
