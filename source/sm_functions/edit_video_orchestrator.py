@@ -532,16 +532,18 @@ def _handle_edit_video_orchestrator_task(
             vlm_temp_dir.mkdir(parents=True, exist_ok=True)
             
             try:
+                base_prompt = join_settings.get("prompt", "")
+                gap_frame_count = join_settings.get("gap_frame_count", 53)
+                fps = orchestrator_payload.get("source_video_fps", 16)
+                
                 image_pairs = _extract_boundary_frames_for_vlm(
                     clip_list=clip_list,
                     temp_dir=vlm_temp_dir,
                     orchestrator_task_id=orchestrator_task_id_str,
+                    replace_mode=replace_mode,
+                    gap_frame_count=gap_frame_count,
                     dprint=dprint
                 )
-                
-                base_prompt = join_settings.get("prompt", "")
-                gap_frame_count = join_settings.get("gap_frame_count", 53)
-                fps = orchestrator_payload.get("source_video_fps", 16)
                 
                 vlm_enhanced_prompts = _generate_vlm_prompts_for_joins(
                     image_pairs=image_pairs,
