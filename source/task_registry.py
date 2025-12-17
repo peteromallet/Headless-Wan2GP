@@ -147,7 +147,11 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         
         debug_enabled = segment_params.get("debug_mode_enabled", full_orchestrator_payload.get("debug_mode_enabled", False))
 
-        travel_mode = full_orchestrator_payload.get("model_type", "vace")
+        # Check if model needs VACE-style processing (guide/mask videos)
+        # Use actual model name (already extracted at line 107), not payload's high-level model_type category
+        model_name_lower = model_name.lower()
+        vace_indicators = ["vace", "controlnet", "cocktail", "lightning"]
+        needs_vace_processing = any(indicator in model_name_lower for indicator in vace_indicators)
 
         start_ref_path = None
         end_ref_path = None
@@ -209,7 +213,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         mask_video_path_for_wgp = None
         video_prompt_type_str = None
 
-        if travel_mode == "vace":
+        if needs_vace_processing:
             try:
                 processor_context = TravelSegmentContext(
                     task_id=task_id,
