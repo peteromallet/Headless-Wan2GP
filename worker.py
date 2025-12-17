@@ -151,9 +151,10 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
 
         if task_params_dict.get("travel_chain_details"):
             chain_success, chain_message, final_path_from_chaining = tbi._handle_travel_chaining_after_wgp(
-                wgp_task_params=task_params_dict, 
+                wgp_task_params=task_params_dict,
                 actual_wgp_output_video_path=output_location_to_db,
                 image_download_dir=image_download_dir,
+                main_output_dir_base=main_output_dir_base,
                 dprint=lambda msg: dprint(msg, task_id=task_id, debug_mode=debug_mode)
             )
             if chain_success:

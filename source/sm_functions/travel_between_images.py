@@ -291,17 +291,18 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         run_id = orchestrator_payload.get("run_id", orchestrator_task_id_str)
         base_dir_for_this_run_str = orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
 
-        # Convert to Path and resolve relative paths against main_output_dir_base
+        # Convert to Path and resolve relative paths against project root (CWD)
+        # This ensures './outputs/foo' resolves to '/project/outputs/foo', not '/project/outputs/outputs/foo'
         base_dir_path = Path(base_dir_for_this_run_str)
         if not base_dir_path.is_absolute():
-            # Relative path - resolve against main_output_dir_base
-            current_run_output_dir = main_output_dir_base / base_dir_path
+            # Relative path - resolve against current working directory (project root)
+            current_run_output_dir = (Path.cwd() / base_dir_path).resolve()
         else:
             # Already absolute - use as is
-            current_run_output_dir = base_dir_path
+            current_run_output_dir = base_dir_path.resolve()
 
         current_run_output_dir.mkdir(parents=True, exist_ok=True)
-        dprint(f"Orchestrator {orchestrator_task_id_str}: Base output directory for this run: {current_run_output_dir.resolve()}")
+        dprint(f"Orchestrator {orchestrator_task_id_str}: Base output directory for this run: {current_run_output_dir}")
 
         num_segments = orchestrator_payload.get("num_new_segments_to_generate", 0)
         if num_segments <= 0:
@@ -2314,6 +2315,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                 wgp_task_params=wgp_payload,
                 actual_wgp_output_video_path=wgp_output_path_or_msg,
                 image_download_dir=segment_image_download_dir,
+                main_output_dir_base=main_output_dir_base,
                 dprint=dprint
             )
             
@@ -2388,13 +2390,16 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         return False, f"Segment {segment_idx if 'segment_idx' in locals() else 'unknown'} failed: {str(e)[:200]}"
 
 # --- SM_RESTRUCTURE: New function to handle chaining after WGP/Comfy sub-task ---
-def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_video_path: str | None, image_download_dir: Path | str | None = None, *, dprint) -> tuple[bool, str, str | None]:
+def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_video_path: str | None, image_download_dir: Path | str | None = None, main_output_dir_base: Path | None = None, *, dprint) -> tuple[bool, str, str | None]:
     """
     Handles the chaining logic after a WGP  sub-task for a travel segment completes.
     This includes post-generation saturation and enqueuing the next segment or stitch task.
     Returns: (success_bool, message_str, final_video_path_for_db_str_or_none)
     The third element is the path that should be considered the definitive output of the WGP task
     (e.g., path to saturated video if saturation was applied).
+
+    Args:
+        main_output_dir_base: Worker's base output directory for resolving relative paths
     """
     chain_details = wgp_task_params.get("travel_chain_details")
     wgp_task_id = wgp_task_params.get("task_id", "unknown_wgp_task")
@@ -2424,8 +2429,21 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
         segment_idx_completed = chain_details["segment_index_completed"]
         full_orchestrator_payload = chain_details["full_orchestrator_payload"]
         segment_processing_dir_for_saturation_str = chain_details["segment_processing_dir_for_saturation"]
-        
+
         is_first_new_segment_after_continue = chain_details.get("is_first_new_segment_after_continue", False)
+
+        # Determine the correct base output directory for prepare_output_path calls
+        # Prefer worker's main_output_dir_base if provided, otherwise fall back to payload
+        if main_output_dir_base:
+            output_base_for_files = main_output_dir_base
+        else:
+            # Fallback: resolve from payload (may be relative)
+            payload_dir_str = full_orchestrator_payload.get("main_output_dir_for_run", "./outputs")
+            payload_dir_path = Path(payload_dir_str)
+            if not payload_dir_path.is_absolute():
+                output_base_for_files = (Path.cwd() / payload_dir_path).resolve()
+            else:
+                output_base_for_files = payload_dir_path.resolve()
         is_subsequent_segment_val = chain_details.get("is_subsequent_segment", False)
 
         dprint(f"Chaining for WGP task {wgp_task_id} (segment {segment_idx_completed} of run {orchestrator_run_id}). Initial video: {video_to_process_abs_path}")
@@ -2475,7 +2493,7 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                 saturated_video_output_abs_path, new_db_path = prepare_output_path(
                     task_id=wgp_task_id,
                     filename=sat_filename,
-                    main_output_dir_base=Path(full_orchestrator_payload.get("main_output_dir_for_run")),
+                    main_output_dir_base=output_base_for_files,
                     task_type="travel_segment"
                 )
                 
@@ -2500,7 +2518,7 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                 brightened_video_output_abs_path, new_db_path = prepare_output_path(
                     task_id=wgp_task_id,
                     filename=bright_filename,
-                    main_output_dir_base=Path(full_orchestrator_payload.get("main_output_dir_for_run")),
+                    main_output_dir_base=output_base_for_files,
                     task_type="travel_segment"
                 )
                 
@@ -2532,7 +2550,7 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                 cm_video_output_abs_path, new_db_path = prepare_output_path(
                     task_id=wgp_task_id,
                     filename=cm_filename,
-                    main_output_dir_base=Path(full_orchestrator_payload.get("main_output_dir_for_run")),
+                    main_output_dir_base=output_base_for_files,
                     task_type="travel_segment"
                 )
 
@@ -2568,7 +2586,7 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                 banner_video_abs_path, new_db_path = prepare_output_path(
                     task_id=wgp_task_id,
                     filename=banner_filename,
-                    main_output_dir_base=Path(full_orchestrator_payload.get("main_output_dir_for_run")),
+                    main_output_dir_base=output_base_for_files,
                     task_type="travel_segment"
                 )
 
