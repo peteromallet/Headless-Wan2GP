@@ -598,6 +598,11 @@ def create_video_from_frames_list(
     dprint=None
 ) -> Path | None:
     """Creates a video from a list of NumPy BGR frames using FFmpeg subprocess.
+    
+    Uses streaming to pipe frames to FFmpeg incrementally, avoiding loading
+    all frame data into memory at once. This is critical for large videos
+    (e.g., 2000+ frames at 1080p would otherwise require 30+ GB RAM).
+    
     Returns the Path object of the successfully written file, or None if failed.
     """
     # Use print if no dprint provided
@@ -626,97 +631,111 @@ def create_video_from_frames_list(
         str(output_path_mp4.resolve())
     ]
 
-    processed_frames = []
+    # Count valid frames first (without storing them)
+    valid_count = 0
     skipped_none = 0
-    skipped_resize = 0
-    for frame_idx, frame_np in enumerate(frames_list):
+    skipped_invalid = 0
+    for frame_np in frames_list:
         if frame_np is None or not isinstance(frame_np, np.ndarray):
             skipped_none += 1
-            continue
-        if frame_np.dtype != np.uint8:
-            frame_np = frame_np.astype(np.uint8)
-        if frame_np.shape[0] != resolution[1] or frame_np.shape[1] != resolution[0] or frame_np.shape[2] != 3:
-            try:
-                frame_np = cv2.resize(frame_np, resolution, interpolation=cv2.INTER_AREA)
-            except Exception as e:
-                log(f"[CREATE_VIDEO] WARNING: Failed to resize frame {frame_idx}: {e}")
-                skipped_resize += 1
-                continue
-        processed_frames.append(frame_np)
+        elif len(frame_np.shape) != 3 or frame_np.shape[2] != 3:
+            skipped_invalid += 1
+        else:
+            valid_count += 1
 
     if skipped_none > 0:
-        log(f"[CREATE_VIDEO] WARNING: Skipped {skipped_none} None/invalid frames")
-    if skipped_resize > 0:
-        log(f"[CREATE_VIDEO] WARNING: Skipped {skipped_resize} frames due to resize failure")
+        log(f"[CREATE_VIDEO] WARNING: Will skip {skipped_none} None/invalid frames")
+    if skipped_invalid > 0:
+        log(f"[CREATE_VIDEO] WARNING: Will skip {skipped_invalid} non-RGB frames")
 
-    if not processed_frames:
-        log(f"[CREATE_VIDEO] ERROR: No valid frames to process! Input had {len(frames_list)} frames, all were skipped")
+    if valid_count == 0:
+        log(f"[CREATE_VIDEO] ERROR: No valid frames to process! Input had {len(frames_list)} frames, all invalid")
         return None
 
-    log(f"[CREATE_VIDEO] Processing {len(processed_frames)} valid frames")
+    log(f"[CREATE_VIDEO] Streaming {valid_count} frames to FFmpeg (memory-efficient mode)")
 
     try:
-        raw_video_data = b''.join(frame.tobytes() for frame in processed_frames)
-    except Exception as e:
-        log(f"[CREATE_VIDEO] ERROR: Failed to convert frames to bytes: {e}")
-        return None
-
-    if not raw_video_data:
-        log(f"[CREATE_VIDEO] ERROR: raw_video_data is empty after byte conversion")
-        return None
-
-    log(f"[CREATE_VIDEO] Raw video data: {len(raw_video_data)} bytes")
-
-    # Use longer timeout (180s) and retry logic for slower instances
-    ffmpeg_timeout = 180
-    max_retries = 2
-    
-    for attempt in range(max_retries):
-        try:
-            log(f"[CREATE_VIDEO] Running FFmpeg (attempt {attempt + 1}/{max_retries}, timeout={ffmpeg_timeout}s)...")
-            proc = subprocess.run(
-                ffmpeg_cmd,
-                input=raw_video_data,
-                capture_output=True,
-                timeout=ffmpeg_timeout
-            )
-
-            if proc.returncode == 0:
-                if output_path_mp4.exists() and output_path_mp4.stat().st_size > 0:
-                    log(f"[CREATE_VIDEO] SUCCESS: Created {output_path_mp4} ({output_path_mp4.stat().st_size} bytes)")
-                    return output_path_mp4
-                log(f"[CREATE_VIDEO] ERROR: FFmpeg succeeded but output file missing or empty")
-                # Don't retry if FFmpeg succeeded but file is missing - something else is wrong
-                return None
-            else:
-                stderr = proc.stderr.decode('utf-8', errors='replace') if proc.stderr else "no stderr"
-                log(f"[CREATE_VIDEO] ERROR: FFmpeg failed with return code {proc.returncode}")
-                log(f"[CREATE_VIDEO] FFmpeg stderr: {stderr[:500]}")
-                if output_path_mp4.exists():
-                    try:
-                        output_path_mp4.unlink()
-                    except Exception:
-                        pass
-                # Retry on FFmpeg failure
-                if attempt < max_retries - 1:
-                    log(f"[CREATE_VIDEO] Retrying...")
-                    continue
-                return None
-                
-        except subprocess.TimeoutExpired:
-            log(f"[CREATE_VIDEO] ERROR: FFmpeg timed out after {ffmpeg_timeout} seconds (attempt {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                log(f"[CREATE_VIDEO] Retrying with same timeout...")
+        # Use Popen to stream frames incrementally instead of loading all into memory
+        proc = subprocess.Popen(
+            ffmpeg_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        
+        frames_written = 0
+        resize_warnings = 0
+        
+        for frame_idx, frame_np in enumerate(frames_list):
+            # Skip invalid frames
+            if frame_np is None or not isinstance(frame_np, np.ndarray):
                 continue
+            if len(frame_np.shape) != 3 or frame_np.shape[2] != 3:
+                continue
+                
+            # Ensure uint8
+            if frame_np.dtype != np.uint8:
+                frame_np = frame_np.astype(np.uint8)
+            
+            # Resize if needed
+            if frame_np.shape[0] != resolution[1] or frame_np.shape[1] != resolution[0]:
+                try:
+                    frame_np = cv2.resize(frame_np, resolution, interpolation=cv2.INTER_AREA)
+                except Exception as e:
+                    if resize_warnings < 5:
+                        log(f"[CREATE_VIDEO] WARNING: Failed to resize frame {frame_idx}: {e}")
+                    resize_warnings += 1
+                    continue
+            
+            # Write frame bytes directly to FFmpeg stdin
+            try:
+                proc.stdin.write(frame_np.tobytes())
+                frames_written += 1
+            except BrokenPipeError:
+                log(f"[CREATE_VIDEO] ERROR: FFmpeg pipe broken after {frames_written} frames")
+                break
+        
+        if resize_warnings > 5:
+            log(f"[CREATE_VIDEO] WARNING: {resize_warnings} total resize failures (only first 5 logged)")
+        
+        # Close stdin to signal end of input
+        proc.stdin.close()
+        
+        # Wait for FFmpeg to finish (with timeout)
+        try:
+            stdout, stderr = proc.communicate(timeout=300)  # 5 minute timeout for encoding
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            log(f"[CREATE_VIDEO] ERROR: FFmpeg timed out after 300 seconds")
             return None
-        except FileNotFoundError:
-            log(f"[CREATE_VIDEO] ERROR: FFmpeg not found - is it installed?")
+        
+        log(f"[CREATE_VIDEO] Wrote {frames_written} frames to FFmpeg")
+        
+        if proc.returncode == 0:
+            if output_path_mp4.exists() and output_path_mp4.stat().st_size > 0:
+                log(f"[CREATE_VIDEO] SUCCESS: Created {output_path_mp4} ({output_path_mp4.stat().st_size} bytes)")
+                return output_path_mp4
+            log(f"[CREATE_VIDEO] ERROR: FFmpeg succeeded but output file missing or empty")
             return None
-        except Exception as e:
-            log(f"[CREATE_VIDEO] ERROR: Unexpected exception: {e}")
-            import traceback
-            traceback.print_exc()
+        else:
+            stderr_str = stderr.decode('utf-8', errors='replace') if stderr else "no stderr"
+            log(f"[CREATE_VIDEO] ERROR: FFmpeg failed with return code {proc.returncode}")
+            log(f"[CREATE_VIDEO] FFmpeg stderr: {stderr_str[:500]}")
+            if output_path_mp4.exists():
+                try:
+                    output_path_mp4.unlink()
+                except Exception:
+                    pass
             return None
+                
+    except FileNotFoundError:
+        log(f"[CREATE_VIDEO] ERROR: FFmpeg not found - is it installed?")
+        return None
+    except Exception as e:
+        log(f"[CREATE_VIDEO] ERROR: Unexpected exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
     
     # If we exhausted all retries without returning, return None
     return None
