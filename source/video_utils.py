@@ -595,13 +595,22 @@ def create_video_from_frames_list(
     fps: int,
     resolution: tuple[int, int],
     *,
-    dprint=None
+    dprint=None,
+    standardize_colorspace: bool = False
 ) -> Path | None:
     """Creates a video from a list of NumPy BGR frames using FFmpeg subprocess.
     
     Uses streaming to pipe frames to FFmpeg incrementally, avoiding loading
     all frame data into memory at once. This is critical for large videos
     (e.g., 2000+ frames at 1080p would otherwise require 30+ GB RAM).
+    
+    Args:
+        frames_list: List of BGR numpy arrays
+        output_path: Output video path
+        fps: Frames per second
+        resolution: (width, height) tuple
+        dprint: Optional logging function (defaults to print)
+        standardize_colorspace: If True, adds BT.709 colorspace standardization
     
     Returns the Path object of the successfully written file, or None if failed.
     """
@@ -628,8 +637,18 @@ def create_video_from_frames_list(
         "-pix_fmt", "yuv420p",
         "-preset", "medium",
         "-crf", "18",  # Visually lossless quality
-        str(output_path_mp4.resolve())
     ]
+    
+    # Add colorspace standardization if requested
+    if standardize_colorspace:
+        ffmpeg_cmd.extend([
+            "-vf", "format=yuv420p,colorspace=bt709:iall=bt709:fast=1",
+            "-color_primaries", "bt709",
+            "-color_trc", "bt709",
+            "-colorspace", "bt709",
+        ])
+    
+    ffmpeg_cmd.append(str(output_path_mp4.resolve()))
 
     # Count valid frames first (without storing them)
     valid_count = 0
