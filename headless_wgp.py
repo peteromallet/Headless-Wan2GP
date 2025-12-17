@@ -316,15 +316,38 @@ class WanOrchestrator:
                     absolute_outputs_path = os.path.abspath(os.path.join(os.path.dirname(self.wan_root), 'outputs'))
                     model_logger.debug(f"[OUTPUT_DIR] Using default output directory: {absolute_outputs_path}")
 
+                # Initialize attributes that don't exist yet
                 for attr, default in {
                     'wan_model': None, 'offloadobj': None, 'reload_needed': True,
-                    'transformer_type': None, 'server_config': {
-                        'save_path': absolute_outputs_path,
-                        'image_save_path': absolute_outputs_path
-                    }
+                    'transformer_type': None
                 }.items():
                     if not hasattr(wgp, attr):
                         setattr(wgp, attr, default)
+
+                # CRITICAL: wgp.py has BOTH a server_config dictionary AND module-level variables
+                # Lines 2347-2348 of wgp.py:
+                #   save_path = server_config.get("save_path", ...)
+                #   image_save_path = server_config.get("image_save_path", ...)
+                # We must update BOTH the dictionary AND the module-level variables!
+                if not hasattr(wgp, 'server_config'):
+                    wgp.server_config = {}
+
+                # Store old values for debugging
+                _old_dict_save_path = wgp.server_config.get('save_path', 'NOT_SET')
+                _old_dict_image_save_path = wgp.server_config.get('image_save_path', 'NOT_SET')
+                _old_module_save_path = getattr(wgp, 'save_path', 'NOT_SET')
+                _old_module_image_save_path = getattr(wgp, 'image_save_path', 'NOT_SET')
+
+                # Update the dictionary (for consistency)
+                wgp.server_config['save_path'] = absolute_outputs_path
+                wgp.server_config['image_save_path'] = absolute_outputs_path
+
+                # Update the module-level variables (this is what wgp.py actually uses!)
+                wgp.save_path = absolute_outputs_path
+                wgp.image_save_path = absolute_outputs_path
+
+                model_logger.info(f"[OUTPUT_DIR] BEFORE: dict={{save_path={_old_dict_save_path}, image_save_path={_old_dict_image_save_path}}}, module={{save_path={_old_module_save_path}, image_save_path={_old_module_image_save_path}}}")
+                model_logger.info(f"[OUTPUT_DIR] AFTER:  dict={{save_path={wgp.server_config['save_path']}, image_save_path={wgp.server_config['image_save_path']}}}, module={{save_path={wgp.save_path}, image_save_path={wgp.image_save_path}}}")
                 
                 # Debug: Check if model definitions are loaded
                 if debug_mode:
@@ -416,6 +439,15 @@ class WanOrchestrator:
 
             # Verify directory after apply_changes (it may have done file operations)
             _verify_wgp_directory(orchestrator_logger, "after apply_changes()")
+
+            # CRITICAL: apply_changes() reads from server_config dict back into module-level vars
+            # So we must set our output paths AGAIN after apply_changes() completes!
+            orchestrator_logger.info(f"[OUTPUT_DIR] Reapplying output directory configuration after apply_changes()...")
+            wgp.server_config['save_path'] = absolute_outputs_path
+            wgp.server_config['image_save_path'] = absolute_outputs_path
+            wgp.save_path = absolute_outputs_path
+            wgp.image_save_path = absolute_outputs_path
+            orchestrator_logger.info(f"[OUTPUT_DIR] Final check: dict={{save_path={wgp.server_config['save_path']}, image_save_path={wgp.server_config['image_save_path']}}}, module={{save_path={wgp.save_path}, image_save_path={wgp.image_save_path}}}")
 
         else:
             # Provide stubbed helpers for smoke mode
