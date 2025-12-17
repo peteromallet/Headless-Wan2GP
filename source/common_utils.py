@@ -1995,11 +1995,87 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
     state[model_type_key] = ui_defaults
     return state, ui_defaults
 
+def _get_task_type_directory(task_type: str) -> str:
+    """
+    Map task types to their standard output subdirectories.
+
+    This creates a consistent directory structure for Phase 2 standardization:
+    - generation/ - Image and video generation tasks
+    - editing/ - Image/video editing tasks
+    - orchestrator_runs/ - Orchestrator task workflows
+    - specialized/ - Specialized tasks (frame extraction, interpolation, etc.)
+    - misc/ - Unknown or uncategorized tasks
+
+    Args:
+        task_type: The task type string (e.g., 'vace', 't2v', 'join_clips_orchestrator')
+
+    Returns:
+        Relative subdirectory path (e.g., 'generation/vace', 'orchestrator_runs/travel')
+    """
+    TASK_TYPE_DIRS = {
+        # Orchestrators
+        'travel_orchestrator': 'orchestrator_runs/travel',
+        'join_clips_orchestrator': 'orchestrator_runs/join_clips',
+        'edit_video_orchestrator': 'orchestrator_runs/edit_video',
+
+        # Generation - VACE
+        'vace': 'generation/vace',
+        'vace_21': 'generation/vace',
+        'vace_22': 'generation/vace',
+
+        # Generation - Text to Video
+        't2v': 'generation/text_to_video',
+        't2v_22': 'generation/text_to_video',
+
+        # Generation - Image to Video
+        'i2v': 'generation/image_to_video',
+        'i2v_22': 'generation/image_to_video',
+
+        # Generation - Text to Image
+        'wan_2_2_t2i': 'generation/text_to_image',
+        't2i': 'generation/text_to_image',
+
+        # Generation - Flux
+        'flux': 'generation/flux',
+        'flux_chroma': 'generation/flux',
+        'flux_dev_kontext': 'generation/flux',
+        'flux_dev_umo': 'generation/flux',
+        'flux_dev_uso': 'generation/flux',
+
+        # Generation - Other
+        'hunyuan': 'generation/hunyuan',
+        'ltxv': 'generation/ltxv',
+        'generate_video': 'generation/video',
+
+        # Editing
+        'image_inpaint': 'editing/inpaint',
+        'qwen_image_edit': 'editing/qwen_edit',
+        'qwen_image_style': 'editing/style_transfer',
+        'annotated_image_edit': 'editing/annotated',
+        'magic_edit': 'editing/magic',
+        'inpaint_frames': 'editing/inpaint_frames',
+
+        # Specialized
+        'extract_frame': 'specialized/frame_extraction',
+        'rife_interpolate_images': 'specialized/interpolation',
+        'create_visualization': 'specialized/visualization',
+
+        # Segment tasks (used by orchestrators)
+        'travel_segment': 'orchestrator_runs/travel/segments',
+        'individual_travel_segment': 'specialized/travel_segment',
+        'join_clips_segment': 'orchestrator_runs/join_clips/segments',
+        'travel_stitch': 'orchestrator_runs/travel/stitch',
+    }
+
+    return TASK_TYPE_DIRS.get(task_type, 'misc')
+
+
 def prepare_output_path(
-    task_id: str, 
-    filename: str, 
-    main_output_dir_base: Path, 
-    *, 
+    task_id: str,
+    filename: str,
+    main_output_dir_base: Path,
+    task_type: str | None = None,  # NEW PARAMETER for Phase 2
+    *,
     dprint=lambda *_: None,
     custom_output_dir: str | Path | None = None
 ) -> tuple[Path, str]:
@@ -2007,8 +2083,19 @@ def prepare_output_path(
     Prepares the output path for a task's artifact.
 
     If `custom_output_dir` is provided, it's used as the base. Otherwise,
-    the output is placed in a directory named after the task_id inside
-    `main_output_dir_base`.
+    the output is placed in a subdirectory based on task_type (Phase 2)
+    or directly in `main_output_dir_base` (Phase 1 backwards compatibility).
+
+    Args:
+        task_id: Unique task identifier
+        filename: Output filename
+        main_output_dir_base: Base output directory (from worker --main-output-dir)
+        task_type: Optional task type for subdirectory organization (Phase 2)
+        dprint: Debug print function
+        custom_output_dir: Optional custom output directory (overrides all)
+
+    Returns:
+        Tuple of (Path object for file location, string path for database)
     """
     # Import DB configuration lazily to avoid circular dependencies.
     try:
@@ -2021,8 +2108,21 @@ def prepare_output_path(
         output_dir_for_task = Path(custom_output_dir)
         dprint(f"Task {task_id}: Using custom output directory: {output_dir_for_task}")
     else:
-        # Flatten: put all artefacts directly in the main output dir, no per-task folder
-        output_dir_for_task = main_output_dir_base
+        # Phase 2: Create task-type-specific subdirectory structure
+        if task_type:
+            type_subdir = _get_task_type_directory(task_type)
+            output_dir_for_task = main_output_dir_base / type_subdir
+            dprint(
+                f"Task {task_id}: Using task-type subdirectory: {output_dir_for_task} "
+                f"(task_type='{task_type}' → '{type_subdir}')"
+            )
+        else:
+            # Backwards compatibility: No task_type provided, use root directory
+            output_dir_for_task = main_output_dir_base
+            dprint(
+                f"Task {task_id}: No task_type provided, using root output directory: {output_dir_for_task} "
+                f"(Phase 1 backwards compatibility)"
+            )
 
         # To avoid name collisions we prefix the filename with the task_id
         # Skip prefixing for files with UUID patterns (they guarantee uniqueness)
@@ -2033,10 +2133,6 @@ def prepare_output_path(
 
         if not filename.startswith(task_id) and not has_uuid_pattern:
             filename = f"{task_id}_{filename}"
-
-        dprint(
-            f"Task {task_id}: Using flattened output directory: {output_dir_for_task} (filename '{filename}')"
-        )
 
     output_dir_for_task.mkdir(parents=True, exist_ok=True)
 
