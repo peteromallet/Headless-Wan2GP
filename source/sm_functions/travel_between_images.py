@@ -3037,7 +3037,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             current_stitched_video_path, _ = prepare_output_path(
                 task_id=stitch_task_id_str,
                 filename=single_video_filename,
-                main_output_dir_base=Path(full_orchestrator_payload.get("main_output_dir_for_run")),
+                main_output_dir_base=main_output_dir_base,
                 task_type="travel_stitch"
             )
             shutil.copy2(str(source_single_video_path), str(current_stitched_video_path))
@@ -3065,7 +3065,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             path_for_raw_stitched_video, _ = prepare_output_path(
                 task_id=stitch_task_id_str,
                 filename=raw_stitched_video_filename,
-                main_output_dir_base=Path(full_orchestrator_payload.get("main_output_dir_for_run")),
+                main_output_dir_base=main_output_dir_base,
                 task_type="travel_stitch"
             )
 
