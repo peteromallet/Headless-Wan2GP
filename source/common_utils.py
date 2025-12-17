@@ -1997,77 +1997,23 @@ def build_task_state(wgp_mod, model_filename, task_params_dict, all_loras_for_mo
 
 def _get_task_type_directory(task_type: str) -> str:
     """
-    Map task types to their standard output subdirectories.
+    Map task types to their output subdirectories.
 
-    This creates a consistent directory structure for Phase 2 standardization:
-    - generation/ - Image and video generation tasks
-    - editing/ - Image/video editing tasks
-    - orchestrator_runs/ - Orchestrator task workflows
-    - specialized/ - Specialized tasks (frame extraction, interpolation, etc.)
-    - misc/ - Unknown or uncategorized tasks
+    Single-level directory structure: outputs/{task_type}/{files}
+    Examples:
+    - vace → outputs/vace/
+    - travel_orchestrator → outputs/travel_orchestrator/
+    - extract_frame → outputs/extract_frame/
 
     Args:
-        task_type: The task type string (e.g., 'vace', 't2v', 'join_clips_orchestrator')
+        task_type: The task type string (e.g., 'vace', 't2v', 'travel_orchestrator')
 
     Returns:
-        Relative subdirectory path (e.g., 'generation/vace', 'orchestrator_runs/travel')
+        Task type as directory name (e.g., 'vace', 'travel_orchestrator')
     """
-    TASK_TYPE_DIRS = {
-        # Orchestrators
-        'travel_orchestrator': 'orchestrator_runs/travel',
-        'join_clips_orchestrator': 'orchestrator_runs/join_clips',
-        'edit_video_orchestrator': 'orchestrator_runs/edit_video',
-
-        # Generation - VACE
-        'vace': 'generation/vace',
-        'vace_21': 'generation/vace',
-        'vace_22': 'generation/vace',
-
-        # Generation - Text to Video
-        't2v': 'generation/text_to_video',
-        't2v_22': 'generation/text_to_video',
-
-        # Generation - Image to Video
-        'i2v': 'generation/image_to_video',
-        'i2v_22': 'generation/image_to_video',
-
-        # Generation - Text to Image
-        'wan_2_2_t2i': 'generation/text_to_image',
-        't2i': 'generation/text_to_image',
-
-        # Generation - Flux
-        'flux': 'generation/flux',
-        'flux_chroma': 'generation/flux',
-        'flux_dev_kontext': 'generation/flux',
-        'flux_dev_umo': 'generation/flux',
-        'flux_dev_uso': 'generation/flux',
-
-        # Generation - Other
-        'hunyuan': 'generation/hunyuan',
-        'ltxv': 'generation/ltxv',
-        'generate_video': 'generation/video',
-
-        # Editing
-        'image_inpaint': 'editing/inpaint',
-        'qwen_image_edit': 'editing/qwen_edit',
-        'qwen_image_style': 'editing/style_transfer',
-        'annotated_image_edit': 'editing/annotated',
-        'magic_edit': 'editing/magic',
-        'inpaint_frames': 'editing/inpaint_frames',
-
-        # Specialized
-        'extract_frame': 'specialized/frame_extraction',
-        'rife_interpolate_images': 'specialized/interpolation',
-        'create_visualization': 'specialized/visualization',
-
-        # Segment tasks (used by orchestrators)
-        'travel_segment': 'orchestrator_runs/travel/segments',
-        'individual_travel_segment': 'specialized/travel_segment',
-        'join_clips_segment': 'orchestrator_runs/join_clips/segments',
-        'travel_stitch': 'orchestrator_runs/travel/stitch',
-    }
-
-    return TASK_TYPE_DIRS.get(task_type, 'misc')
+    # Simply return the task type as the directory name
+    # This creates outputs/{task_type}/ structure
+    return task_type if task_type else 'misc'
 
 
 def prepare_output_path(
@@ -2138,6 +2084,17 @@ def prepare_output_path(
 
     final_save_path = output_dir_for_task / filename
 
+    # Handle filename conflicts by adding _1, _2, etc.
+    if final_save_path.exists():
+        stem = final_save_path.stem
+        suffix = final_save_path.suffix
+        counter = 1
+        while final_save_path.exists():
+            new_filename = f"{stem}_{counter}{suffix}"
+            final_save_path = output_dir_for_task / new_filename
+            counter += 1
+        dprint(f"Task {task_id}: Filename conflict resolved - using {final_save_path.name}")
+
     # Build DB path string - use relative path to current working directory
     try:
         db_output_location = str(final_save_path.relative_to(Path.cwd()))
@@ -2185,16 +2142,25 @@ def sanitize_filename_for_storage(filename: str) -> str:
     return sanitized
 
 def prepare_output_path_with_upload(
-    task_id: str, 
-    filename: str, 
-    main_output_dir_base: Path, 
-    *, 
+    task_id: str,
+    filename: str,
+    main_output_dir_base: Path,
+    task_type: str | None = None,  # NEW PARAMETER for Phase 2
+    *,
     dprint=lambda *_: None,
     custom_output_dir: str | Path | None = None
 ) -> tuple[Path, str]:
     """
     Prepares the output path for a task's artifact and handles Supabase upload if configured.
-    
+
+    Args:
+        task_id: Unique task identifier
+        filename: Output filename
+        main_output_dir_base: Base output directory (from worker --main-output-dir)
+        task_type: Optional task type for subdirectory organization (Phase 2)
+        dprint: Debug print function
+        custom_output_dir: Optional custom output directory (overrides all)
+
     Returns:
         tuple[Path, str]: (local_file_path, db_output_location)
         - local_file_path: Where to save the file locally (for generation)
@@ -2209,16 +2175,18 @@ def prepare_output_path_with_upload(
     # Sanitize filename BEFORE any processing to prevent storage upload issues
     original_filename = filename
     sanitized_filename = sanitize_filename_for_storage(filename)
-    
+
     if original_filename != sanitized_filename:
         dprint(f"Task {task_id}: Sanitized filename '{original_filename}' -> '{sanitized_filename}'")
 
     # First, get the local path where we'll save the file (using sanitized filename)
+    # PHASE 2: Forward task_type parameter
     local_save_path, initial_db_location = prepare_output_path(
-        task_id, sanitized_filename, main_output_dir_base, 
+        task_id, sanitized_filename, main_output_dir_base,
+        task_type=task_type,  # Forward task_type for Phase 2
         dprint=dprint, custom_output_dir=custom_output_dir
     )
-    
+
     # Return the local path for now - we'll handle Supabase upload after file is created
     return local_save_path, initial_db_location
 

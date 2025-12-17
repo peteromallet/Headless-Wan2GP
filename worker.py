@@ -40,11 +40,92 @@ from source.heartbeat_utils import start_heartbeat_guardian_process
 from source.task_registry import TaskRegistry
 from source.sm_functions import travel_between_images as tbi
 from source.lora_utils import cleanup_legacy_lora_collisions
+from source.common_utils import prepare_output_path, _get_task_type_directory
+import shutil
 
 # Global heartbeat control
 heartbeat_thread = None
 heartbeat_stop_event = threading.Event()
 debug_mode = False
+
+
+def move_wgp_output_to_task_type_dir(output_path: str, task_type: str, task_id: str, main_output_dir_base: Path) -> str:
+    """
+    Move WGP-generated output from base directory to task-type subdirectory.
+
+    This function handles post-processing of WGP outputs to organize them by task_type.
+    WGP generates all files to a globally-configured base directory, so we move them
+    to task-type subdirectories after generation completes.
+
+    Args:
+        output_path: Path to the WGP-generated file (in base directory)
+        task_type: Task type (e.g., "vace", "flux", "t2v")
+        task_id: Task ID
+        main_output_dir_base: Base output directory
+
+    Returns:
+        New path if file was moved, original path otherwise
+    """
+    # List of WGP generation task types that should be organized
+    wgp_task_types = {
+        "vace", "vace_21", "vace_22",
+        "flux",
+        "t2v", "t2v_22", "wan_2_2_t2i",
+        "i2v", "i2v_22",
+        "hunyuan",
+        "ltxv",
+        "qwen_image_edit", "qwen_image_style", "image_inpaint", "annotated_image_edit",
+        "inpaint_frames",  # Specialized handler that enqueues WGP tasks
+        "generate_video"
+    }
+
+    # Only process WGP task types
+    if task_type not in wgp_task_types:
+        return output_path
+
+    try:
+        output_file = Path(output_path)
+
+        # Check if file exists
+        if not output_file.exists():
+            headless_logger.debug(f"Output file doesn't exist, skipping move: {output_path}", task_id=task_id)
+            return output_path
+
+        # Check if file is in base directory (not already in a subdirectory)
+        # If the parent directory is main_output_dir_base, it's in base directory
+        if output_file.parent.resolve() != main_output_dir_base.resolve():
+            headless_logger.debug(f"Output already in subdirectory, skipping move: {output_path}", task_id=task_id)
+            return output_path
+
+        # Generate new path in task-type subdirectory
+        filename = output_file.name
+        new_path, _ = prepare_output_path(
+            task_id=task_id,
+            filename=filename,
+            main_output_dir_base=main_output_dir_base,
+            task_type=task_type
+        )
+
+        # Move the file
+        headless_logger.info(
+            f"Moving WGP output to task-type directory: {output_file} → {new_path} (task_type={task_type})",
+            task_id=task_id
+        )
+
+        # Ensure destination directory exists
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Move the file
+        shutil.move(str(output_file), str(new_path))
+
+        headless_logger.success(f"Moved WGP output to {new_path}", task_id=task_id)
+        return str(new_path)
+
+    except Exception as e:
+        headless_logger.error(f"Failed to move WGP output to task-type directory: {e}", task_id=task_id)
+        traceback.print_exc()
+        # Return original path if move fails
+        return output_path
 
 def process_single_task(task_params_dict, main_output_dir_base: Path, task_type: str, project_id_for_task: str | None, image_download_dir: Path | str | None = None, colour_match_videos: bool = False, mask_active_frames: bool = True, task_queue: HeadlessTaskQueue = None):
     task_id = task_params_dict.get("task_id", "unknown_task_" + str(time.time()))
@@ -82,6 +163,16 @@ def process_single_task(task_params_dict, main_output_dir_base: Path, task_type:
 
         if chaining_result_path_override:
                 output_location_to_db = chaining_result_path_override
+
+        # Move WGP outputs to task-type subdirectories (Phase 2)
+        # This post-processes WGP-generated files to organize them by task_type
+        if output_location_to_db:
+            output_location_to_db = move_wgp_output_to_task_type_dir(
+                output_path=output_location_to_db,
+                task_type=task_type,
+                task_id=task_id,
+                main_output_dir_base=main_output_dir_base
+            )
 
     # Ensure orchestrator tasks use their DB row ID
     if task_type in {"travel_orchestrator"}:

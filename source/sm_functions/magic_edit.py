@@ -130,7 +130,7 @@ def _handle_magic_edit_task(
             dprint(f"Task {task_id}: Replicate output type: {type(output)}")
             
             # Download the result
-            output_image_path = temp_dir / f"magic_edit_{task_id}.webp"
+            output_image_path = temp_dir / f"{task_id}_edited.webp"
             
             if hasattr(output, 'read'):
                 # Output is a file-like object
@@ -165,6 +165,7 @@ def _handle_magic_edit_task(
                 task_id=task_id,
                 filename=output_image_path.name,
                 main_output_dir_base=main_output_dir_base,
+                task_type="magic_edit",
                 dprint=dprint
             )
             

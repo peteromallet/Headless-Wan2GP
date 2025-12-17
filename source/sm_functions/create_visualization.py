@@ -97,29 +97,27 @@ def _handle_create_visualization_task(
         dprint(f"[VIZ] Task {viz_task_id_str}: Visualization created at {viz_path}")
 
         # Prepare final output path with upload
-        final_path, final_url = prepare_output_path_with_upload(
-            filename=f"visualization_{viz_task_id_str}.mp4",
+        final_path, initial_db_location = prepare_output_path_with_upload(
+            filename=f"{viz_task_id_str}_visualization.mp4",
             task_id=viz_task_id_str,
             main_output_dir_base=main_output_dir_base,
-            project_id=task_params_from_db.get("project_id"),
+            task_type="create_visualization",
             dprint=dprint
         )
 
         # Move/upload the visualization
         import shutil
-        if final_url:
-            # Upload to storage
-            from ..common_utils import upload_and_get_final_output_location
-            output_location = upload_and_get_final_output_location(
-                local_path=Path(viz_path),
-                task_id=viz_task_id_str,
-                project_id=task_params_from_db.get("project_id"),
-                dprint=dprint
-            )
-        else:
-            # Copy to local output directory
-            shutil.copy2(viz_path, final_path)
-            output_location = str(final_path)
+        # Copy temp visualization to final location
+        shutil.copy2(viz_path, final_path)
+
+        # Handle upload and get final DB location
+        from ..common_utils import upload_and_get_final_output_location
+        output_location = upload_and_get_final_output_location(
+            local_file_path=Path(final_path),
+            supabase_object_name=viz_task_id_str,
+            initial_db_location=initial_db_location,
+            dprint=dprint
+        )
 
         # Cleanup temp directory
         shutil.rmtree(temp_dir, ignore_errors=True)
