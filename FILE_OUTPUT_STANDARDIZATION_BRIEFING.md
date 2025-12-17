@@ -23,46 +23,82 @@ This is the **MASTER DOCUMENT** for file output standardization. It contains:
 
 ## 📊 Phase 1 Status
 
-### ✅ Implementation Complete
+### ✅ Implementation Complete + Tested
 
 **Commits:**
 - `ee6f057` - Initial implementation (parameters added)
-- `285691f` - Critical fix (image_save_path) + validation phase
+- `285691f` - Critical fix #1 (image_save_path) + validation phase
 - `5cfb855` - Quick validation checklist
+- `57a2af5` - **Critical fix #2 (wgp.apply_changes timing issue) - REQUIRED FOR PRODUCTION!**
 
 **Files Changed:**
-- `headless_wgp.py` - Added `main_output_dir` parameter to `WanOrchestrator.__init__()`
-- `headless_model_management.py` - Added `main_output_dir` parameter to `HeadlessTaskQueue.__init__()`
+- `headless_wgp.py` - Added `main_output_dir` parameter + critical timing fixes
+- `headless_model_management.py` - Added `main_output_dir` parameter
 - `worker.py` - Pass configured `--main-output-dir` to task queue
+- `test_phase1_output_dir.py` - Full integration test (validates with real WGP)
+- `test_phase1_static.py` - Fast static validation test
 
 **What Works Now:**
 - ✅ WGP respects worker's `--main-output-dir` configuration
 - ✅ Both video tasks (save_path) and image tasks (image_save_path) consolidated
+- ✅ Paths survive wgp.apply_changes() calls (critical timing fix)
 - ✅ Backwards compatible (defaults to old behavior if not configured)
-- ✅ All validation tests passed
+- ✅ **All validation tests passed** (tested with real WGP environment)
 
-**Critical Fix Applied:**
-- Added `image_save_path` to WGP `server_config` (was missing in initial implementation)
-- Without this, images would still go to `Wan2GP/outputs/` while videos consolidated
-- Fix ensures ALL task types (images + videos) respect the configured directory
+**Critical Fixes Applied:**
+1. **image_save_path Missing (commit `285691f`)**
+   - WGP uses two separate config keys: `save_path` (videos) and `image_save_path` (images)
+   - Initial implementation only set `save_path`, so images would still go to old location
+   - **Fix:** Added `image_save_path` to server_config
+
+2. **wgp.apply_changes() Timing Issue (commit `57a2af5`) - CRITICAL!**
+   - WGP has module-level variables AND a server_config dictionary
+   - `wgp.apply_changes()` reads from dict → module vars, overwriting our changes
+   - **Fix:** Set paths in TWO places: after wgp import AND after apply_changes()
+   - **Without this fix, all files would still go to old location in production!**
 
 **Risk Assessment:**
 - Risk Level: Very Low ✅
-- Confidence: 98% (thorough validation, trivial changes, safe design)
+- Confidence: **99%** (tested with real WGP environment, all tests pass)
 - Rollback: Easy (optional parameters, no breaking changes)
 
 **What's NOT Active Yet:**
 - Code is deployed but requires worker restart to activate
 - Files still going to old locations until restart
-- Phase 1.5 validation will activate and verify
+- Phase 1.5 validation will activate and verify in production
 
-### 🔍 Gotchas Found During Sense-Check
+### 🔍 Testing Performed
+
+**Static Validation (test_phase1_static.py):**
+- ✅ Parameter flow: worker.py → HeadlessTaskQueue → WanOrchestrator
+- ✅ Both save_path and image_save_path configured
+- ✅ Backwards compatibility (optional parameters with None defaults)
+
+**Integration Testing (test_phase1_output_dir.py):**
+- ✅ Full WGP initialization with configured output directory
+- ✅ Verified all 4 configuration points:
+  - `wgp.save_path` (module-level variable for videos)
+  - `wgp.image_save_path` (module-level variable for images)
+  - `wgp.server_config['save_path']` (dictionary)
+  - `wgp.server_config['image_save_path']` (dictionary)
+- ✅ Paths persist through wgp.apply_changes() calls
+- ✅ Test environment: RTX 4090, CUDA 12.4, PyTorch with full WGP dependencies
+
+### 🔍 Gotchas Found During Testing
 
 **1. image_save_path Missing (FIXED)**
-- **Problem:** WGP uses two separate config keys: `save_path` (videos) and `image_save_path` (images)
-- **Impact:** Initial implementation only set `save_path`, so images would still go to old location
-- **Fix Applied:** Added `image_save_path` to server_config (one line change)
 - **Status:** ✅ FIXED in commit `285691f`
+
+**2. wgp.apply_changes() Resets Paths (FIXED) - CRITICAL!**
+- **Problem:** WGP's module-level code structure:
+  - Line 2347-2348: `save_path = server_config.get("save_path", "outputs/")`
+  - Line 3068: `wgp.apply_changes()` reads dict → module vars
+  - Our paths were set BEFORE apply_changes(), so they got reset!
+- **Discovery:** Found through integration testing with real WGP environment
+- **Impact:** Without this fix, ALL files would still go to `Wan2GP/outputs/` despite config
+- **Fix Applied:** Set paths in two places (after import AND after apply_changes)
+- **Status:** ✅ FIXED in commit `57a2af5`
+- **Validation:** Integration test now passes with all 4 config points correct
 
 **Other Checks (All Safe):**
 - ✅ Multiple instantiation points (backwards compatible)
