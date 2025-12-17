@@ -318,7 +318,10 @@ class WanOrchestrator:
 
                 for attr, default in {
                     'wan_model': None, 'offloadobj': None, 'reload_needed': True,
-                    'transformer_type': None, 'server_config': {'save_path': absolute_outputs_path}
+                    'transformer_type': None, 'server_config': {
+                        'save_path': absolute_outputs_path,
+                        'image_save_path': absolute_outputs_path
+                    }
                 }.items():
                     if not hasattr(wgp, attr):
                         setattr(wgp, attr, default)
