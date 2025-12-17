@@ -1844,6 +1844,84 @@ def overlay_start_end_images_above_video(
         return False
 
 
+def reverse_video(
+    input_video_path: str | Path,
+    output_video_path: str | Path,
+    *,
+    dprint=print
+) -> Path | None:
+    """
+    Reverse a video using FFmpeg (play it backwards) with visually lossless quality.
+    
+    Uses CRF 17 encoding which is visually indistinguishable from the original.
+    
+    Args:
+        input_video_path: Path to input video
+        output_video_path: Path for reversed output video
+        dprint: Debug print function
+        
+    Returns:
+        Path to reversed video if successful, None otherwise
+    """
+    input_path = Path(input_video_path)
+    output_path = Path(output_video_path)
+    
+    if not input_path.exists():
+        dprint(f"[REVERSE_VIDEO] Input video not found: {input_path}")
+        return None
+    
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Get input video FPS to preserve it exactly
+    _, input_fps = get_video_frame_count_and_fps(str(input_path))
+    if not input_fps:
+        input_fps = 16  # Default fallback
+    
+    # Use ffmpeg to reverse the video with visually lossless quality
+    # -crf 17: Visually lossless (17-18 is considered transparent quality)
+    # -preset slow: Better compression efficiency, maintains quality
+    # -r: Preserve exact framerate from input
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', str(input_path),
+        '-vf', 'reverse',
+        '-an',  # No audio (reversed audio sounds bad anyway)
+        '-c:v', 'libx264',
+        '-crf', '17',  # Visually lossless quality
+        '-preset', 'slow',  # Better quality at same bitrate
+        '-pix_fmt', 'yuv420p',
+        '-r', str(input_fps),  # Preserve exact framerate
+        str(output_path)
+    ]
+    
+    try:
+        dprint(f"[REVERSE_VIDEO] Reversing video (visually lossless): {input_path.name} -> {output_path.name}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)  # Longer timeout for slow preset
+        
+        if result.returncode != 0:
+            dprint(f"[REVERSE_VIDEO] FFmpeg failed: {result.stderr[:500]}")
+            return None
+        
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            dprint(f"[REVERSE_VIDEO] Output missing or empty: {output_path}")
+            return None
+        
+        # Verify the reversed video
+        reversed_frames, reversed_fps = get_video_frame_count_and_fps(str(output_path))
+        original_frames, _ = get_video_frame_count_and_fps(str(input_path))
+        
+        dprint(f"[REVERSE_VIDEO] ✅ Successfully reversed video: {original_frames} -> {reversed_frames} frames @ {reversed_fps} fps (CRF 17)")
+        return output_path
+        
+    except subprocess.TimeoutExpired:
+        dprint(f"[REVERSE_VIDEO] FFmpeg timeout")
+        return None
+    except Exception as e:
+        dprint(f"[REVERSE_VIDEO] Exception: {e}")
+        traceback.print_exc()
+        return None
+
+
 def standardize_video_aspect_ratio(
     input_video_path: str | Path,
     output_video_path: str | Path,

@@ -29,7 +29,7 @@ import cv2
 
 from .. import db_operations as db_ops
 from ..common_utils import download_video_if_url, get_video_frame_count_and_fps
-from ..video_utils import extract_frames_from_video
+from ..video_utils import extract_frames_from_video, reverse_video
 
 
 def _extract_boundary_frames_for_vlm(
@@ -688,12 +688,70 @@ def _handle_join_clips_orchestrator_task(
         # Extract required fields
         clip_list = orchestrator_payload.get("clip_list", [])
         run_id = orchestrator_payload.get("run_id")
-
-        if not clip_list or len(clip_list) < 2:
-            return False, "clip_list must contain at least 2 clips"
+        loop_first_clip = orchestrator_payload.get("loop_first_clip", False)
 
         if not run_id:
             return False, "run_id is required"
+
+        # Handle loop_first_clip: reverse the first clip and use it as the second clip
+        # This creates a "boomerang" effect where the clip plays forward then backward
+        if loop_first_clip:
+            dprint(f"[JOIN_ORCHESTRATOR] loop_first_clip=True - will reverse first clip to create looping effect")
+            
+            if not clip_list or len(clip_list) < 1:
+                return False, "clip_list must contain at least 1 clip when loop_first_clip=True"
+            
+            # Create a temp directory for the reversed video
+            loop_temp_dir = Path(main_output_dir_base) / f"join_clips_run_{run_id}" / "loop_temp"
+            loop_temp_dir.mkdir(parents=True, exist_ok=True)
+            
+            first_clip = clip_list[0]
+            first_clip_url = first_clip.get("url")
+            first_clip_name = first_clip.get("name", "clip_0")
+            
+            if not first_clip_url:
+                return False, "First clip in clip_list is missing 'url' field"
+            
+            # Download the first clip if it's a URL
+            dprint(f"[JOIN_ORCHESTRATOR] Downloading first clip for reversal: {first_clip_url[:80]}...")
+            local_first_clip_path = download_video_if_url(
+                first_clip_url,
+                download_target_dir=loop_temp_dir,
+                task_id_for_logging=orchestrator_task_id_str,
+                descriptive_name="first_clip_for_loop"
+            )
+            
+            if not local_first_clip_path or not Path(local_first_clip_path).exists():
+                return False, f"Failed to download first clip: {first_clip_url}"
+            
+            # Reverse the video
+            reversed_clip_path = loop_temp_dir / f"{first_clip_name}_reversed.mp4"
+            dprint(f"[JOIN_ORCHESTRATOR] Reversing first clip...")
+            
+            reversed_path = reverse_video(
+                local_first_clip_path,
+                reversed_clip_path,
+                dprint=dprint
+            )
+            
+            if not reversed_path or not reversed_path.exists():
+                return False, f"Failed to reverse first clip: {local_first_clip_path}"
+            
+            dprint(f"[JOIN_ORCHESTRATOR] ✅ Created reversed clip: {reversed_path}")
+            
+            # Build new clip_list: [original_first_clip, reversed_first_clip]
+            # The reversed clip becomes the "second" clip
+            reversed_clip_dict = {
+                "url": str(reversed_path.resolve()),
+                "name": f"{first_clip_name}_reversed"
+            }
+            
+            # Override clip_list with the two clips
+            clip_list = [first_clip, reversed_clip_dict]
+            dprint(f"[JOIN_ORCHESTRATOR] clip_list overridden: [{first_clip_name}, {reversed_clip_dict['name']}]")
+
+        if not clip_list or len(clip_list) < 2:
+            return False, "clip_list must contain at least 2 clips"
 
         num_joins = len(clip_list) - 1
         dprint(f"[JOIN_ORCHESTRATOR] Processing {len(clip_list)} clips = {num_joins} join tasks")
