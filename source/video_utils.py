@@ -506,8 +506,15 @@ def extract_frame_range_to_video(
         dprint_func(f"[EXTRACT_RANGE_ERROR] Source video does not exist: {source_video}")
         return None
     
-    # Get source properties
-    source_frames, source_fps = get_video_frame_count_and_fps(str(source_video))
+    # Get source properties - use ffprobe for accurate frame count
+    source_frames = get_video_frame_count_ffprobe(str(source_video), dprint=dprint_func)
+    _, source_fps = get_video_frame_count_and_fps(str(source_video))
+    
+    if not source_frames:
+        # Fallback to OpenCV if ffprobe fails
+        source_frames, source_fps = get_video_frame_count_and_fps(str(source_video))
+        dprint_func(f"[EXTRACT_RANGE] ⚠️  Using OpenCV frame count (ffprobe failed): {source_frames}")
+    
     if not source_frames:
         dprint_func(f"[EXTRACT_RANGE_ERROR] Could not determine source video frame count")
         return None
@@ -556,15 +563,20 @@ def extract_frame_range_to_video(
             dprint_func(f"[EXTRACT_RANGE_ERROR] Output missing or empty: {output_path}")
             return None
         
-        # Verify frame count
+        # Verify frame count (allow small tolerance for OpenCV/FFmpeg discrepancies)
         actual_frames, _ = get_video_frame_count_and_fps(str(output_path))
         if actual_frames is None:
             dprint_func(f"[EXTRACT_RANGE_ERROR] Could not verify output frame count")
             return None
         
-        if actual_frames != expected_frames:
-            dprint_func(f"[EXTRACT_RANGE_ERROR] Frame count mismatch: expected {expected_frames}, got {actual_frames}")
+        # Allow up to 3 frames difference - OpenCV and FFmpeg often disagree on frame counts
+        # especially for end-of-video segments or variable framerate videos
+        frame_diff = abs(actual_frames - expected_frames)
+        if frame_diff > 3:
+            dprint_func(f"[EXTRACT_RANGE_ERROR] Frame count mismatch too large: expected {expected_frames}, got {actual_frames} (diff: {frame_diff})")
             return None
+        elif frame_diff > 0:
+            dprint_func(f"[EXTRACT_RANGE] ⚠️  Minor frame count difference: expected {expected_frames}, got {actual_frames} (diff: {frame_diff}, within tolerance)")
         
         dprint_func(f"[EXTRACT_RANGE] ✅ Extracted {actual_frames} frames to {output_path.name}")
         return output_path
@@ -743,12 +755,71 @@ def _apply_saturation_to_video_ffmpeg(
 
 # ## Video Brightness Adjustment Functions
 
+def get_video_frame_count_ffprobe(video_path: str, dprint=print) -> int | None:
+    """
+    Get accurate frame count using ffprobe (more reliable than OpenCV).
+    
+    Uses ffprobe to count actual frames in the video stream, which is more
+    accurate than OpenCV's CAP_PROP_FRAME_COUNT (especially for VFR videos
+    or videos with certain codecs).
+    
+    Args:
+        video_path: Path to video file
+        dprint: Debug print function
+        
+    Returns:
+        Frame count, or None on error
+    """
+    try:
+        # Method 1: Try to get frame count from stream metadata (fast)
+        cmd = [
+            'ffprobe', '-v', 'error',
+            '-select_streams', 'v:0',
+            '-count_packets',
+            '-show_entries', 'stream=nb_read_packets',
+            '-of', 'csv=p=0',
+            str(video_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        
+        if result.returncode == 0 and result.stdout.strip():
+            frame_count = int(result.stdout.strip())
+            if frame_count > 0:
+                return frame_count
+        
+        # Method 2: Fallback to counting frames (slower but reliable)
+        dprint(f"[FFPROBE] Metadata count failed, counting frames manually...")
+        cmd2 = [
+            'ffprobe', '-v', 'error',
+            '-select_streams', 'v:0',
+            '-count_frames',
+            '-show_entries', 'stream=nb_read_frames',
+            '-of', 'csv=p=0',
+            str(video_path)
+        ]
+        result2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=120)
+        
+        if result2.returncode == 0 and result2.stdout.strip():
+            frame_count = int(result2.stdout.strip())
+            if frame_count > 0:
+                return frame_count
+        
+        return None
+        
+    except subprocess.TimeoutExpired:
+        dprint(f"[FFPROBE] Timeout getting frame count for {video_path}")
+        return None
+    except Exception as e:
+        dprint(f"[FFPROBE] Error: {e}")
+        return None
+
+
 def get_video_frame_count_and_fps(video_path: str) -> tuple[int, float] | tuple[None, None]:
     """
     Get frame count and FPS from a video file using OpenCV.
     
-    Note: OpenCV can sometimes return incorrect frame counts for recently encoded videos.
-    Consider using manual frame extraction for critical operations where accuracy is essential.
+    WARNING: OpenCV's CAP_PROP_FRAME_COUNT can be inaccurate for some videos.
+    For critical frame-accurate operations, use get_video_frame_count_ffprobe() instead.
     """
     
     # Try multiple times in case the video metadata is still being written
