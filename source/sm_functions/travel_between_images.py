@@ -205,12 +205,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         existing_stitch = existing_child_tasks['stitch']
         
         expected_segments = orchestrator_payload.get("num_new_segments_to_generate", 0)
+        # Some runs intentionally do NOT create a stitch task (e.g. independent_segments=True).
+        # In that case, the orchestrator should be considered complete once all segments complete.
+        independent_segments = bool(orchestrator_payload.get("independent_segments", False))
+        required_stitch_count = 0 if independent_segments else 1
         
         if existing_segments or existing_stitch:
             dprint(f"[IDEMPOTENCY] Found existing child tasks: {len(existing_segments)} segments, {len(existing_stitch)} stitch tasks")
             
             # Check if we have the expected number of tasks already
-            if len(existing_segments) >= expected_segments and len(existing_stitch) >= 1:
+            if len(existing_segments) >= expected_segments and len(existing_stitch) >= required_stitch_count:
                 # Clean up any duplicates but don't create new tasks
                 cleanup_summary = db_ops.cleanup_duplicate_child_tasks(orchestrator_task_id_str, expected_segments)
 
@@ -222,7 +226,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 # Also check for terminal failure states (failed/cancelled) that should mark orchestrator as failed
 
                 def is_complete(task):
-                    return task.get('status') == 'complete'
+                    # DB stores statuses as "Complete" (capitalized). Compare case-insensitively.
+                    return (task.get('status', '') or '').lower() == 'complete'
 
                 def is_terminal_failure(task):
                     """Check if task is in a terminal failure state (failed, cancelled, etc.)"""
@@ -230,14 +235,14 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     return status in ('failed', 'cancelled', 'canceled', 'error')
 
                 all_segments_complete = all(is_complete(seg) for seg in existing_segments) if existing_segments else False
-                all_stitch_complete = all(is_complete(st) for st in existing_stitch) if existing_stitch else False
+                all_stitch_complete = True if required_stitch_count == 0 else (all(is_complete(st) for st in existing_stitch) if existing_stitch else False)
 
                 any_segment_failed = any(is_terminal_failure(seg) for seg in existing_segments) if existing_segments else False
-                any_stitch_failed = any(is_terminal_failure(st) for st in existing_stitch) if existing_stitch else False
+                any_stitch_failed = False if required_stitch_count == 0 else (any(is_terminal_failure(st) for st in existing_stitch) if existing_stitch else False)
 
                 # Also ensure we have the minimum required tasks
                 has_required_segments = len(existing_segments) >= expected_segments
-                has_required_stitch = len(existing_stitch) >= 1
+                has_required_stitch = True if required_stitch_count == 0 else (len(existing_stitch) >= 1)
 
                 # If any child task failed/cancelled, mark orchestrator as failed
                 if (any_segment_failed or any_stitch_failed) and has_required_segments and has_required_stitch:
@@ -263,8 +268,22 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     dprint(f"[IDEMPOTENT_COMPLETE] All {len(existing_segments)} child segments and {len(existing_stitch)} stitch tasks are complete")
                     travel_logger.info(f"All child tasks complete, orchestrator should be marked as complete", task_id=orchestrator_task_id_str)
 
-                    # Get the final output from the stitch task
-                    final_output = existing_stitch[0].get('output_location', 'Completed via idempotency')
+                    # Get the final output:
+                    # - If stitch exists, use its output
+                    # - Otherwise (independent segments), use the last segment's output
+                    final_output = None
+                    if existing_stitch:
+                        final_output = existing_stitch[0].get('output_location')
+                    if not final_output and existing_segments:
+                        def _seg_idx(seg):
+                            try:
+                                return int(seg.get('params', {}).get('segment_index', -1))
+                            except Exception:
+                                return -1
+                        last_seg = sorted(existing_segments, key=_seg_idx)[-1]
+                        final_output = last_seg.get('output_location')
+                    if not final_output:
+                        final_output = 'Completed via idempotency'
 
                     # Return with special marker so worker knows to mark as COMPLETE instead of IN_PROGRESS
                     # We use a tuple with the marker to signal completion
@@ -274,16 +293,19 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     return generation_success, output_message_for_orchestrator_db
                 else:
                     # Some children still in progress - report status and let worker keep waiting
-                    segments_complete_count = sum(1 for seg in existing_segments if seg['status'] == 'complete')
-                    stitch_complete_count = sum(1 for st in existing_stitch if st['status'] == 'complete')
+                    segments_complete_count = sum(1 for seg in existing_segments if is_complete(seg))
+                    stitch_complete_count = sum(1 for st in existing_stitch if is_complete(st))
 
                     generation_success = True
-                    output_message_for_orchestrator_db = f"[IDEMPOTENT] Child tasks already exist but not all complete: {segments_complete_count}/{len(existing_segments)} segments complete, {stitch_complete_count}/{len(existing_stitch)} stitch complete. Cleaned up {cleanup_summary['duplicate_segments_removed']} duplicate segments and {cleanup_summary['duplicate_stitch_removed']} duplicate stitch tasks."
+                    if required_stitch_count == 0:
+                        output_message_for_orchestrator_db = f"[IDEMPOTENT] Child tasks already exist but not all complete: {segments_complete_count}/{len(existing_segments)} segments complete. Cleaned up {cleanup_summary['duplicate_segments_removed']} duplicate segments."
+                    else:
+                        output_message_for_orchestrator_db = f"[IDEMPOTENT] Child tasks already exist but not all complete: {segments_complete_count}/{len(existing_segments)} segments complete, {stitch_complete_count}/{len(existing_stitch)} stitch complete. Cleaned up {cleanup_summary['duplicate_segments_removed']} duplicate segments and {cleanup_summary['duplicate_stitch_removed']} duplicate stitch tasks."
                     travel_logger.info(output_message_for_orchestrator_db, task_id=orchestrator_task_id_str)
                     return generation_success, output_message_for_orchestrator_db
             else:
                 # Partial completion - log and continue with missing tasks
-                dprint(f"[IDEMPOTENCY] Partial child tasks found: {len(existing_segments)}/{expected_segments} segments, {len(existing_stitch)}/1 stitch. Will continue with orchestration.")
+                dprint(f"[IDEMPOTENCY] Partial child tasks found: {len(existing_segments)}/{expected_segments} segments, {len(existing_stitch)}/{required_stitch_count} stitch. Will continue with orchestration.")
                 travel_logger.warning(f"Partial child tasks found, continuing orchestration to create missing tasks", task_id=orchestrator_task_id_str)
         else:
             dprint(f"[IDEMPOTENCY] No existing child tasks found. Proceeding with normal orchestration.")
