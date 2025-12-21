@@ -197,7 +197,9 @@ def generate_transition_prompts_batch(
     num_frames_list: Optional[List[int]] = None,
     fps: int = 16,
     device: str = "cuda",
-    dprint=print
+    dprint=print,
+    task_id: Optional[str] = None,
+    upload_debug_images: bool = True
 ) -> List[str]:
     """
     Batch generate transition prompts for multiple image pairs.
@@ -212,6 +214,8 @@ def generate_transition_prompts_batch(
         fps: Frames per second (default: 16)
         device: Device to run the model on ('cuda' or 'cpu')
         dprint: Print function for logging
+        task_id: Optional task ID for organizing debug image uploads
+        upload_debug_images: Whether to upload debug combined images to storage (default: True)
 
     Returns:
         List of generated prompts (one per image pair)
@@ -275,12 +279,25 @@ def generate_transition_prompts_batch(
                 end_exists = Path(end_path).exists() if end_path else False
                 dprint(f"[VLM_FILE_DEBUG] Pair {i}: start={start_path} (exists={start_exists})")
                 dprint(f"[VLM_FILE_DEBUG] Pair {i}: end={end_path} (exists={end_exists})")
+                
+                # Compute file hashes to verify image identity
+                import hashlib
+                def get_file_hash(filepath):
+                    """Get first 8 chars of MD5 hash for quick file identity check."""
+                    try:
+                        with open(filepath, 'rb') as f:
+                            return hashlib.md5(f.read()).hexdigest()[:8]
+                    except:
+                        return 'ERROR'
+                
                 if start_exists:
                     start_size = Path(start_path).stat().st_size
-                    dprint(f"[VLM_FILE_DEBUG] Pair {i}: start file size={start_size} bytes")
+                    start_hash = get_file_hash(start_path)
+                    dprint(f"[VLM_FILE_DEBUG] Pair {i}: start file size={start_size} bytes, hash={start_hash}")
                 if end_exists:
                     end_size = Path(end_path).stat().st_size
-                    dprint(f"[VLM_FILE_DEBUG] Pair {i}: end file size={end_size} bytes")
+                    end_hash = get_file_hash(end_path)
+                    dprint(f"[VLM_FILE_DEBUG] Pair {i}: end file size={end_size} bytes, hash={end_hash}")
 
                 # Load and combine images
                 start_img = Image.open(start_path).convert("RGB")
@@ -288,6 +305,20 @@ def generate_transition_prompts_batch(
                 
                 # [VLM_IMAGE_VERIFY] Log image dimensions to verify correct loading
                 dprint(f"[VLM_IMAGE_VERIFY] Pair {i}: start_img dimensions={start_img.size}, end_img dimensions={end_img.size}")
+                
+                # [VLM_IMAGE_CONTENT] Log image color statistics to help verify content
+                import numpy as np
+                def get_image_stats(img):
+                    """Get average RGB and warmth indicator for image."""
+                    arr = np.array(img)
+                    avg_r, avg_g, avg_b = arr[:,:,0].mean(), arr[:,:,1].mean(), arr[:,:,2].mean()
+                    # Warmth: positive = warm (more red), negative = cool (more blue)
+                    warmth = (avg_r - avg_b) / 255 * 100
+                    brightness = (avg_r + avg_g + avg_b) / 3
+                    return f"RGB=({avg_r:.0f},{avg_g:.0f},{avg_b:.0f}) brightness={brightness:.0f} warmth={warmth:+.1f}%"
+                
+                dprint(f"[VLM_IMAGE_CONTENT] Pair {i} START: {get_image_stats(start_img)}")
+                dprint(f"[VLM_IMAGE_CONTENT] Pair {i} END: {get_image_stats(end_img)}")
 
                 combined_width = start_img.width + end_img.width
                 combined_height = max(start_img.height, end_img.height)
@@ -297,14 +328,60 @@ def generate_transition_prompts_batch(
                 
                 # [VLM_DEBUG_SAVE] Save combined image for manual inspection
                 # This shows EXACTLY what VLM sees - left=start, right=end
+                debug_path = None
+                start_debug_path = None
+                end_debug_path = None
                 try:
                     debug_dir = Path(start_path).parent / "vlm_debug"
                     debug_dir.mkdir(exist_ok=True)
                     debug_path = debug_dir / f"vlm_combined_pair{i}.jpg"
                     combined_img.save(str(debug_path), quality=95)
                     dprint(f"[VLM_DEBUG_SAVE] Saved combined image for pair {i} to: {debug_path}")
+                    
+                    # Also save individual start/end images to debug folder for clarity
+                    start_debug_path = debug_dir / f"vlm_pair{i}_LEFT_start.jpg"
+                    end_debug_path = debug_dir / f"vlm_pair{i}_RIGHT_end.jpg"
+                    start_img.save(str(start_debug_path), quality=95)
+                    end_img.save(str(end_debug_path), quality=95)
+                    dprint(f"[VLM_DEBUG_SAVE] Saved individual images: {start_debug_path.name}, {end_debug_path.name}")
                 except Exception as e_save:
                     dprint(f"[VLM_DEBUG_SAVE] Could not save debug image: {e_save}")
+                
+                # [VLM_DEBUG_UPLOAD] Upload debug images to Supabase for remote inspection
+                if upload_debug_images and task_id and debug_path and debug_path.exists():
+                    try:
+                        from .common_utils import upload_intermediate_file_to_storage
+                        
+                        # Upload the combined image (most important - shows exactly what VLM sees)
+                        upload_filename = f"vlm_debug_pair{i}_combined.jpg"
+                        upload_url = upload_intermediate_file_to_storage(
+                            debug_path,
+                            task_id,
+                            upload_filename,
+                            dprint=dprint
+                        )
+                        if upload_url:
+                            dprint(f"[VLM_DEBUG_UPLOAD] ✅ Pair {i} COMBINED (what VLM sees): {upload_url}")
+                        else:
+                            dprint(f"[VLM_DEBUG_UPLOAD] ❌ Failed to upload combined image for pair {i}")
+                        
+                        # Upload individual images too for clarity
+                        if start_debug_path and start_debug_path.exists():
+                            start_url = upload_intermediate_file_to_storage(
+                                start_debug_path, task_id, f"vlm_debug_pair{i}_LEFT.jpg", dprint=dprint
+                            )
+                            if start_url:
+                                dprint(f"[VLM_DEBUG_UPLOAD] ✅ Pair {i} LEFT (start image): {start_url}")
+                        
+                        if end_debug_path and end_debug_path.exists():
+                            end_url = upload_intermediate_file_to_storage(
+                                end_debug_path, task_id, f"vlm_debug_pair{i}_RIGHT.jpg", dprint=dprint
+                            )
+                            if end_url:
+                                dprint(f"[VLM_DEBUG_UPLOAD] ✅ Pair {i} RIGHT (end image): {end_url}")
+                                
+                    except Exception as e_upload:
+                        dprint(f"[VLM_DEBUG_UPLOAD] ❌ Failed to upload debug images for pair {i}: {e_upload}")
 
                 # Craft query with base_prompt context
                 base_prompt_text = base_prompt if base_prompt and base_prompt.strip() else "the objects/people inside the scene move excitingly and things transform or shift with the camera"
