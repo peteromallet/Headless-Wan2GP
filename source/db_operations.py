@@ -208,6 +208,50 @@ def check_task_counts_supabase(run_type: str = "gpu") -> dict | None:
         dprint(f"Task-counts call failed: {e_counts}")
         return None
 
+def check_my_assigned_tasks(worker_id: str) -> dict | None:
+    """
+    Check if this worker has any tasks already assigned to it (In Progress).
+    This handles the case where a claim succeeded but the response was lost.
+    
+    Returns task data dict if found, None otherwise.
+    """
+    if not SUPABASE_CLIENT or not worker_id:
+        return None
+    
+    try:
+        # Query for tasks assigned to this worker that are In Progress
+        result = SUPABASE_CLIENT.table('tasks') \
+            .select('id, params, task_type, project_id') \
+            .eq('worker_id', worker_id) \
+            .eq('status', STATUS_IN_PROGRESS) \
+            .limit(1) \
+            .execute()
+        
+        if result.data and len(result.data) > 0:
+            task = result.data[0]
+            task_id = task.get('id')
+            task_type = task.get('task_type', 'unknown')
+            params = task.get('params', {})
+            
+            print(f"[RECOVERY] 🔄 Found assigned task {task_id} (type={task_type}) - recovering")
+            dprint(f"[RECOVERY_DEBUG] Task was assigned to us but we didn't process it - likely lost HTTP response")
+            
+            # Return in the same format as claim-next-task Edge Function
+            return {
+                'task_id': task_id,
+                'params': params,
+                'task_type': task_type,
+                'project_id': task.get('project_id')
+            }
+        
+        return None
+        
+    except Exception as e:
+        # Don't let recovery check failures block normal operation
+        dprint(f"[RECOVERY] Failed to check assigned tasks: {e}")
+        return None
+
+
 def get_oldest_queued_task_supabase(worker_id: str = None):
     """Fetches the oldest task via Supabase Edge Function. First checks task counts to avoid unnecessary claim attempts."""
     if not SUPABASE_CLIENT:
@@ -220,6 +264,19 @@ def get_oldest_queued_task_supabase(worker_id: str = None):
         dprint(f"DEBUG: No worker_id provided, using default GPU worker: {worker_id}")
     else:
         dprint(f"DEBUG: Using provided worker_id: {worker_id}")
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 1: Check for tasks already assigned to this worker (RECOVERY)
+    # This handles the case where a previous claim succeeded in the DB but
+    # the HTTP response was lost before we could process it.
+    # ═══════════════════════════════════════════════════════════════════════════
+    assigned_task = check_my_assigned_tasks(worker_id)
+    if assigned_task:
+        return assigned_task
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 2: No assigned tasks - check for new tasks to claim
+    # ═══════════════════════════════════════════════════════════════════════════
     
     # OPTIMIZATION: Check task counts first to avoid unnecessary claim attempts
     dprint("Checking task counts before attempting to claim...")
@@ -288,10 +345,13 @@ def get_oldest_queued_task_supabase(worker_id: str = None):
                 dprint(f"Edge Function returned {resp.status_code}: {resp.text}")
                 return None
         except Exception as e_edge:
-            dprint(f"Edge Function call failed: {e_edge}")
+            # Log visibly - this is a critical failure that can cause orphaned tasks
+            print(f"[CLAIM] ❌ Edge Function call failed: {e_edge}")
+            dprint(f"[CLAIM_DEBUG] Exception type: {type(e_edge).__name__}")
+            dprint(f"[CLAIM_DEBUG] Full traceback: {traceback.format_exc()}")
             return None
     else:
-        dprint("ERROR: No edge function URL or access token available for task claiming")
+        print("[CLAIM] ❌ No edge function URL or access token available for task claiming")
         return None
 
 def update_task_status_supabase(task_id_str, status_str, output_location_val=None, thumbnail_url_val=None):

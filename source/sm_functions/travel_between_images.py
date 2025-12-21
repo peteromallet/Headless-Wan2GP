@@ -1058,8 +1058,21 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     img_name = Path(img).name if img else 'NONE'
                     dprint(f"[VLM_INPUT_DEBUG]   [{i}]: {img_name}")
 
-                # Get pre-existing enhanced prompts if available
-                expanded_enhanced_prompts = orchestrator_payload.get("enhanced_prompts_expanded", [])
+                # Get pre-existing enhanced prompts if available.
+                #
+                # IMPORTANT:
+                # We do NOT trust pre-existing enhanced prompts by default because they can be stale/misaligned
+                # if the image ordering (or the set of images) changed upstream. That exact scenario produces
+                # "prompts that make no sense" because the prompt was generated for a different image pair.
+                #
+                # To explicitly reuse pre-existing enhanced prompts (e.g., if the client guarantees alignment),
+                # set orchestrator_payload["use_preexisting_enhanced_prompts"] = True.
+                use_preexisting_enhanced_prompts = orchestrator_payload.get("use_preexisting_enhanced_prompts", False)
+                expanded_enhanced_prompts = (
+                    orchestrator_payload.get("enhanced_prompts_expanded", [])
+                    if use_preexisting_enhanced_prompts
+                    else []
+                )
                 base_prompt = orchestrator_payload.get("base_prompt", "")
 
                 if base_prompt:
@@ -1067,19 +1080,27 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 else:
                     dprint(f"[VLM_BATCH] No base_prompt found in payload")
 
-                if expanded_enhanced_prompts:
-                    dprint(f"[VLM_BATCH] Found {len(expanded_enhanced_prompts)} pre-existing enhanced prompts in payload")
-                    for idx, prompt in enumerate(expanded_enhanced_prompts):
-                        if prompt and prompt.strip():
-                            dprint(f"[VLM_BATCH]   Segment {idx}: '{prompt[:80]}...'")
+                if use_preexisting_enhanced_prompts:
+                    if expanded_enhanced_prompts:
+                        dprint(f"[VLM_BATCH] Found {len(expanded_enhanced_prompts)} pre-existing enhanced prompts in payload (reuse enabled)")
+                        for idx, prompt in enumerate(expanded_enhanced_prompts):
+                            if prompt and prompt.strip():
+                                dprint(f"[VLM_BATCH]   Segment {idx}: '{prompt[:80]}...'")
+                    else:
+                        dprint(f"[VLM_BATCH] No pre-existing enhanced prompts found in payload (reuse enabled)")
                 else:
-                    dprint(f"[VLM_BATCH] No pre-existing enhanced prompts found in payload")
+                    # Still log whether the payload *had* something, but we're ignoring it.
+                    payload_enhanced_len = len(orchestrator_payload.get("enhanced_prompts_expanded", []) or [])
+                    if payload_enhanced_len:
+                        dprint(f"[VLM_BATCH] Ignoring {payload_enhanced_len} pre-existing enhanced prompts in payload (reuse disabled; will regenerate)")
+                    else:
+                        dprint(f"[VLM_BATCH] No pre-existing enhanced prompts in payload (will generate)")
 
                 # CRITICAL FIX: Detect and handle mismatched array sizes
                 # This can happen when:
                 # 1. Consolidation reduced segments but enhanced_prompts wasn't remapped (handled by consolidation fix)
                 # 2. Payload arrived with inconsistent data from frontend (handled here)
-                if expanded_enhanced_prompts and len(expanded_enhanced_prompts) != num_segments:
+                if use_preexisting_enhanced_prompts and expanded_enhanced_prompts and len(expanded_enhanced_prompts) != num_segments:
                     dprint(f"[VLM_BATCH] ⚠️ SIZE MISMATCH: enhanced_prompts has {len(expanded_enhanced_prompts)} items but num_segments={num_segments}")
                     
                     # Build a remapped version: map first/last segments to first/last prompts
@@ -1331,6 +1352,21 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 traceback.print_exc()
                 dprint(f"[VLM_BATCH] Falling back to original prompts for all segments")
                 vlm_enhanced_prompts = {}
+
+        # Update orchestrator_payload with VLM enhanced prompts so they appear in debug output/DB
+        if vlm_enhanced_prompts:
+            enhanced_list = orchestrator_payload.get("enhanced_prompts_expanded", [])
+            # Resize if needed (should be initialized to correct size but be safe)
+            if len(enhanced_list) < num_segments:
+                enhanced_list.extend([""] * (num_segments - len(enhanced_list)))
+            
+            # Fill in values
+            for idx_prom, prompt in vlm_enhanced_prompts.items():
+                if idx_prom < len(enhanced_list):
+                    enhanced_list[idx_prom] = prompt
+            
+            orchestrator_payload["enhanced_prompts_expanded"] = enhanced_list
+            dprint(f"[VLM_ENHANCE] Updated orchestrator_payload enhanced_prompts_expanded with {len(vlm_enhanced_prompts)} prompts")
 
         # Loop to queue all segment tasks (skip existing ones for idempotency)
         segments_created = 0
