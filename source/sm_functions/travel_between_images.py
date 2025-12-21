@@ -1222,24 +1222,35 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                         if (start_anchor_idx < len(input_images_resolved) and
                             end_anchor_idx < len(input_images_resolved)):
 
-                            start_image_path = input_images_resolved[start_anchor_idx]
-                            end_image_path = input_images_resolved[end_anchor_idx]
+                            start_image_url = input_images_resolved[start_anchor_idx]
+                            end_image_url = input_images_resolved[end_anchor_idx]
+                            
+                            # [VLM_URL_DEBUG] Log the source URLs BEFORE download
+                            start_url_name = Path(start_image_url).name if start_image_url else 'NONE'
+                            end_url_name = Path(end_image_url).name if end_image_url else 'NONE'
+                            dprint(f"[VLM_URL_DEBUG] Segment {idx}: Downloading images for VLM")
+                            dprint(f"[VLM_URL_DEBUG]   START (idx={start_anchor_idx}): {start_url_name}")
+                            dprint(f"[VLM_URL_DEBUG]   END   (idx={end_anchor_idx}): {end_url_name}")
 
                             # Download images if they're URLs
                             start_image_path = download_image_if_url(
-                                start_image_path,
+                                start_image_url,
                                 current_run_output_dir,
                                 f"vlm_start_{idx}",
                                 debug_mode=False,
                                 descriptive_name=f"vlm_start_seg{idx}"
                             )
                             end_image_path = download_image_if_url(
-                                end_image_path,
+                                end_image_url,
                                 current_run_output_dir,
                                 f"vlm_end_{idx}",
                                 debug_mode=False,
                                 descriptive_name=f"vlm_end_seg{idx}"
                             )
+                            
+                            # [VLM_URL_DEBUG] Log the downloaded local paths
+                            dprint(f"[VLM_URL_DEBUG]   START downloaded to: {Path(start_image_path).name}")
+                            dprint(f"[VLM_URL_DEBUG]   END   downloaded to: {Path(end_image_path).name}")
 
                             image_pairs.append((start_image_path, end_image_path))
                             # Use segment-specific base_prompt if available, otherwise use overall base_prompt
@@ -1273,7 +1284,9 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                         num_frames_list=segment_frame_counts,
                         fps=fps_helpers,
                         device=vlm_device,
-                        dprint=dprint
+                        dprint=dprint,
+                        task_id=orchestrator_task_id_str,
+                        upload_debug_images=True  # Upload VLM debug images for remote inspection
                     )
 
                     # Map results back to segment indices
