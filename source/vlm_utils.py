@@ -12,6 +12,44 @@ from PIL import Image, ImageDraw, ImageFont
 import torch
 
 
+def create_framed_vlm_image(start_img: Image.Image, end_img: Image.Image, border_width: int = 6) -> Image.Image:
+    """
+    Create a combined image with colored borders for VLM to see.
+    
+    Green border on left (start), red border on right (end).
+    This helps VLM understand which image is which.
+    
+    Args:
+        start_img: The starting image (will get green border)
+        end_img: The ending image (will get red border)
+        border_width: Width of the colored border
+        
+    Returns:
+        Combined image with colored borders
+    """
+    from PIL import ImageOps
+    
+    # Colors
+    start_color = (46, 139, 87)   # Sea green for start
+    end_color = (178, 34, 34)     # Firebrick red for end
+    
+    # Add borders to each image
+    start_bordered = ImageOps.expand(start_img, border=border_width, fill=start_color)
+    end_bordered = ImageOps.expand(end_img, border=border_width, fill=end_color)
+    
+    # Small gap between images
+    gap = 4
+    
+    # Combine side by side
+    combined_width = start_bordered.width + end_bordered.width + gap
+    combined_height = max(start_bordered.height, end_bordered.height)
+    combined = Image.new('RGB', (combined_width, combined_height), (40, 40, 40))
+    combined.paste(start_bordered, (0, 0))
+    combined.paste(end_bordered, (start_bordered.width + gap, 0))
+    
+    return combined
+
+
 def create_labeled_debug_image(start_img: Image.Image, end_img: Image.Image, pair_index: int = 0) -> Image.Image:
     """
     Create a labeled debug image showing start and end images side by side with clear labels and frames.
@@ -27,11 +65,11 @@ def create_labeled_debug_image(start_img: Image.Image, end_img: Image.Image, pai
         Combined image with labels and frames
     """
     # Settings
-    border_width = 4
-    label_height = 40
-    gap_between = 20
-    title_height = 50
-    padding = 10
+    border_width = 8
+    label_height = 60
+    gap_between = 30
+    title_height = 70
+    padding = 15
     
     # Colors
     start_color = (46, 139, 87)   # Sea green for start
@@ -63,8 +101,8 @@ def create_labeled_debug_image(start_img: Image.Image, end_img: Image.Image, pai
         font = None
         for fp in font_paths:
             if Path(fp).exists():
-                font = ImageFont.truetype(fp, 24)
-                title_font = ImageFont.truetype(fp, 28)
+                font = ImageFont.truetype(fp, 36)
+                title_font = ImageFont.truetype(fp, 42)
                 break
         if font is None:
             font = ImageFont.load_default()
@@ -452,11 +490,9 @@ def generate_transition_prompts_batch(
                 dprint(f"[VLM_IMAGE_CONTENT] Pair {i} START: {get_image_stats(start_img)}")
                 dprint(f"[VLM_IMAGE_CONTENT] Pair {i} END: {get_image_stats(end_img)}")
 
-                combined_width = start_img.width + end_img.width
-                combined_height = max(start_img.height, end_img.height)
-                combined_img = Image.new('RGB', (combined_width, combined_height))
-                combined_img.paste(start_img, (0, 0))
-                combined_img.paste(end_img, (start_img.width, 0))
+                # Create combined image with colored borders for VLM
+                # Green border = starting image (left), Red border = ending image (right)
+                combined_img = create_framed_vlm_image(start_img, end_img)
                 
                 # [VLM_DEBUG_SAVE] Save labeled debug image for manual inspection
                 # Note: VLM sees raw combined_img (no labels), but we save a labeled version for humans
@@ -528,7 +564,7 @@ def generate_transition_prompts_batch(
                     duration_seconds = num_frames / fps
                     duration_text = f" This transition occurs over approximately {duration_seconds:.1f} seconds ({num_frames} frames at {fps} FPS)."
 
-                query = f"""You are viewing two images side by side: the left image shows the starting frame, and the right image shows the ending frame of a video sequence.
+                query = f"""You are viewing two images side by side: the LEFT image (with GREEN border) shows the STARTING frame, and the RIGHT image (with RED border) shows the ENDING frame of a video sequence.
 
 {duration_text} Your goal is to create a THREE-SENTENCE prompt that describes the MOTION and CHANGES in this transition based on the user's description: '{base_prompt_text}'
 
