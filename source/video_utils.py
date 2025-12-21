@@ -870,6 +870,70 @@ def get_video_frame_count_ffprobe(video_path: str, dprint=print) -> int | None:
         return None
 
 
+def _parse_ffprobe_rate(rate_str: str) -> float | None:
+    """
+    Parse an ffprobe rate string (e.g. '30000/1001', '24/1', '0/0').
+    Returns float fps or None.
+    """
+    try:
+        s = (rate_str or "").strip()
+        if not s:
+            return None
+        if "/" in s:
+            num_s, den_s = s.split("/", 1)
+            num = float(num_s)
+            den = float(den_s)
+            if den == 0:
+                return None
+            val = num / den
+        else:
+            val = float(s)
+        if val <= 0:
+            return None
+        return val
+    except Exception:
+        return None
+
+
+def get_video_fps_ffprobe(video_path: str, dprint=print) -> float | None:
+    """
+    Get FPS using ffprobe (avg_frame_rate preferred; falls back to r_frame_rate).
+    This is more reliable than OpenCV for VFR content.
+    """
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=avg_frame_rate,r_frame_rate",
+            "-of", "json",
+            str(video_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0 or not result.stdout:
+            return None
+
+        data = json.loads(result.stdout)
+        streams = data.get("streams") or []
+        if not streams:
+            return None
+        st = streams[0]
+
+        avg = _parse_ffprobe_rate(st.get("avg_frame_rate"))
+        r = _parse_ffprobe_rate(st.get("r_frame_rate"))
+
+        # Prefer avg if present; fall back to r_frame_rate
+        fps = avg or r
+        if fps and fps > 0:
+            return fps
+        return None
+    except subprocess.TimeoutExpired:
+        dprint(f"[FFPROBE] Timeout getting FPS for {video_path}")
+        return None
+    except Exception as e:
+        dprint(f"[FFPROBE] Error getting FPS: {e}")
+        return None
+
+
 def get_video_frame_count_and_fps(video_path: str) -> tuple[int, float] | tuple[None, None]:
     """
     Get frame count and FPS from a video file using OpenCV.

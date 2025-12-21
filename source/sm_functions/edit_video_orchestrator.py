@@ -32,7 +32,7 @@ from typing import Tuple, List, Optional, Dict
 
 from .. import db_operations as db_ops
 from ..common_utils import download_video_if_url, get_video_frame_count_and_fps
-from ..video_utils import extract_frame_range_to_video, ensure_video_fps, get_video_frame_count_ffprobe
+from ..video_utils import extract_frame_range_to_video, ensure_video_fps, get_video_frame_count_ffprobe, get_video_fps_ffprobe
 
 # Import shared functions from join_clips_orchestrator
 from .join_clips_orchestrator import (
@@ -264,7 +264,8 @@ def _preprocess_portions_to_regenerate(
             "per_join_settings": List[dict]
         }
     """
-    dprint(f"[EDIT_VIDEO] Preprocessing {len(portions_to_regenerate)} portions to regenerate")
+    DEBUG_TAG = "[FrameAlignmentIssue]"
+    dprint(f"{DEBUG_TAG} [EDIT_VIDEO] Preprocessing {len(portions_to_regenerate)} portions to regenerate")
     
     try:
         # Download source video if it's a URL
@@ -279,13 +280,50 @@ def _preprocess_portions_to_regenerate(
         if not source_video.exists():
             return {"success": False, "error": f"Source video not found: {source_video_path}"}
         
-        # Ensure video is at the expected FPS (frame indices are calculated for this FPS)
+        # === FRAME/FPS DIAGNOSTICS (BEFORE ANY RESAMPLING) ===
         target_fps = source_video_fps or 16
-        dprint(f"[EDIT_VIDEO] Expected (from payload): {source_video_total_frames} frames @ {target_fps} fps")
+        ffprobe_frames_before = get_video_frame_count_ffprobe(str(source_video), dprint=dprint)
+        opencv_frames_before, opencv_fps_before = get_video_frame_count_and_fps(str(source_video))
+        ffprobe_fps_before = get_video_fps_ffprobe(str(source_video), dprint=dprint)
+        dprint(f"{DEBUG_TAG} [EDIT_VIDEO] Payload expects: frames={source_video_total_frames}, fps={target_fps}")
+        dprint(
+            f"{DEBUG_TAG} [EDIT_VIDEO] Source (pre-ensure_fps): "
+            f"ffprobe_frames={ffprobe_frames_before}, ffprobe_fps={ffprobe_fps_before}, "
+            f"opencv_frames={opencv_frames_before}, opencv_fps={opencv_fps_before}"
+        )
+
+        # Time↔frame sanity checks for each portion (if times are provided)
+        sorted_portions_dbg = sorted(portions_to_regenerate, key=lambda p: p.get("start_frame", 0))
+        for i, p in enumerate(sorted_portions_dbg):
+            sf = p.get("start_frame")
+            ef = p.get("end_frame")
+            st = p.get("start_time_seconds") or p.get("start_time")
+            et = p.get("end_time_seconds") or p.get("end_time")
+            if sf is None or ef is None:
+                continue
+            if st is not None and et is not None:
+                try:
+                    # These conversions assume 0-indexed frames where frame ~= time * fps
+                    # We log both payload-fps and ffprobe-fps estimates to spot drift.
+                    sf_payload = int(round(float(st) * float(target_fps)))
+                    ef_payload = int(round(float(et) * float(target_fps))) - 1  # end_time is typically exclusive
+                    sf_ff = int(round(float(st) * float(ffprobe_fps_before))) if ffprobe_fps_before else None
+                    ef_ff = int(round(float(et) * float(ffprobe_fps_before))) - 1 if ffprobe_fps_before else None
+                    dprint(
+                        f"{DEBUG_TAG} [EDIT_VIDEO] Portion {i}: frames={sf}-{ef}, "
+                        f"times={st:.6f}-{et:.6f}s -> "
+                        f"@payload_fps({target_fps}): {sf_payload}-{ef_payload}"
+                        + (f", @ffprobe_fps({ffprobe_fps_before:.6f}): {sf_ff}-{ef_ff}" if ffprobe_fps_before else "")
+                    )
+                except Exception as conv_err:
+                    dprint(f"{DEBUG_TAG} [EDIT_VIDEO] Portion {i}: time↔frame conversion error: {conv_err}")
+            else:
+                dprint(f"{DEBUG_TAG} [EDIT_VIDEO] Portion {i}: frames={sf}-{ef} (no times provided)")
         
         # Use tight FPS tolerance (0.01) to force resampling when there's any meaningful FPS difference
         # This is critical because frame indices are calculated for target_fps - even a 0.3 FPS difference
         # causes ~0.5s drift over 400 frames, making extracted frames appear "too early" or "too late"
+        source_video_before_ensure = source_video
         source_video = ensure_video_fps(
             video_path=source_video,
             target_fps=target_fps,
@@ -295,11 +333,22 @@ def _preprocess_portions_to_regenerate(
         )
         if not source_video:
             return {"success": False, "error": f"Failed to ensure video is at {target_fps} fps"}
+
+        if Path(source_video_before_ensure) != Path(source_video):
+            dprint(f"{DEBUG_TAG} [EDIT_VIDEO] ensure_video_fps RESAMPLED: {source_video_before_ensure.name} -> {Path(source_video).name}")
+        else:
+            dprint(f"{DEBUG_TAG} [EDIT_VIDEO] ensure_video_fps NO-OP: video already within tolerance of {target_fps}fps")
         
         # Get actual frame count from the (potentially resampled) video
         # Use ffprobe for accuracy - OpenCV's CAP_PROP_FRAME_COUNT is unreliable
         actual_frames_ffprobe = get_video_frame_count_ffprobe(str(source_video), dprint=dprint)
         actual_frames_opencv, actual_fps = get_video_frame_count_and_fps(str(source_video))
+        actual_fps_ffprobe = get_video_fps_ffprobe(str(source_video), dprint=dprint)
+        dprint(
+            f"{DEBUG_TAG} [EDIT_VIDEO] Source (post-ensure_fps): "
+            f"ffprobe_frames={actual_frames_ffprobe}, ffprobe_fps={actual_fps_ffprobe}, "
+            f"opencv_frames={actual_frames_opencv}, opencv_fps={actual_fps}"
+        )
         
         # Prefer ffprobe count, fall back to OpenCV
         actual_frames = actual_frames_ffprobe or actual_frames_opencv
@@ -316,15 +365,15 @@ def _preprocess_portions_to_regenerate(
             diff = abs(source_video_total_frames - actual_frames)
             if diff <= 3:
                 # Small difference - trust payload (frontend calculated correctly)
-                dprint(f"[EDIT_VIDEO] Using payload frame count: {source_video_total_frames} (actual: {actual_frames}, diff: {diff})")
+                dprint(f"{DEBUG_TAG} [EDIT_VIDEO] Using payload frame count: {source_video_total_frames} (actual: {actual_frames}, diff: {diff})")
                 actual_frames = source_video_total_frames
             else:
-                dprint(f"[EDIT_VIDEO] Note: Payload frame count ({source_video_total_frames}) differs significantly from actual ({actual_frames})")
+                dprint(f"{DEBUG_TAG} [EDIT_VIDEO] Payload frame count differs significantly: payload={source_video_total_frames}, actual={actual_frames}, diff={diff}")
         
         source_video_total_frames = actual_frames
         source_video_fps = actual_fps or target_fps
         
-        dprint(f"[EDIT_VIDEO] Final source video: {source_video_total_frames} frames @ {source_video_fps} fps")
+        dprint(f"{DEBUG_TAG} [EDIT_VIDEO] Final source video chosen: {source_video_total_frames} frames @ {source_video_fps} fps (target_fps={target_fps})")
         
         # Calculate keeper segments
         keeper_segments = _calculate_keeper_segments(
@@ -487,6 +536,17 @@ def _handle_edit_video_orchestrator_task(
         # Extract join settings (same as join_clips_orchestrator)
         join_settings = _extract_join_settings_from_payload(orchestrator_payload)
         per_join_settings = orchestrator_payload.get("per_join_settings", [])
+        
+        # IMPORTANT: Override replace_mode to False for join tasks.
+        # edit_video_orchestrator uses replace_mode to determine how keepers are extracted
+        # (anchors at boundaries, gap region excluded). The keepers are already "clean" -
+        # they don't contain gap frames. But join_clips in replace_mode expects clips to
+        # CONTAIN gap frames at their boundaries that it will remove. This mismatch causes:
+        # 1. Wrong context frame extraction (looking before gap position that doesn't exist)
+        # 2. Double-trimming of frames (gap already excluded from keepers, then trimmed again)
+        # The join tasks should use INSERT mode since they're bridging clean keeper clips.
+        join_settings["replace_mode"] = False
+        dprint(f"[EDIT_VIDEO] Overriding join_settings replace_mode to False (keepers are clean)")
         output_base_dir = orchestrator_payload.get("output_base_dir", str(main_output_dir_base.resolve()))
         
         # Create run-specific output directory
@@ -536,11 +596,14 @@ def _handle_edit_video_orchestrator_task(
                 gap_frame_count = join_settings.get("gap_frame_count", 53)
                 fps = orchestrator_payload.get("source_video_fps", 16)
                 
+                # Use replace_mode=False for VLM frame extraction because keeper clips are
+                # already clean - anchors are at the boundaries (last/first frames), not
+                # hidden behind gap frames that need to be skipped.
                 image_pairs = _extract_boundary_frames_for_vlm(
                     clip_list=clip_list,
                     temp_dir=vlm_temp_dir,
                     orchestrator_task_id=orchestrator_task_id_str,
-                    replace_mode=replace_mode,
+                    replace_mode=False,  # Keepers have anchors at boundaries
                     gap_frame_count=gap_frame_count,
                     dprint=dprint
                 )
