@@ -1047,6 +1047,61 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 # Import VLM helper
                 from ..vlm_utils import generate_transition_prompts_batch
                 from ..common_utils import download_image_if_url
+                
+                # [VLM_DB_CHECK] Check if enhanced prompts already exist in database BEFORE running VLM
+                # This prevents re-runs from overwriting good prompts with potentially hallucinated ones
+                vlm_skipped_due_to_existing_db_prompts = False
+                shot_id = orchestrator_payload.get("shot_id")
+                if shot_id and db_ops.SUPABASE_URL:
+                    try:
+                        import httpx
+                        # Query shot_generations to check for existing enhanced_prompts
+                        query_url = f"{db_ops.SUPABASE_URL.rstrip('/')}/rest/v1/shot_generations"
+                        headers = {
+                            "apikey": db_ops.SUPABASE_SERVICE_KEY or db_ops.SUPABASE_ACCESS_TOKEN or "",
+                            "Authorization": f"Bearer {db_ops.SUPABASE_SERVICE_KEY or db_ops.SUPABASE_ACCESS_TOKEN or ''}",
+                        }
+                        params = {
+                            "shot_id": f"eq.{shot_id}",
+                            "select": "id,timeline_frame,metadata",
+                            "timeline_frame": "not.is.null",
+                            "order": "timeline_frame.asc"
+                        }
+                        resp = httpx.get(query_url, headers=headers, params=params, timeout=10)
+                        if resp.status_code == 200:
+                            shot_gens = resp.json()
+                            # Check for enhanced_prompt in metadata for each shot_generation
+                            existing_prompts = []
+                            for sg in shot_gens:
+                                metadata = sg.get("metadata") or {}
+                                enhanced_prompt = metadata.get("enhanced_prompt", "")
+                                if enhanced_prompt and enhanced_prompt.strip():
+                                    existing_prompts.append(enhanced_prompt)
+                            
+                            # We need num_segments prompts (one per transition, excluding last image)
+                            expected_prompt_count = max(0, len(shot_gens) - 1)
+                            
+                            dprint(f"[VLM_DB_CHECK] Found {len(existing_prompts)}/{expected_prompt_count} enhanced prompts in database for shot {shot_id[:8]}...")
+                            
+                            if len(existing_prompts) >= expected_prompt_count and expected_prompt_count > 0:
+                                dprint(f"[VLM_DB_CHECK] ✅ All enhanced prompts already exist in database - SKIPPING VLM to prevent overwrites")
+                                # Use existing prompts from database
+                                for idx, prompt in enumerate(existing_prompts[:num_segments]):
+                                    vlm_enhanced_prompts[idx] = prompt
+                                    dprint(f"[VLM_DB_CHECK]   Segment {idx}: '{prompt[:60]}...'")
+                                vlm_skipped_due_to_existing_db_prompts = True
+                            else:
+                                dprint(f"[VLM_DB_CHECK] Enhanced prompts incomplete or missing - will run VLM")
+                        else:
+                            dprint(f"[VLM_DB_CHECK] Failed to query database: {resp.status_code} - will run VLM")
+                    except Exception as e_db_check:
+                        dprint(f"[VLM_DB_CHECK] Database check failed: {e_db_check} - will run VLM")
+                
+                # Skip VLM processing if we already have prompts from database
+                if vlm_skipped_due_to_existing_db_prompts:
+                    dprint(f"[VLM_BATCH] Skipping VLM model loading - using {len(vlm_enhanced_prompts)} prompts from database")
+                    # Jump to the end of VLM processing (will still update orchestrator_payload)
+                    raise StopIteration("VLM skipped - using DB prompts")
 
                 # Get input images
                 input_images_resolved = orchestrator_payload.get("input_image_paths_resolved", [])
@@ -1363,6 +1418,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     traceback.print_exc()
                     # Non-fatal - continue with task creation
 
+            except StopIteration:
+                # This is our signal that VLM was skipped due to existing DB prompts
+                # vlm_enhanced_prompts is already populated with DB values, so just continue
+                dprint(f"[VLM_BATCH] VLM processing skipped - using existing database prompts")
             except Exception as e_vlm_batch:
                 dprint(f"[VLM_BATCH] ERROR during batch VLM processing: {e_vlm_batch}")
                 traceback.print_exc()
