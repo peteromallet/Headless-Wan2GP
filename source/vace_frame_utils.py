@@ -81,6 +81,17 @@ def create_guide_and_mask_for_generation(
 
     if resolution_wh[0] <= 0 or resolution_wh[1] <= 0:
         raise ValueError(f"Invalid resolution: {resolution_wh}")
+    
+    # === [FrameAlignmentIssue] GUIDE/MASK CREATION DIAGNOSTICS ===
+    dprint(f"[FrameAlignmentIssue] [VACE_GUIDE_MASK] Task {task_id}: === Guide/Mask Creation Input ===")
+    dprint(f"[FrameAlignmentIssue] [VACE_GUIDE_MASK]   context_frames_before: {len(context_frames_before)} frames")
+    dprint(f"[FrameAlignmentIssue] [VACE_GUIDE_MASK]   context_frames_after: {len(context_frames_after)} frames")
+    dprint(f"[FrameAlignmentIssue] [VACE_GUIDE_MASK]   gap_frame_count: {gap_frame_count}")
+    dprint(f"[FrameAlignmentIssue] [VACE_GUIDE_MASK]   replace_mode: {replace_mode}")
+    dprint(f"[FrameAlignmentIssue] [VACE_GUIDE_MASK]   regenerate_anchors: {regenerate_anchors}, num_anchor_frames: {num_anchor_frames}")
+    dprint(f"[FrameAlignmentIssue] [VACE_GUIDE_MASK]   resolution_wh: {resolution_wh}, fps: {fps}")
+    if gap_inserted_frames:
+        dprint(f"[FrameAlignmentIssue] [VACE_GUIDE_MASK]   gap_inserted_frames at relative indices: {list(gap_inserted_frames.keys())}")
 
     # Calculate total frames accounting for regenerate_anchors and replace_mode
     num_context_before = len(context_frames_before)
@@ -317,6 +328,20 @@ def create_guide_and_mask_for_generation(
 
     dprint(f"[VACE_UTILS]   Inactive frame indices (black/keep): {sorted(inactive_indices)}")
     dprint(f"[VACE_UTILS]   Active frame indices (white/generate): {active_indices}")
+    
+    # === [FrameAlignmentIssue] FINAL STRUCTURE SUMMARY ===
+    num_inactive = len(inactive_indices)
+    num_active = len(active_indices)
+    dprint(f"[FrameAlignmentIssue] [VACE_GUIDE_MASK] Task {task_id}: === Final Guide/Mask Structure ===")
+    dprint(f"[FrameAlignmentIssue] [VACE_GUIDE_MASK]   Total frames in guide: {total_frames}")
+    dprint(f"[FrameAlignmentIssue] [VACE_GUIDE_MASK]   Preserved (black mask): {num_inactive} frames")
+    dprint(f"[FrameAlignmentIssue] [VACE_GUIDE_MASK]   Generated (white mask): {num_active} frames")
+    # Check 4N+1 constraint
+    is_valid_4n1 = (total_frames - 1) % 4 == 0
+    dprint(f"[FrameAlignmentIssue] [VACE_GUIDE_MASK]   Valid 4N+1: {is_valid_4n1} ({total_frames} = 4*{(total_frames-1)//4}+1)")
+    if not is_valid_4n1:
+        nearest_valid = ((total_frames - 1) // 4) * 4 + 1
+        dprint(f"[FrameAlignmentIssue] [VACE_GUIDE_MASK]   ⚠️  WARNING: VACE may quantize to {nearest_valid} frames!")
 
     # Create mask video
     try:

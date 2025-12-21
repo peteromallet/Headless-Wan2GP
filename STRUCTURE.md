@@ -113,6 +113,7 @@ DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
 ```
 <repo-root>
 ├── add_task.py
+├── debug.py                 # Unified task/worker/system debug CLI
 ├── generate_test_tasks.py
 ├── worker.py
 ├── test_supabase_worker.py    # Test script for Supabase functionality
@@ -135,11 +136,11 @@ DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
 ├── supabase/
 │   └── functions/
 │       ├── _shared/                # Shared authentication utilities for edge functions
-│       ├── claim_next_task/        # Edge Function: claims next task (service-role → any, user → own only)
-│       ├── complete_task/          # Edge Function: uploads file & marks task complete
-│       ├── create_task/            # Edge Function: queues task from client
+│       ├── claim-next-task/        # Edge Function: claims next task (service-role → any, user → own only)
+│       ├── complete-task/          # Edge Function: uploads file & marks task complete
+│       ├── create-task/            # Edge Function: queues task from client
 │       ├── generate-upload-url/    # Edge Function: generates presigned URLs for file uploads
-│       ├── get_predecessor_output/ # Edge Function: gets task dependency and its output in single call
+│       ├── get-predecessor-output/ # Edge Function: gets task dependency and its output in single call
 │       ├── get-completed-segments/ # Edge Function: fetches completed travel_segment outputs for a run_id, bypassing RLS
 │       ├── task-counts/            # Edge Function: returns task counts and worker statistics
 │       └── update-task-status/     # Edge Function: updates task status (use claim_next_task for proper claiming)

@@ -39,6 +39,8 @@ from ..video_utils import (
     standardize_video_aspect_ratio,
     stitch_videos_with_crossfade as sm_stitch_videos_with_crossfade,
     create_video_from_frames_list as sm_create_video_from_frames_list,
+    get_video_frame_count_ffprobe,
+    get_video_fps_ffprobe,
 )
 from ..vace_frame_utils import (
     create_guide_and_mask_for_generation,
@@ -133,7 +135,8 @@ def _handle_join_clips_task(
     Returns:
         Tuple of (success: bool, output_path_or_message: str)
     """
-    dprint(f"[JOIN_CLIPS] Task {task_id}: Starting join_clips handler")
+    DEBUG_TAG = "[FrameAlignmentIssue]"
+    dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: Starting join_clips handler")
 
     try:
         # --- 1. Extract and Validate Parameters ---
@@ -148,9 +151,9 @@ def _handle_join_clips_task(
         # Extract keep_bridging_images param
         keep_bridging_images = task_params_from_db.get("keep_bridging_images", False)
 
-        dprint(f"[JOIN_CLIPS] Task {task_id}: Mode: {'REPLACE' if replace_mode else 'INSERT'}")
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: Mode: {'REPLACE' if replace_mode else 'INSERT'}")
         if replace_mode:
-            dprint(f"[JOIN_CLIPS] Task {task_id}: gap_frame_count={gap_frame_count} frames will REPLACE boundary frames (no insertion)")
+            dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: gap_frame_count={gap_frame_count} frames will REPLACE boundary frames (no insertion)")
 
         # Check if this is part of an orchestrator and starting_video_path needs to be fetched
         orchestrator_task_id_ref = task_params_from_db.get("orchestrator_task_id_ref")
@@ -203,7 +206,7 @@ def _handle_join_clips_task(
         join_clips_dir.mkdir(parents=True, exist_ok=True)
 
         # Download videos if they are URLs (e.g., Supabase storage URLs)
-        dprint(f"[JOIN_CLIPS] Task {task_id}: Checking if videos need to be downloaded...")
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: Checking if videos need to be downloaded...")
         starting_video_path = download_video_if_url(
             starting_video_path,
             download_target_dir=join_clips_dir,
@@ -231,27 +234,44 @@ def _handle_join_clips_task(
             dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
             return False, error_msg
 
-        dprint(f"[JOIN_CLIPS] Task {task_id}: Parameters validated")
-        dprint(f"[JOIN_CLIPS]   Starting video: {starting_video}")
-        dprint(f"[JOIN_CLIPS]   Ending video: {ending_video}")
-        dprint(f"[JOIN_CLIPS]   Context frames: {context_frame_count}")
-        dprint(f"[JOIN_CLIPS]   Gap frames: {gap_frame_count}")
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: Parameters validated")
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Starting video: {starting_video}")
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Ending video: {ending_video}")
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Context frames: {context_frame_count}")
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Gap frames: {gap_frame_count}")
         if aspect_ratio:
-            dprint(f"[JOIN_CLIPS]   Target aspect ratio: {aspect_ratio}")
+            dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Target aspect ratio: {aspect_ratio}")
+
+        # === FRAME/FPS DIAGNOSTICS (BEFORE ensure_video_fps) ===
+        try:
+            start_ff_frames_pre = get_video_frame_count_ffprobe(str(starting_video), dprint=dprint)
+            end_ff_frames_pre = get_video_frame_count_ffprobe(str(ending_video), dprint=dprint)
+            start_ff_fps_pre = get_video_fps_ffprobe(str(starting_video), dprint=dprint)
+            end_ff_fps_pre = get_video_fps_ffprobe(str(ending_video), dprint=dprint)
+            start_cv_frames_pre, start_cv_fps_pre = get_video_frame_count_and_fps(str(starting_video))
+            end_cv_frames_pre, end_cv_fps_pre = get_video_frame_count_and_fps(str(ending_video))
+            dprint(
+                f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: Pre-ensure_fps stats: "
+                f"start(ff_frames={start_ff_frames_pre}, ff_fps={start_ff_fps_pre}, cv_frames={start_cv_frames_pre}, cv_fps={start_cv_fps_pre}); "
+                f"end(ff_frames={end_ff_frames_pre}, ff_fps={end_ff_fps_pre}, cv_frames={end_cv_frames_pre}, cv_fps={end_cv_fps_pre})"
+            )
+        except Exception as e_diag:
+            dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: Pre-ensure_fps diagnostics error: {e_diag}")
 
         # --- 2a. Ensure Videos are at Target FPS ---
         # use_input_video_fps: If True, keep original FPS. If False, downsample to fps param (default 16)
         use_input_video_fps = task_params_from_db.get("use_input_video_fps", False)
         
         if use_input_video_fps:
-            dprint(f"[JOIN_CLIPS] Task {task_id}: use_input_video_fps=True, keeping original video FPS")
+            dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: use_input_video_fps=True, keeping original video FPS")
             # Don't convert - will use input video's FPS
         else:
             # Downsample to target FPS (default 16)
             # Note: Use 'or' to handle explicit None values (get() only returns default if key is missing)
             target_fps_param = task_params_from_db.get("fps") or 16
-            dprint(f"[JOIN_CLIPS] Task {task_id}: use_input_video_fps=False, ensuring videos are at {target_fps_param} FPS...")
+            dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: use_input_video_fps=False, ensuring videos are at {target_fps_param} FPS...")
             
+            starting_video_before = starting_video
             starting_video_fps = ensure_video_fps(
                 video_path=starting_video,
                 target_fps=target_fps_param,
@@ -263,7 +283,10 @@ def _handle_join_clips_task(
                 dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
                 return False, error_msg
             starting_video = starting_video_fps
+            if Path(starting_video_before) != Path(starting_video):
+                dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: ensure_video_fps RESAMPLED starting clip -> {starting_video.name}")
             
+            ending_video_before = ending_video
             ending_video_fps = ensure_video_fps(
                 video_path=ending_video,
                 target_fps=target_fps_param,
@@ -275,6 +298,24 @@ def _handle_join_clips_task(
                 dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
                 return False, error_msg
             ending_video = ending_video_fps
+            if Path(ending_video_before) != Path(ending_video):
+                dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: ensure_video_fps RESAMPLED ending clip -> {ending_video.name}")
+
+        # === FRAME/FPS DIAGNOSTICS (AFTER ensure_video_fps) ===
+        try:
+            start_ff_frames_post = get_video_frame_count_ffprobe(str(starting_video), dprint=dprint)
+            end_ff_frames_post = get_video_frame_count_ffprobe(str(ending_video), dprint=dprint)
+            start_ff_fps_post = get_video_fps_ffprobe(str(starting_video), dprint=dprint)
+            end_ff_fps_post = get_video_fps_ffprobe(str(ending_video), dprint=dprint)
+            start_cv_frames_post, start_cv_fps_post = get_video_frame_count_and_fps(str(starting_video))
+            end_cv_frames_post, end_cv_fps_post = get_video_frame_count_and_fps(str(ending_video))
+            dprint(
+                f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: Post-ensure_fps stats: "
+                f"start(ff_frames={start_ff_frames_post}, ff_fps={start_ff_fps_post}, cv_frames={start_cv_frames_post}, cv_fps={start_cv_fps_post}); "
+                f"end(ff_frames={end_ff_frames_post}, ff_fps={end_ff_fps_post}, cv_frames={end_cv_frames_post}, cv_fps={end_cv_fps_post})"
+            )
+        except Exception as e_diag2:
+            dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: Post-ensure_fps diagnostics error: {e_diag2}")
 
         # --- 2b. Standardize Videos to Target Aspect Ratio (if specified) ---
         if aspect_ratio:
@@ -445,6 +486,12 @@ def _handle_join_clips_task(
         dprint(f"[JOIN_CLIPS] Task {task_id}: Mode={'REPLACE' if replace_mode else 'INSERT'}, gap_for_guide={gap_for_guide}")
         if replace_mode:
             dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE initial split: {gap_from_clip1} from clip1, {gap_from_clip2} from clip2")
+        dprint(
+            f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: gap split summary: "
+            f"requested_gap={gap_frame_count}, gap_for_guide={gap_for_guide}, "
+            f"gap_from_clip1={gap_from_clip1}, gap_from_clip2={gap_from_clip2}, "
+            f"context_frame_count={context_frame_count}"
+        )
 
         # --- 5. Extract Context Frames ---
         dprint(f"[JOIN_CLIPS] Task {task_id}: Extracting context frames...")
@@ -521,6 +568,7 @@ def _handle_join_clips_task(
                 
                 dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - clip1 context from frames [{context_start_idx}:{context_end_idx}] ({context_from_clip1} frames)")
                 dprint(f"[JOIN_CLIPS] Task {task_id}:   (frames {context_end_idx} to {len(start_all_frames)-1} will be removed as gap)")
+                dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: REPLACE clip1: context_idx=[{context_start_idx}:{context_end_idx}), removed_tail=[{context_end_idx}:{len(start_all_frames)})")
                 
                 # Context from clip2: frames AFTER the gap (not the first frames)
                 # If removing first M frames, context is the N frames after that
@@ -528,6 +576,7 @@ def _handle_join_clips_task(
                 
                 dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - clip2 context from frames [{gap_from_clip2}:{gap_from_clip2 + context_from_clip2}] ({context_from_clip2} frames)")
                 dprint(f"[JOIN_CLIPS] Task {task_id}:   (frames 0 to {gap_from_clip2-1} will be removed as gap)")
+                dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: REPLACE clip2: removed_head=[0:{gap_from_clip2}), context_idx=[{gap_from_clip2}:{gap_from_clip2 + context_from_clip2})")
                 
                 # --- VID2VID SOURCE: Extract gap frames for vid2vid initialization ---
                 # If vid2vid_init_strength is set, create a source video from the gap frames
@@ -587,6 +636,11 @@ def _handle_join_clips_task(
                 
                 dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode - clip1 context from last {context_frame_count} frames")
                 dprint(f"[JOIN_CLIPS] Task {task_id}: INSERT mode - clip2 context from first {context_frame_count} frames")
+                dprint(
+                    f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: INSERT indices: "
+                    f"clip1 context_idx=[{len(start_all_frames)-context_frame_count}:{len(start_all_frames)}), "
+                    f"clip2 context_idx=[0:{context_frame_count})"
+                )
 
         except Exception as e:
             error_msg = f"Failed to extract context frames: {e}"
@@ -594,6 +648,22 @@ def _handle_join_clips_task(
             import traceback
             traceback.print_exc()
             return False, error_msg
+
+        # === [FrameAlignmentIssue] CONTEXT EXTRACTION SUMMARY ===
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: === Context Extraction Summary ===")
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Starting video: {len(start_all_frames)} total frames")
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Ending video: {len(end_all_frames)} total frames")
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Context extracted from start: {len(start_context_frames)} frames")
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Context extracted from end: {len(end_context_frames)} frames")
+        if replace_mode:
+            dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Mode: REPLACE (context from OUTSIDE gap region)")
+            dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Gap frames removed from clip1 tail: {gap_from_clip1}")
+            dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Gap frames removed from clip2 head: {gap_from_clip2}")
+        else:
+            dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Mode: INSERT (context at boundaries, no removal)")
+        # Log expected guide structure
+        expected_guide_frames = len(start_context_frames) + gap_for_guide + len(end_context_frames)
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Expected guide structure: {len(start_context_frames)} ctx + {gap_for_guide} gap + {len(end_context_frames)} ctx = {expected_guide_frames} total")
 
         # Get resolution from first frame or task params
         first_frame = start_context_frames[0]
@@ -683,17 +753,16 @@ def _handle_join_clips_task(
 
         total_frames = guide_frame_count
         
-        # === FRAME COUNT VERIFICATION ===
-        dprint(f"[FRAME_COUNTS] Task {task_id}: ========== GUIDE/MASK VERIFICATION ==========")
-        dprint(f"[FRAME_COUNTS] Task {task_id}: Expected total: {quantized_total_frames}")
-        dprint(f"[FRAME_COUNTS] Task {task_id}: Guide video frames: {guide_frame_count}")
+        # === [FrameAlignmentIssue] GUIDE/MASK VERIFICATION ===
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: === Guide/Mask Verification ===")
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Expected total frames: {quantized_total_frames}")
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Actual guide frames: {guide_frame_count}")
         is_valid_4n1 = (total_frames - 1) % 4 == 0
-        dprint(f"[FRAME_COUNTS] Task {task_id}: Valid 4N+1: {is_valid_4n1} {'✓' if is_valid_4n1 else '✗ WARNING'}")
+        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Valid 4N+1: {is_valid_4n1} ({total_frames} = 4*{(total_frames-1)//4}+1)")
         if guide_frame_count != quantized_total_frames:
-            dprint(f"[FRAME_COUNTS] Task {task_id}: ⚠️  MISMATCH: Guide ({guide_frame_count}) != Expected ({quantized_total_frames})")
+            dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   ⚠️  MISMATCH: Guide ({guide_frame_count}) != Expected ({quantized_total_frames})")
         else:
-            dprint(f"[FRAME_COUNTS] Task {task_id}: ✓ Frame counts match")
-        dprint(f"[FRAME_COUNTS] Task {task_id}: =============================================")
+            dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   ✓ Frame counts match")
 
         # --- 6. Prepare Generation Parameters (using shared helper) ---
         dprint(f"[JOIN_CLIPS] Task {task_id}: Preparing generation parameters...")
@@ -913,12 +982,28 @@ def _handle_join_clips_task(
 
                         # Use generalized stitch function with frame-level crossfade blending
                         # This matches the approach used in travel_between_images.py
+                        
+                        # === [FrameAlignmentIssue] FINAL STITCHING DIAGNOSTICS ===
+                        dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: === Final Stitching Plan ===")
+                        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Clip1 trimmed: frames 0-{frames_to_keep_clip1-1} ({frames_to_keep_clip1} frames)")
+                        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Transition: {actual_transition_frames} frames (context+gap+context)")
+                        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Clip2 trimmed: frames {frames_to_skip_clip2}-end ({frames_remaining_clip2} frames)")
+                        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Blend at each boundary: {blend_frames} frames")
+                        
+                        # Calculate expected final frame count
+                        # Stitch: clip1[:-blend] + crossfade(clip1[-blend:], trans[:blend]) + trans[blend:-blend] + crossfade(trans[-blend:], clip2[:blend]) + clip2[blend:]
+                        # = (frames_to_keep_clip1 - blend_frames) + blend_frames + (actual_transition_frames - 2*blend_frames) + blend_frames + (frames_remaining_clip2 - blend_frames)
+                        # = frames_to_keep_clip1 + actual_transition_frames + frames_remaining_clip2 - 2*blend_frames
+                        expected_final_frames = frames_to_keep_clip1 + actual_transition_frames + frames_remaining_clip2 - 2 * blend_frames
+                        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Expected final frame count: {expected_final_frames}")
+                        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]     = {frames_to_keep_clip1} + {actual_transition_frames} + {frames_remaining_clip2} - 2*{blend_frames}")
+                        
+                        # Compare to original
+                        original_total = start_frame_count + end_frame_count
+                        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Original clips total: {original_total} ({start_frame_count} + {end_frame_count})")
+                        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Net frame delta: {expected_final_frames - original_total:+d}")
+                        
                         dprint(f"[JOIN_CLIPS] Task {task_id}: Stitching videos with {blend_frames}-frame crossfade at each boundary")
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: === FRAME ALIGNMENT DEBUG ===")
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: Transition video has {total_frames} frames")
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: Transition last {blend_frames} frames: [{total_frames - blend_frames}:{total_frames}]")
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: Clip2 trimmed starts at original frame {frames_to_skip_clip2}")
-                        dprint(f"[JOIN_CLIPS] Task {task_id}: Clip2 trimmed first {blend_frames} frames = clip2[{frames_to_skip_clip2}:{frames_to_skip_clip2 + blend_frames}]")
 
                         video_paths = [
                             clip1_trimmed_path,
@@ -955,6 +1040,17 @@ def _handle_join_clips_task(
                         file_size = final_output_path.stat().st_size
                         if file_size == 0:
                             raise ValueError(f"Final concatenated video is empty (0 bytes)")
+                        
+                        # === [FrameAlignmentIssue] FINAL OUTPUT VERIFICATION ===
+                        final_actual_frames, final_actual_fps = get_video_frame_count_and_fps(str(final_output_path))
+                        dprint(f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: === Final Output Verification ===")
+                        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Expected frames: {expected_final_frames}")
+                        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   Actual frames: {final_actual_frames}")
+                        dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   FPS: {final_actual_fps}")
+                        if final_actual_frames and abs(final_actual_frames - expected_final_frames) > 3:
+                            dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   ⚠️  FRAME COUNT MISMATCH: diff={final_actual_frames - expected_final_frames}")
+                        elif final_actual_frames:
+                            dprint(f"{DEBUG_TAG} [JOIN_CLIPS]   ✓ Frame count within tolerance")
                         
                         dprint(f"[JOIN_CLIPS] Task {task_id}: Final video validated: {file_size} bytes")
 
