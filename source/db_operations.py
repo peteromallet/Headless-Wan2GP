@@ -266,13 +266,31 @@ def get_oldest_queued_task_supabase(worker_id: str = None):
         dprint(f"DEBUG: Using provided worker_id: {worker_id}")
     
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 1: Check for tasks already assigned to this worker (RECOVERY)
-    # This handles the case where a previous claim succeeded in the DB but
-    # the HTTP response was lost before we could process it.
+    # RECOVERY (but don't starve queued tasks)
+    #
+    # We *used* to immediately return an In Progress task assigned to this worker,
+    # assuming a claim succeeded but the HTTP response was lost.
+    #
+    # That behavior can create a tight loop for orchestrator tasks:
+    # - Orchestrator stays "In Progress" while waiting for child tasks
+    # - Recovery keeps returning the orchestrator every cycle
+    # - Worker never claims queued child tasks => orchestrator can never finish
+    #
+    # Fix: only prioritize recovery for non-orchestrator tasks.
+    # For orchestrators, we defer recovery until AFTER attempting to claim queued work.
     # ═══════════════════════════════════════════════════════════════════════════
     assigned_task = check_my_assigned_tasks(worker_id)
+    deferred_orchestrator_recovery = None
     if assigned_task:
-        return assigned_task
+        try:
+            ttype = (assigned_task.get("task_type") or "").lower()
+        except Exception:
+            ttype = ""
+        if ttype.endswith("_orchestrator"):
+            deferred_orchestrator_recovery = assigned_task
+            dprint(f"[RECOVERY] Deferring orchestrator recovery for {assigned_task.get('task_id')} to avoid starving queued tasks")
+        else:
+            return assigned_task
     
     # ═══════════════════════════════════════════════════════════════════════════
     # STEP 2: No assigned tasks - check for new tasks to claim
@@ -301,6 +319,10 @@ def get_oldest_queued_task_supabase(worker_id: str = None):
             dprint(f"[CLAIM_DEBUG] Proceeding with claim attempt despite queued_only=0 because eligible_queued={eligible_queued}")
         elif available_tasks <= 0:
             dprint("No queued tasks according to task-counts, skipping claim attempt")
+            # If we deferred an orchestrator recovery, fall back to it when there
+            # are no queued tasks to claim.
+            if deferred_orchestrator_recovery:
+                return deferred_orchestrator_recovery
             return None
         else:
             dprint(f"Found {available_tasks} queued tasks, proceeding with claim")
@@ -340,18 +362,28 @@ def get_oldest_queued_task_supabase(worker_id: str = None):
                 return task_data  # Already in the expected format
             elif resp.status_code == 204:
                 dprint("Edge Function: No queued tasks available")
+                # If no queued tasks are claimable right now, fall back to any
+                # deferred orchestrator recovery (lost-response protection).
+                if deferred_orchestrator_recovery:
+                    return deferred_orchestrator_recovery
                 return None
             else:
                 dprint(f"Edge Function returned {resp.status_code}: {resp.text}")
+                if deferred_orchestrator_recovery:
+                    return deferred_orchestrator_recovery
                 return None
         except Exception as e_edge:
             # Log visibly - this is a critical failure that can cause orphaned tasks
             print(f"[CLAIM] ❌ Edge Function call failed: {e_edge}")
             dprint(f"[CLAIM_DEBUG] Exception type: {type(e_edge).__name__}")
             dprint(f"[CLAIM_DEBUG] Full traceback: {traceback.format_exc()}")
+            if deferred_orchestrator_recovery:
+                return deferred_orchestrator_recovery
             return None
     else:
         print("[CLAIM] ❌ No edge function URL or access token available for task claiming")
+        if deferred_orchestrator_recovery:
+            return deferred_orchestrator_recovery
         return None
 
 def update_task_status_supabase(task_id_str, status_str, output_location_val=None, thumbnail_url_val=None):
