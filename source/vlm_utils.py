@@ -270,6 +270,7 @@ def generate_transition_prompts_batch(
         system_prompt = "You are a video direction assistant. You MUST respond with EXACTLY THREE SENTENCES following this structure: 1) PRIMARY MOTION, 2) MOVING ELEMENTS, 3) MOTION DETAILS. Focus exclusively on what moves and changes, not static descriptions."
 
         results = []
+        prev_end_hash = None  # Track previous pair's end hash for boundary verification
         for i, ((start_path, end_path), base_prompt) in enumerate(zip(image_pairs, base_prompts)):
             try:
                 dprint(f"[VLM_BATCH] Processing pair {i+1}/{len(image_pairs)}: {Path(start_path).name} → {Path(end_path).name}")
@@ -290,6 +291,8 @@ def generate_transition_prompts_batch(
                     except:
                         return 'ERROR'
                 
+                start_hash = None
+                end_hash = None
                 if start_exists:
                     start_size = Path(start_path).stat().st_size
                     start_hash = get_file_hash(start_path)
@@ -298,6 +301,17 @@ def generate_transition_prompts_batch(
                     end_size = Path(end_path).stat().st_size
                     end_hash = get_file_hash(end_path)
                     dprint(f"[VLM_FILE_DEBUG] Pair {i}: end file size={end_size} bytes, hash={end_hash}")
+                
+                # [VLM_BOUNDARY_CHECK] Verify consecutive segments share the correct boundary image
+                if i > 0 and prev_end_hash and start_hash:
+                    if prev_end_hash == start_hash:
+                        dprint(f"[VLM_BOUNDARY_CHECK] ✅ Pair {i} start matches Pair {i-1} end (hash={start_hash}) - boundary correct")
+                    else:
+                        dprint(f"[VLM_BOUNDARY_CHECK] ❌ MISMATCH! Pair {i} start (hash={start_hash}) != Pair {i-1} end (hash={prev_end_hash})")
+                        dprint(f"[VLM_BOUNDARY_CHECK] ⚠️ This indicates images may be out of order or corrupted!")
+                
+                # Store end hash for next iteration's boundary check
+                prev_end_hash = end_hash
 
                 # Load and combine images
                 start_img = Image.open(start_path).convert("RGB")
@@ -416,6 +430,9 @@ Examples of MOTION-FOCUSED descriptions:
 - "The camera zooms aggressively inward into a macro shot of an eye as the brown horse reflection grows larger and more detailed. The iris textures shift under the changing warm lighting while the biological details come into sharper focus. The pupil constricts and contracts in reaction to the light while the tiny reflected horse tosses its mane and shifts position."
 
 Now create your THREE-SENTENCE MOTION-FOCUSED description based on: '{base_prompt_text}'"""
+
+                # [VLM_QUERY_DEBUG] Log the key parts of the query being sent to VLM
+                dprint(f"[VLM_QUERY_DEBUG] Pair {i}: base_prompt_text='{base_prompt_text[:100]}...' duration_text='{duration_text}'")
 
                 # Run inference
                 result = extender.extend_with_img(
