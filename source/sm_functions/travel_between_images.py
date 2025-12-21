@@ -1225,12 +1225,15 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                             start_image_url = input_images_resolved[start_anchor_idx]
                             end_image_url = input_images_resolved[end_anchor_idx]
                             
-                            # [VLM_URL_DEBUG] Log the source URLs BEFORE download
+                            # [VLM_URL_DEBUG] Log the FULL source URLs (clickable in logs)
                             start_url_name = Path(start_image_url).name if start_image_url else 'NONE'
                             end_url_name = Path(end_image_url).name if end_image_url else 'NONE'
+                            dprint(f"[VLM_URL_DEBUG] ═══════════════════════════════════════════════════════")
                             dprint(f"[VLM_URL_DEBUG] Segment {idx}: Downloading images for VLM")
-                            dprint(f"[VLM_URL_DEBUG]   START (idx={start_anchor_idx}): {start_url_name}")
-                            dprint(f"[VLM_URL_DEBUG]   END   (idx={end_anchor_idx}): {end_url_name}")
+                            dprint(f"[VLM_URL_DEBUG]   START (array idx={start_anchor_idx}): {start_url_name}")
+                            dprint(f"[VLM_URL_DEBUG]   START FULL URL: {start_image_url}")
+                            dprint(f"[VLM_URL_DEBUG]   END   (array idx={end_anchor_idx}): {end_url_name}")
+                            dprint(f"[VLM_URL_DEBUG]   END   FULL URL: {end_image_url}")
 
                             # Download images if they're URLs
                             start_image_path = download_image_if_url(
