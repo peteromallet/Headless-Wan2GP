@@ -8,8 +8,126 @@ and generate descriptive prompts for video generation.
 import sys
 from pathlib import Path
 from typing import Optional, Union, List, Tuple
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import torch
+
+
+def create_labeled_debug_image(start_img: Image.Image, end_img: Image.Image, pair_index: int = 0) -> Image.Image:
+    """
+    Create a labeled debug image showing start and end images side by side with clear labels and frames.
+    
+    This is for human inspection - NOT what VLM sees (VLM sees raw side-by-side without labels).
+    
+    Args:
+        start_img: The starting image (left side)
+        end_img: The ending image (right side)
+        pair_index: The pair number for the title
+        
+    Returns:
+        Combined image with labels and frames
+    """
+    # Settings
+    border_width = 4
+    label_height = 40
+    gap_between = 20
+    title_height = 50
+    padding = 10
+    
+    # Colors
+    start_color = (46, 139, 87)   # Sea green for start
+    end_color = (178, 34, 34)     # Firebrick red for end
+    bg_color = (40, 40, 40)       # Dark gray background
+    text_color = (255, 255, 255)  # White text
+    
+    # Calculate dimensions
+    img_width = max(start_img.width, end_img.width)
+    img_height = max(start_img.height, end_img.height)
+    
+    # Total canvas size
+    total_width = (img_width + border_width * 2) * 2 + gap_between + padding * 2
+    total_height = title_height + label_height + img_height + border_width * 2 + padding * 2
+    
+    # Create canvas
+    canvas = Image.new('RGB', (total_width, total_height), bg_color)
+    draw = ImageDraw.Draw(canvas)
+    
+    # Try to load a font, fall back to default
+    try:
+        # Try common system fonts
+        font_paths = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "C:/Windows/Fonts/arial.ttf",
+        ]
+        font = None
+        for fp in font_paths:
+            if Path(fp).exists():
+                font = ImageFont.truetype(fp, 24)
+                title_font = ImageFont.truetype(fp, 28)
+                break
+        if font is None:
+            font = ImageFont.load_default()
+            title_font = font
+    except:
+        font = ImageFont.load_default()
+        title_font = font
+    
+    # Draw title
+    title = f"VLM Debug - Pair {pair_index} (LEFT=Start → RIGHT=End)"
+    try:
+        bbox = draw.textbbox((0, 0), title, font=title_font)
+        title_width = bbox[2] - bbox[0]
+    except:
+        title_width = len(title) * 10
+    title_x = (total_width - title_width) // 2
+    draw.text((title_x, 10), title, fill=text_color, font=title_font)
+    
+    # Calculate positions
+    left_x = padding
+    right_x = padding + img_width + border_width * 2 + gap_between
+    images_y = title_height + label_height
+    
+    # Draw "Starting Image" label and frame
+    draw.rectangle(
+        [left_x, images_y, left_x + img_width + border_width * 2, images_y + img_height + border_width * 2],
+        outline=start_color,
+        width=border_width
+    )
+    start_label = "← STARTING IMAGE"
+    try:
+        bbox = draw.textbbox((0, 0), start_label, font=font)
+        label_width = bbox[2] - bbox[0]
+    except:
+        label_width = len(start_label) * 8
+    label_x = left_x + (img_width + border_width * 2 - label_width) // 2
+    draw.text((label_x, title_height + 5), start_label, fill=start_color, font=font)
+    
+    # Draw "Ending Image" label and frame
+    draw.rectangle(
+        [right_x, images_y, right_x + img_width + border_width * 2, images_y + img_height + border_width * 2],
+        outline=end_color,
+        width=border_width
+    )
+    end_label = "ENDING IMAGE →"
+    try:
+        bbox = draw.textbbox((0, 0), end_label, font=font)
+        label_width = bbox[2] - bbox[0]
+    except:
+        label_width = len(end_label) * 8
+    label_x = right_x + (img_width + border_width * 2 - label_width) // 2
+    draw.text((label_x, title_height + 5), end_label, fill=end_color, font=font)
+    
+    # Paste images (centered within their frames if smaller)
+    start_paste_x = left_x + border_width + (img_width - start_img.width) // 2
+    start_paste_y = images_y + border_width + (img_height - start_img.height) // 2
+    canvas.paste(start_img, (start_paste_x, start_paste_y))
+    
+    end_paste_x = right_x + border_width + (img_width - end_img.width) // 2
+    end_paste_y = images_y + border_width + (img_height - end_img.height) // 2
+    canvas.paste(end_img, (end_paste_x, end_paste_y))
+    
+    return canvas
 
 
 def download_qwen_vlm_if_needed(model_dir: Path) -> Path:
@@ -340,17 +458,20 @@ def generate_transition_prompts_batch(
                 combined_img.paste(start_img, (0, 0))
                 combined_img.paste(end_img, (start_img.width, 0))
                 
-                # [VLM_DEBUG_SAVE] Save combined image for manual inspection
-                # This shows EXACTLY what VLM sees - left=start, right=end
+                # [VLM_DEBUG_SAVE] Save labeled debug image for manual inspection
+                # Note: VLM sees raw combined_img (no labels), but we save a labeled version for humans
                 debug_path = None
                 start_debug_path = None
                 end_debug_path = None
                 try:
                     debug_dir = Path(start_path).parent / "vlm_debug"
                     debug_dir.mkdir(exist_ok=True)
+                    
+                    # Create labeled version for human inspection (with frames and labels)
+                    labeled_debug_img = create_labeled_debug_image(start_img, end_img, pair_index=i)
                     debug_path = debug_dir / f"vlm_combined_pair{i}.jpg"
-                    combined_img.save(str(debug_path), quality=95)
-                    dprint(f"[VLM_DEBUG_SAVE] Saved combined image for pair {i} to: {debug_path}")
+                    labeled_debug_img.save(str(debug_path), quality=95)
+                    dprint(f"[VLM_DEBUG_SAVE] Saved labeled debug image for pair {i} to: {debug_path}")
                     
                     # Also save individual start/end images to debug folder for clarity
                     start_debug_path = debug_dir / f"vlm_pair{i}_LEFT_start.jpg"
