@@ -496,7 +496,8 @@ def _check_existing_join_tasks(
 
     # Check completion status
     def is_complete(task):
-        return task.get('status') == 'complete'
+        # DB stores statuses as "Complete" (capitalized). Compare case-insensitively.
+        return (task.get('status', '') or '').lower() == 'complete'
 
     def is_terminal_failure(task):
         status = task.get('status', '').lower()
