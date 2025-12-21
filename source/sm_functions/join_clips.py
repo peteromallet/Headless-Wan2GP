@@ -47,7 +47,13 @@ from ..vace_frame_utils import (
 from .. import db_operations as db_ops
 
 
-def _calculate_vace_quantization(context_frame_count: int, gap_frame_count: int, replace_mode: bool) -> dict:
+def _calculate_vace_quantization(
+    context_frame_count: int,
+    gap_frame_count: int,
+    replace_mode: bool,
+    context_before: int = None,
+    context_after: int = None
+) -> dict:
     """
     Calculate VACE quantization adjustments for frame counts.
 
@@ -56,10 +62,12 @@ def _calculate_vace_quantization(context_frame_count: int, gap_frame_count: int,
     quantize down to the nearest valid count.
 
     Args:
-        context_frame_count: Number of frames from each clip's boundary
+        context_frame_count: Number of frames from each clip's boundary (symmetric default)
         gap_frame_count: Number of frames to generate in the gap
         replace_mode: Whether we're replacing a portion (True) or inserting (False)
                      Both modes now work similarly for VACE - context + gap + context
+        context_before: Override for context frames before gap (for asymmetric cases)
+        context_after: Override for context frames after gap (for asymmetric cases)
 
     Returns:
         dict with:
@@ -67,9 +75,12 @@ def _calculate_vace_quantization(context_frame_count: int, gap_frame_count: int,
             - gap_for_guide: Adjusted gap to use in guide/mask creation
             - quantization_shift: Number of frames dropped by VACE (0 if no quantization)
     """
-    # Both modes now use the same calculation: context + gap + context
-    # The difference is in how the final video is stitched (replace removes original frames)
-    desired_total = context_frame_count * 2 + gap_frame_count
+    # Support asymmetric context counts
+    ctx_before = context_before if context_before is not None else context_frame_count
+    ctx_after = context_after if context_after is not None else context_frame_count
+    
+    # Calculate desired total: context_before + gap + context_after
+    desired_total = ctx_before + gap_frame_count + ctx_after
 
     # Apply VACE quantization (4n + 1)
     actual_total = ((desired_total - 1) // 4) * 4 + 1
@@ -82,6 +93,8 @@ def _calculate_vace_quantization(context_frame_count: int, gap_frame_count: int,
         'total_frames': actual_total,
         'gap_for_guide': gap_for_guide,
         'quantization_shift': quantization_shift,
+        'context_before': ctx_before,
+        'context_after': ctx_after,
     }
 
 
@@ -431,7 +444,7 @@ def _handle_join_clips_task(
         
         dprint(f"[JOIN_CLIPS] Task {task_id}: Mode={'REPLACE' if replace_mode else 'INSERT'}, gap_for_guide={gap_for_guide}")
         if replace_mode:
-            dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE will remove {gap_from_clip1} from clip1, {gap_from_clip2} from clip2")
+            dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE initial split: {gap_from_clip1} from clip1, {gap_from_clip2} from clip2")
 
         # --- 5. Extract Context Frames ---
         dprint(f"[JOIN_CLIPS] Task {task_id}: Extracting context frames...")
@@ -460,34 +473,60 @@ def _handle_join_clips_task(
                 # clip1: [...][context 8][gap N removed]
                 # clip2: [gap M removed][context 8][...]
                 #
-                # Validate we have enough frames
-                min_clip1_frames = context_frame_count + gap_from_clip1
-                min_clip2_frames = context_frame_count + gap_from_clip2
+                # Calculate available context for each clip (keeping gap position fixed)
+                clip1_available = len(start_all_frames)
+                clip2_available = len(end_all_frames)
+                clip1_max_context = clip1_available - gap_from_clip1  # Max context after reserving gap
+                clip2_max_context = clip2_available - gap_from_clip2  # Max context after reserving gap
                 
-                if len(start_all_frames) < min_clip1_frames:
-                    error_msg = f"Starting video too short for REPLACE mode: need {min_clip1_frames} frames, have {len(start_all_frames)}"
+                # Validate clips have enough frames for the gap (minimum requirement)
+                if clip1_max_context < 1:
+                    error_msg = f"Starting video too short for REPLACE mode: need at least {gap_from_clip1 + 1} frames, have {clip1_available}"
                     dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
                     return False, error_msg
                 
-                if len(end_all_frames) < min_clip2_frames:
-                    error_msg = f"Ending video too short for REPLACE mode: need {min_clip2_frames} frames, have {len(end_all_frames)}"
+                if clip2_max_context < 1:
+                    error_msg = f"Ending video too short for REPLACE mode: need at least {gap_from_clip2 + 1} frames, have {clip2_available}"
                     dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
                     return False, error_msg
+                
+                # Adjust context frame counts per-side if clips are too short
+                # Keep gap position fixed, reduce context on the side that's too short
+                context_from_clip1 = min(context_frame_count, clip1_max_context)
+                context_from_clip2 = min(context_frame_count, clip2_max_context)
+                
+                needs_asymmetric_context = context_from_clip1 < context_frame_count or context_from_clip2 < context_frame_count
+                if needs_asymmetric_context:
+                    dprint(f"[JOIN_CLIPS] Task {task_id}: Adjusting context frames to fit clip lengths")
+                    dprint(f"[JOIN_CLIPS] Task {task_id}:   clip1: {clip1_available} frames, max context: {clip1_max_context} -> using {context_from_clip1}")
+                    dprint(f"[JOIN_CLIPS] Task {task_id}:   clip2: {clip2_available} frames, max context: {clip2_max_context} -> using {context_from_clip2}")
+                    
+                    # Recalculate quantization with actual asymmetric context counts
+                    quantization_result = _calculate_vace_quantization(
+                        context_frame_count=context_frame_count,
+                        gap_frame_count=gap_frame_count,
+                        replace_mode=replace_mode,
+                        context_before=context_from_clip1,
+                        context_after=context_from_clip2
+                    )
+                    gap_for_guide = quantization_result['gap_for_guide']
+                    quantization_shift = quantization_result['quantization_shift']
+                    dprint(f"[JOIN_CLIPS] Task {task_id}: Recalculated quantization with asymmetric context: gap_for_guide={gap_for_guide}")
                 
                 # Context from clip1: frames BEFORE the gap (not the last frames)
-                # If removing last N frames, context is the 8 frames before that
-                context_start_idx = len(start_all_frames) - gap_from_clip1 - context_frame_count
+                # If removing last N frames, context is the N frames before that
+                context_start_idx = len(start_all_frames) - gap_from_clip1 - context_from_clip1
                 context_end_idx = len(start_all_frames) - gap_from_clip1
                 start_context_frames = start_all_frames[context_start_idx:context_end_idx]
                 
-                dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - clip1 context from frames [{context_start_idx}:{context_end_idx}]")
+                dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - clip1 context from frames [{context_start_idx}:{context_end_idx}] ({context_from_clip1} frames)")
                 dprint(f"[JOIN_CLIPS] Task {task_id}:   (frames {context_end_idx} to {len(start_all_frames)-1} will be removed as gap)")
                 
                 # Context from clip2: frames AFTER the gap (not the first frames)
-                # If removing first M frames, context is the 8 frames after that
-                end_context_frames = end_all_frames[gap_from_clip2:gap_from_clip2 + context_frame_count]
+                # If removing first M frames, context is the N frames after that
+                end_context_frames = end_all_frames[gap_from_clip2:gap_from_clip2 + context_from_clip2]
                 
-                dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - clip2 context from frames [{gap_from_clip2}:{gap_from_clip2 + context_frame_count}]")
+                dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE mode - clip2 context from frames [{gap_from_clip2}:{gap_from_clip2 + context_from_clip2}] ({context_from_clip2} frames)")
                 dprint(f"[JOIN_CLIPS] Task {task_id}:   (frames 0 to {gap_from_clip2-1} will be removed as gap)")
                 
                 # --- VID2VID SOURCE: Extract gap frames for vid2vid initialization ---
@@ -580,10 +619,15 @@ def _handle_join_clips_task(
         quantized_total_frames = quantization_result['total_frames']
         
         # === QUANTIZATION DIAGNOSTIC SUMMARY ===
+        actual_ctx_before = len(start_context_frames)
+        actual_ctx_after = len(end_context_frames)
         dprint(f"[FRAME_COUNTS] Task {task_id}: ========== QUANTIZATION SUMMARY ==========")
-        dprint(f"[FRAME_COUNTS] Task {task_id}: Context frames: {context_frame_count} (each side)")
+        if actual_ctx_before != actual_ctx_after or actual_ctx_before != context_frame_count:
+            dprint(f"[FRAME_COUNTS] Task {task_id}: Context frames: {actual_ctx_before} before, {actual_ctx_after} after (requested: {context_frame_count})")
+        else:
+            dprint(f"[FRAME_COUNTS] Task {task_id}: Context frames: {context_frame_count} (each side)")
         dprint(f"[FRAME_COUNTS] Task {task_id}: Requested gap: {gap_frame_count}")
-        dprint(f"[FRAME_COUNTS] Task {task_id}: Desired total: {context_frame_count * 2 + gap_frame_count}")
+        dprint(f"[FRAME_COUNTS] Task {task_id}: Actual total: {actual_ctx_before + gap_for_guide + actual_ctx_after}")
         dprint(f"[FRAME_COUNTS] Task {task_id}: Quantized total: {quantized_total_frames} (4N+1 enforced)")
         if quantization_shift > 0:
             dprint(f"[FRAME_COUNTS] Task {task_id}: Gap adjusted: {gap_frame_count} → {gap_for_guide} (shift: -{quantization_shift})")
