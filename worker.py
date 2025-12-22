@@ -195,7 +195,7 @@ def parse_args():
     parser.add_argument("--mask-active-frames", dest="mask_active_frames", action="store_true", default=True)
     parser.add_argument("--no-mask-active-frames", dest="mask_active_frames", action="store_false")
     parser.add_argument("--queue-workers", type=int, default=1)
-    parser.add_argument("--preload-model", type=str, default="wan_2_2_vace_lightning_baseline_2_2_2")
+    parser.add_argument("--preload-model", type=str, default="wan_2_2_i2v_lightning_baseline_2_2_2")
     parser.add_argument("--db-type", type=str, default="supabase")
     parser.add_argument("--supabase-url", type=str, required=True)
     parser.add_argument("--supabase-access-token", type=str, required=True)
