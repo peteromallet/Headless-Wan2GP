@@ -649,9 +649,8 @@ class HeadlessTaskQueue:
         start_time = time.time()
         
         try:
-            # 1. Handle model switching (leverage wgp.py's model management)
-            if task.model != self.current_model:
-                self._switch_model(task.model, worker_name)
+            # 1. Ensure correct model is loaded (orchestrator checks WGP's ground truth)
+            self._switch_model(task.model, worker_name)
             
             # 2. Delegate actual generation to orchestrator
             # The orchestrator handles the heavy lifting while we manage the queue
@@ -738,36 +737,39 @@ class HeadlessTaskQueue:
             except Exception:
                 pass
     
-    def _switch_model(self, model_key: str, worker_name: str):
+    def _switch_model(self, model_key: str, worker_name: str) -> bool:
         """
-        Switch to a different model using wgp.py's model management.
+        Ensure the correct model is loaded using wgp.py's model management.
         
         This leverages the orchestrator's model loading while tracking
-        the change in our queue system.
+        the change in our queue system. The orchestrator checks WGP's ground truth
+        (wgp.transformer_type) to determine if a switch is actually needed.
+        
+        Returns:
+            bool: True if a model switch actually occurred, False if already loaded
         """
         # Ensure orchestrator is initialized before switching models
         self._ensure_orchestrator()
         
-        if model_key == self.current_model:
-            return
-        
-        self.logger.info(f"{worker_name} switching model: {self.current_model} → {model_key}")
+        self.logger.debug(f"{worker_name} ensuring model {model_key} is loaded (current: {self.current_model})")
         switch_start = time.time()
         
-        # Cleanup legacy collision-prone LoRAs before loading new model to prevent wrong version usage
         try:
-            cleanup_legacy_lora_collisions()
-        except Exception as e:
-            self.logger.warning(f"LoRA cleanup failed during model switch: {e}")
-        
-        try:
-            # Use orchestrator's model loading (which uses wgp.py's persistence)
-            self.orchestrator.load_model(model_key)
-            self.current_model = model_key
-            self.stats["model_switches"] += 1
+            # Use orchestrator's model loading - it checks WGP's ground truth
+            # and returns whether a switch actually occurred
+            switched = self.orchestrator.load_model(model_key)
             
-            switch_time = time.time() - switch_start
-            self.logger.info(f"Model switch completed in {switch_time:.1f}s")
+            if switched:
+                # Only do switch-specific actions if a switch actually occurred
+                self.logger.info(f"{worker_name} switched model: {self.current_model} → {model_key}")
+                
+                self.stats["model_switches"] += 1
+                switch_time = time.time() - switch_start
+                self.logger.info(f"Model switch completed in {switch_time:.1f}s")
+            
+            # Always sync our tracking with orchestrator's state
+            self.current_model = model_key
+            return switched
             
         except Exception as e:
             self.logger.error(f"Model switch failed: {e}")

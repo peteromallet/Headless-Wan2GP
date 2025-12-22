@@ -16,6 +16,52 @@ from source.logging_utils import (
     safe_repr, safe_dict_repr, safe_log_params, safe_log_change
 )
 
+
+def _notify_worker_model_switch(old_model: Optional[str], new_model: str):
+    """
+    Notify Supabase edge function that a model switch is about to happen.
+    
+    Called BEFORE the actual model load so the worker status can be updated
+    to show it's switching models (which can take 30-60+ seconds).
+    
+    Only fires if WORKER_ID is set (i.e., running in cloud worker context).
+    """
+    worker_id = os.getenv("WORKER_ID")
+    if not worker_id:
+        return
+    
+    # Prefer service role; fall back to older env var name if present.
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SERVICE_KEY")
+    if not supabase_key:
+        model_logger.debug("No SUPABASE_SERVICE_ROLE_KEY, skipping model switch notification")
+        return
+    
+    try:
+        import httpx
+        
+        response = httpx.post(
+            "https://wczysqzxlwdndgxitrvc.supabase.co/functions/v1/update-worker-model",
+            headers={
+                "Authorization": f"Bearer {supabase_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "worker_id": worker_id,
+                # Keep payload minimal to avoid schema mismatches server-side.
+                "model": new_model,
+            },
+            timeout=5.0  # Don't block model loading on this
+        )
+        
+        if response.status_code == 200:
+            model_logger.debug(f"Notified edge function of model switch: {old_model} → {new_model}")
+        else:
+            model_logger.warning(f"Edge function returned {response.status_code}: {response.text[:200]}")
+            
+    except Exception as e:
+        # Don't let notification failures block model loading
+        model_logger.warning(f"Failed to notify model switch: {e}")
+
 # Import debug mode flag
 try:
     from worker import debug_mode
@@ -495,21 +541,25 @@ class WanOrchestrator:
             wgp.models_def[model_key] = model_def # replace with full def
             model_def["settings"] = settings
         
-    def load_model(self, model_key: str):
+    def load_model(self, model_key: str) -> bool:
         """Load and validate a model type using WGP's exact generation-time pattern.
         
         Args:
             model_key: Model identifier (e.g., "t2v", "vace_14B", "flux")
+            
+        Returns:
+            bool: True if a model switch actually occurred, False if already loaded
             
         This replicates the exact model loading logic from WGP's generate_video function
         (lines 4249-4258) rather than the UI preloading function.
         """
         if self.smoke_mode:
             # In smoke mode, skip heavy WGP model loading
+            switched = model_key != self.current_model
             self.current_model = model_key
             self.state["model_type"] = model_key
             model_logger.info(f"[SMOKE] Pretending to load model: {model_key}")
-            return
+            return switched
 
         if self._get_base_model_type(model_key) is None:
             raise ValueError(f"Unknown model: {model_key}")
@@ -548,10 +598,24 @@ class WanOrchestrator:
         model_logger.debug(f"Model Info: {model_key} | Architecture: {architecture} | Modules: {modules}")
         
         # Use WGP's EXACT model loading pattern from generate_video (lines 4249-4258)
+        # This is the SINGLE SOURCE OF TRUTH for whether a switch is needed
         current_model_info = f"(current: {wgp.transformer_type})" if wgp.transformer_type else "(no model loaded)"
+        switched = False
         
         if model_key != wgp.transformer_type or wgp.reload_needed:
             model_logger.info(f"🔄 MODEL SWITCH: Using WGP's generate_video pattern - switching from {current_model_info} to {model_key}")
+
+            # Notify edge function BEFORE switch starts (worker will be busy loading)
+            _notify_worker_model_switch(old_model=wgp.transformer_type, new_model=model_key)
+
+            # Cleanup legacy collision-prone LoRAs BEFORE loading the new model.
+            # This matches the original intent upstream of wgp.load_models() and avoids
+            # accidental reuse of wrong/old LoRA artifacts across switches.
+            try:
+                from source.lora_utils import cleanup_legacy_lora_collisions
+                cleanup_legacy_lora_collisions()
+            except Exception as e:
+                model_logger.warning(f"LoRA cleanup failed during model switch: {e}")
             
             # Replicate WGP's exact unloading pattern (lines 4250-4254)
             wgp.wan_model = None
@@ -572,6 +636,7 @@ class WanOrchestrator:
             wgp.wan_model, wgp.offloadobj = wgp.load_models(model_key)
             model_logger.debug("Model loaded")
             wgp.reload_needed = False
+            switched = True
             
             # Note: transformer_type is set automatically by load_models() at line 2929
             
@@ -585,7 +650,10 @@ class WanOrchestrator:
         self.offloadobj = wgp.offloadobj  # Keep reference to WGP's offload object
         
         family = self._get_model_family(model_key, for_ui=True)
-        model_logger.success(f"✅ MODEL Loaded model: {model_key} ({family}) using WGP's exact generate_video pattern")
+        if switched:
+            model_logger.success(f"✅ MODEL Loaded model: {model_key} ({family}) using WGP's exact generate_video pattern")
+        
+        return switched
     
     def unload_model(self):
         """Unload the current model using WGP's native unload function."""
