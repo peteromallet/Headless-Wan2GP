@@ -91,6 +91,12 @@ def error(component: str, message: str, task_id: Optional[str] = None):
     print(formatted, file=sys.stderr)
     _write_to_log_file(formatted)
 
+def critical(component: str, message: str, task_id: Optional[str] = None):
+    """Log a critical/fatal error message that should always be shown."""
+    formatted = _format_message("🔴 CRITICAL", component, message, task_id)
+    print(formatted, file=sys.stderr)
+    _write_to_log_file(formatted)
+
 def debug(component: str, message: str, task_id: Optional[str] = None):
     """Log a debug message that only appears when debug mode is enabled."""
     if _debug_mode:
@@ -128,6 +134,9 @@ class ComponentLogger:
     
     def error(self, message: str, task_id: Optional[str] = None):
         error(self.component, message, task_id)
+    
+    def critical(self, message: str, task_id: Optional[str] = None):
+        critical(self.component, message, task_id)
     
     def debug(self, message: str, task_id: Optional[str] = None):
         debug(self.component, message, task_id)

@@ -585,7 +585,7 @@ def extract_specific_frame_ffmpeg(
         'ffmpeg',
         '-y',  # Overwrite output without asking
         '-i', str(input_video_p.resolve()),
-        '-vf', f"select=eq(n\,{frame_number})", # Escaped comma for ffmpeg filter syntax
+        '-vf', f"select=eq(n\\,{frame_number})", # Escaped comma for ffmpeg filter syntax
         '-vframes', '1',
         str(output_image_p.resolve())
     ]
