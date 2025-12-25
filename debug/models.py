@@ -12,6 +12,7 @@ class TaskInfo:
     state: Optional[Dict[str, Any]]
     logs: List[Dict[str, Any]]
     child_task_info: Optional['TaskInfo'] = None  # For cascaded failures
+    child_tasks: Optional[List[Dict[str, Any]]] = None  # All child tasks for orchestrators
     
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -21,6 +22,8 @@ class TaskInfo:
         }
         if self.child_task_info:
             result['child_task_info'] = self.child_task_info.to_dict()
+        if self.child_tasks:
+            result['child_tasks'] = self.child_tasks
         return result
 
 

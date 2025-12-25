@@ -2227,6 +2227,8 @@ def upload_intermediate_file_to_storage(
     This is used when orchestrators create intermediate files (like reversed videos)
     that need to be accessible by child tasks running on different workers.
     
+    Includes retry logic for transient failures (502/503/504, timeouts, network errors).
+    
     Args:
         local_file_path: Path to the local file to upload
         task_id: Task ID for organizing uploads
@@ -2238,6 +2240,10 @@ def upload_intermediate_file_to_storage(
     """
     import httpx
     import mimetypes
+    
+    # Retry configuration
+    RETRYABLE_STATUS_CODES = {502, 503, 504}
+    MAX_RETRIES = 3
     
     # Check if Supabase is configured
     SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -2258,23 +2264,48 @@ def upload_intermediate_file_to_storage(
             "Content-Type": "application/json"
         }
         
-        # Step 1: Get signed upload URL
+        # Step 1: Get signed upload URL - WITH RETRY
         generate_url_edge = f"{SUPABASE_URL.rstrip('/')}/functions/v1/generate-upload-url"
         content_type = mimetypes.guess_type(str(local_file_path))[0] or 'application/octet-stream'
         
-        upload_url_resp = httpx.post(
-            generate_url_edge,
-            headers=headers,
-            json={
-                "task_id": task_id,
-                "filename": filename,
-                "content_type": content_type
-            },
-            timeout=30
-        )
+        upload_url_resp = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                upload_url_resp = httpx.post(
+                    generate_url_edge,
+                    headers=headers,
+                    json={
+                        "task_id": task_id,
+                        "filename": filename,
+                        "content_type": content_type
+                    },
+                    timeout=30 + (attempt * 15)
+                )
+                
+                if upload_url_resp.status_code == 200:
+                    break
+                elif upload_url_resp.status_code in RETRYABLE_STATUS_CODES and attempt < MAX_RETRIES - 1:
+                    wait_time = 2 ** attempt
+                    dprint(f"[UPLOAD_INTERMEDIATE] generate-upload-url got {upload_url_resp.status_code}, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    break  # Non-retryable error
+                    
+            except (httpx.TimeoutException, httpx.RequestError) as e:
+                if attempt < MAX_RETRIES - 1:
+                    wait_time = 2 ** attempt
+                    dprint(f"[UPLOAD_INTERMEDIATE] generate-upload-url error, retrying in {wait_time}s: {e}")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    dprint(f"[UPLOAD_INTERMEDIATE] [EDGE_FAIL:generate-upload-url:NETWORK] {e}")
+                    return None
         
-        if upload_url_resp.status_code != 200:
-            dprint(f"[UPLOAD_INTERMEDIATE] Failed to get upload URL: {upload_url_resp.status_code} - {upload_url_resp.text[:200]}")
+        if not upload_url_resp or upload_url_resp.status_code != 200:
+            error_text = upload_url_resp.text[:200] if upload_url_resp else "No response"
+            error_code = upload_url_resp.status_code if upload_url_resp else "N/A"
+            dprint(f"[UPLOAD_INTERMEDIATE] [EDGE_FAIL:generate-upload-url:HTTP_{error_code}] {error_text}")
             return None
         
         upload_data = upload_url_resp.json()
@@ -2285,19 +2316,46 @@ def upload_intermediate_file_to_storage(
             dprint(f"[UPLOAD_INTERMEDIATE] No upload_url in response")
             return None
         
-        # Step 2: Upload file via signed URL
-        dprint(f"[UPLOAD_INTERMEDIATE] Uploading {local_file_path.name} ({local_file_path.stat().st_size / 1024 / 1024:.1f} MB)")
+        # Step 2: Upload file via signed URL - WITH RETRY
+        # IMPORTANT: do NOT read entire file into memory (can be large).
+        file_size_mb = local_file_path.stat().st_size / 1024 / 1024
+        dprint(f"[UPLOAD_INTERMEDIATE] Uploading {local_file_path.name} ({file_size_mb:.1f} MB)")
         
-        with open(local_file_path, 'rb') as f:
-            put_resp = httpx.put(
-                upload_url,
-                headers={"Content-Type": content_type},
-                content=f,
-                timeout=300  # 5 min timeout for large files
-            )
+        put_resp = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                with open(local_file_path, 'rb') as f:
+                    put_resp = httpx.put(
+                        upload_url,
+                        headers={"Content-Type": content_type},
+                        content=f,
+                        timeout=300 + (attempt * 60)  # 5 min base, +1 min per retry
+                    )
+                
+                if put_resp.status_code in [200, 201]:
+                    break
+                elif put_resp.status_code in RETRYABLE_STATUS_CODES and attempt < MAX_RETRIES - 1:
+                    wait_time = 2 ** attempt
+                    dprint(f"[UPLOAD_INTERMEDIATE] storage-upload got {put_resp.status_code}, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    break  # Non-retryable error
+                    
+            except (httpx.TimeoutException, httpx.RequestError) as e:
+                if attempt < MAX_RETRIES - 1:
+                    wait_time = 2 ** attempt
+                    dprint(f"[UPLOAD_INTERMEDIATE] storage-upload error, retrying in {wait_time}s: {e}")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    dprint(f"[UPLOAD_INTERMEDIATE] [EDGE_FAIL:storage-upload:NETWORK] {e}")
+                    return None
         
-        if put_resp.status_code not in [200, 201]:
-            dprint(f"[UPLOAD_INTERMEDIATE] Upload failed: {put_resp.status_code} - {put_resp.text[:200]}")
+        if not put_resp or put_resp.status_code not in [200, 201]:
+            error_text = put_resp.text[:200] if put_resp else "No response"
+            error_code = put_resp.status_code if put_resp else "N/A"
+            dprint(f"[UPLOAD_INTERMEDIATE] [EDGE_FAIL:storage-upload:HTTP_{error_code}] {error_text}")
             return None
         
         # Construct public URL

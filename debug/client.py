@@ -109,6 +109,8 @@ class DebugClient:
         
         If follow_cascade is True and this is an orchestrator that failed due to
         a child task, also fetch the child task info.
+        
+        For orchestrator tasks, also fetches all child tasks (segments, stitch, etc.)
         """
         # Get logs for this task
         logs = self.log_client.get_task_timeline(task_id)
@@ -119,6 +121,8 @@ class DebugClient:
         
         # Check for cascaded failure and fetch child task
         child_task_info = None
+        child_tasks = None
+        
         if follow_cascade and state:
             error_msg = state.get('error_message', '') or ''
             output_loc = state.get('output_location', '') or ''
@@ -134,13 +138,97 @@ class DebugClient:
                     if child_task_id != task_id:  # Avoid infinite recursion
                         child_task_info = self.get_task_info(child_task_id, follow_cascade=False)
                     break
+            
+            # If this is an orchestrator, fetch all child tasks
+            task_type = state.get('task_type', '')
+            if 'orchestrator' in task_type.lower():
+                child_tasks = self._get_orchestrator_child_tasks(task_id, state)
         
         return TaskInfo(
             task_id=task_id,
             state=state,
             logs=logs,
-            child_task_info=child_task_info
+            child_task_info=child_task_info,
+            child_tasks=child_tasks
         )
+    
+    def _get_orchestrator_child_tasks(self, orchestrator_id: str, orchestrator_state: dict) -> List[Dict[str, Any]]:
+        """Get all child tasks for an orchestrator task.
+        
+        Looks for tasks that reference this orchestrator via:
+        - params.orchestrator_task_id_ref
+        - params.orchestrator_details.orchestrator_task_id
+        - dependant_on field
+        """
+        child_tasks = []
+        
+        # Method 1: Query by dependant_on
+        try:
+            result = self.supabase.table('tasks').select(
+                'id, task_type, status, error_message, output_location, created_at, '
+                'generation_started_at, generation_processed_at, worker_id, attempts, params'
+            ).eq('dependant_on', orchestrator_id).order('created_at').execute()
+            if result.data:
+                child_tasks.extend(result.data)
+        except:
+            pass
+        
+        # Method 2: Look for orchestrator_task_id in params (for travel segments)
+        # This requires a more complex query - check params JSON
+        try:
+            # Get project_id from orchestrator params
+            orch_params = orchestrator_state.get('params', {})
+            if isinstance(orch_params, str):
+                import json
+                orch_params = json.loads(orch_params)
+            
+            project_id = orchestrator_state.get('project_id') or orch_params.get('project_id')
+            
+            if project_id:
+                # Get recent tasks from same project that might be children
+                result = self.supabase.table('tasks').select(
+                    'id, task_type, status, error_message, output_location, created_at, '
+                    'generation_started_at, generation_processed_at, worker_id, attempts, params'
+                ).eq('project_id', project_id).in_(
+                    'task_type', ['travel_segment', 'travel_stitch', 'join_clips']
+                ).order('created_at').execute()
+                
+                if result.data:
+                    for task in result.data:
+                        # Check if this task references our orchestrator
+                        task_params = task.get('params', {})
+                        if isinstance(task_params, str):
+                            import json
+                            try:
+                                task_params = json.loads(task_params)
+                            except:
+                                continue
+                        
+                        # Check orchestrator_task_id_ref or orchestrator_details.orchestrator_task_id
+                        ref_id = task_params.get('orchestrator_task_id_ref')
+                        if not ref_id:
+                            orch_details = task_params.get('orchestrator_details', {})
+                            ref_id = orch_details.get('orchestrator_task_id')
+                        
+                        if ref_id == orchestrator_id and task['id'] not in [t['id'] for t in child_tasks]:
+                            child_tasks.append(task)
+        except Exception as e:
+            pass
+        
+        # Sort by segment_index if available, otherwise by created_at
+        def sort_key(task):
+            params = task.get('params', {})
+            if isinstance(params, str):
+                import json
+                try:
+                    params = json.loads(params)
+                except:
+                    params = {}
+            segment_idx = params.get('segment_index', 999)
+            return (segment_idx, task.get('created_at', ''))
+        
+        child_tasks.sort(key=sort_key)
+        return child_tasks
     
     # ==================== WORKER METHODS ====================
     
