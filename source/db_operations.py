@@ -571,14 +571,13 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
 
     # --- Use edge functions for ALL status updates ---
     if status_str == STATUS_COMPLETE and output_location_val is not None:
-        # Use complete-task edge function for completion with file
-        # NOTE: Supabase Edge Function is named `complete-task` (hyphen).
-        # A prior refactor briefly used `complete_task` (underscore) in URLs.
-        # Prefer the correct hyphen form; if that 404s at runtime, we fall back.
+        # Use completion edge function for completion with file
+        # NOTE: In this project, the deployed edge function is `complete_task` (underscore).
+        # We keep `complete-task` (hyphen) as a fallback for any older deployments.
         edge_url = (
             SUPABASE_EDGE_COMPLETE_TASK_URL
             or (os.getenv("SUPABASE_EDGE_COMPLETE_TASK_URL") or None)
-            or (f"{SUPABASE_URL.rstrip('/')}/functions/v1/complete-task" if SUPABASE_URL else None)
+            or (f"{SUPABASE_URL.rstrip('/')}/functions/v1/complete_task" if SUPABASE_URL else None)
         )
         
         if not edge_url:
@@ -674,7 +673,7 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                             # Continue without thumbnail
                     
                     dprint(f"[DEBUG] Calling complete-task Edge Function with base64 data for task {task_id_str}")
-                    fallback_url = edge_url.replace("/complete-task", "/complete_task") if edge_url.endswith("/functions/v1/complete-task") else None
+                    fallback_url = edge_url.replace("/complete_task", "/complete-task") if edge_url.endswith("/functions/v1/complete_task") else None
                     resp, edge_error = _call_edge_function_with_retry(
                         edge_url=edge_url,
                         payload=payload,
@@ -829,7 +828,7 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                         payload["thumbnail_storage_path"] = thumbnail_storage_path
 
                     dprint(f"[DEBUG] Calling complete-task Edge Function with storage_path for task {task_id_str}")
-                    fallback_url = edge_url.replace("/complete-task", "/complete_task") if edge_url.endswith("/functions/v1/complete-task") else None
+                    fallback_url = edge_url.replace("/complete_task", "/complete-task") if edge_url.endswith("/functions/v1/complete_task") else None
                     resp, edge_error = _call_edge_function_with_retry(
                         edge_url=edge_url,
                         payload=payload,
@@ -910,7 +909,7 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                 if SUPABASE_ACCESS_TOKEN:
                     headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
 
-                fallback_url = edge_url.replace("/complete-task", "/complete_task") if edge_url.endswith("/functions/v1/complete-task") else None
+                fallback_url = edge_url.replace("/complete_task", "/complete-task") if edge_url.endswith("/functions/v1/complete_task") else None
                 resp, edge_error = _call_edge_function_with_retry(
                     edge_url=edge_url,
                     payload=payload,
