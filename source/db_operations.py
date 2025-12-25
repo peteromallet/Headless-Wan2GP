@@ -47,6 +47,168 @@ def dprint(msg: str):
         print(f"[DEBUG {datetime.datetime.now().isoformat()}] {msg}")
 
 # -----------------------------------------------------------------------------
+# Generic edge function retry helper
+# -----------------------------------------------------------------------------
+# Standard error message prefixes for reliable detection in debug.py
+# Format: "[EDGE_FAIL:{function_name}:{error_type}]" for easy grep/parsing
+EDGE_FAIL_PREFIX = "[EDGE_FAIL"  # Used by debug.py to detect edge failures
+
+RETRYABLE_STATUS_CODES = {502, 503, 504}
+
+def _call_edge_function_with_retry(
+    edge_url: str,
+    payload,
+    headers: dict,
+    function_name: str,
+    *,
+    context_id: str = "",  # task_id or worker_id for logging
+    timeout: int = 30,
+    max_retries: int = 3,
+    method: str = "POST",
+    fallback_url: str | None = None,  # Optional 404 fallback URL
+) -> tuple[httpx.Response | None, str | None]:
+    """
+    Call a Supabase edge function with retry logic for transient errors.
+    
+    Retries on:
+    - 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout
+    - Network errors (TimeoutException, RequestError)
+    
+    Args:
+        edge_url: The edge function URL
+        payload: JSON payload (for POST) or None
+        headers: HTTP headers
+        function_name: Name of function for logging (e.g. "complete-task", "update-task-status")
+        context_id: Task/worker ID for logging context
+        timeout: Base timeout in seconds (increases on retries)
+        max_retries: Maximum retry attempts
+        method: HTTP method ("POST" or "PUT")
+        fallback_url: Optional fallback URL to try on 404
+    
+    Returns:
+        Tuple of (response, error_message)
+        - On success: (response, None)
+        - On failure: (response_or_None, standardized_error_message)
+        
+        Error message format for detection:
+        "[EDGE_FAIL:{function_name}:{error_type}] {details}"
+    """
+    ctx = f" for {context_id}" if context_id else ""
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            current_timeout = timeout + (attempt * 15)  # Increase timeout on retries
+            
+            if method == "PUT":
+                # For large uploads, avoid buffering entire files in memory:
+                # - If payload is a Path/str to an existing file, open+stream per attempt.
+                # - If payload is bytes, send directly.
+                # - Otherwise, pass through to httpx (caller responsibility).
+                if isinstance(payload, (str, Path)) and Path(payload).exists():
+                    with open(Path(payload), "rb") as f:
+                        resp = httpx.put(edge_url, content=f, headers=headers, timeout=current_timeout)
+                else:
+                    resp = httpx.put(edge_url, content=payload, headers=headers, timeout=current_timeout)
+            else:
+                resp = httpx.post(edge_url, json=payload, headers=headers, timeout=current_timeout)
+            
+            # Handle 404 fallback (e.g. hyphen vs underscore naming)
+            if resp.status_code == 404 and fallback_url:
+                dprint(f"[RETRY] {function_name} returned 404; trying fallback URL: {fallback_url}")
+                if method == "PUT":
+                    if isinstance(payload, (str, Path)) and Path(payload).exists():
+                        with open(Path(payload), "rb") as f:
+                            resp = httpx.put(fallback_url, content=f, headers=headers, timeout=current_timeout)
+                    else:
+                        resp = httpx.put(fallback_url, content=payload, headers=headers, timeout=current_timeout)
+                else:
+                    resp = httpx.post(fallback_url, json=payload, headers=headers, timeout=current_timeout)
+            
+            # Success
+            if resp.status_code in [200, 201]:
+                return resp, None
+            
+            # Retryable error
+            if resp.status_code in RETRYABLE_STATUS_CODES and attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                print(f"[RETRY] ⚠️ {function_name} got {resp.status_code}{ctx} (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            
+            # Non-retryable error or final attempt
+            error_type = "5XX_TRANSIENT" if resp.status_code in RETRYABLE_STATUS_CODES else f"HTTP_{resp.status_code}"
+            error_msg = f"{EDGE_FAIL_PREFIX}:{function_name}:{error_type}] {resp.status_code} after {attempt + 1} attempts{ctx}: {resp.text[:200]}"
+            
+            if resp.status_code in RETRYABLE_STATUS_CODES:
+                print(f"[ERROR] ❌ {function_name} failed with {resp.status_code} after {max_retries} attempts{ctx}")
+            
+            return resp, error_msg
+            
+        except httpx.TimeoutException as e:
+            last_error = str(e)
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                print(f"[RETRY] ⏳ {function_name} timeout{ctx} (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            else:
+                error_msg = f"{EDGE_FAIL_PREFIX}:{function_name}:TIMEOUT] Timed out after {max_retries} attempts{ctx}: {e}"
+                print(f"[ERROR] ❌ {error_msg}")
+                return None, error_msg
+                
+        except httpx.RequestError as e:
+            last_error = str(e)
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                print(f"[RETRY] ⚠️ {function_name} network error{ctx} (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s: {e}")
+                time.sleep(wait_time)
+                continue
+            else:
+                error_msg = f"{EDGE_FAIL_PREFIX}:{function_name}:NETWORK] Request failed after {max_retries} attempts{ctx}: {e}"
+                print(f"[ERROR] ❌ {error_msg}")
+                return None, error_msg
+    
+    # Should not reach here, but safety fallback
+    error_msg = f"{EDGE_FAIL_PREFIX}:{function_name}:UNKNOWN] All retries exhausted{ctx}"
+    return None, error_msg
+
+
+def _call_complete_task_with_retry(
+    edge_url: str,
+    payload: dict,
+    headers: dict,
+    task_id_str: str,
+    timeout: int = 60,
+    max_retries: int = 3,
+) -> httpx.Response | None:
+    """
+    Call complete-task edge function with retry logic.
+    Wrapper around _call_edge_function_with_retry for backwards compatibility.
+    """
+    # Build fallback URL for 404 handling
+    fallback_url = None
+    if edge_url.endswith("/functions/v1/complete-task"):
+        fallback_url = edge_url.replace("/complete-task", "/complete_task")
+    
+    resp, error_msg = _call_edge_function_with_retry(
+        edge_url=edge_url,
+        payload=payload,
+        headers=headers,
+        function_name="complete-task",
+        context_id=task_id_str,
+        timeout=timeout,
+        max_retries=max_retries,
+        fallback_url=fallback_url,
+    )
+    
+    # Log error but don't return it - caller handles response checking
+    if error_msg:
+        dprint(f"[DEBUG] complete-task error: {error_msg}")
+    
+    return resp
+
+# -----------------------------------------------------------------------------
 # Internal Helpers for Supabase
 # -----------------------------------------------------------------------------
 
@@ -78,36 +240,42 @@ def _is_jwt_token(token_str: str) -> bool:
     return len(parts) == 3
 
 def _mark_task_failed_via_edge_function(task_id_str: str, error_message: str):
-    """Mark a task as failed using the update-task-status Edge Function"""
-    try:
-        edge_url = (
-            os.getenv("SUPABASE_EDGE_UPDATE_TASK_URL")
-            or (f"{SUPABASE_URL.rstrip('/')}/functions/v1/update-task-status" if SUPABASE_URL else None)
-        )
+    """Mark a task as failed using the update-task-status Edge Function (with retry)."""
+    edge_url = (
+        os.getenv("SUPABASE_EDGE_UPDATE_TASK_URL")
+        or (f"{SUPABASE_URL.rstrip('/')}/functions/v1/update-task-status" if SUPABASE_URL else None)
+    )
 
-        if not edge_url:
-            print(f"[ERROR] No update-task-status edge function URL available for marking task {task_id_str} as failed")
-            return
+    if not edge_url:
+        print(f"[ERROR] No update-task-status edge function URL available for marking task {task_id_str} as failed")
+        return
 
-        headers = {"Content-Type": "application/json"}
-        if SUPABASE_ACCESS_TOKEN:
-            headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
+    headers = {"Content-Type": "application/json"}
+    if SUPABASE_ACCESS_TOKEN:
+        headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
 
-        payload = {
-            "task_id": task_id_str,
-            "status": STATUS_FAILED,
-            "output_location": error_message
-        }
+    payload = {
+        "task_id": task_id_str,
+        "status": STATUS_FAILED,
+        "output_location": error_message
+    }
 
-        resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
+    resp, edge_error = _call_edge_function_with_retry(
+        edge_url=edge_url,
+        payload=payload,
+        headers=headers,
+        function_name="update-task-status",
+        context_id=task_id_str,
+        timeout=30,
+        max_retries=3,
+    )
 
-        if resp.status_code == 200:
-            dprint(f"[DEBUG] Successfully marked task {task_id_str} as Failed via Edge Function")
-        else:
-            print(f"[ERROR] Failed to mark task {task_id_str} as Failed: {resp.status_code} - {resp.text}")
-
-    except Exception as e:
-        print(f"[ERROR] Exception marking task {task_id_str} as Failed: {e}")
+    if resp and resp.status_code == 200:
+        dprint(f"[DEBUG] Successfully marked task {task_id_str} as Failed via Edge Function")
+    elif edge_error:
+        print(f"[ERROR] Failed to mark task {task_id_str} as Failed: {edge_error}")
+    elif resp:
+        print(f"[ERROR] Failed to mark task {task_id_str} as Failed: {resp.status_code} - {resp.text}")
 
 # -----------------------------------------------------------------------------
 # Public Database Functions
@@ -506,14 +674,19 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                             # Continue without thumbnail
                     
                     dprint(f"[DEBUG] Calling complete-task Edge Function with base64 data for task {task_id_str}")
-                    resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)
-                    if resp.status_code == 404 and edge_url and edge_url.endswith("/functions/v1/complete-task") and SUPABASE_URL:
-                        # Back-compat fallback (older deployments)
-                        fallback_url = f"{SUPABASE_URL.rstrip('/')}/functions/v1/complete_task"
-                        dprint(f"[DEBUG] complete-task returned 404; retrying with {fallback_url}")
-                        resp = httpx.post(fallback_url, json=payload, headers=headers, timeout=60)
+                    fallback_url = edge_url.replace("/complete-task", "/complete_task") if edge_url.endswith("/functions/v1/complete-task") else None
+                    resp, edge_error = _call_edge_function_with_retry(
+                        edge_url=edge_url,
+                        payload=payload,
+                        headers=headers,
+                        function_name="complete-task",
+                        context_id=task_id_str,
+                        timeout=60,
+                        max_retries=3,
+                        fallback_url=fallback_url,
+                    )
 
-                    if resp.status_code == 200:
+                    if resp is not None and resp.status_code == 200:
                         dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE with base64 upload")
                         # Parse response to get storage URL and thumbnail URL
                         try:
@@ -530,7 +703,7 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                             pass
                         return None
                     else:
-                        error_msg = f"complete-task edge function failed: {resp.status_code} - {resp.text}"
+                        error_msg = edge_error or f"{EDGE_FAIL_PREFIX}:complete-task:HTTP_{resp.status_code if resp else 'N/A'}] {resp.text[:200] if resp else 'No response'}"
                         print(f"[ERROR] {error_msg}")
                         _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
                         return None
@@ -539,24 +712,28 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                     dprint(f"[DEBUG] Using presigned upload for {output_path.name} ({file_size_mb:.2f} MB >= {FILE_SIZE_THRESHOLD_MB} MB)")
                     
                     # MODE 3: Presigned URL upload (for files 2MB or larger)
-                    # Step 1: Get signed upload URLs (request thumbnail URL for videos)
+                    # Step 1: Get signed upload URLs (request thumbnail URL for videos) - WITH RETRY
                     generate_url_edge = f"{SUPABASE_URL.rstrip('/')}/functions/v1/generate-upload-url"
                     content_type = mimetypes.guess_type(str(output_path))[0] or 'application/octet-stream'
 
-                    upload_url_resp = httpx.post(
-                        generate_url_edge,
-                        headers=headers,
-                        json={
+                    upload_url_resp, edge_error = _call_edge_function_with_retry(
+                        edge_url=generate_url_edge,
+                        payload={
                             "task_id": task_id_str,
                             "filename": output_path.name,
                             "content_type": content_type,
                             "generate_thumbnail_url": is_video  # Request thumbnail URL for videos
                         },
-                        timeout=30
+                        headers=headers,
+                        function_name="generate-upload-url",
+                        context_id=task_id_str,
+                        timeout=30,
+                        max_retries=3,
                     )
 
-                    if upload_url_resp.status_code != 200:
-                        error_msg = f"Failed to generate upload URL: {upload_url_resp.status_code} - {upload_url_resp.text}"
+                    if edge_error or not upload_url_resp or upload_url_resp.status_code != 200:
+                        # Prefer standardized error from helper (avoids double-wrapping)
+                        error_msg = edge_error or f"{EDGE_FAIL_PREFIX}:generate-upload-url:HTTP_{upload_url_resp.status_code if upload_url_resp else 'N/A'}] {upload_url_resp.text[:200] if upload_url_resp else 'No response'}"
                         print(f"[ERROR] {error_msg}")
                         _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
                         return
@@ -588,20 +765,23 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                                 if save_frame_from_video(output_path, 0, temp_frame_path, (width, height)):
                                     dprint(f"[DEBUG] Extracted first frame, uploading via signed URL")
                                     
-                                    # Upload thumbnail directly via signed URL
-                                    with open(temp_frame_path, 'rb') as thumb_file:
-                                        thumb_resp = httpx.put(
-                                            upload_data["thumbnail_upload_url"],
-                                            headers={"Content-Type": "image/jpeg"},
-                                            content=thumb_file,
-                                            timeout=60
-                                        )
+                                    # Upload thumbnail directly via signed URL - WITH RETRY
+                                    thumb_resp, thumb_error = _call_edge_function_with_retry(
+                                        edge_url=upload_data["thumbnail_upload_url"],
+                                        payload=temp_frame_path,
+                                        headers={"Content-Type": "image/jpeg"},
+                                        function_name="storage-upload-thumbnail",
+                                        context_id=task_id_str,
+                                        timeout=60,
+                                        max_retries=3,
+                                        method="PUT",
+                                    )
                                     
-                                    if thumb_resp.status_code in [200, 201]:
+                                    if thumb_resp and thumb_resp.status_code in [200, 201]:
                                         thumbnail_storage_path = upload_data["thumbnail_storage_path"]
                                         dprint(f"[DEBUG] Thumbnail uploaded successfully via signed URL")
                                     else:
-                                        dprint(f"[WARNING] Thumbnail upload failed: {thumb_resp.status_code}")
+                                        dprint(f"[WARNING] Thumbnail upload failed: {thumb_error or thumb_resp.status_code if thumb_resp else 'No response'}")
                                 else:
                                     dprint(f"[WARNING] Failed to extract first frame from video")
                             else:
@@ -617,18 +797,21 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                             dprint(f"[WARNING] Error extracting/uploading thumbnail: {e}")
                             # Continue without thumbnail
 
-                    # Step 3: Upload main file directly to storage using presigned URL
+                    # Step 3: Upload main file directly to storage using presigned URL - WITH RETRY
                     dprint(f"[DEBUG] Uploading main file via signed URL")
-                    with open(output_path, 'rb') as f:
-                        put_resp = httpx.put(
-                            upload_data["upload_url"],
-                            headers={"Content-Type": content_type},
-                            content=f,
-                            timeout=600  # 10 minute timeout for large files
-                        )
+                    put_resp, put_error = _call_edge_function_with_retry(
+                        edge_url=upload_data["upload_url"],
+                        payload=output_path,
+                        headers={"Content-Type": content_type},
+                        function_name="storage-upload-file",
+                        context_id=task_id_str,
+                        timeout=600,  # 10 minute base timeout for large files
+                        max_retries=3,
+                        method="PUT",
+                    )
 
-                    if put_resp.status_code not in [200, 201]:
-                        error_msg = f"Failed to upload file to storage: {put_resp.status_code} - {put_resp.text}"
+                    if put_error or not put_resp or put_resp.status_code not in [200, 201]:
+                        error_msg = put_error or f"{EDGE_FAIL_PREFIX}:storage-upload-file:HTTP_{put_resp.status_code if put_resp else 'N/A'}] {put_resp.text[:200] if put_resp else 'No response'}"
                         print(f"[ERROR] {error_msg}")
                         _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
                         return
@@ -646,13 +829,19 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                         payload["thumbnail_storage_path"] = thumbnail_storage_path
 
                     dprint(f"[DEBUG] Calling complete-task Edge Function with storage_path for task {task_id_str}")
-                    resp = httpx.post(edge_url, json=payload, headers=headers, timeout=60)
-                    if resp.status_code == 404 and edge_url and edge_url.endswith("/functions/v1/complete-task") and SUPABASE_URL:
-                        fallback_url = f"{SUPABASE_URL.rstrip('/')}/functions/v1/complete_task"
-                        dprint(f"[DEBUG] complete-task returned 404; retrying with {fallback_url}")
-                        resp = httpx.post(fallback_url, json=payload, headers=headers, timeout=60)
+                    fallback_url = edge_url.replace("/complete-task", "/complete_task") if edge_url.endswith("/functions/v1/complete-task") else None
+                    resp, edge_error = _call_edge_function_with_retry(
+                        edge_url=edge_url,
+                        payload=payload,
+                        headers=headers,
+                        function_name="complete-task",
+                        context_id=task_id_str,
+                        timeout=60,
+                        max_retries=3,
+                        fallback_url=fallback_url,
+                    )
 
-                    if resp.status_code == 200:
+                    if resp is not None and resp.status_code == 200:
                         dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE with file upload")
                         # Parse response to get storage URL and thumbnail URL
                         try:
@@ -669,7 +858,7 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                             pass
                         return None
                     else:
-                        error_msg = f"complete-task edge function failed: {resp.status_code} - {resp.text}"
+                        error_msg = edge_error or f"{EDGE_FAIL_PREFIX}:complete-task:HTTP_{resp.status_code if resp else 'N/A'}] {resp.text[:200] if resp else 'No response'}"
                         print(f"[ERROR] {error_msg}")
                         # Use update-task-status edge function to mark as failed
                         _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
@@ -721,13 +910,19 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                 if SUPABASE_ACCESS_TOKEN:
                     headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
 
-                resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
-                if resp.status_code == 404 and edge_url and edge_url.endswith("/functions/v1/complete-task") and SUPABASE_URL:
-                    fallback_url = f"{SUPABASE_URL.rstrip('/')}/functions/v1/complete_task"
-                    dprint(f"[DEBUG] complete-task returned 404; retrying with {fallback_url}")
-                    resp = httpx.post(fallback_url, json=payload, headers=headers, timeout=30)
+                fallback_url = edge_url.replace("/complete-task", "/complete_task") if edge_url.endswith("/functions/v1/complete-task") else None
+                resp, edge_error = _call_edge_function_with_retry(
+                    edge_url=edge_url,
+                    payload=payload,
+                    headers=headers,
+                    function_name="complete-task",
+                    context_id=task_id_str,
+                    timeout=30,
+                    max_retries=3,
+                    fallback_url=fallback_url,
+                )
 
-                if resp.status_code == 200:
+                if resp is not None and resp.status_code == 200:
                     dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status COMPLETE")
                     # Parse response to get storage URL and thumbnail URL
                     try:
@@ -745,7 +940,7 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                     except:
                         return output_location_val
                 else:
-                    error_msg = f"complete-task edge function failed: {resp.status_code} - {resp.text}"
+                    error_msg = edge_error or f"{EDGE_FAIL_PREFIX}:complete-task:HTTP_{resp.status_code if resp else 'N/A'}] {resp.text[:200] if resp else 'No response'}"
                     print(f"[ERROR] {error_msg}")
                     # Use update-task-status edge function to mark as failed
                     _mark_task_failed_via_edge_function(task_id_str, f"Completion failed: {error_msg}")
@@ -754,7 +949,7 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
             print(f"[ERROR] complete-task edge function exception: {e_edge}")
             return None
     else:
-        # Use update-task-status edge function for all other status updates
+        # Use update-task-status edge function for all other status updates (with retry)
         edge_url = (
             os.getenv("SUPABASE_EDGE_UPDATE_TASK_URL") 
             or (f"{SUPABASE_URL.rstrip('/')}/functions/v1/update-task-status" if SUPABASE_URL else None)
@@ -764,34 +959,40 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
             print(f"[ERROR] No update-task-status edge function URL available")
             return
             
-        try:
-            headers = {"Content-Type": "application/json"}
-            if SUPABASE_ACCESS_TOKEN:
-                headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
+        headers = {"Content-Type": "application/json"}
+        if SUPABASE_ACCESS_TOKEN:
+            headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
+        
+        payload = {
+            "task_id": task_id_str,
+            "status": status_str
+        }
+        
+        if output_location_val:
+            payload["output_location"] = output_location_val
             
-            payload = {
-                "task_id": task_id_str,
-                "status": status_str
-            }
-            
-            if output_location_val:
-                payload["output_location"] = output_location_val
-                
-            if thumbnail_url_val:
-                payload["thumbnail_url"] = thumbnail_url_val
-            
-            dprint(f"[DEBUG] Calling update-task-status Edge Function for task {task_id_str} → {status_str}")
-            resp = httpx.post(edge_url, json=payload, headers=headers, timeout=30)
-            
-            if resp.status_code == 200:
-                dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status {status_str}")
-                return
-            else:
-                print(f"[ERROR] update-task-status edge function failed: {resp.status_code} - {resp.text}")
-                return
-                
-        except Exception as e:
-            print(f"[ERROR] update-task-status edge function exception: {e}")
+        if thumbnail_url_val:
+            payload["thumbnail_url"] = thumbnail_url_val
+        
+        dprint(f"[DEBUG] Calling update-task-status Edge Function for task {task_id_str} → {status_str}")
+        resp, edge_error = _call_edge_function_with_retry(
+            edge_url=edge_url,
+            payload=payload,
+            headers=headers,
+            function_name="update-task-status",
+            context_id=task_id_str,
+            timeout=30,
+            max_retries=3,
+        )
+        
+        if resp and resp.status_code == 200:
+            dprint(f"[DEBUG] Edge function SUCCESS for task {task_id_str} → status {status_str}")
+            return
+        elif edge_error:
+            print(f"[ERROR] update-task-status edge function failed: {edge_error}")
+            return
+        elif resp:
+            print(f"[ERROR] update-task-status edge function failed: {resp.status_code} - {resp.text}")
             return
 
 def _migrate_supabase_schema():
@@ -875,36 +1076,22 @@ def add_task_to_db(task_payload: dict, task_type_str: str, dependant_on: str | N
 
     dprint(f"Supabase Edge call >>> POST {edge_url} payload={str(payload_edge)[:120]}…")
 
-    # Retry logic for transient network failures
-    max_create_retries = 3
-    base_timeout = 45  # Increased from 30s
-    
-    for attempt in range(max_create_retries):
-        try:
-            # Use longer timeout on retries
-            current_timeout = base_timeout + (attempt * 15)  # 45s, 60s, 75s
-            resp = httpx.post(edge_url, json=payload_edge, headers=headers, timeout=current_timeout)
-            break  # Success - exit retry loop
-        except httpx.TimeoutException as e:
-            if attempt < max_create_retries - 1:
-                wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
-                print(f"[RETRY] ⏳ create-task timeout (attempt {attempt + 1}/{max_create_retries}), retrying in {wait_time}s...")
-                time.sleep(wait_time)
-                continue
-            else:
-                error_msg = f"Edge Function create-task timed out after {max_create_retries} attempts: {e}"
-                print(f"[ERROR] ❌ {error_msg}")
-                raise RuntimeError(error_msg)
-        except httpx.RequestError as e:
-            if attempt < max_create_retries - 1:
-                wait_time = 2 ** attempt
-                print(f"[RETRY] ⚠️ create-task network error (attempt {attempt + 1}/{max_create_retries}), retrying in {wait_time}s: {e}")
-                time.sleep(wait_time)
-                continue
-            else:
-                error_msg = f"Edge Function create-task request failed after {max_create_retries} attempts: {e}"
-                print(f"[ERROR] ❌ {error_msg}")
-                raise RuntimeError(error_msg)
+    # Use standardized retry helper (handles 5xx, timeout, and network errors)
+    resp, edge_error = _call_edge_function_with_retry(
+        edge_url=edge_url,
+        payload=payload_edge,
+        headers=headers,
+        function_name="create-task",
+        context_id=f"{task_type_str}:{actual_db_row_id[:8]}",
+        timeout=45,  # Base timeout
+        max_retries=3,
+    )
+
+    # Handle failure cases
+    if edge_error:
+        raise RuntimeError(f"Edge Function create-task failed: {edge_error}")
+    if resp is None:
+        raise RuntimeError(f"Edge Function create-task returned no response for {actual_db_row_id}")
 
     if resp.status_code == 200:
         print(f"Task {actual_db_row_id} (Type: {task_type_str}) queued via Edge Function.")

@@ -15,6 +15,84 @@ class Formatter:
     # ==================== HELPER METHODS ====================
     
     @staticmethod
+    def _parse_edge_failure(text: str) -> Dict[str, str] | None:
+        """
+        Parse standardized edge function failure format.
+        
+        Format: "[EDGE_FAIL:{function_name}:{error_type}] {details}"
+        
+        Returns dict with 'function', 'error_type', 'details' or None if not matched.
+        """
+        import re
+        # Match: [EDGE_FAIL:function-name:ERROR_TYPE] details
+        match = re.search(r'\[EDGE_FAIL:([^:]+):([^\]]+)\]\s*(.+)', text)
+        if match:
+            return {
+                'function': match.group(1),
+                'error_type': match.group(2),
+                'details': match.group(3).strip()
+            }
+        return None
+    
+    @staticmethod
+    def _diagnose_error(text: str) -> List[str]:
+        """
+        Analyze error text and return diagnosis lines.
+        
+        Handles:
+        - Standardized [EDGE_FAIL:...] format (most reliable)
+        - Legacy error patterns (502, timeout, etc.)
+        """
+        lines = []
+        text_lower = text.lower()
+        
+        # First check for standardized EDGE_FAIL format (most reliable)
+        edge_fail = Formatter._parse_edge_failure(text)
+        if edge_fail:
+            func = edge_fail['function']
+            err_type = edge_fail['error_type']
+            
+            if '5XX' in err_type or err_type in ['HTTP_502', 'HTTP_503', 'HTTP_504']:
+                lines.append(f"   🔧 DIAGNOSIS: Edge function '{func}' returned 5xx error (transient)")
+                lines.append("   💡 This is usually a transient infrastructure issue")
+                if func in ['complete-task', 'storage-upload', 'storage-upload-file']:
+                    lines.append("   💡 The video was likely generated successfully but upload failed!")
+            elif 'TIMEOUT' in err_type:
+                lines.append(f"   🔧 DIAGNOSIS: Edge function '{func}' timed out")
+                lines.append("   💡 Operation took too long - possible infrastructure slowdown")
+            elif 'NETWORK' in err_type:
+                lines.append(f"   🔧 DIAGNOSIS: Network error calling '{func}'")
+                lines.append("   💡 Transient network issue between worker and Supabase")
+            else:
+                lines.append(f"   🔧 DIAGNOSIS: Edge function '{func}' failed ({err_type})")
+            
+            return lines
+        
+        # Fall back to legacy pattern matching
+        if any(code in text for code in ['502', '503', '504']):
+            lines.append("   🔧 DIAGNOSIS: Supabase edge function returned 5xx error")
+            lines.append("   💡 This is usually a transient infrastructure issue")
+            if 'upload' in text_lower or 'complete' in text_lower or 'storage' in text_lower:
+                lines.append("   💡 The video was likely generated successfully but upload failed!")
+        elif 'timeout' in text_lower or 'timed out' in text_lower:
+            lines.append("   🔧 DIAGNOSIS: Request timed out")
+            lines.append("   💡 Operation took too long - may be transient")
+        elif 'upload failed' in text_lower or 'completion failed' in text_lower:
+            lines.append("   🔧 DIAGNOSIS: Upload/completion failure AFTER generation")
+            lines.append("   💡 The video was likely generated but couldn't be saved")
+        elif 'cascad' in text_lower:
+            lines.append("   🔧 DIAGNOSIS: Cascaded failure from child task")
+            lines.append("   💡 See child task details below for root cause")
+        elif 'oom' in text_lower or 'out of memory' in text_lower or 'cuda' in text_lower:
+            lines.append("   🔧 DIAGNOSIS: GPU memory error")
+            lines.append("   💡 Task params may be too large for available VRAM")
+        elif 'lora' in text_lower or 'safetensors' in text_lower:
+            lines.append("   🔧 DIAGNOSIS: LoRA loading failure")
+            lines.append("   💡 Check if LoRA file exists and is accessible")
+        
+        return lines
+    
+    @staticmethod
     def _extract_lora_urls(params: Dict[str, Any]) -> List[str]:
         """Extract all LoRA URLs from task parameters."""
         urls = []
@@ -74,10 +152,16 @@ class Formatter:
         
         # Overview section
         lines.append("\n🏷️  Overview")
-        lines.append(f"   Status: {task.get('status', 'Unknown')}")
+        status = task.get('status', 'Unknown')
+        lines.append(f"   Status: {status}")
         lines.append(f"   Type: {task.get('task_type', 'Unknown')}")
         lines.append(f"   Worker: {task.get('worker_id', 'None')}")
-        lines.append(f"   Attempts: {task.get('attempts', 0)}")
+        attempts = task.get('attempts', 0)
+        lines.append(f"   Attempts: {attempts}")
+        
+        # Note: "attempts" is task-level retries (re-claimed / re-processed), not internal HTTP retries.
+        if status == 'Failed' and attempts == 0:
+            lines.append("   ⚠️  WARNING: attempts=0 (no task-level retry recorded)")
         
         # Timing section
         lines.append("\n⏱️  Timing")
@@ -183,9 +267,18 @@ class Formatter:
         error_msg = task.get('error_message')
         output_location = task.get('output_location')
         
+        # Combine error sources for analysis
+        error_text = error_msg or ''
+        if output_location and 'failed' in output_location.lower():
+            error_text = error_text or output_location
+        
         if error_msg:
             lines.append("\n❌ Error Analysis")
             lines.append(f"   Error: {error_msg}")
+            
+            # Use standardized diagnosis helper
+            diagnosis_lines = Formatter._diagnose_error(error_msg)
+            lines.extend(diagnosis_lines)
             
             # Find last error log
             error_logs = [log for log in info.logs if log['log_level'] == 'ERROR']
@@ -197,6 +290,10 @@ class Formatter:
             if output_location and 'failed' in output_location.lower():
                 lines.append("\n❌ Error Analysis")
                 lines.append(f"   Output (contains error): {output_location}")
+                
+                # Use standardized diagnosis helper
+                diagnosis_lines = Formatter._diagnose_error(output_location)
+                lines.extend(diagnosis_lines)
                 
                 # Check if error message appears incomplete
                 if output_location.endswith(': ') or output_location.endswith(':'):
@@ -224,6 +321,69 @@ class Formatter:
             else:
                 lines.append("\n✅ Success")
                 lines.append(f"   Output: {output_location}")
+        
+        # Child Tasks (for orchestrators)
+        if info.child_tasks:
+            lines.append("\n📋 Child Tasks (Segments/Stitch)")
+            lines.append("-" * 60)
+            
+            # Count by status
+            status_counts = {}
+            failed_tasks = []
+            
+            for child in info.child_tasks:
+                child_status = child.get('status', 'Unknown')
+                status_counts[child_status] = status_counts.get(child_status, 0) + 1
+                if child_status == 'Failed':
+                    failed_tasks.append(child)
+            
+            # Status summary
+            status_str = ", ".join(f"{s}: {c}" for s, c in sorted(status_counts.items()))
+            lines.append(f"   Summary: {len(info.child_tasks)} tasks ({status_str})")
+            
+            # Show each child task
+            for child in info.child_tasks:
+                child_id = child['id'][:8]
+                child_type = child.get('task_type', 'unknown')
+                child_status = child.get('status', 'unknown')
+                child_attempts = child.get('attempts', 0)
+                
+                # Get segment index if available
+                child_params = child.get('params', {})
+                if isinstance(child_params, str):
+                    import json
+                    try:
+                        child_params = json.loads(child_params)
+                    except:
+                        child_params = {}
+                seg_idx = child_params.get('segment_index', '-')
+                
+                # Status emoji
+                if child_status == 'Complete':
+                    emoji = '✅'
+                elif child_status == 'Failed':
+                    emoji = '❌'
+                elif child_status == 'In Progress':
+                    emoji = '🔄'
+                else:
+                    emoji = '⏳'
+                
+                # Show task line
+                line = f"   {emoji} Seg {seg_idx}: {child_id}... | {child_status}"
+                if child_status == 'Failed':
+                    line += f" (attempts: {child_attempts})"
+                    error = child.get('error_message', '')
+                    if error:
+                        # Truncate long errors
+                        error_short = error[:50] + "..." if len(error) > 50 else error
+                        line += f"\n      └─ Error: {error_short}"
+                lines.append(line)
+            
+            # Highlight failed tasks that need attention
+            if failed_tasks:
+                lines.append(f"\n   ⚠️  {len(failed_tasks)} FAILED child task(s):")
+                for ft in failed_tasks:
+                    lines.append(f"      python debug.py task {ft['id']}")
         
         # Related Resources
         lines.append("\n💡 Related Resources")
