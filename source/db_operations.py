@@ -78,7 +78,7 @@ def _call_edge_function_with_retry(
         edge_url: The edge function URL
         payload: JSON payload (for POST) or None
         headers: HTTP headers
-        function_name: Name of function for logging (e.g. "complete-task", "update-task-status")
+        function_name: Name of function for logging (e.g. "complete_task", "update-task-status")
         context_id: Task/worker ID for logging context
         timeout: Base timeout in seconds (increases on retries)
         max_retries: Maximum retry attempts
@@ -183,28 +183,23 @@ def _call_complete_task_with_retry(
     max_retries: int = 3,
 ) -> httpx.Response | None:
     """
-    Call complete-task edge function with retry logic.
+    Call complete_task edge function with retry logic.
     Wrapper around _call_edge_function_with_retry for backwards compatibility.
     """
-    # Build fallback URL for 404 handling
-    fallback_url = None
-    if edge_url.endswith("/functions/v1/complete-task"):
-        fallback_url = edge_url.replace("/complete-task", "/complete_task")
-    
     resp, error_msg = _call_edge_function_with_retry(
         edge_url=edge_url,
         payload=payload,
         headers=headers,
-        function_name="complete-task",
+        function_name="complete_task",
         context_id=task_id_str,
         timeout=timeout,
         max_retries=max_retries,
-        fallback_url=fallback_url,
+        fallback_url=None,
     )
     
     # Log error but don't return it - caller handles response checking
     if error_msg:
-        dprint(f"[DEBUG] complete-task error: {error_msg}")
+        dprint(f"[DEBUG] complete_task error: {error_msg}")
     
     return resp
 
@@ -572,8 +567,7 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
     # --- Use edge functions for ALL status updates ---
     if status_str == STATUS_COMPLETE and output_location_val is not None:
         # Use completion edge function for completion with file
-        # NOTE: In this project, the deployed edge function is `complete_task` (underscore).
-        # We keep `complete-task` (hyphen) as a fallback for any older deployments.
+        # NOTE: Canonical deployed edge function is `complete_task` (underscore).
         edge_url = (
             SUPABASE_EDGE_COMPLETE_TASK_URL
             or (os.getenv("SUPABASE_EDGE_COMPLETE_TASK_URL") or None)
@@ -581,7 +575,7 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
         )
         
         if not edge_url:
-            print(f"[ERROR] No complete-task edge function URL available")
+            print(f"[ERROR] No complete_task edge function URL available")
             return
 
         try:
@@ -672,17 +666,16 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                             dprint(f"[WARNING] Error extracting/encoding thumbnail: {e}")
                             # Continue without thumbnail
                     
-                    dprint(f"[DEBUG] Calling complete-task Edge Function with base64 data for task {task_id_str}")
-                    fallback_url = edge_url.replace("/complete_task", "/complete-task") if edge_url.endswith("/functions/v1/complete_task") else None
+                    dprint(f"[DEBUG] Calling complete_task Edge Function with base64 data for task {task_id_str}")
                     resp, edge_error = _call_edge_function_with_retry(
                         edge_url=edge_url,
                         payload=payload,
                         headers=headers,
-                        function_name="complete-task",
+                        function_name="complete_task",
                         context_id=task_id_str,
                         timeout=60,
                         max_retries=3,
-                        fallback_url=fallback_url,
+                        fallback_url=None,
                     )
 
                     if resp is not None and resp.status_code == 200:
@@ -702,7 +695,7 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                             pass
                         return None
                     else:
-                        error_msg = edge_error or f"{EDGE_FAIL_PREFIX}:complete-task:HTTP_{resp.status_code if resp else 'N/A'}] {resp.text[:200] if resp else 'No response'}"
+                        error_msg = edge_error or f"{EDGE_FAIL_PREFIX}:complete_task:HTTP_{resp.status_code if resp else 'N/A'}] {resp.text[:200] if resp else 'No response'}"
                         print(f"[ERROR] {error_msg}")
                         _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
                         return None
@@ -827,17 +820,16 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                     if thumbnail_storage_path:
                         payload["thumbnail_storage_path"] = thumbnail_storage_path
 
-                    dprint(f"[DEBUG] Calling complete-task Edge Function with storage_path for task {task_id_str}")
-                    fallback_url = edge_url.replace("/complete_task", "/complete-task") if edge_url.endswith("/functions/v1/complete_task") else None
+                    dprint(f"[DEBUG] Calling complete_task Edge Function with storage_path for task {task_id_str}")
                     resp, edge_error = _call_edge_function_with_retry(
                         edge_url=edge_url,
                         payload=payload,
                         headers=headers,
-                        function_name="complete-task",
+                        function_name="complete_task",
                         context_id=task_id_str,
                         timeout=60,
                         max_retries=3,
-                        fallback_url=fallback_url,
+                        fallback_url=None,
                     )
 
                     if resp is not None and resp.status_code == 200:
@@ -857,7 +849,7 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                             pass
                         return None
                     else:
-                        error_msg = edge_error or f"{EDGE_FAIL_PREFIX}:complete-task:HTTP_{resp.status_code if resp else 'N/A'}] {resp.text[:200] if resp else 'No response'}"
+                        error_msg = edge_error or f"{EDGE_FAIL_PREFIX}:complete_task:HTTP_{resp.status_code if resp else 'N/A'}] {resp.text[:200] if resp else 'No response'}"
                         print(f"[ERROR] {error_msg}")
                         # Use update-task-status edge function to mark as failed
                         _mark_task_failed_via_edge_function(task_id_str, f"Upload failed: {error_msg}")
@@ -909,16 +901,15 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                 if SUPABASE_ACCESS_TOKEN:
                     headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
 
-                fallback_url = edge_url.replace("/complete_task", "/complete-task") if edge_url.endswith("/functions/v1/complete_task") else None
                 resp, edge_error = _call_edge_function_with_retry(
                     edge_url=edge_url,
                     payload=payload,
                     headers=headers,
-                    function_name="complete-task",
+                    function_name="complete_task",
                     context_id=task_id_str,
                     timeout=30,
                     max_retries=3,
-                    fallback_url=fallback_url,
+                    fallback_url=None,
                 )
 
                 if resp is not None and resp.status_code == 200:
@@ -939,13 +930,13 @@ def update_task_status_supabase(task_id_str, status_str, output_location_val=Non
                     except:
                         return output_location_val
                 else:
-                    error_msg = edge_error or f"{EDGE_FAIL_PREFIX}:complete-task:HTTP_{resp.status_code if resp else 'N/A'}] {resp.text[:200] if resp else 'No response'}"
+                    error_msg = edge_error or f"{EDGE_FAIL_PREFIX}:complete_task:HTTP_{resp.status_code if resp else 'N/A'}] {resp.text[:200] if resp else 'No response'}"
                     print(f"[ERROR] {error_msg}")
                     # Use update-task-status edge function to mark as failed
                     _mark_task_failed_via_edge_function(task_id_str, f"Completion failed: {error_msg}")
                     return None
         except Exception as e_edge:
-            print(f"[ERROR] complete-task edge function exception: {e_edge}")
+            print(f"[ERROR] complete_task edge function exception: {e_edge}")
             return None
     else:
         # Use update-task-status edge function for all other status updates (with retry)
