@@ -676,6 +676,56 @@ class HeadlessTaskQueue:
                     # If a path was returned, check existence where possible
                     rp = Path(result_path)
                     is_success = rp.exists()
+
+                    # Some environments (e.g. networked volumes) can briefly report a freshly-written file as missing.
+                    # Do a short retry before failing the task.
+                    if not is_success:
+                        try:
+                            import os
+                            import time as _time
+
+                            retry_s = 2.0
+                            interval_s = 0.2
+                            attempts = max(1, int(retry_s / interval_s))
+
+                            for _ in range(attempts):
+                                _time.sleep(interval_s)
+                                if rp.exists():
+                                    is_success = True
+                                    break
+
+                            if not is_success:
+                                # Tagged diagnostics to debug "phantom output path" failures
+                                # Keep output bounded to avoid log spam.
+                                tag = "[TravelNoOutputGenerated]"
+                                cwd = os.getcwd()
+                                parent = rp.parent
+                                self.logger.error(f"{tag} Output path missing after generation: {result_path}")
+                                self.logger.error(f"{tag} CWD: {cwd}")
+                                try:
+                                    self.logger.error(f"{tag} Parent exists: {parent} -> {parent.exists()}")
+                                except Exception as _e:
+                                    self.logger.error(f"{tag} Parent exists check failed: {type(_e).__name__}: {_e}")
+
+                                try:
+                                    if parent.exists():
+                                        # Show a small sample of directory contents to spot mismatched output dirs.
+                                        entries = sorted([p.name for p in parent.iterdir()])[:50]
+                                        self.logger.error(f"{tag} Parent dir sample (first {len(entries)}): {entries}")
+                                except Exception as _e:
+                                    self.logger.error(f"{tag} Parent list failed: {type(_e).__name__}: {_e}")
+
+                                # Common alternative location when running from Wan2GP/ with relative outputs
+                                try:
+                                    alt_parent = Path(cwd) / "outputs"
+                                    if alt_parent != parent and alt_parent.exists():
+                                        alt_entries = sorted([p.name for p in alt_parent.iterdir()])[:50]
+                                        self.logger.error(f"{tag} Alt outputs dir: {alt_parent} sample (first {len(alt_entries)}): {alt_entries}")
+                                except Exception as _e:
+                                    self.logger.error(f"{tag} Alt outputs list failed: {type(_e).__name__}: {_e}")
+                        except Exception:
+                            # Never let diagnostics break the worker loop.
+                            pass
             except Exception:
                 # If any exception while checking, keep prior truthiness
                 pass

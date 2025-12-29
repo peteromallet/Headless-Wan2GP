@@ -41,6 +41,7 @@ from ..video_utils import (
     create_video_from_frames_list as sm_create_video_from_frames_list,
     get_video_frame_count_ffprobe,
     get_video_fps_ffprobe,
+    add_audio_to_video,
 )
 from ..vace_frame_utils import (
     create_guide_and_mask_for_generation,
@@ -158,6 +159,8 @@ def _handle_join_clips_task(
         # Check if this is part of an orchestrator and starting_video_path needs to be fetched
         orchestrator_task_id_ref = task_params_from_db.get("orchestrator_task_id_ref")
         is_first_join = task_params_from_db.get("is_first_join", False)
+        is_last_join = task_params_from_db.get("is_last_join", False)
+        audio_url = task_params_from_db.get("audio_url")  # Audio to add to final output (only used on last join)
 
         if not starting_video_path:
             # Check if this is an orchestrator child task that needs to fetch predecessor output
@@ -1097,6 +1100,41 @@ def _handle_join_clips_task(
 
                         dprint(f"[JOIN_CLIPS] Task {task_id}: Successfully created final joined video")
                         dprint(f"[JOIN_CLIPS] Task {task_id}: Output: {final_output_path}")
+
+                        # Add audio to final output if this is the last join and audio_url is provided
+                        if is_last_join and audio_url:
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: This is the last join - adding audio...")
+                            
+                            # Create path for video with audio
+                            video_with_audio_path = final_output_path.with_name(
+                                final_output_path.stem + "_with_audio.mp4"
+                            )
+                            
+                            result_with_audio = add_audio_to_video(
+                                video_path=final_output_path,
+                                audio_url=audio_url,
+                                output_path=video_with_audio_path,
+                                temp_dir=join_clips_dir,
+                                dprint=dprint
+                            )
+                            
+                            if result_with_audio and result_with_audio.exists():
+                                # Replace the final output path with the audio version
+                                dprint(f"[JOIN_CLIPS] Task {task_id}: ✅ Audio added successfully")
+                                
+                                # Remove the silent version
+                                try:
+                                    final_output_path.unlink()
+                                except Exception:
+                                    pass
+                                
+                                # Rename audio version to final path
+                                result_with_audio.rename(final_output_path)
+                                dprint(f"[JOIN_CLIPS] Task {task_id}: Final output now includes audio")
+                            else:
+                                dprint(f"[JOIN_CLIPS] Task {task_id}: ⚠️  Failed to add audio - returning silent video")
+                        elif audio_url and not is_last_join:
+                            dprint(f"[JOIN_CLIPS] Task {task_id}: audio_url provided but not last join - skipping audio")
 
                         # Handle upload and get final DB location
                         final_db_location = upload_and_get_final_output_location(

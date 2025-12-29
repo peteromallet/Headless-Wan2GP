@@ -2150,3 +2150,145 @@ def standardize_video_aspect_ratio(
             except Exception:
                 pass
         return None
+
+
+def add_audio_to_video(
+    video_path: str | Path,
+    audio_url: str,
+    output_path: str | Path,
+    temp_dir: str | Path,
+    *,
+    dprint=print
+) -> Path | None:
+    """
+    Add audio to a video file, trimming audio to match video duration.
+    
+    If the audio is longer than the video, it will be trimmed to match.
+    If the audio is shorter than the video, the video will have audio only
+    for the duration of the audio (remainder will be silent).
+    
+    Args:
+        video_path: Path to input video (no audio or audio will be replaced)
+        audio_url: URL or local path to audio file (mp3, wav, etc.)
+        output_path: Path for output video with audio
+        temp_dir: Directory for temporary files (audio download)
+        dprint: Logging function
+        
+    Returns:
+        Path to output video with audio, or None if failed
+    """
+    video_path = Path(video_path)
+    output_path = Path(output_path)
+    temp_dir = Path(temp_dir)
+    
+    if not video_path.exists():
+        dprint(f"[ADD_AUDIO] Input video does not exist: {video_path}")
+        return None
+    
+    if not audio_url:
+        dprint(f"[ADD_AUDIO] No audio URL provided")
+        return None
+    
+    dprint(f"[ADD_AUDIO] Adding audio to video")
+    dprint(f"[ADD_AUDIO]   Video: {video_path}")
+    dprint(f"[ADD_AUDIO]   Audio: {audio_url[:80]}...")
+    
+    try:
+        # Download audio if it's a URL
+        if audio_url.startswith(('http://', 'https://')):
+            import requests
+            import uuid
+            
+            # Determine file extension from URL or default to mp3
+            audio_ext = '.mp3'
+            url_lower = audio_url.lower()
+            for ext in ['.mp3', '.wav', '.aac', '.m4a', '.ogg', '.flac']:
+                if ext in url_lower:
+                    audio_ext = ext
+                    break
+            
+            audio_filename = f"temp_audio_{uuid.uuid4().hex[:8]}{audio_ext}"
+            local_audio_path = temp_dir / audio_filename
+            
+            dprint(f"[ADD_AUDIO] Downloading audio to {local_audio_path}...")
+            
+            response = requests.get(audio_url, stream=True, timeout=60)
+            response.raise_for_status()
+            
+            with open(local_audio_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            dprint(f"[ADD_AUDIO] Audio downloaded: {local_audio_path.stat().st_size} bytes")
+        else:
+            local_audio_path = Path(audio_url)
+            if not local_audio_path.exists():
+                dprint(f"[ADD_AUDIO] Local audio file does not exist: {audio_url}")
+                return None
+        
+        # Get video duration for logging
+        try:
+            probe_cmd = [
+                'ffprobe', '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                str(video_path)
+            ]
+            result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+            video_duration = float(result.stdout.strip()) if result.returncode == 0 else None
+            if video_duration:
+                dprint(f"[ADD_AUDIO] Video duration: {video_duration:.2f}s")
+        except Exception:
+            video_duration = None
+        
+        # Mux video with audio using FFmpeg
+        # -shortest: Stop when shortest stream ends (trims audio to video length)
+        # -c:v copy: Don't re-encode video (fast)
+        # -c:a aac: Encode audio to AAC for compatibility
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        ffmpeg_cmd = [
+            'ffmpeg', '-y',
+            '-i', str(video_path),
+            '-i', str(local_audio_path),
+            '-c:v', 'copy',           # Copy video stream (no re-encoding)
+            '-c:a', 'aac',            # Encode audio to AAC
+            '-b:a', '192k',           # Audio bitrate
+            '-shortest',              # Trim to shortest stream (video)
+            '-map', '0:v:0',          # Take video from first input
+            '-map', '1:a:0',          # Take audio from second input
+            str(output_path)
+        ]
+        
+        dprint(f"[ADD_AUDIO] Running FFmpeg to mux audio...")
+        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=300)
+        
+        if result.returncode != 0:
+            dprint(f"[ADD_AUDIO] FFmpeg failed: {result.stderr[:500] if result.stderr else 'No error message'}")
+            return None
+        
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            dprint(f"[ADD_AUDIO] Output file not created or empty")
+            return None
+        
+        # Clean up downloaded audio if we downloaded it
+        if audio_url.startswith(('http://', 'https://')):
+            try:
+                local_audio_path.unlink()
+            except Exception:
+                pass
+        
+        dprint(f"[ADD_AUDIO] ✅ Successfully added audio to video: {output_path}")
+        dprint(f"[ADD_AUDIO]   Output size: {output_path.stat().st_size} bytes")
+        
+        return output_path
+        
+    except Exception as e:
+        dprint(f"[ADD_AUDIO] Error adding audio: {e}")
+        traceback.print_exc()
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except Exception:
+                pass
+        return None
