@@ -22,6 +22,8 @@ from source.specialized_handlers import (
     handle_rife_interpolate_task,
     handle_extract_frame_task
 )
+from source.comfy_handler import handle_comfy_task
+from source.task_engine_router import route_task, COMFY_TASK_TYPES
 from source.sm_functions import travel_between_images as tbi
 from source.sm_functions import magic_edit as me
 from source.sm_functions.join_clips import _handle_join_clips_task
@@ -503,6 +505,12 @@ class TaskRegistry:
             ),
             "rife_interpolate_images": lambda: handle_rife_interpolate_task(
                 params, context["main_output_dir_base"], task_id, dprint_func, task_queue=context["task_queue"]
+            ),
+            "comfy": lambda: handle_comfy_task(
+                task_params_from_db=params,
+                main_output_dir_base=context["main_output_dir_base"],
+                task_id=task_id,
+                dprint=dprint_func
             )
         }
 
