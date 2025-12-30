@@ -681,7 +681,8 @@ class HeadlessTaskQueue:
                     # Do a short retry before failing the task.
                     if not is_success:
                         try:
-                            import os
+                            # Note: os is imported at module level - don't re-import here as it causes
+                            # "local variable 'os' referenced before assignment" due to Python scoping
                             import time as _time
 
                             retry_s = 2.0
