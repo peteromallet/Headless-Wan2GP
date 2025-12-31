@@ -152,8 +152,9 @@ def main():
     
     # Initialize task queue (this loads the model)
     task_queue = HeadlessTaskQueue(
-        wan_root=str(PROJECT_ROOT / "Wan2GP"),
-        debug_mode=True
+        wan_dir=str(PROJECT_ROOT / "Wan2GP"),
+        debug_mode=True,
+        main_output_dir=str(OUTPUT_DIR)
     )
     
     print("Model loaded!")
@@ -208,9 +209,9 @@ def main():
                         image = apply_text_overlay(image, overlay_text)
                         
                         # Save to organized folder
-                        save_dir = OUTPUT_DIR / f"prompt{prompt_idx}" / f"hires_steps_{hires_steps}"
+                        save_dir = OUTPUT_DIR / f"prompt{prompt_idx}"
                         save_dir.mkdir(parents=True, exist_ok=True)
-                        save_path = save_dir / f"{task_id}.jpg"
+                        save_path = save_dir / f"hires_steps_{hires_steps}.jpg"
                         image.save(save_path, quality=95)
                         
                         print(f"  ✅ Saved: {save_path.relative_to(PROJECT_ROOT)}")
