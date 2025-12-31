@@ -150,9 +150,11 @@ def main():
     from source.task_conversion import db_task_to_generation_task
     from headless_model_management import HeadlessTaskQueue
     
+    wan2gp_path = str(PROJECT_ROOT / "Wan2GP")
+    
     # Initialize task queue (this loads the model)
     task_queue = HeadlessTaskQueue(
-        wan_dir=str(PROJECT_ROOT / "Wan2GP"),
+        wan_dir=wan2gp_path,
         debug_mode=True,
         main_output_dir=str(OUTPUT_DIR)
     )
@@ -188,7 +190,8 @@ def main():
                 gen_task = db_task_to_generation_task(
                     db_task_params=task_params,
                     task_id=task_id,
-                    task_type="qwen_image_style"
+                    task_type="qwen_image_style",
+                    wan2gp_path=wan2gp_path
                 )
                 
                 # Run the task
