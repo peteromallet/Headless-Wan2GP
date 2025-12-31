@@ -2,7 +2,7 @@
 """
 Test script for qwen_image_hires two-pass generation.
 
-Runs tasks directly (no database needed) with varying hires pass settings.
+Runs tasks directly via WanOrchestrator (no queue, no database).
 
 Usage:
     python test_qwen_hires.py
@@ -10,7 +10,6 @@ Usage:
 
 import os
 import sys
-import uuid
 from datetime import datetime
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
@@ -99,15 +98,8 @@ def apply_text_overlay(image: Image.Image, text: str, position: str = "bottom-le
     text_height = line_height * len(lines)
     padding = 12
     
-    if position == "bottom-left":
-        x = padding
-        y = image.height - text_height - padding * 2
-    elif position == "top-left":
-        x = padding
-        y = padding
-    else:
-        x = padding
-        y = image.height - text_height - padding * 2
+    x = padding
+    y = image.height - text_height - padding * 2
     
     bg_bbox = (x - padding, y - padding, x + max_line_width + padding, y + text_height + padding)
     overlay = Image.new('RGBA', image.size, (0, 0, 0, 0))
@@ -131,7 +123,7 @@ def apply_text_overlay(image: Image.Image, text: str, position: str = "bottom-le
 
 def main():
     print("=" * 70)
-    print("Qwen Image Hires Test - Two-Pass Generation (Direct Execution)")
+    print("Qwen Image Hires Test - Two-Pass Generation")
     print("=" * 70)
     print()
     print(f"Configuration:")
@@ -145,98 +137,81 @@ def main():
     print(f"  Output directory: {OUTPUT_DIR}/")
     print()
     
-    # Import the task processing machinery
-    print("Loading model and task system...")
-    from source.task_conversion import db_task_to_generation_task
-    from headless_model_management import HeadlessTaskQueue
+    # Import and initialize WanOrchestrator
+    print("Initializing WanOrchestrator...")
+    from headless_wgp import WanOrchestrator
     
     wan2gp_path = str(PROJECT_ROOT / "Wan2GP")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     
-    # Initialize and start task queue
-    task_queue = HeadlessTaskQueue(
-        wan_dir=wan2gp_path,
-        debug_mode=True,
+    orchestrator = WanOrchestrator(
+        wan_root=wan2gp_path,
         main_output_dir=str(OUTPUT_DIR)
     )
-    task_queue.start()
     
-    print("Queue started!")
+    print("Orchestrator ready!")
     print()
     print("-" * 70)
     
     completed = 0
     failed = 0
     
-    try:
-        for prompt_idx, prompt in enumerate(PROMPTS, 1):
-            prompt_preview = prompt[:50] + "..." if len(prompt) > 50 else prompt
-            print(f"\n📝 Prompt {prompt_idx}: \"{prompt_preview}\"")
+    for prompt_idx, prompt in enumerate(PROMPTS, 1):
+        prompt_preview = prompt[:50] + "..." if len(prompt) > 50 else prompt
+        print(f"\n📝 Prompt {prompt_idx}: \"{prompt_preview}\"")
+        
+        for hires_steps in HIRES_STEPS_TO_TEST:
+            print(f"\n  🔄 Running: hires_steps={hires_steps}")
             
-            for hires_steps in HIRES_STEPS_TO_TEST:
-                task_id = f"hires_test_p{prompt_idx}_s{hires_steps}_{datetime.now().strftime('%H%M%S')}"
-                
-                # Build task params
-                task_params = {
-                    **BASE_TASK,
-                    "prompt": prompt,
-                    "hires_scale": HIRES_SCALE,
+            try:
+                # Build hires config
+                hires_config = {
+                    "enabled": True,
+                    "scale": HIRES_SCALE,
                     "hires_steps": hires_steps,
-                    "hires_denoise": HIRES_DENOISE,
-                    "hires_upscale_method": "bicubic",
+                    "denoising_strength": HIRES_DENOISE,
+                    "upscale_method": "bicubic",
                 }
                 
-                print(f"\n  🔄 Running: hires_steps={hires_steps}")
+                # Call generate directly
+                output_path = orchestrator.generate(
+                    prompt=prompt,
+                    model_type="qwen_image_edit_20B",
+                    resolution=BASE_TASK["resolution"],
+                    num_inference_steps=BASE_TASK["num_inference_steps"],
+                    guidance_scale=BASE_TASK["guidance_scale"],
+                    seed=BASE_TASK["seed"],
+                    video_prompt_type="KI",
+                    hires_config=hires_config,
+                )
                 
-                try:
-                    # Convert to generation task
-                    gen_task = db_task_to_generation_task(
-                        db_task_params=task_params,
-                        task_id=task_id,
-                        task_type="qwen_image_style",
-                        wan2gp_path=wan2gp_path
+                if output_path and Path(output_path).exists():
+                    image = Image.open(output_path)
+                    
+                    overlay_text = (
+                        f"Pass1: {BASE_TASK['num_inference_steps']} steps @ {BASE_TASK['resolution']}\n"
+                        f"Pass2: {hires_steps} steps @ {HIRES_DENOISE} denoise\n"
+                        f"Scale: {HIRES_SCALE}x"
                     )
+                    image = apply_text_overlay(image, overlay_text)
                     
-                    # Submit task and wait for completion
-                    task_queue.submit_task(gen_task)
-                    result = task_queue.wait_for_completion(task_id, timeout=600.0)
+                    # Save to organized folder
+                    save_dir = OUTPUT_DIR / f"prompt{prompt_idx}"
+                    save_dir.mkdir(parents=True, exist_ok=True)
+                    save_path = save_dir / f"hires_steps_{hires_steps}.jpg"
+                    image.save(save_path, quality=95)
                     
-                    if result.get("success") and result.get("output_path"):
-                        output_path = Path(result["output_path"])
-                        
-                        # Load, overlay, and save
-                        if output_path.exists():
-                            image = Image.open(output_path)
-                            
-                            overlay_text = (
-                                f"Pass1: {BASE_TASK['num_inference_steps']} steps @ {BASE_TASK['resolution']}\n"
-                                f"Pass2: {hires_steps} steps @ {HIRES_DENOISE} denoise\n"
-                                f"Scale: {HIRES_SCALE}x"
-                            )
-                            image = apply_text_overlay(image, overlay_text)
-                            
-                            # Save to organized folder
-                            save_dir = OUTPUT_DIR / f"prompt{prompt_idx}"
-                            save_dir.mkdir(parents=True, exist_ok=True)
-                            save_path = save_dir / f"hires_steps_{hires_steps}.jpg"
-                            image.save(save_path, quality=95)
-                            
-                            print(f"  ✅ Saved: {save_path.relative_to(PROJECT_ROOT)}")
-                            completed += 1
-                        else:
-                            print(f"  ⚠️ Output file not found: {output_path}")
-                            failed += 1
-                    else:
-                        error = result.get("error", "Unknown error")
-                        print(f"  ❌ Failed: {error}")
-                        failed += 1
-                        
-                except Exception as e:
-                    print(f"  ❌ Error: {e}")
+                    print(f"  ✅ Saved: {save_path.relative_to(PROJECT_ROOT)}")
+                    completed += 1
+                else:
+                    print(f"  ❌ No output returned")
                     failed += 1
-    finally:
-        # Always stop the queue
-        print("\nStopping queue...")
-        task_queue.stop()
+                    
+            except Exception as e:
+                import traceback
+                print(f"  ❌ Error: {e}")
+                traceback.print_exc()
+                failed += 1
     
     print()
     print("=" * 70)
