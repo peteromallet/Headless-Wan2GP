@@ -152,83 +152,91 @@ def main():
     
     wan2gp_path = str(PROJECT_ROOT / "Wan2GP")
     
-    # Initialize task queue (this loads the model)
+    # Initialize and start task queue
     task_queue = HeadlessTaskQueue(
         wan_dir=wan2gp_path,
         debug_mode=True,
         main_output_dir=str(OUTPUT_DIR)
     )
+    task_queue.start()
     
-    print("Model loaded!")
+    print("Queue started!")
     print()
     print("-" * 70)
     
     completed = 0
     failed = 0
     
-    for prompt_idx, prompt in enumerate(PROMPTS, 1):
-        prompt_preview = prompt[:50] + "..." if len(prompt) > 50 else prompt
-        print(f"\n📝 Prompt {prompt_idx}: \"{prompt_preview}\"")
-        
-        for hires_steps in HIRES_STEPS_TO_TEST:
-            task_id = f"hires_test_p{prompt_idx}_s{hires_steps}_{datetime.now().strftime('%H%M%S')}"
+    try:
+        for prompt_idx, prompt in enumerate(PROMPTS, 1):
+            prompt_preview = prompt[:50] + "..." if len(prompt) > 50 else prompt
+            print(f"\n📝 Prompt {prompt_idx}: \"{prompt_preview}\"")
             
-            # Build task params
-            task_params = {
-                **BASE_TASK,
-                "prompt": prompt,
-                "hires_scale": HIRES_SCALE,
-                "hires_steps": hires_steps,
-                "hires_denoise": HIRES_DENOISE,
-                "hires_upscale_method": "bicubic",
-            }
-            
-            print(f"\n  🔄 Running: hires_steps={hires_steps}")
-            
-            try:
-                # Convert to generation task
-                gen_task = db_task_to_generation_task(
-                    db_task_params=task_params,
-                    task_id=task_id,
-                    task_type="qwen_image_style",
-                    wan2gp_path=wan2gp_path
-                )
+            for hires_steps in HIRES_STEPS_TO_TEST:
+                task_id = f"hires_test_p{prompt_idx}_s{hires_steps}_{datetime.now().strftime('%H%M%S')}"
                 
-                # Run the task
-                result = task_queue.process_task(gen_task)
+                # Build task params
+                task_params = {
+                    **BASE_TASK,
+                    "prompt": prompt,
+                    "hires_scale": HIRES_SCALE,
+                    "hires_steps": hires_steps,
+                    "hires_denoise": HIRES_DENOISE,
+                    "hires_upscale_method": "bicubic",
+                }
                 
-                if result and result.get("output_path"):
-                    output_path = Path(result["output_path"])
+                print(f"\n  🔄 Running: hires_steps={hires_steps}")
+                
+                try:
+                    # Convert to generation task
+                    gen_task = db_task_to_generation_task(
+                        db_task_params=task_params,
+                        task_id=task_id,
+                        task_type="qwen_image_style",
+                        wan2gp_path=wan2gp_path
+                    )
                     
-                    # Load, overlay, and save
-                    if output_path.exists():
-                        image = Image.open(output_path)
+                    # Submit task and wait for completion
+                    task_queue.submit_task(gen_task)
+                    result = task_queue.wait_for_completion(task_id, timeout=600.0)
+                    
+                    if result.get("success") and result.get("output_path"):
+                        output_path = Path(result["output_path"])
                         
-                        overlay_text = (
-                            f"Pass1: {BASE_TASK['num_inference_steps']} steps @ {BASE_TASK['resolution']}\n"
-                            f"Pass2: {hires_steps} steps @ {HIRES_DENOISE} denoise\n"
-                            f"Scale: {HIRES_SCALE}x"
-                        )
-                        image = apply_text_overlay(image, overlay_text)
-                        
-                        # Save to organized folder
-                        save_dir = OUTPUT_DIR / f"prompt{prompt_idx}"
-                        save_dir.mkdir(parents=True, exist_ok=True)
-                        save_path = save_dir / f"hires_steps_{hires_steps}.jpg"
-                        image.save(save_path, quality=95)
-                        
-                        print(f"  ✅ Saved: {save_path.relative_to(PROJECT_ROOT)}")
-                        completed += 1
+                        # Load, overlay, and save
+                        if output_path.exists():
+                            image = Image.open(output_path)
+                            
+                            overlay_text = (
+                                f"Pass1: {BASE_TASK['num_inference_steps']} steps @ {BASE_TASK['resolution']}\n"
+                                f"Pass2: {hires_steps} steps @ {HIRES_DENOISE} denoise\n"
+                                f"Scale: {HIRES_SCALE}x"
+                            )
+                            image = apply_text_overlay(image, overlay_text)
+                            
+                            # Save to organized folder
+                            save_dir = OUTPUT_DIR / f"prompt{prompt_idx}"
+                            save_dir.mkdir(parents=True, exist_ok=True)
+                            save_path = save_dir / f"hires_steps_{hires_steps}.jpg"
+                            image.save(save_path, quality=95)
+                            
+                            print(f"  ✅ Saved: {save_path.relative_to(PROJECT_ROOT)}")
+                            completed += 1
+                        else:
+                            print(f"  ⚠️ Output file not found: {output_path}")
+                            failed += 1
                     else:
-                        print(f"  ⚠️ Output file not found: {output_path}")
+                        error = result.get("error", "Unknown error")
+                        print(f"  ❌ Failed: {error}")
                         failed += 1
-                else:
-                    print(f"  ❌ No output returned")
+                        
+                except Exception as e:
+                    print(f"  ❌ Error: {e}")
                     failed += 1
-                    
-            except Exception as e:
-                print(f"  ❌ Error: {e}")
-                failed += 1
+    finally:
+        # Always stop the queue
+        print("\nStopping queue...")
+        task_queue.stop()
     
     print()
     print("=" * 70)
