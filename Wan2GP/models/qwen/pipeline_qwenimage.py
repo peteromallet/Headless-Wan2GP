@@ -422,6 +422,62 @@ class QwenImagePipeline(): #DiffusionPipeline
 
         return latents
 
+    @staticmethod
+    def _upscale_latents(latents, height, width, vae_scale_factor, scale_factor, upscale_method="bicubic"):
+        """
+        Upscale packed latents in latent space for hires fix.
+        
+        Args:
+            latents: Packed latents tensor (batch, seq, channels)
+            height: Current output height in pixels
+            width: Current output width in pixels
+            vae_scale_factor: VAE compression factor
+            scale_factor: Upscale multiplier (e.g., 2.0)
+            upscale_method: Interpolation method ('bicubic', 'bilinear', 'nearest')
+        
+        Returns:
+            Tuple of (upscaled_packed_latents, new_height, new_width)
+        """
+        batch_size, num_patches, channels = latents.shape
+        
+        # Calculate latent spatial dimensions
+        latent_h = 2 * (int(height) // (vae_scale_factor * 2))
+        latent_w = 2 * (int(width) // (vae_scale_factor * 2))
+        
+        # Unpack to spatial format: (B, C, 1, H, W)
+        latents_spatial = latents.view(batch_size, latent_h // 2, latent_w // 2, channels // 4, 2, 2)
+        latents_spatial = latents_spatial.permute(0, 3, 1, 4, 2, 5)
+        latents_spatial = latents_spatial.reshape(batch_size, channels // 4, 1, latent_h, latent_w)
+        
+        # Calculate new dimensions
+        new_latent_h = int(latent_h * scale_factor)
+        new_latent_w = int(latent_w * scale_factor)
+        
+        # Ensure dimensions are divisible by 2 for repacking
+        new_latent_h = (new_latent_h // 2) * 2
+        new_latent_w = (new_latent_w // 2) * 2
+        
+        # Upscale in spatial domain (squeeze temporal dim for 2D interpolate)
+        latents_2d = latents_spatial.squeeze(2)  # (B, C, H, W)
+        upscaled = torch.nn.functional.interpolate(
+            latents_2d, 
+            size=(new_latent_h, new_latent_w), 
+            mode=upscale_method,
+            align_corners=False if upscale_method != 'nearest' else None
+        )
+        upscaled = upscaled.unsqueeze(2)  # (B, C, 1, H, W)
+        
+        # Repack to sequence format
+        num_channels = upscaled.shape[1]
+        upscaled_packed = upscaled.view(batch_size, num_channels, new_latent_h // 2, 2, new_latent_w // 2, 2)
+        upscaled_packed = upscaled_packed.permute(0, 2, 4, 1, 3, 5)
+        upscaled_packed = upscaled_packed.reshape(batch_size, (new_latent_h // 2) * (new_latent_w // 2), num_channels * 4)
+        
+        # Calculate new output dimensions in pixels
+        new_height = new_latent_h * vae_scale_factor
+        new_width = new_latent_w * vae_scale_factor
+        
+        return upscaled_packed, new_height, new_width
 
     def _encode_vae_image(self, image: torch.Tensor, generator: torch.Generator):
         if isinstance(generator, list):

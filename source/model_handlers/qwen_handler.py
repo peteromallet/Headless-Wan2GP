@@ -209,6 +209,29 @@ class QwenHandler:
                 generation_params["lora_multipliers"].append(0.75)
                 self._log_info(f"Added Lightning LoRA with strength 0.75")
 
+        # Optional hires fix - can be enabled on any qwen_image_edit task
+        self._maybe_add_hires_config(db_task_params, generation_params)
+
+    def _maybe_add_hires_config(self, db_task_params: Dict[str, Any], generation_params: Dict[str, Any]):
+        """Add hires_config if hires params are present in task params."""
+        hires_scale = db_task_params.get("hires_scale")
+        if hires_scale is None:
+            return  # No hires fix requested
+        
+        hires_config = {
+            "enabled": True,
+            "scale": float(hires_scale),
+            "hires_steps": int(db_task_params.get("hires_steps", 6)),
+            "denoising_strength": float(db_task_params.get("hires_denoise", 0.5)),
+            "upscale_method": db_task_params.get("hires_upscale_method", "bicubic"),
+        }
+        generation_params["hires_config"] = hires_config
+        
+        self._log_info(
+            f"Hires fix enabled: {hires_config['scale']}x scale, "
+            f"{hires_config['hires_steps']} steps @ {hires_config['denoising_strength']} denoise"
+        )
+
     def handle_image_inpaint(self, db_task_params: Dict[str, Any], generation_params: Dict[str, Any]):
         """Handle image_inpaint task type."""
         self._log_info("Processing image_inpaint task")
@@ -269,6 +292,9 @@ class QwenHandler:
             generation_params["lora_names"].append(inpaint_fname)
             generation_params["lora_multipliers"].append(1.0)
 
+        # Optional hires fix
+        self._maybe_add_hires_config(db_task_params, generation_params)
+
     def handle_annotated_image_edit(self, db_task_params: Dict[str, Any], generation_params: Dict[str, Any]):
         """Handle annotated_image_edit task type."""
         self._log_info("Processing annotated_image_edit task")
@@ -320,6 +346,9 @@ class QwenHandler:
         if annotate_fname not in generation_params["lora_names"]:
             generation_params["lora_names"].append(annotate_fname)
             generation_params["lora_multipliers"].append(1.0)
+
+        # Optional hires fix
+        self._maybe_add_hires_config(db_task_params, generation_params)
 
     def handle_qwen_image_style(self, db_task_params: Dict[str, Any], generation_params: Dict[str, Any]):
         """Handle qwen_image_style task type."""
@@ -432,3 +461,102 @@ class QwenHandler:
         if scene_strength > 0.0 and scene_fname not in generation_params["lora_names"]:
             generation_params["lora_names"].append(scene_fname)
             generation_params["lora_multipliers"].append(scene_strength)
+
+        # Optional hires fix
+        self._maybe_add_hires_config(db_task_params, generation_params)
+
+    def handle_qwen_image_hires(self, db_task_params: Dict[str, Any], generation_params: Dict[str, Any]):
+        """
+        Handle qwen_image_hires task type - two-pass generation with latent upscaling.
+        
+        Workflow:
+        - Pass 1: Generate at base resolution (default 1328x1328)
+        - Latent upscale: Bicubic interpolation in latent space
+        - Pass 2: Refine at higher resolution with partial denoising
+        
+        This replicates the ComfyUI two-pass hires fix workflow.
+        """
+        self._log_info("Processing qwen_image_hires task (two-pass generation)")
+        
+        # Default base resolutions matching ComfyUI workflow
+        BASE_RESOLUTIONS = {
+            "1:1": (1328, 1328),
+            "16:9": (1664, 928),
+            "9:16": (928, 1664),
+            "4:3": (1472, 1104),
+            "3:4": (1104, 1472),
+            "3:2": (1584, 1056),
+            "2:3": (1056, 1584),
+        }
+        
+        # Determine base resolution
+        resolution_input = db_task_params.get("resolution", "1328x1328")
+        if resolution_input in BASE_RESOLUTIONS:
+            # Aspect ratio key provided
+            w, h = BASE_RESOLUTIONS[resolution_input]
+            resolution_str = f"{w}x{h}"
+        else:
+            resolution_str = resolution_input
+        
+        generation_params["resolution"] = resolution_str
+        
+        # Build hires config
+        hires_config = {
+            "enabled": True,
+            "scale": float(db_task_params.get("hires_scale", 2.0)),
+            "hires_steps": int(db_task_params.get("hires_steps", 6)),
+            "denoising_strength": float(db_task_params.get("hires_denoise", 0.5)),
+            "upscale_method": db_task_params.get("hires_upscale_method", "bicubic"),
+        }
+        generation_params["hires_config"] = hires_config
+        
+        # Base generation params
+        generation_params.setdefault("video_prompt_type", "KI")
+        generation_params.setdefault("guidance_scale", 1)
+        generation_params.setdefault("num_inference_steps", int(db_task_params.get("num_inference_steps", 10)))
+        generation_params.setdefault("video_length", 1)
+        
+        # System prompt
+        if "system_prompt" in db_task_params and db_task_params["system_prompt"]:
+            generation_params["system_prompt"] = db_task_params["system_prompt"]
+        else:
+            generation_params["system_prompt"] = "You are a professional image generator. Create high-quality, detailed images based on the description."
+        
+        # Lightning LoRA setup (0.45 strength matches ComfyUI workflow)
+        lightning_v2_fname = "Qwen-Image-Lightning-8steps-V2.0.safetensors"
+        lightning_v1_fname = "Qwen-VL-Image-Edit-Lora-V1.0-bf16.safetensors"
+        
+        # Check for available lightning LoRA
+        selected_lightning = None
+        for fname in [lightning_v2_fname, lightning_v1_fname]:
+            if (self.qwen_lora_dir / fname).exists():
+                selected_lightning = fname
+                break
+        
+        # Download V2 if nothing found
+        if not selected_lightning:
+            self._download_lora_if_missing("lightx2v/Qwen-Image-Lightning", lightning_v2_fname)
+            selected_lightning = lightning_v2_fname
+        
+        # LoRA strength from task params or default 0.45 (ComfyUI default)
+        lora_strength = float(db_task_params.get("lightning_lora_strength", 0.45))
+        
+        if "lora_names" not in generation_params:
+            generation_params["lora_names"] = []
+        if "lora_multipliers" not in generation_params:
+            generation_params["lora_multipliers"] = []
+        
+        if selected_lightning not in generation_params["lora_names"]:
+            generation_params["lora_names"].append(selected_lightning)
+            generation_params["lora_multipliers"].append(lora_strength)
+            self._log_info(f"Added Lightning LoRA '{selected_lightning}' @ {lora_strength}")
+        
+        # Log final config
+        base_w, base_h = map(int, resolution_str.split("x"))
+        final_w = int(base_w * hires_config["scale"])
+        final_h = int(base_h * hires_config["scale"])
+        self._log_info(
+            f"Hires workflow: {resolution_str} → {final_w}x{final_h}, "
+            f"base {generation_params['num_inference_steps']} steps, "
+            f"hires {hires_config['hires_steps']} steps @ {hires_config['denoising_strength']} denoise"
+        )

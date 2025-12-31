@@ -242,6 +242,7 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             "join_clips_segment": "wan_2_2_vace_lightning_baseline_2_2_2",
             "inpaint_frames": "wan_2_2_vace_lightning_baseline_2_2_2",
             "qwen_image_edit": "qwen_image_edit_20B",
+            "qwen_image_hires": "qwen_image_edit_20B",
             "qwen_image_style": "qwen_image_edit_20B",
             "image_inpaint": "qwen_image_edit_20B",
             "annotated_image_edit": "qwen_image_edit_20B"
@@ -266,6 +267,8 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         "tea_cache_setting", "tea_cache_start_step_perc", "RIFLEx_setting", 
         "slg_switch", "slg_layers", "slg_start_perc", "slg_end_perc",
         "cfg_star_switch", "cfg_zero_step", "prompt_enhancer",
+        # Hires fix parameters
+        "hires_scale", "hires_steps", "hires_denoise", "hires_upscale_method", "lightning_lora_strength",
         "sliding_window_size", "sliding_window_overlap", "sliding_window_overlap_noise",
         "sliding_window_discard_last_frames", "latent_noise_mask_strength",
         "vid2vid_init_video", "vid2vid_init_strength",
@@ -328,6 +331,8 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
 
     if task_type == "qwen_image_edit":
         qwen_handler.handle_qwen_image_edit(db_task_params, generation_params)
+    elif task_type == "qwen_image_hires":
+        qwen_handler.handle_qwen_image_hires(db_task_params, generation_params)
     elif task_type == "image_inpaint":
         qwen_handler.handle_image_inpaint(db_task_params, generation_params)
     elif task_type == "annotated_image_edit":

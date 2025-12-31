@@ -1217,6 +1217,12 @@ class HeadlessTaskQueue:
             # Special phase_config patching parameters (internal use)
             "_parsed_phase_config": "_parsed_phase_config",
             "_phase_config_model_name": "_phase_config_model_name",
+            
+            # Qwen hires fix configuration
+            "hires_config": "hires_config",
+            
+            # Qwen-specific parameters
+            "system_prompt": "system_prompt",
         }
         
 

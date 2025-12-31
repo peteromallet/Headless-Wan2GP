@@ -25,6 +25,7 @@ export const TASK_TYPES = {
   IMAGE_EDIT: 'image_edit',
   MAGIC_EDIT: 'magic_edit',
   QWEN_IMAGE_EDIT: 'qwen_image_edit',
+  QWEN_IMAGE_HIRES: 'qwen_image_hires',
   ANNOTATED_IMAGE_EDIT: 'annotated_image_edit',
   
   // Generation tasks
@@ -134,6 +135,7 @@ export function isEditType(taskType: string): boolean {
          taskType === TASK_TYPES.IMAGE_EDIT ||
          taskType === TASK_TYPES.MAGIC_EDIT ||
          taskType === TASK_TYPES.QWEN_IMAGE_EDIT ||
+         taskType === TASK_TYPES.QWEN_IMAGE_HIRES ||
          taskType === TASK_TYPES.ANNOTATED_IMAGE_EDIT;
 }
 
@@ -147,6 +149,7 @@ export function getEditVariantType(taskType: string): VariantType {
     case TASK_TYPES.ANNOTATED_IMAGE_EDIT:
       return VARIANT_TYPES.ANNOTATED_EDIT;
     case TASK_TYPES.QWEN_IMAGE_EDIT:
+    case TASK_TYPES.QWEN_IMAGE_HIRES:
     case TASK_TYPES.IMAGE_EDIT:
     case TASK_TYPES.MAGIC_EDIT:
       return VARIANT_TYPES.MAGIC_EDIT;
