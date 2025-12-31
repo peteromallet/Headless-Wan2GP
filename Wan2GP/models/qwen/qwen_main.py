@@ -15,7 +15,7 @@ from diffusers.utils.torch_utils import randn_tensor
 from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2Tokenizer, AutoTokenizer, Qwen2VLProcessor
 from .autoencoder_kl_qwenimage import AutoencoderKLQwenImage
 from diffusers import FlowMatchEulerDiscreteScheduler
-from .pipeline_qwenimage import QwenImagePipeline
+from .pipeline_qwenimage import QwenImagePipeline, calculate_shift, retrieve_timesteps
 from PIL import Image
 from shared.utils.utils import calculate_new_dimensions
 
@@ -143,6 +143,7 @@ class model_factory():
         model_mode = 0,
         outpainting_dims = None,
         system_prompt = None,
+        hires_config = None,  # NEW: Two-pass hires fix configuration
         **bbargs
     ):
         # Generate with different aspect ratios
@@ -216,6 +217,120 @@ class model_factory():
                 stiched = stitch_images(stiched, new_img)
             input_ref_images  = [stiched]
 
+        # ========== TWO-PASS HIRES FIX ==========
+        if hires_config and hires_config.get("enabled"):
+            hires_scale = hires_config.get("scale", 2.0)
+            hires_steps = hires_config.get("hires_steps", 6)
+            hires_denoise = hires_config.get("denoising_strength", 0.5)
+            hires_upscale_method = hires_config.get("upscale_method", "bicubic")
+            hires_seed_offset = int(hires_config.get("seed_offset", 1))
+            
+            print(f"🔍 Hires fix enabled: {width}x{height} → {int(width*hires_scale)}x{int(height*hires_scale)}")
+            print(f"   Pass 1: {sampling_steps} steps | Pass 2: {hires_steps} steps @ {hires_denoise} denoise")
+            
+            # === PASS 1: Generate at base resolution, output latents ===
+            latents = self.pipeline(
+                prompt=input_prompt,
+                negative_prompt=n_prompt,
+                image=input_ref_images,
+                image_mask=image_mask,
+                width=width,
+                height=height,
+                num_inference_steps=sampling_steps,
+                num_images_per_prompt=batch_size,
+                true_cfg_scale=guide_scale,
+                callback=callback,
+                pipeline=self,
+                loras_slists=loras_slists,
+                joint_pass=joint_pass,
+                denoising_strength=denoising_strength,
+                generator=torch.Generator(device="cuda").manual_seed(seed),
+                lora_inpaint=image_mask is not None and model_mode == 1,
+                outpainting_dims=outpainting_dims,
+                system_prompt=system_prompt,
+                output_type="latent",  # Return latents, don't VAE decode yet
+            )
+            if latents is None:
+                return None
+            
+            print(f"✅ Pass 1 complete: latents shape {latents.shape}")
+            
+            # === UPSCALE LATENTS ===
+            latents, new_height, new_width = QwenImagePipeline._upscale_latents(
+                latents, height, width,
+                self.pipeline.vae_scale_factor,
+                hires_scale,
+                hires_upscale_method
+            )
+            print(f"📐 Latents upscaled: {width}x{height} → {new_width}x{new_height}")
+            
+            # === PASS 2: Refine at higher resolution ===
+            # Reset scheduler for second pass
+            self.scheduler = FlowMatchEulerDiscreteScheduler(**scheduler_config)
+            self.pipeline.scheduler = self.scheduler
+
+            # Build sigma/timestep schedule so pass 2 starts at the correct noise level.
+            # NOTE: In this codebase, timestep is on a 0..1000 scale, so sigma ≈ timestep/1000.
+            device = "cuda"
+            sigmas_full = np.linspace(1.0, 1 / hires_steps, hires_steps).tolist()
+            hires_image_seq_len = int(latents.shape[1])
+            mu = calculate_shift(
+                hires_image_seq_len,
+                self.scheduler.config.get("base_image_seq_len", 256),
+                self.scheduler.config.get("max_image_seq_len", 4096),
+                self.scheduler.config.get("base_shift", 0.5),
+                self.scheduler.config.get("max_shift", 1.15),
+            )
+
+            timesteps_full, _ = retrieve_timesteps(
+                self.scheduler,
+                num_inference_steps=None,
+                device=device,
+                sigmas=sigmas_full,
+                mu=mu,
+            )
+
+            start_idx = int(len(timesteps_full) * (1.0 - float(hires_denoise)))
+            start_idx = max(0, min(start_idx, len(timesteps_full) - 1))
+            sigma0 = float(timesteps_full[start_idx].item()) / 1000.0
+            sigmas_trimmed = sigmas_full[start_idx:]
+
+            # Add noise to the (clean) upscaled latents so the scheduler starts at sigma0.
+            noise_gen = torch.Generator(device="cuda").manual_seed(int(seed) + hires_seed_offset)
+            noise = torch.randn(latents.shape, generator=noise_gen, device=latents.device, dtype=latents.dtype)
+            latents = latents * (1.0 - sigma0) + noise * sigma0
+            print(f"🌀 Pass 2 init noise: start_idx={start_idx}/{len(timesteps_full)} sigma0={sigma0:.4f} steps={len(sigmas_trimmed)}")
+            
+            image = self.pipeline(
+                prompt=input_prompt,
+                negative_prompt=n_prompt,
+                image=None,  # No input image for pass 2 - we have latents
+                image_mask=None,
+                width=new_width,
+                height=new_height,
+                num_inference_steps=hires_steps,
+                sigmas=sigmas_trimmed,
+                num_images_per_prompt=batch_size,
+                true_cfg_scale=guide_scale,
+                callback=callback,
+                pipeline=self,
+                loras_slists=loras_slists,
+                joint_pass=joint_pass,
+                denoising_strength=hires_denoise,  # (kept for compatibility; sigma schedule controls actual start)
+                latents=latents,  # Pre-computed upscaled latents
+                generator=torch.Generator(device="cuda").manual_seed(int(seed) + hires_seed_offset),
+                lora_inpaint=False,
+                outpainting_dims=None,
+                system_prompt=system_prompt,
+                output_type="pil",  # Now VAE decode to final image
+            )
+            if image is None:
+                return None
+            
+            print(f"✅ Hires fix complete: {new_width}x{new_height}")
+            return image.transpose(0, 1)
+        
+        # ========== STANDARD SINGLE-PASS (existing behavior) ==========
         image = self.pipeline(
             prompt=input_prompt,
             negative_prompt=n_prompt,

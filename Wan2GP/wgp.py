@@ -4551,6 +4551,7 @@ def generate_video(
     mode,
     system_prompt=None,
     phase_config=None,
+    hires_config=None,
 ):
 
 
@@ -5304,6 +5305,7 @@ def generate_video(
                     image_mask= new_image_mask,
                     outpainting_dims = outpainting_dims,
                     system_prompt = system_prompt,
+                    **({"hires_config": hires_config} if model_family == "qwen" and hires_config else {}),
                 )
             except Exception as e:
                 if len(control_audio_tracks) > 0 or len(source_audio_tracks) > 0:
