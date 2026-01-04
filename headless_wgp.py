@@ -1322,6 +1322,10 @@ class WanOrchestrator:
                 'temperature': 1.0,
                 'output_filename': '',
 
+                # Hires config for two-pass generation (qwen models)
+                'hires_config': resolved_params.get('hires_config', None),
+                'system_prompt': resolved_params.get('system_prompt', ''),
+
                 # Mode and filename
                 'mode': 'generate',
                 'model_filename': '',
@@ -1402,6 +1406,10 @@ class WanOrchestrator:
                 'exaggeration': resolved_params.get("exaggeration", 0.5),
                 'temperature': resolved_params.get("temperature", 1.0),
                 'output_filename': resolved_params.get("output_filename", ""),
+
+                # Hires config for two-pass generation (qwen models)
+                'hires_config': resolved_params.get("hires_config", None),
+                'system_prompt': resolved_params.get("system_prompt", ""),
             }
 
             # Standard defaults for other parameters - extend the dictionary
