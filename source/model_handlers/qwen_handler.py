@@ -593,3 +593,200 @@ class QwenHandler:
             f"base {generation_params['num_inference_steps']} steps, "
             f"hires {hires_config['hires_steps']} steps @ {hires_config['denoising_strength']} denoise"
         )
+
+    def handle_qwen_image(self, db_task_params: Dict[str, Any], generation_params: Dict[str, Any]):
+        """
+        Handle qwen_image task type - general text-to-image generation.
+
+        This is the standard Qwen text-to-image generation without any input image.
+        Supports optional LoRAs and standard generation parameters.
+        """
+        self._log_info("Processing qwen_image task (text-to-image)")
+
+        # Resolution handling
+        resolution = db_task_params.get("resolution", "1024x1024")
+        capped_res = self.cap_qwen_resolution(resolution)
+        if capped_res:
+            generation_params["resolution"] = capped_res
+
+        # Base generation params
+        generation_params.setdefault("video_prompt_type", "")  # No input image
+        generation_params.setdefault("guidance_scale", 3.5)
+        generation_params.setdefault("num_inference_steps", int(db_task_params.get("num_inference_steps", 25)))
+        generation_params.setdefault("video_length", 1)
+
+        # System prompt
+        if "system_prompt" in db_task_params and db_task_params["system_prompt"]:
+            generation_params["system_prompt"] = db_task_params["system_prompt"]
+        else:
+            generation_params["system_prompt"] = "You are a professional image generator. Create high-quality, detailed images based on the description provided."
+
+        # Lightning LoRA setup for faster inference
+        lightning_fname = "Qwen-Image-Edit-Lightning-8steps-V1.0-bf16.safetensors"
+        if not (self.qwen_lora_dir / lightning_fname).exists():
+            self._download_lora_if_missing("lightx2v/Qwen-Image-Lightning", lightning_fname)
+
+        lora_strength = float(db_task_params.get("lightning_lora_strength", 1.0))
+
+        if "lora_names" not in generation_params:
+            generation_params["lora_names"] = []
+        if "lora_multipliers" not in generation_params:
+            generation_params["lora_multipliers"] = []
+
+        if lightning_fname not in generation_params["lora_names"]:
+            generation_params["lora_names"].append(lightning_fname)
+            generation_params["lora_multipliers"].append(lora_strength)
+            self._log_info(f"Added Lightning LoRA @ {lora_strength}")
+
+        # Handle additional LoRAs from task params
+        self._apply_additional_loras(db_task_params, generation_params)
+
+        # Optional hires fix
+        self._maybe_add_hires_config(db_task_params, generation_params)
+
+        self._log_info(f"qwen_image: {generation_params.get('resolution')}, {generation_params['num_inference_steps']} steps")
+
+    def handle_qwen_image_2512(self, db_task_params: Dict[str, Any], generation_params: Dict[str, Any]):
+        """
+        Handle qwen_image_2512 task type - enhanced text-to-image with better text rendering.
+
+        This variant is optimized for:
+        - Better text/typography rendering in images
+        - More realistic human generation
+        - Higher quality output overall
+        """
+        self._log_info("Processing qwen_image_2512 task (enhanced text-to-image)")
+
+        # Resolution handling - this model supports up to 2512px
+        resolution = db_task_params.get("resolution", "1024x1024")
+        # Allow higher resolution for this model variant
+        max_dimension = 2512
+        if resolution and 'x' in resolution:
+            try:
+                width, height = map(int, resolution.split('x'))
+                if width > max_dimension or height > max_dimension:
+                    ratio = min(max_dimension / width, max_dimension / height)
+                    width = int(width * ratio)
+                    height = int(height * ratio)
+                    resolution = f"{width}x{height}"
+                    self._log_info(f"Resolution capped to {resolution} (max {max_dimension}px)")
+            except ValueError:
+                pass
+        generation_params["resolution"] = resolution
+
+        # Base generation params - optimized for quality
+        generation_params.setdefault("video_prompt_type", "")  # No input image
+        generation_params.setdefault("guidance_scale", 4.0)  # Slightly higher for better text
+        generation_params.setdefault("num_inference_steps", int(db_task_params.get("num_inference_steps", 28)))
+        generation_params.setdefault("video_length", 1)
+
+        # System prompt optimized for text rendering
+        if "system_prompt" in db_task_params and db_task_params["system_prompt"]:
+            generation_params["system_prompt"] = db_task_params["system_prompt"]
+        else:
+            generation_params["system_prompt"] = "You are an expert image generator specializing in photorealistic images with accurate text rendering. Pay careful attention to any text, typography, or lettering in the prompt and render it clearly and legibly."
+
+        # Lightning LoRA
+        lightning_fname = "Qwen-Image-Edit-Lightning-8steps-V1.0-bf16.safetensors"
+        if not (self.qwen_lora_dir / lightning_fname).exists():
+            self._download_lora_if_missing("lightx2v/Qwen-Image-Lightning", lightning_fname)
+
+        lora_strength = float(db_task_params.get("lightning_lora_strength", 0.8))
+
+        if "lora_names" not in generation_params:
+            generation_params["lora_names"] = []
+        if "lora_multipliers" not in generation_params:
+            generation_params["lora_multipliers"] = []
+
+        if lightning_fname not in generation_params["lora_names"]:
+            generation_params["lora_names"].append(lightning_fname)
+            generation_params["lora_multipliers"].append(lora_strength)
+
+        # Handle additional LoRAs
+        self._apply_additional_loras(db_task_params, generation_params)
+
+        # Optional hires fix
+        self._maybe_add_hires_config(db_task_params, generation_params)
+
+        self._log_info(f"qwen_image_2512: {generation_params.get('resolution')}, {generation_params['num_inference_steps']} steps")
+
+    def handle_z_image_turbo(self, db_task_params: Dict[str, Any], generation_params: Dict[str, Any]):
+        """
+        Handle z_image_turbo task type - ultra-fast image generation.
+
+        Optimized for:
+        - Rapid prototyping (~0.2s generation)
+        - High-volume generation
+        - Cost-sensitive workflows
+
+        Uses 8-step inference pipeline with aggressive Lightning LoRA.
+        """
+        self._log_info("Processing z_image_turbo task (fast text-to-image)")
+
+        # Resolution handling
+        resolution = db_task_params.get("resolution", "512x512")  # Default smaller for speed
+        capped_res = self.cap_qwen_resolution(resolution)
+        if capped_res:
+            generation_params["resolution"] = capped_res
+
+        # Base generation params - optimized for SPEED
+        generation_params.setdefault("video_prompt_type", "")  # No input image
+        generation_params.setdefault("guidance_scale", 2.5)  # Lower for faster convergence
+        generation_params.setdefault("num_inference_steps", int(db_task_params.get("num_inference_steps", 8)))  # Fast!
+        generation_params.setdefault("video_length", 1)
+
+        # System prompt
+        if "system_prompt" in db_task_params and db_task_params["system_prompt"]:
+            generation_params["system_prompt"] = db_task_params["system_prompt"]
+        else:
+            generation_params["system_prompt"] = "Generate an image based on the description."
+
+        # Lightning LoRA at full strength for turbo mode
+        lightning_fname = "Qwen-Image-Edit-Lightning-8steps-V1.0-bf16.safetensors"
+        if not (self.qwen_lora_dir / lightning_fname).exists():
+            self._download_lora_if_missing("lightx2v/Qwen-Image-Lightning", lightning_fname)
+
+        # Full strength Lightning for maximum speed
+        lora_strength = float(db_task_params.get("lightning_lora_strength", 1.0))
+
+        if "lora_names" not in generation_params:
+            generation_params["lora_names"] = []
+        if "lora_multipliers" not in generation_params:
+            generation_params["lora_multipliers"] = []
+
+        if lightning_fname not in generation_params["lora_names"]:
+            generation_params["lora_names"].append(lightning_fname)
+            generation_params["lora_multipliers"].append(lora_strength)
+
+        # Handle additional LoRAs
+        self._apply_additional_loras(db_task_params, generation_params)
+
+        # Note: hires fix generally not recommended for turbo mode (defeats the speed purpose)
+        # but still allow it if explicitly requested
+        if db_task_params.get("hires_scale"):
+            self._maybe_add_hires_config(db_task_params, generation_params)
+            self._log_warning("Hires fix enabled on turbo mode - this will significantly increase generation time")
+
+        self._log_info(f"z_image_turbo: {generation_params.get('resolution')}, {generation_params['num_inference_steps']} steps (fast mode)")
+
+    def _apply_additional_loras(self, db_task_params: Dict[str, Any], generation_params: Dict[str, Any]):
+        """Apply additional LoRAs from task params (loras array or additional_loras dict)."""
+        # Handle array format: [{"path": "url", "scale": 0.8}]
+        loras = db_task_params.get("loras", [])
+        for lora in loras:
+            if isinstance(lora, dict):
+                path = lora.get("path", "")
+                scale = float(lora.get("scale", 1.0))
+                if path:
+                    if "additional_loras" not in generation_params:
+                        generation_params["additional_loras"] = {}
+                    generation_params["additional_loras"][path] = scale
+                    self._log_debug(f"Added LoRA from array: {path} @ {scale}")
+
+        # Handle dict format: {"url": scale}
+        additional_loras = db_task_params.get("additional_loras", {})
+        if additional_loras:
+            if "additional_loras" not in generation_params:
+                generation_params["additional_loras"] = {}
+            generation_params["additional_loras"].update(additional_loras)
+            self._log_debug(f"Added {len(additional_loras)} additional LoRAs from dict")

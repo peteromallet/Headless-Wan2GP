@@ -245,7 +245,11 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             "qwen_image_hires": "qwen_image_edit_20B",
             "qwen_image_style": "qwen_image_edit_20B",
             "image_inpaint": "qwen_image_edit_20B",
-            "annotated_image_edit": "qwen_image_edit_20B"
+            "annotated_image_edit": "qwen_image_edit_20B",
+            # Text-to-image tasks
+            "qwen_image": "qwen_image_edit_20B",
+            "qwen_image_2512": "qwen_image_edit_20B",
+            "z_image_turbo": "qwen_image_edit_20B"
         }
         model = task_type_to_model.get(task_type, "t2v")
     
@@ -263,7 +267,7 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         "frames_positions", "image_guide", "image_mask",
         "model_mode", "video_source", "keep_frames_video_source",
         "audio_guide", "audio_guide2", "audio_source", "audio_prompt_type", "speakers_locations",
-        "activated_loras", "loras_multipliers", "additional_loras",
+        "activated_loras", "loras_multipliers", "additional_loras", "loras",
         "tea_cache_setting", "tea_cache_start_step_perc", "RIFLEx_setting", 
         "slg_switch", "slg_layers", "slg_start_perc", "slg_end_perc",
         "cfg_star_switch", "cfg_zero_step", "prompt_enhancer",
@@ -340,6 +344,15 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
     elif task_type == "qwen_image_style":
         qwen_handler.handle_qwen_image_style(db_task_params, generation_params)
         prompt = generation_params.get("prompt", prompt)
+        model = "qwen_image_edit_20B"
+    elif task_type == "qwen_image":
+        qwen_handler.handle_qwen_image(db_task_params, generation_params)
+        model = "qwen_image_edit_20B"
+    elif task_type == "qwen_image_2512":
+        qwen_handler.handle_qwen_image_2512(db_task_params, generation_params)
+        model = "qwen_image_edit_20B"
+    elif task_type == "z_image_turbo":
+        qwen_handler.handle_z_image_turbo(db_task_params, generation_params)
         model = "qwen_image_edit_20B"
 
     # Defaults
