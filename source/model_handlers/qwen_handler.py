@@ -184,19 +184,10 @@ class QwenHandler:
             generation_params["system_prompt"] = "You are a professional image editor. Analyze the input image carefully, then apply the requested modifications precisely while maintaining visual coherence and image quality."
 
         # Ensure Lightning LoRA
-        lightning_candidates = [
-            "Qwen-VL-Image-Edit-Lora-V1.0-bf16.safetensors",
-            "Qwen-VL-Image-Edit-Lora-V1.0-fp16.safetensors",
-            "Qwen-VL-8step-Lightning-bf16.safetensors"
-        ]
-        selected_lightning_path = None
-        for fname in lightning_candidates:
-            if (self.qwen_lora_dir / fname).exists():
-                selected_lightning_path = self.qwen_lora_dir / fname
-                break
-        
-        if not selected_lightning_path:
-            selected_lightning_path = self._download_lora_if_missing("lightx2v/Qwen-Image-Lightning", lightning_candidates[0])
+        lightning_fname = "Qwen-Image-Edit-Lightning-8steps-V1.0-bf16.safetensors"
+        selected_lightning_path = self.qwen_lora_dir / lightning_fname
+        if not selected_lightning_path.exists():
+            selected_lightning_path = self._download_lora_if_missing("lightx2v/Qwen-Image-Lightning", lightning_fname)
         
         if selected_lightning_path:
             if "lora_names" not in generation_params:
@@ -266,18 +257,10 @@ class QwenHandler:
         inpaint_fname = "qwen_image_edit_inpainting.safetensors"
         self._download_lora_if_missing("ostris/qwen_image_edit_inpainting", inpaint_fname)
         
-        lightning_candidates = [
-            "Qwen-VL-Image-Edit-Lora-V1.0-bf16.safetensors",
-            "Qwen-VL-Image-Edit-Lora-V1.0-fp16.safetensors"
-        ]
-        selected_lightning = None
-        for fname in lightning_candidates:
-            if (self.qwen_lora_dir / fname).exists():
-                selected_lightning = fname
-                break
-        if not selected_lightning:
-            self._download_lora_if_missing("lightx2v/Qwen-Image-Lightning", lightning_candidates[0])
-            selected_lightning = lightning_candidates[0]
+        lightning_fname = "Qwen-Image-Edit-Lightning-8steps-V1.0-bf16.safetensors"
+        if not (self.qwen_lora_dir / lightning_fname).exists():
+            self._download_lora_if_missing("lightx2v/Qwen-Image-Lightning", lightning_fname)
+        selected_lightning = lightning_fname
 
         if "lora_names" not in generation_params:
             generation_params["lora_names"] = []
@@ -329,10 +312,10 @@ class QwenHandler:
         annotate_fname = "in_scene_pure_squares_flipped_450_lr_000006700.safetensors"
         self._download_lora_if_missing("peteromallet/random_junk", annotate_fname)
         
-        lightning_candidates = ["Qwen-VL-Image-Edit-Lora-V1.0-bf16.safetensors"]
-        selected_lightning = lightning_candidates[0]
-        if not (self.qwen_lora_dir / selected_lightning).exists():
-            self._download_lora_if_missing("lightx2v/Qwen-Image-Lightning", selected_lightning)
+        lightning_fname = "Qwen-Image-Edit-Lightning-8steps-V1.0-bf16.safetensors"
+        if not (self.qwen_lora_dir / lightning_fname).exists():
+            self._download_lora_if_missing("lightx2v/Qwen-Image-Lightning", lightning_fname)
+        selected_lightning = lightning_fname
 
         if "lora_names" not in generation_params:
             generation_params["lora_names"] = []
@@ -522,21 +505,11 @@ class QwenHandler:
         else:
             generation_params["system_prompt"] = "You are a professional image generator. Create high-quality, detailed images based on the description."
         
-        # Lightning LoRA setup (0.45 strength matches ComfyUI workflow)
-        lightning_v2_fname = "Qwen-Image-Lightning-8steps-V2.0.safetensors"
-        lightning_v1_fname = "Qwen-VL-Image-Edit-Lora-V1.0-bf16.safetensors"
-        
-        # Check for available lightning LoRA
-        selected_lightning = None
-        for fname in [lightning_v2_fname, lightning_v1_fname]:
-            if (self.qwen_lora_dir / fname).exists():
-                selected_lightning = fname
-                break
-        
-        # Download V2 if nothing found
-        if not selected_lightning:
-            self._download_lora_if_missing("lightx2v/Qwen-Image-Lightning", lightning_v2_fname)
-            selected_lightning = lightning_v2_fname
+        # Lightning LoRA setup
+        lightning_fname = "Qwen-Image-Edit-Lightning-8steps-V1.0-bf16.safetensors"
+        if not (self.qwen_lora_dir / lightning_fname).exists():
+            self._download_lora_if_missing("lightx2v/Qwen-Image-Lightning", lightning_fname)
+        selected_lightning = lightning_fname
         
         # LoRA strength from task params or default 0.45 (ComfyUI default)
         lora_strength = float(db_task_params.get("lightning_lora_strength", 0.45))
