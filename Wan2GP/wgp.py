@@ -2783,16 +2783,24 @@ def apply_changes(state,
     """
     Stub function for headless mode compatibility.
     Updates server_config and module-level variables with provided settings.
+
+    Note: This is a minimal stub that updates globals needed for load_models().
+    The full upstream function also persists to disk and returns Gradio components,
+    which we don't need in headless mode.
     """
     global server_config, save_path, image_save_path, attention_mode, default_profile, compile, vae_config, boost, preload_model_policy
+    global transformer_quantization, transformer_dtype_policy, text_encoder_quantization, transformer_types
 
-    # Update server_config with provided values
+    # Update server_config with provided values AND module-level globals
     if transformer_types_choices is not None:
         server_config["transformer_types"] = transformer_types_choices
+        transformer_types = transformer_types_choices
     if transformer_dtype_policy_choice is not None:
         server_config["transformer_dtype_policy"] = transformer_dtype_policy_choice
+        transformer_dtype_policy = transformer_dtype_policy_choice
     if text_encoder_quantization_choice is not None:
         server_config["text_encoder_quantization"] = text_encoder_quantization_choice
+        text_encoder_quantization = text_encoder_quantization_choice
     if VAE_precision_choice is not None:
         server_config["vae_precision"] = VAE_precision_choice
     if mixed_precision_choice is not None:
@@ -2819,6 +2827,7 @@ def apply_changes(state,
         server_config["metadata_type"] = metadata_choice
     if quantization_choice is not None:
         server_config["transformer_quantization"] = quantization_choice
+        transformer_quantization = quantization_choice
     if preload_model_policy_choice is not None:
         server_config["preload_model_policy"] = preload_model_policy_choice
         preload_model_policy = preload_model_policy_choice
