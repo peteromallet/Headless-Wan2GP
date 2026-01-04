@@ -7348,7 +7348,7 @@ def prepare_inputs_dict(target, inputs, model_type = None, model_filename = None
 
     if target == "metadata":
         inputs = {k: v for k,v in inputs.items() if v != None  }
-        if hasattr(app, 'plugin_manager'):
+        if 'app' in globals() and hasattr(app, 'plugin_manager'):
             inputs = app.plugin_manager.run_data_hooks(
                 'before_metadata_save',
                 configs=inputs,
