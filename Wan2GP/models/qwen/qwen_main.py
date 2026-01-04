@@ -318,7 +318,7 @@ class model_factory():
 
             # === DEBUG: Save Pass 1 output before upscaling ===
             if os.getenv("DEBUG_HIRES_SAVE_PASS1", "0") == "1":
-                from shared.utils.utils import convert_tensor_to_image
+                # convert_tensor_to_image already imported at module level
                 from shared.config import model_config
                 print("📸 Saving Pass 1 output for debugging...")
                 # Decode latents to image
@@ -355,7 +355,7 @@ class model_factory():
 
             # === DEBUG: Save upscaled latents (before adding noise) ===
             if os.getenv("DEBUG_HIRES_SAVE_PASS1", "0") == "1":
-                from shared.utils.utils import convert_tensor_to_image
+                # convert_tensor_to_image already imported at module level
                 from shared.config import model_config
                 print("📸 Saving upscaled latents (pre-noise) for debugging...")
                 # Decode upscaled latents to image
