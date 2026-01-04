@@ -166,24 +166,26 @@ class ComfyUIClient:
         outputs = []
 
         for node_id, node_output in history.get('outputs', {}).items():
-            if 'videos' in node_output:
-                for video in node_output['videos']:
-                    params = {
-                        'filename': video['filename'],
-                        'subfolder': video.get('subfolder', ''),
-                        'type': video.get('type', 'output')
-                    }
+            # Check both 'videos' and 'gifs' (VHS_VideoCombine uses 'gifs')
+            for output_key in ['videos', 'gifs']:
+                if output_key in node_output:
+                    for video in node_output[output_key]:
+                        params = {
+                            'filename': video['filename'],
+                            'subfolder': video.get('subfolder', ''),
+                            'type': video.get('type', 'output')
+                        }
 
-                    response = await client.get(
-                        f"{self.base_url}/view",
-                        params=params,
-                        timeout=120.0
-                    )
-                    response.raise_for_status()
+                        response = await client.get(
+                            f"{self.base_url}/view",
+                            params=params,
+                            timeout=120.0
+                        )
+                        response.raise_for_status()
 
-                    outputs.append({
-                        'filename': video['filename'],
-                        'content': response.content
-                    })
+                        outputs.append({
+                            'filename': video['filename'],
+                            'content': response.content
+                        })
 
         return outputs

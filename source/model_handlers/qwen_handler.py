@@ -17,6 +17,7 @@ from huggingface_hub import hf_hub_download  # type: ignore
 
 from source.logging_utils import headless_logger
 from source.common_utils import download_image_if_url as sm_download_image_if_url
+from source.phase_multiplier_utils import format_phase_multipliers, extract_phase_values
 
 
 class QwenHandler:
@@ -194,11 +195,13 @@ class QwenHandler:
                 generation_params["lora_names"] = []
             if "lora_multipliers" not in generation_params:
                 generation_params["lora_multipliers"] = []
-            
+
             if selected_lightning_path.name not in generation_params["lora_names"]:
                 generation_params["lora_names"].append(selected_lightning_path.name)
-                generation_params["lora_multipliers"].append(0.75)
-                self._log_info(f"Added Lightning LoRA with strength 0.75")
+                # Lightning LoRA at 1.0 strength
+                # (will be auto-converted to "1.0;0" for hires by _convert_to_phase_multipliers)
+                generation_params["lora_multipliers"].append("1.0")
+                self._log_info(f"Added Lightning LoRA with strength 1.0")
 
         # Optional hires fix - can be enabled on any qwen_image_edit task
         self._maybe_add_hires_config(db_task_params, generation_params)
@@ -208,7 +211,7 @@ class QwenHandler:
         hires_scale = db_task_params.get("hires_scale")
         if hires_scale is None:
             return  # No hires fix requested
-        
+
         hires_config = {
             "enabled": True,
             "scale": float(hires_scale),
@@ -217,11 +220,66 @@ class QwenHandler:
             "upscale_method": db_task_params.get("hires_upscale_method", "bicubic"),
         }
         generation_params["hires_config"] = hires_config
-        
+
+        # Convert LoRA multipliers to phase-based format (pass1;pass2)
+        # This allows fine control over which LoRAs are active in each pass
+        self._convert_to_phase_multipliers(generation_params)
+
         self._log_info(
             f"Hires fix enabled: {hires_config['scale']}x scale, "
             f"{hires_config['hires_steps']} steps @ {hires_config['denoising_strength']} denoise"
         )
+
+    def _convert_to_phase_multipliers(self, generation_params: Dict[str, Any]):
+        """
+        Convert simple LoRA multipliers to phase-based format for hires fix.
+
+        IMPORTANT: This stores the full phase format in hires_config but sends
+        only pass 1 values to WGP to avoid conflicts with WGP's phase system.
+
+        Converts:
+          ["1.0", "1.1", "0.5"] -> ["1.0;0", "1.1;1.1", "0.5;0.5"]
+
+        Where the format is "pass1_strength;pass2_strength".
+
+        Special handling:
+        - Lightning LoRAs (auto-detected) -> "X;0" (disabled in pass 2)
+        - All other LoRAs -> "X;X" (same strength in both passes)
+
+        Users can override by passing phase-based multipliers directly (e.g., "1.0;0.5").
+        """
+        if "lora_multipliers" not in generation_params:
+            return
+
+        lora_names = generation_params.get("lora_names", [])
+        multipliers = generation_params["lora_multipliers"]
+
+        # Ensure multipliers is a list
+        if not isinstance(multipliers, list):
+            multipliers = [multipliers]
+
+        # Convert to phase-based format
+        phase_multipliers = format_phase_multipliers(
+            lora_names=lora_names,
+            multipliers=multipliers,
+            num_phases=2,  # Hires fix = 2 passes
+            auto_detect_lightning=True
+        )
+
+        # Store full phase format in hires_config for qwen_main.py to use
+        if "hires_config" in generation_params:
+            generation_params["hires_config"]["phase_lora_multipliers"] = phase_multipliers
+            self._log_info(f"Stored phase-based multipliers in hires_config: {phase_multipliers}")
+
+        # Extract ONLY pass 1 values to send to WGP (avoids conflict with WGP's phase system)
+        pass1_multipliers = extract_phase_values(
+            phase_multipliers,
+            phase_index=0,  # Pass 1
+            num_phases=2
+        )
+
+        generation_params["lora_multipliers"] = pass1_multipliers
+        self._log_info(f"Sending pass 1 multipliers to WGP: {pass1_multipliers}")
 
     def handle_image_inpaint(self, db_task_params: Dict[str, Any], generation_params: Dict[str, Any]):
         """Handle image_inpaint task type."""
@@ -431,7 +489,9 @@ class QwenHandler:
 
         if lightning_fname not in generation_params["lora_names"]:
             generation_params["lora_names"].append(lightning_fname)
-            generation_params["lora_multipliers"].append(0.85)
+            # Lightning LoRA at 1.0 strength
+            # (will be auto-converted to "1.0;0" for hires by _convert_to_phase_multipliers)
+            generation_params["lora_multipliers"].append("1.0")
 
         if style_strength > 0.0 and style_fname not in generation_params["lora_names"]:
             generation_params["lora_names"].append(style_fname)
