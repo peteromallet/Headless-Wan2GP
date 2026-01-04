@@ -430,6 +430,8 @@ class WanOrchestrator:
                 "queue": [],
                 "file_list": [],
                 "file_settings_list": [],
+                "audio_file_list": [],
+                "audio_file_settings_list": [],
                 "selected": 0,
                 "prompt_no": 1,
                 "prompts_max": 1
