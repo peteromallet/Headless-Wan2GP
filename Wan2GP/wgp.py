@@ -5235,6 +5235,8 @@ def generate_video(
     exaggeration,
     temperature,
     output_filename,
+    hires_config,
+    system_prompt,
     state,
     model_type,
     mode,
@@ -6019,6 +6021,8 @@ def generate_video(
                     pace=pace,
                     temperature=temperature,
                     window_start_frame_no = window_start_frame,
+                    hires_config = hires_config,
+                    system_prompt = system_prompt,
                 )
             except Exception as e:
                 if len(control_audio_tracks) > 0 or len(source_audio_tracks) > 0:
