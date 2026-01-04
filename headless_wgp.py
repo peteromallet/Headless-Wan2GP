@@ -474,7 +474,7 @@ class WanOrchestrator:
                     image_save_path_choice=outputs_dir,
                     attention_choice="auto",
                     compile_choice="",
-                    profile_choice=4,
+                    profile_choice=1,  # Profile 1 for 24GB+ VRAM (4090/3090)
                     vae_config_choice="default",
                     metadata_choice="none",
                     quantization_choice="int8",

@@ -410,6 +410,50 @@ class QwenImagePipeline(): #DiffusionPipeline
 
         return latents
 
+    @staticmethod
+    def _upscale_latents(latents, height, width, vae_scale_factor, scale_factor, method="bicubic"):
+        """
+        Upscale packed latents by a given scale factor.
+
+        Args:
+            latents: Packed latents of shape (B, num_patches, channels)
+            height: Original image height
+            width: Original image width
+            vae_scale_factor: VAE compression factor (typically 8)
+            scale_factor: How much to upscale (e.g., 2.0 for 2x)
+            method: Interpolation method ("bicubic", "bilinear", "nearest")
+
+        Returns:
+            Tuple of (upscaled_packed_latents, new_height, new_width)
+        """
+        import torch.nn.functional as F
+
+        # Unpack to spatial format: (B, C, 1, H, W)
+        unpacked = QwenImagePipeline._unpack_latents(latents, height, width, vae_scale_factor)
+        batch_size, channels, frames, h, w = unpacked.shape
+
+        # Calculate new dimensions (must be divisible by 2 for repacking)
+        new_h = int(h * scale_factor)
+        new_w = int(w * scale_factor)
+        # Ensure divisible by 2 for packing
+        new_h = (new_h // 2) * 2
+        new_w = (new_w // 2) * 2
+
+        # Upscale spatial dimensions: squeeze frame dim, interpolate, unsqueeze
+        # Shape: (B, C, 1, H, W) -> (B, C, H, W) -> interpolate -> (B, C, new_H, new_W) -> (B, C, 1, new_H, new_W)
+        latents_2d = unpacked.squeeze(2)  # (B, C, H, W)
+        upscaled_2d = F.interpolate(latents_2d, size=(new_h, new_w), mode=method, align_corners=False if method != "nearest" else None)
+        upscaled = upscaled_2d.unsqueeze(2)  # (B, C, 1, new_H, new_W)
+
+        # Repack to (B, num_patches, channels)
+        repacked = QwenImagePipeline._pack_latents(upscaled)
+
+        # Calculate new image dimensions
+        new_height = new_h * vae_scale_factor
+        new_width = new_w * vae_scale_factor
+
+        return repacked, new_height, new_width
+
 
     def _encode_vae_image(self, image: torch.Tensor, generator: torch.Generator):
         if isinstance(generator, list):
