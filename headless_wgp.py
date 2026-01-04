@@ -1309,6 +1309,17 @@ class WanOrchestrator:
                 'min_frames_if_references': 9,
                 'override_profile': -1,
 
+                # New v9.1 required parameters
+                'alt_guidance_scale': 0.0,
+                'masking_strength': 1.0,
+                'control_net_weight_alt': 1.0,
+                'motion_amplitude': 1.0,
+                'custom_guide': None,
+                'pace': 0.5,
+                'exaggeration': 0.5,
+                'temperature': 1.0,
+                'output_filename': '',
+
                 # Mode and filename
                 'mode': 'generate',
                 'model_filename': '',
@@ -1378,6 +1389,17 @@ class WanOrchestrator:
                 'embedded_guidance_scale': final_embedded_guidance if is_flux else 0.0,
                 'flow_shift': resolved_params.get("flow_shift", 7.0),
                 'sample_solver': resolved_params.get("sample_solver", "euler"),
+
+                # New v9.1 required parameters
+                'alt_guidance_scale': resolved_params.get("alt_guidance_scale", 0.0),
+                'masking_strength': resolved_params.get("masking_strength", 1.0),
+                'control_net_weight_alt': resolved_params.get("control_net_weight_alt", 1.0),
+                'motion_amplitude': resolved_params.get("motion_amplitude", 1.0),
+                'custom_guide': resolved_params.get("custom_guide", None),
+                'pace': resolved_params.get("pace", 0.5),
+                'exaggeration': resolved_params.get("exaggeration", 0.5),
+                'temperature': resolved_params.get("temperature", 1.0),
+                'output_filename': resolved_params.get("output_filename", ""),
             }
 
             # Standard defaults for other parameters - extend the dictionary
