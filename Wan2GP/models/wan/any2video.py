@@ -1047,6 +1047,11 @@ class WanAny2V:
         if self._interrupt:
             return None
 
+        # Initialize latent noise mask variables (used only when VACE + latent_noise_mask_strength > 0)
+        latent_noise_mask_original = None
+        latent_noise_mask_blend = None
+        latent_noise_mask_noise = None  # stored once for consistent blending across steps
+
         expand_shape = [batch_size] + [-1] * len(target_shape)
         # Ropes
         if freqs is not None:
@@ -1419,6 +1424,37 @@ class WanAny2V:
                 noisy_image = randn[:, :, :source_latents.shape[2]] * sigma + (1 - sigma) * source_latents
                 latents[:, :, :source_latents.shape[2]] = noisy_image * (1-image_mask_latents) + image_mask_latents * latents[:, :, :source_latents.shape[2]]  
 
+            # Latent Noise Mask: Blend denoised latents with noised original for preserved regions
+            # This ensures preserved regions stay closer to the original throughout denoising.
+            # (Restores behavior from our pre-upgrade implementation.)
+            if (
+                latent_noise_mask_strength > 0
+                and latent_noise_mask_original is not None
+                and latent_noise_mask_blend is not None
+                and latent_noise_mask_noise is not None
+            ):
+                # Get next timestep (for calculating noise level at next step)
+                next_t = timesteps[i + 1] if i < len(timesteps) - 1 else torch.tensor([0.0], device=self.device)
+                latent_noise_factor = (
+                    next_t.item() / 1000.0 if hasattr(next_t, "item") else float(next_t) / 1000.0
+                )
+
+                # Account for ref_images if present
+                orig_start = ref_images_count if ref_images_before and ref_images_count > 0 else 0
+                orig_latents = latent_noise_mask_original[:, :, orig_start : orig_start + latents.shape[2]]
+                stored_noise = latent_noise_mask_noise[:, :, orig_start : orig_start + latents.shape[2]]
+                mask_blend = latent_noise_mask_blend[:, :, orig_start : orig_start + latents.shape[2]]
+
+                # Ensure shapes match
+                if orig_latents.shape[2:] == latents.shape[2:]:
+                    # Create noised version of original using stored noise (consistent across all steps)
+                    noised_original = orig_latents * (1.0 - latent_noise_factor) + stored_noise * latent_noise_factor
+
+                    # mask=1 (white) = generate new content (use denoised latents)
+                    # mask=0 (black) = preserve original (use noised original)
+                    preserve_weight = (1.0 - mask_blend) * latent_noise_mask_strength
+                    latents = latents * (1.0 - preserve_weight) + noised_original * preserve_weight
+                    noised_original = None
 
             if callback is not None:
                 latents_preview = latents
