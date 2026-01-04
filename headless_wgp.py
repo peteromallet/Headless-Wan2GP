@@ -471,7 +471,7 @@ class WanOrchestrator:
                     save_path_choice=outputs_dir,
                     image_save_path_choice=outputs_dir,
                     attention_choice="auto",
-                    compile_choice=0,
+                    compile_choice="",
                     profile_choice=4,
                     vae_config_choice="default",
                     metadata_choice="none",
