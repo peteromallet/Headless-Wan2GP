@@ -77,7 +77,7 @@ class family_handler():
 
     @staticmethod
     def query_supported_types():
-        return ["qwen_image_20B", "qwen_image_edit_20B", "qwen_image_edit_plus_20B", "qwen_image_edit_plus2_20B", "qwen_image_layered_20B"]
+        return ["qwen_image_20B", "qwen_image_2512_20B", "qwen_image_edit_20B", "qwen_image_edit_plus_20B", "qwen_image_edit_plus2_20B", "qwen_image_layered_20B"]
 
     @staticmethod
     def query_family_maps():

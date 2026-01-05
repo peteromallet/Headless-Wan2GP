@@ -248,8 +248,8 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             "annotated_image_edit": "qwen_image_edit_20B",
             # Text-to-image tasks
             "qwen_image": "qwen_image_edit_20B",
-            "qwen_image_2512": "qwen_image_edit_20B",
-            "z_image_turbo": "qwen_image_edit_20B"
+            "qwen_image_2512": "qwen_image_2512_20B",
+            "z_image_turbo": "z_image"
         }
         model = task_type_to_model.get(task_type, "t2v")
     
@@ -350,10 +350,20 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         model = "qwen_image_edit_20B"
     elif task_type == "qwen_image_2512":
         qwen_handler.handle_qwen_image_2512(db_task_params, generation_params)
-        model = "qwen_image_edit_20B"
+        model = "qwen_image_2512_20B"
     elif task_type == "z_image_turbo":
-        qwen_handler.handle_z_image_turbo(db_task_params, generation_params)
-        model = "qwen_image_edit_20B"
+        # Z-Image turbo - fast text-to-image generation
+        generation_params.setdefault("video_prompt_type", "")  # No input image
+        generation_params.setdefault("video_length", 1)  # Single image output
+        generation_params.setdefault("guidance_scale", 0)  # Z-Image uses guidance_scale=0
+        generation_params.setdefault("num_inference_steps", int(db_task_params.get("num_inference_steps", 8)))
+
+        # Resolution handling
+        if "resolution" in db_task_params:
+            generation_params["resolution"] = db_task_params["resolution"]
+
+        # Override model to use Z-Image (user might pass "z-image" with hyphen)
+        model = "z_image"
 
     # Defaults
     essential_defaults = {

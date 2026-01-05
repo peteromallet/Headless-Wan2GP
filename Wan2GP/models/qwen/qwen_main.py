@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from source.phase_multiplier_utils import get_phase_loras
+from source.hires_utils import HiresFixHelper
 
 from diffusers.image_processor import VaeImageProcessor
 from .transformer_qwenimage import QwenImageTransformer2DModel
@@ -285,6 +286,15 @@ class model_factory():
             print(f"🔍 Hires fix enabled: {width}x{height} → {int(width*hires_scale)}x{int(height*hires_scale)}")
             print(f"   Pass 1: {sampling_steps} steps | Pass 2: {hires_steps} steps @ {hires_denoise} denoise")
 
+            # === Extract LoRA info from hires_config (set by qwen_handler.py) ===
+            # NOTE: activated_loras is NOT in bbargs - it's processed by wgp.py into loras_slists
+            # The handler stores LoRA names in hires_config for us to use
+            original_lora_names = hires_config.get("lora_names", [])
+            print(f"💾 LoRA names from hires_config: {len(original_lora_names)} LoRAs for phase filtering")
+            if original_lora_names:
+                for i, name in enumerate(original_lora_names):
+                    print(f"   LoRA {i+1}: {name}")
+
             # === PASS 1: Generate at base resolution, output latents ===
             latents = self.pipeline(
                 prompt=input_prompt,
@@ -445,36 +455,49 @@ class model_factory():
             print(f"🌀 Pass 2 init noise: start_idx={start_idx}/{len(timesteps_full)} sigma0={sigma0:.4f} steps={len(sigmas_trimmed)}")
 
             # === Apply Phase-Based LoRA Multipliers for Pass 2 ===
-            # Save original activated_loras and loras_multipliers from pass 1
-            original_activated_loras = bbargs.get("activated_loras", []).copy() if isinstance(bbargs.get("activated_loras", []), list) else []
-            original_loras_multipliers = bbargs.get("loras_multipliers", "")
-
             # Get phase-based multipliers from hires_config (set by qwen_handler.py)
             phase_multipliers = hires_config.get("phase_lora_multipliers", [])
 
-            if phase_multipliers:
-                # Use stored phase multipliers to filter for pass 2
-                try:
-                    pass2_loras, pass2_multipliers = get_phase_loras(
-                        lora_names=original_activated_loras,
-                        multipliers=phase_multipliers,
-                        phase_index=1,  # Pass 2 (0-indexed)
-                        num_phases=2
+            if phase_multipliers and original_lora_names:
+                # Use HiresFixHelper to filter LoRAs for Pass 2
+                print(f"🔍 Phase multipliers from config: {phase_multipliers}")
+
+                loras_slists_pass2, pass2_multipliers_all, active_count = HiresFixHelper.filter_loras_for_phase(
+                    lora_names=original_lora_names,
+                    phase_multipliers=phase_multipliers,
+                    phase_index=1,  # Pass 2 (0-indexed)
+                    num_phases=2,
+                    num_steps=hires_steps
+                )
+
+                if loras_slists_pass2 is not None:
+                    # Successfully filtered LoRAs for Pass 2
+                    loras_slists = loras_slists_pass2
+                    print(f"✓ Successfully built Pass 2 loras_slists")
+
+                    # Print formatted summary
+                    HiresFixHelper.print_pass2_lora_summary(
+                        lora_names=original_lora_names,
+                        phase_values=pass2_multipliers_all,
+                        active_count=active_count
                     )
-
-                    bbargs["activated_loras"] = pass2_loras
-                    bbargs["loras_multipliers"] = " ".join(pass2_multipliers)  # Space-separated for WGP
-                    print(f"🔧 Pass 2: Using {len(pass2_loras)}/{len(original_activated_loras)} LoRAs (phase-based filtering)")
-
-                except Exception as e:
-                    # Fallback: keep all LoRAs if parsing fails
-                    print(f"⚠️ Phase multiplier parsing failed: {e}")
-                    print(f"⚠️ Falling back to using all LoRAs in pass 2")
-                    bbargs["activated_loras"] = original_activated_loras
-                    bbargs["loras_multipliers"] = original_loras_multipliers
+                else:
+                    # Error occurred, fall back to original loras_slists
+                    print(f"⚠️ Failed to build Pass 2 loras_slists, using original")
             else:
-                # No phase multipliers provided, keep all LoRAs for pass 2
-                print(f"🔧 Pass 2: No phase multipliers found, using all {len(original_activated_loras)} LoRAs")
+                # No phase multipliers provided
+                if not original_lora_names:
+                    print(f"🔧 Pass 2: No LoRA names found in hires_config")
+                else:
+                    print(f"🔧 Pass 2: No phase multipliers found, using original loras_slists")
+
+            # Final verification before Pass 2 pipeline call
+            print(f"")
+            print(f"🚀 Starting Pass 2 generation...")
+            print(f"🔍 loras_slists being passed to pipeline: id={id(loras_slists)}, type={type(loras_slists)}")
+            if loras_slists:
+                print(f"🔍 loras_slists length: {len(loras_slists)}")
+            print(f"")
 
             image = self.pipeline(
                 prompt=input_prompt,
@@ -506,11 +529,26 @@ class model_factory():
             if image is None:
                 return None
 
-            # === Restore original LoRAs ===
-            bbargs["activated_loras"] = original_activated_loras
-            bbargs["loras_multipliers"] = original_loras_multipliers
-
             print(f"✅ Hires fix complete: {new_width}x{new_height}")
+
+            # === Save downscaled version (hires quality at original resolution) ===
+            import datetime
+            from PIL import Image as PILImage
+
+            # Convert tensor to PIL image
+            hires_image_pil = convert_tensor_to_image(image.transpose(0, 1)[0])
+
+            # Resize back to original Pass 1 dimensions
+            downscaled = hires_image_pil.resize((width, height), PILImage.Resampling.LANCZOS)
+
+            # Save downscaled version to outputs directory
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%Hh%Mm%Ss")
+            output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "outputs")
+            os.makedirs(output_dir, exist_ok=True)
+            downscaled_path = os.path.join(output_dir, f"{timestamp}_seed{seed}_hires_downscaled.png")
+            downscaled.save(downscaled_path)
+            print(f"💾 Saved hires-downscaled version ({width}x{height}): {downscaled_path}")
+
             return image.transpose(0, 1)
 
         # ========== STANDARD SINGLE-PASS (existing behavior) ==========
