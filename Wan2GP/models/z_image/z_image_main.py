@@ -1,6 +1,8 @@
 import json
 import os
+import sys
 import torch
+from pathlib import Path
 from accelerate import init_empty_weights
 from diffusers import FlowMatchEulerDiscreteScheduler
 from diffusers.utils import logging
@@ -11,6 +13,13 @@ from transformers import AutoTokenizer, Qwen3ForCausalLM
 from .autoencoder_kl import AutoencoderKL
 from .pipeline_z_image import ZImagePipeline
 from .z_image_transformer2d import ZImageTransformer2DModel
+
+# Add project root to path for hires utils
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from source.hires_utils import HiresFixHelper
 
 
 logger = logging.get_logger(__name__)
@@ -234,32 +243,163 @@ class model_factory:
 
         guide_scale = 0
 
-        images = self.pipeline(
-            prompt=input_prompt,
-            negative_prompt=n_prompt,
-            num_inference_steps=sampling_steps,
-            guidance_scale=guide_scale,
-            num_images_per_prompt=batch_size,
-            generator=generator,
-            height=height,
-            width=width,
-            max_sequence_length=max_sequence_length,
-            callback_on_step_end=None,
-            output_type="pt",
-            return_dict=True,
-            cfg_normalization=cfg_normalization,
-            cfg_truncation=cfg_truncation,
-            callback=callback,
-            pipeline=self.pipeline,
-            control_image=input_frames,
-            inpaint_mask=input_masks,
-            control_context_scale=None if context_scale is None else context_scale[0],
-            input_ref_images= input_ref_images,
-            NAG_scale=NAG_scale,
-            NAG_tau=NAG_tau,
-            NAG_alpha=NAG_alpha,
-            loras_slists=loras_slists,
-        )
+        # Check for hires fix configuration
+        hires_config = kwargs.get("hires_config")
+        if hires_config and hires_config.get("enabled", False):
+            # === HIRES FIX MODE ===
+            hires_scale = hires_config.get("scale", 1.5)
+            hires_steps = hires_config.get("hires_steps", sampling_steps)
+            hires_denoise = hires_config.get("denoising_strength", 0.5)
+
+            print(f"🔍 Hires fix enabled: {width}x{height} → {int(width*hires_scale)}x{int(height*hires_scale)}")
+            print(f"   Pass 1: {sampling_steps} steps | Pass 2: {hires_steps} steps @ {hires_denoise} denoise")
+
+            # Extract LoRA info from hires_config if available
+            original_lora_names = hires_config.get("lora_names", [])
+            phase_multipliers = hires_config.get("phase_lora_multipliers", [])
+
+            if original_lora_names:
+                print(f"💾 LoRA names from hires_config: {len(original_lora_names)} LoRAs for phase filtering")
+                for i, name in enumerate(original_lora_names):
+                    print(f"   LoRA {i+1}: {name}")
+
+            # === PASS 1: Generate at base resolution ===
+            latents = self.pipeline(
+                prompt=input_prompt,
+                negative_prompt=n_prompt,
+                num_inference_steps=sampling_steps,
+                guidance_scale=guide_scale,
+                num_images_per_prompt=batch_size,
+                generator=torch.Generator(device="cuda").manual_seed(seed),
+                height=height,
+                width=width,
+                max_sequence_length=max_sequence_length,
+                callback_on_step_end=None,
+                output_type="latent",  # Return latents for Pass 2
+                return_dict=False,
+                cfg_normalization=cfg_normalization,
+                cfg_truncation=cfg_truncation,
+                callback=callback,
+                pipeline=self.pipeline,
+                control_image=input_frames,
+                inpaint_mask=input_masks,
+                control_context_scale=None if context_scale is None else context_scale[0],
+                input_ref_images=input_ref_images,
+                NAG_scale=NAG_scale,
+                NAG_tau=NAG_tau,
+                NAG_alpha=NAG_alpha,
+                loras_slists=loras_slists,
+            )
+
+            if latents is None:
+                return None
+
+            print(f"✅ Pass 1 complete: latents shape {latents.shape}")
+
+            # === UPSCALE LATENTS ===
+            latents_upscaled = HiresFixHelper.upscale_latents(
+                latents=latents,
+                scale_factor=hires_scale,
+                method=hires_config.get("upscale_method", "bicubic")
+            )
+
+            hires_height = int(height * hires_scale)
+            hires_width = int(width * hires_scale)
+            print(f"📐 Latents upscaled: {width}x{height} → {hires_width}x{hires_height}")
+
+            # === ADD NOISE FOR PASS 2 ===
+            hires_generator = torch.Generator(device="cuda").manual_seed(seed + 1)
+            latents_noised = HiresFixHelper.add_denoise_noise(
+                latents=latents_upscaled,
+                denoise_strength=hires_denoise,
+                generator=hires_generator
+            )
+            print(f"🌀 Pass 2 init noise: denoise={hires_denoise}")
+
+            # === FILTER LoRAs FOR PASS 2 ===
+            if phase_multipliers and original_lora_names:
+                print(f"🔍 Phase multipliers from config: {phase_multipliers}")
+
+                loras_slists_pass2, pass2_multipliers_all, active_count = HiresFixHelper.filter_loras_for_phase(
+                    lora_names=original_lora_names,
+                    phase_multipliers=phase_multipliers,
+                    phase_index=1,  # Pass 2 (0-indexed)
+                    num_phases=2,
+                    num_steps=hires_steps
+                )
+
+                if loras_slists_pass2 is not None:
+                    loras_slists = loras_slists_pass2
+                    print(f"✓ Successfully built Pass 2 loras_slists")
+
+                    HiresFixHelper.print_pass2_lora_summary(
+                        lora_names=original_lora_names,
+                        phase_values=pass2_multipliers_all,
+                        active_count=active_count
+                    )
+                else:
+                    print(f"⚠️ Failed to build Pass 2 loras_slists, using original")
+
+            # === PASS 2: Refine at higher resolution ===
+            print(f"🚀 Starting Pass 2 generation...")
+            images = self.pipeline(
+                prompt=input_prompt,
+                negative_prompt=n_prompt,
+                num_inference_steps=hires_steps,
+                guidance_scale=guide_scale,
+                num_images_per_prompt=batch_size,
+                generator=torch.Generator(device="cuda").manual_seed(seed + 1),
+                height=hires_height,
+                width=hires_width,
+                max_sequence_length=max_sequence_length,
+                latents=latents_noised,  # Pass noised upscaled latents
+                callback_on_step_end=None,
+                output_type="pt",
+                return_dict=True,
+                cfg_normalization=cfg_normalization,
+                cfg_truncation=cfg_truncation,
+                callback=callback,
+                pipeline=self.pipeline,
+                control_image=input_frames,
+                inpaint_mask=input_masks,
+                control_context_scale=None if context_scale is None else context_scale[0],
+                input_ref_images=input_ref_images,
+                NAG_scale=NAG_scale,
+                NAG_tau=NAG_tau,
+                NAG_alpha=NAG_alpha,
+                loras_slists=loras_slists,
+            )
+
+            print(f"✅ Hires fix complete: {hires_width}x{hires_height}")
+
+        else:
+            # === STANDARD MODE (NO HIRES FIX) ===
+            images = self.pipeline(
+                prompt=input_prompt,
+                negative_prompt=n_prompt,
+                num_inference_steps=sampling_steps,
+                guidance_scale=guide_scale,
+                num_images_per_prompt=batch_size,
+                generator=generator,
+                height=height,
+                width=width,
+                max_sequence_length=max_sequence_length,
+                callback_on_step_end=None,
+                output_type="pt",
+                return_dict=True,
+                cfg_normalization=cfg_normalization,
+                cfg_truncation=cfg_truncation,
+                callback=callback,
+                pipeline=self.pipeline,
+                control_image=input_frames,
+                inpaint_mask=input_masks,
+                control_context_scale=None if context_scale is None else context_scale[0],
+                input_ref_images= input_ref_images,
+                NAG_scale=NAG_scale,
+                NAG_tau=NAG_tau,
+                NAG_alpha=NAG_alpha,
+                loras_slists=loras_slists,
+            )
 
         if images is None:
             return None

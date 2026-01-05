@@ -197,11 +197,14 @@ class QwenHandler:
                 generation_params["lora_multipliers"] = []
 
             if selected_lightning_path.name not in generation_params["lora_names"]:
+                # Get Lightning LoRA strength per phase from task params or use defaults
+                lightning_phase1 = float(db_task_params.get("lightning_lora_strength_phase_1", 0.85))
+                lightning_phase2 = float(db_task_params.get("lightning_lora_strength_phase_2", 0.0))
+
                 generation_params["lora_names"].append(selected_lightning_path.name)
-                # Lightning LoRA at 1.0 strength
-                # (will be auto-converted to "1.0;0" for hires by _convert_to_phase_multipliers)
-                generation_params["lora_multipliers"].append("1.0")
-                self._log_info(f"Added Lightning LoRA with strength 1.0")
+                # Lightning LoRA with phase-specific strengths
+                generation_params["lora_multipliers"].append(f"{lightning_phase1};{lightning_phase2}")
+                self._log_info(f"Added Lightning LoRA with strength Phase1={lightning_phase1}, Phase2={lightning_phase2}")
 
         # Optional hires fix - can be enabled on any qwen_image_edit task
         self._maybe_add_hires_config(db_task_params, generation_params)
@@ -238,15 +241,15 @@ class QwenHandler:
         only pass 1 values to WGP to avoid conflicts with WGP's phase system.
 
         Converts:
-          ["1.0", "1.1", "0.5"] -> ["1.0;0", "1.1;1.1", "0.5;0.5"]
+          ["1.1", "0.5"] -> ["1.1;1.1", "0.5;0.5"]
 
         Where the format is "pass1_strength;pass2_strength".
 
-        Special handling:
-        - Lightning LoRAs (auto-detected) -> "X;0" (disabled in pass 2)
-        - All other LoRAs -> "X;X" (same strength in both passes)
+        Lightning LoRA phases are manually controlled via:
+        - lightning_lora_strength_phase_1 (default: 0.85)
+        - lightning_lora_strength_phase_2 (default: 0.0)
 
-        Users can override by passing phase-based multipliers directly (e.g., "1.0;0.5").
+        All other LoRAs -> "X;X" (same strength in both passes unless phase format specified).
         """
         if "lora_multipliers" not in generation_params:
             return
@@ -259,17 +262,21 @@ class QwenHandler:
             multipliers = [multipliers]
 
         # Convert to phase-based format
+        # Note: auto_detect_lightning=False because Lightning LoRA phases are now manually specified
         phase_multipliers = format_phase_multipliers(
             lora_names=lora_names,
             multipliers=multipliers,
             num_phases=2,  # Hires fix = 2 passes
-            auto_detect_lightning=True
+            auto_detect_lightning=False  # Manual control via lightning_lora_strength_phase_1/2
         )
 
-        # Store full phase format in hires_config for qwen_main.py to use
+        # Store full phase format AND LoRA names in hires_config for qwen_main.py to use
         if "hires_config" in generation_params:
+            generation_params["hires_config"]["lora_names"] = lora_names
             generation_params["hires_config"]["phase_lora_multipliers"] = phase_multipliers
-            self._log_info(f"Stored phase-based multipliers in hires_config: {phase_multipliers}")
+            self._log_info(f"Stored {len(lora_names)} LoRA names and phase multipliers in hires_config")
+            for i, (name, mult) in enumerate(zip(lora_names, phase_multipliers)):
+                self._log_info(f"   LoRA {i+1}: {name} @ {mult}")
 
         # Extract ONLY pass 1 values to send to WGP (avoids conflict with WGP's phase system)
         pass1_multipliers = extract_phase_values(
@@ -488,10 +495,13 @@ class QwenHandler:
             generation_params["lora_multipliers"] = []
 
         if lightning_fname not in generation_params["lora_names"]:
+            # Get Lightning LoRA strength per phase from task params or use defaults
+            lightning_phase1 = float(db_task_params.get("lightning_lora_strength_phase_1", 0.85))
+            lightning_phase2 = float(db_task_params.get("lightning_lora_strength_phase_2", 0.0))
+
             generation_params["lora_names"].append(lightning_fname)
-            # Lightning LoRA at 1.0 strength
-            # (will be auto-converted to "1.0;0" for hires by _convert_to_phase_multipliers)
-            generation_params["lora_multipliers"].append("1.0")
+            # Lightning LoRA with phase-specific strengths
+            generation_params["lora_multipliers"].append(f"{lightning_phase1};{lightning_phase2}")
 
         if style_strength > 0.0 and style_fname not in generation_params["lora_names"]:
             generation_params["lora_names"].append(style_fname)
@@ -609,10 +619,10 @@ class QwenHandler:
         if capped_res:
             generation_params["resolution"] = capped_res
 
-        # Base generation params
+        # Base generation params - optimized for 4-step Lightning V2.0
         generation_params.setdefault("video_prompt_type", "")  # No input image
         generation_params.setdefault("guidance_scale", 3.5)
-        generation_params.setdefault("num_inference_steps", int(db_task_params.get("num_inference_steps", 25)))
+        generation_params.setdefault("num_inference_steps", int(db_task_params.get("num_inference_steps", 4)))
         generation_params.setdefault("video_length", 1)
 
         # System prompt
@@ -621,22 +631,27 @@ class QwenHandler:
         else:
             generation_params["system_prompt"] = "You are a professional image generator. Create high-quality, detailed images based on the description provided."
 
-        # Lightning LoRA setup for faster inference
-        lightning_fname = "Qwen-Image-Edit-Lightning-8steps-V1.0-bf16.safetensors"
-        if not (self.qwen_lora_dir / lightning_fname).exists():
-            self._download_lora_if_missing("lightx2v/Qwen-Image-Lightning", lightning_fname)
+        # Lightning LoRA V2.0 - 4-step version for base Qwen Image
+        lightning_fname = "Qwen-Image-Lightning-4steps-V2.0-bf16.safetensors"
+        selected_lightning_path = self.qwen_lora_dir / lightning_fname
+        if not selected_lightning_path.exists():
+            selected_lightning_path = self._download_lora_if_missing("lightx2v/Qwen-Image-Lightning", lightning_fname)
 
-        lora_strength = float(db_task_params.get("lightning_lora_strength", 1.0))
+        if selected_lightning_path:
+            if "lora_names" not in generation_params:
+                generation_params["lora_names"] = []
+            if "lora_multipliers" not in generation_params:
+                generation_params["lora_multipliers"] = []
 
-        if "lora_names" not in generation_params:
-            generation_params["lora_names"] = []
-        if "lora_multipliers" not in generation_params:
-            generation_params["lora_multipliers"] = []
+            if selected_lightning_path.name not in generation_params["lora_names"]:
+                # Get Lightning LoRA strength per phase from task params or use defaults
+                lightning_phase1 = float(db_task_params.get("lightning_lora_strength_phase_1", 1.0))
+                lightning_phase2 = float(db_task_params.get("lightning_lora_strength_phase_2", 1.0))
 
-        if lightning_fname not in generation_params["lora_names"]:
-            generation_params["lora_names"].append(lightning_fname)
-            generation_params["lora_multipliers"].append(lora_strength)
-            self._log_info(f"Added Lightning LoRA @ {lora_strength}")
+                generation_params["lora_names"].append(selected_lightning_path.name)
+                # Lightning LoRA with phase-specific strengths
+                generation_params["lora_multipliers"].append(f"{lightning_phase1};{lightning_phase2}")
+                self._log_info(f"Added Lightning LoRA with strength Phase1={lightning_phase1}, Phase2={lightning_phase2}")
 
         # Handle additional LoRAs from task params
         self._apply_additional_loras(db_task_params, generation_params)
@@ -674,10 +689,10 @@ class QwenHandler:
                 pass
         generation_params["resolution"] = resolution
 
-        # Base generation params - optimized for quality
+        # Base generation params - optimized for 4-step Lightning LoRA
         generation_params.setdefault("video_prompt_type", "")  # No input image
         generation_params.setdefault("guidance_scale", 4.0)  # Slightly higher for better text
-        generation_params.setdefault("num_inference_steps", int(db_task_params.get("num_inference_steps", 28)))
+        generation_params.setdefault("num_inference_steps", int(db_task_params.get("num_inference_steps", 4)))
         generation_params.setdefault("video_length", 1)
 
         # System prompt optimized for text rendering
@@ -686,21 +701,27 @@ class QwenHandler:
         else:
             generation_params["system_prompt"] = "You are an expert image generator specializing in photorealistic images with accurate text rendering. Pay careful attention to any text, typography, or lettering in the prompt and render it clearly and legibly."
 
-        # Lightning LoRA
-        lightning_fname = "Qwen-Image-Edit-Lightning-8steps-V1.0-bf16.safetensors"
-        if not (self.qwen_lora_dir / lightning_fname).exists():
-            self._download_lora_if_missing("lightx2v/Qwen-Image-Lightning", lightning_fname)
+        # Lightning LoRA - 2512-specific 4-step version
+        lightning_fname = "Qwen-Image-2512-Lightning-4steps-V1.0-bf16.safetensors"
+        selected_lightning_path = self.qwen_lora_dir / lightning_fname
+        if not selected_lightning_path.exists():
+            selected_lightning_path = self._download_lora_if_missing("lightx2v/Qwen-Image-2512-Lightning", lightning_fname)
 
-        lora_strength = float(db_task_params.get("lightning_lora_strength", 0.8))
+        if selected_lightning_path:
+            if "lora_names" not in generation_params:
+                generation_params["lora_names"] = []
+            if "lora_multipliers" not in generation_params:
+                generation_params["lora_multipliers"] = []
 
-        if "lora_names" not in generation_params:
-            generation_params["lora_names"] = []
-        if "lora_multipliers" not in generation_params:
-            generation_params["lora_multipliers"] = []
+            if selected_lightning_path.name not in generation_params["lora_names"]:
+                # Get Lightning LoRA strength per phase from task params or use defaults
+                lightning_phase1 = float(db_task_params.get("lightning_lora_strength_phase_1", 1.0))
+                lightning_phase2 = float(db_task_params.get("lightning_lora_strength_phase_2", 1.0))
 
-        if lightning_fname not in generation_params["lora_names"]:
-            generation_params["lora_names"].append(lightning_fname)
-            generation_params["lora_multipliers"].append(lora_strength)
+                generation_params["lora_names"].append(selected_lightning_path.name)
+                # Lightning LoRA with phase-specific strengths
+                generation_params["lora_multipliers"].append(f"{lightning_phase1};{lightning_phase2}")
+                self._log_info(f"Added Lightning LoRA with strength Phase1={lightning_phase1}, Phase2={lightning_phase2}")
 
         # Handle additional LoRAs
         self._apply_additional_loras(db_task_params, generation_params)
