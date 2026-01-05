@@ -430,6 +430,8 @@ class WanOrchestrator:
                 "queue": [],
                 "file_list": [],
                 "file_settings_list": [],
+                "audio_file_list": [],
+                "audio_file_settings_list": [],
                 "selected": 0,
                 "prompt_no": 1,
                 "prompts_max": 1
@@ -471,8 +473,8 @@ class WanOrchestrator:
                     save_path_choice=outputs_dir,
                     image_save_path_choice=outputs_dir,
                     attention_choice="auto",
-                    compile_choice=0,
-                    profile_choice=4,
+                    compile_choice="",
+                    profile_choice=1,  # Profile 1 for 24GB+ VRAM (4090/3090)
                     vae_config_choice="default",
                     metadata_choice="none",
                     quantization_choice="int8",
@@ -1309,6 +1311,21 @@ class WanOrchestrator:
                 'min_frames_if_references': 9,
                 'override_profile': -1,
 
+                # New v9.1 required parameters
+                'alt_guidance_scale': 0.0,
+                'masking_strength': 1.0,
+                'control_net_weight_alt': 1.0,
+                'motion_amplitude': 1.0,
+                'custom_guide': None,
+                'pace': 0.5,
+                'exaggeration': 0.5,
+                'temperature': 1.0,
+                'output_filename': '',
+
+                # Hires config for two-pass generation (qwen models)
+                'hires_config': resolved_params.get('hires_config', None),
+                'system_prompt': resolved_params.get('system_prompt', ''),
+
                 # Mode and filename
                 'mode': 'generate',
                 'model_filename': '',
@@ -1378,6 +1395,21 @@ class WanOrchestrator:
                 'embedded_guidance_scale': final_embedded_guidance if is_flux else 0.0,
                 'flow_shift': resolved_params.get("flow_shift", 7.0),
                 'sample_solver': resolved_params.get("sample_solver", "euler"),
+
+                # New v9.1 required parameters
+                'alt_guidance_scale': resolved_params.get("alt_guidance_scale", 0.0),
+                'masking_strength': resolved_params.get("masking_strength", 1.0),
+                'control_net_weight_alt': resolved_params.get("control_net_weight_alt", 1.0),
+                'motion_amplitude': resolved_params.get("motion_amplitude", 1.0),
+                'custom_guide': resolved_params.get("custom_guide", None),
+                'pace': resolved_params.get("pace", 0.5),
+                'exaggeration': resolved_params.get("exaggeration", 0.5),
+                'temperature': resolved_params.get("temperature", 1.0),
+                'output_filename': resolved_params.get("output_filename", ""),
+
+                # Hires config for two-pass generation (qwen models)
+                'hires_config': resolved_params.get("hires_config", None),
+                'system_prompt': resolved_params.get("system_prompt", ""),
             }
 
             # Standard defaults for other parameters - extend the dictionary

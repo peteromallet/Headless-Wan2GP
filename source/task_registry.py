@@ -49,9 +49,11 @@ from headless_model_management import HeadlessTaskQueue, GenerationTask
 
 # Define Direct Queue Task Types
 DIRECT_QUEUE_TASK_TYPES = {
-    "wan_2_2_t2i", "vace", "vace_21", "vace_22", "flux", "t2v", "t2v_22", 
+    "wan_2_2_t2i", "vace", "vace_21", "vace_22", "flux", "t2v", "t2v_22",
     "i2v", "i2v_22", "hunyuan", "ltxv", "generate_video",
-    "qwen_image_edit", "qwen_image_hires", "qwen_image_style", "image_inpaint", "annotated_image_edit"
+    "qwen_image_edit", "qwen_image_hires", "qwen_image_style", "image_inpaint", "annotated_image_edit",
+    # Text-to-image tasks (no input image required)
+    "qwen_image", "qwen_image_2512", "z_image_turbo"
 }
 
 
