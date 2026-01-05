@@ -642,16 +642,30 @@ def process_all_loras(params: Dict[str, Any], task_params: Dict[str, Any], model
         if dprint:
             dprint(f"[LORA_PROCESS] Task {task_id}: Added {len(orchestrator_payload['additional_loras'])} additional LoRAs from orchestrator")
 
-    # Step 3.5: Parse phase_config if present in orchestrator_payload
+    # Step 3.5: Parse phase_config if present in orchestrator_payload OR task_params
+    # For orchestrator tasks: phase_config is in orchestrator_payload
+    # For segment tasks: phase_config is at top level of task_params
+    phase_config = None
+    phase_config_source = None
+    model_name_for_phase = None
+    
     if orchestrator_payload and "phase_config" in orchestrator_payload:
+        phase_config = orchestrator_payload["phase_config"]
+        phase_config_source = "orchestrator_payload"
+        model_name_for_phase = orchestrator_payload.get("model_name")
+    elif task_params and "phase_config" in task_params:
+        phase_config = task_params["phase_config"]
+        phase_config_source = "task_params"
+        model_name_for_phase = task_params.get("model_name")
+    
+    if phase_config:
         if dprint:
-            dprint(f"[LORA_PROCESS] Task {task_id}: phase_config detected in orchestrator_payload - parsing LoRA configuration")
+            dprint(f"[LORA_PROCESS] Task {task_id}: phase_config detected in {phase_config_source} - parsing LoRA configuration")
 
         try:
             from source.task_conversion import parse_phase_config
 
             # Get num_inference_steps for parsing
-            phase_config = orchestrator_payload["phase_config"]
             steps_per_phase = phase_config.get("steps_per_phase", [2, 2, 2])
             total_steps = sum(steps_per_phase)
 
@@ -660,7 +674,7 @@ def process_all_loras(params: Dict[str, Any], task_params: Dict[str, Any], model
                 phase_config=phase_config,
                 num_inference_steps=total_steps,
                 task_id=task_id,
-                model_name=orchestrator_payload.get("model_name")
+                model_name=model_name_for_phase
             )
 
             # Override with parsed values
