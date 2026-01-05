@@ -4,9 +4,39 @@ This long-running process polls the Supabase-backed Postgres `tasks` table,
 claims queued tasks, and executes them using the HeadlessTaskQueue system.
 """
 
-import argparse
-import sys
+# Suppress common warnings/errors from headless environment
 import os
+import sys
+import warnings
+
+# Suppress Python warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", message=".*pynvml.*")
+
+# Set environment variables for headless operation
+os.environ.setdefault("PYTHONWARNINGS", "ignore::FutureWarning")
+os.environ.setdefault("XDG_RUNTIME_DIR", "/tmp/runtime-root")
+os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+
+# Redirect ALSA errors to /dev/null (can't be suppressed via Python)
+try:
+    import ctypes
+    ERROR_HANDLER_FUNC = ctypes.CFUNCTYPE(None, ctypes.c_char_p, ctypes.c_int,
+                                          ctypes.c_char_p, ctypes.c_int,
+                                          ctypes.c_char_p)
+    def py_error_handler(filename, line, function, err, fmt):
+        pass
+    c_error_handler = ERROR_HANDLER_FUNC(py_error_handler)
+    try:
+        asound = ctypes.cdll.LoadLibrary('libasound.so.2')
+        asound.snd_lib_error_set_handler(c_error_handler)
+    except:
+        pass  # ALSA not available, no need to suppress
+except:
+    pass  # ctypes not available or other error
+
+import argparse
 import time
 import datetime
 import traceback
