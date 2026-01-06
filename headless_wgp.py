@@ -1173,19 +1173,25 @@ class WanOrchestrator:
             # (worker.py called LoraResolver.resolve_all_lora_formats() before passing to us)
             # We just need to format them for WGP's expected string format
             
-            # lora_names already contains validated absolute paths that exist on disk
-            activated_loras = lora_names or []
+            # Check both function param (lora_names) AND kwargs (activated_loras) since callers
+            # may pass LoRAs using either key depending on the code path
+            activated_loras = lora_names or kwargs.get('activated_loras') or []
             
             # Format multipliers as space-separated string for WGP
+            # Check both lora_multipliers (function param) and kwargs variants
             # Handles both regular floats (1.0, 0.8) and phase-config strings ("1.0;0;0")
-            if lora_multipliers:
-                loras_multipliers_str = " ".join(str(m) for m in lora_multipliers)
+            eff_multipliers = lora_multipliers or kwargs.get('lora_multipliers') or kwargs.get('loras_multipliers')
+            if eff_multipliers:
+                if isinstance(eff_multipliers, str):
+                    loras_multipliers_str = eff_multipliers
+                else:
+                    loras_multipliers_str = " ".join(str(m) for m in eff_multipliers)
             else:
                 loras_multipliers_str = ""
             
             if activated_loras:
-                generation_logger.info(f"Using {len(activated_loras)} LoRAs (pre-validated by LoraResolver)")
-                generation_logger.debug(f"LoRA paths: {[os.path.basename(p) for p in activated_loras]}")
+                generation_logger.info(f"Using {len(activated_loras)} LoRAs from {'lora_names' if lora_names else 'kwargs.activated_loras'}")
+                generation_logger.debug(f"LoRA paths: {[os.path.basename(p) if isinstance(p, str) else str(p) for p in activated_loras]}")
             else:
                 generation_logger.debug("No LoRAs to apply")
 
