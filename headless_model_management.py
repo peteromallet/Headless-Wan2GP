@@ -50,6 +50,7 @@ from datetime import datetime
 from contextlib import contextmanager
 from source.lora_utils import cleanup_legacy_lora_collisions
 from source.logging_utils import queue_logger
+from source.params import TaskConfig
 
 # Add WanGP to path for imports
 def setup_wgp_path(wan_dir: str):
@@ -1110,290 +1111,75 @@ class HeadlessTaskQueue:
     
     def _convert_to_wgp_task(self, task: GenerationTask) -> Dict[str, Any]:
         """
-        Convert our task format to WanOrchestrator-compatible parameters.
+        Convert task to WGP parameters using typed TaskConfig.
         
-        This maps our GenerationTask structure to the parameters expected by
-        the WanOrchestrator generate methods.
+        This:
+        1. Parses all params into TaskConfig at the boundary
+        2. Handles LoRA downloads via LoRAConfig
+        3. Converts to WGP format only at the end
         """
-        # Start with base parameters
-        wgp_params = {
-            "prompt": task.prompt,
-            "model": task.model,
-        }
+        # Parse into typed config
+        config = TaskConfig.from_db_task(
+            task.parameters,
+            task_id=task.id,
+            task_type=task.parameters.get('_source_task_type', ''),
+            model=task.model,
+            debug_mode=self.debug_mode
+        )
         
-        # Add all parameters from the task, with some parameter name mapping
-        param_mapping = {
-            # Map any parameter name differences between our format and WanOrchestrator
-            "negative_prompt": "negative_prompt",
-            "resolution": "resolution", 
-            "video_length": "video_length",
-            "num_inference_steps": "num_inference_steps",
-            "guidance_scale": "guidance_scale",
-            "flow_shift": "flow_shift",  # Important for CausVid/LightI2X settings
-            "seed": "seed",
-            "video_guide": "video_guide",
-            "video_mask": "video_mask",
-            "image_guide": "image_guide",
-            "image_mask": "image_mask",
-            "video_prompt_type": "video_prompt_type",
-            "control_net_weight": "control_net_weight",
-            "control_net_weight2": "control_net_weight2",
-            "embedded_guidance_scale": "embedded_guidance_scale",
-            "denoise_strength": "denoising_strength",  # Map LightI2X parameter name
-            "guidance2_scale": "guidance2_scale",
-            "guidance3_scale": "guidance3_scale",
-            "switch_threshold": "switch_threshold",
-            "switch_threshold2": "switch_threshold2",
-            "guidance_phases": "guidance_phases",
-            "model_switch_phase": "model_switch_phase",
-            "image_refs_relative_size": "image_refs_relative_size",
-            "override_profile": "override_profile",
-            "sample_solver": "sample_solver",
-            "lora_names": "lora_names",
-            "lora_multipliers": "lora_multipliers",
-            # Image parameters
-            "image_start": "image_start",
-            "image_end": "image_end",
-            "image_refs": "image_refs",
-            "frames_positions": "frames_positions",
-            
-            # Video/Media
-            "video_source": "video_source",
-            "keep_frames_video_source": "keep_frames_video_source",
-            "keep_frames_video_guide": "keep_frames_video_guide",
-            "video_guide_outpainting": "video_guide_outpainting",
-            "mask_expand": "mask_expand",
-            "min_frames_if_references": "min_frames_if_references",
-            "remove_background_images_ref": "remove_background_images_ref",
-            
-            # Audio
-            "audio_guidance_scale": "audio_guidance_scale",
-            "audio_guide": "audio_guide",
-            "audio_guide2": "audio_guide2",
-            "audio_source": "audio_source",
-            "audio_prompt_type": "audio_prompt_type",
-            "speakers_locations": "speakers_locations",
-            "MMAudio_setting": "MMAudio_setting",
-            "MMAudio_prompt": "MMAudio_prompt",
-            "MMAudio_neg_prompt": "MMAudio_neg_prompt",
-            
-            # Sliding Window
-            "sliding_window_size": "sliding_window_size",
-            "sliding_window_overlap": "sliding_window_overlap",
-            "sliding_window_color_correction_strength": "sliding_window_color_correction_strength",
-            "sliding_window_overlap_noise": "sliding_window_overlap_noise",
-            "sliding_window_discard_last_frames": "sliding_window_discard_last_frames",
-            
-            # Latent Noise Mask (improved VACE masking)
-            "latent_noise_mask_strength": "latent_noise_mask_strength",
-
-            # Vid2vid initialization (for VACE replace mode)
-            "vid2vid_init_video": "vid2vid_init_video",
-            "vid2vid_init_strength": "vid2vid_init_strength",
-
-            # Upscaling/Post-processing
-            "temporal_upsampling": "temporal_upsampling",
-            "spatial_upsampling": "spatial_upsampling",
-            "film_grain_intensity": "film_grain_intensity",
-            "film_grain_saturation": "film_grain_saturation",
-            
-            # Advanced Sampling
-            "RIFLEx_setting": "RIFLEx_setting",
-            "NAG_scale": "NAG_scale",
-            "NAG_tau": "NAG_tau",
-            "NAG_alpha": "NAG_alpha",
-            "slg_switch": "slg_switch",
-            "slg_layers": "slg_layers",
-            "slg_start_perc": "slg_start_perc",
-            "slg_end_perc": "slg_end_perc",
-            "apg_switch": "apg_switch",
-            "cfg_star_switch": "cfg_star_switch",
-            "cfg_zero_step": "cfg_zero_step",
-            "prompt_enhancer": "prompt_enhancer",
-            "model_mode": "model_mode",
-            "batch_size": "batch_size",
-            "repeat_generation": "repeat_generation",
-
-            # Special phase_config patching parameters (internal use)
-            "_parsed_phase_config": "_parsed_phase_config",
-            "_phase_config_model_name": "_phase_config_model_name",
-            
-            # Qwen hires fix configuration
-            "hires_config": "hires_config",
-            
-            # Qwen-specific parameters
-            "system_prompt": "system_prompt",
-        }
+        # Add prompt and model
+        config.generation.prompt = task.prompt
+        config.model = task.model
         
-
-        
-        # Helper: resolve media paths preferring repo root over Wan2GP cwd
-        def _resolve_media_path(val: str) -> Optional[str]:
-            if not val:
-                return None
-            p = Path(val)
-            try:
-                if p.is_absolute():
-                    return str(p.resolve()) if p.exists() else None
-                repo_root = Path(__file__).parent
-                wan_root = Path.cwd()
-                # Prefer repo root for relative paths (one level up from Wan2GP)
-                candidate = repo_root / p
-                if candidate.exists():
-                    return str(candidate.resolve())
-                candidate = wan_root / p
-                if candidate.exists():
-                    return str(candidate.resolve())
-            except Exception:
-                return None
-            return None
-
-        # Database/infrastructure parameters that should never be passed to WanGP
-        db_param_blacklist = {"supabase_url", "supabase_anon_key", "supabase_access_token"}
-
-        # Map parameters with proper defaults
-        for our_param, wgp_param in param_mapping.items():
-            # Skip database parameters
-            if our_param in db_param_blacklist:
-                continue
-
-            if our_param in task.parameters:
-                value = task.parameters[our_param]
-
-                # Special handling for file path parameters
-                if our_param in ["video_guide", "video_mask", "image_guide", "image_mask"] and value:
-                    resolved = _resolve_media_path(str(value))
-                    if resolved:
-                        wgp_params[wgp_param] = resolved
-                        if self.debug_mode:
-                            self.logger.info(f"[PARAM_DEBUG] Task {task.id}: {our_param} path resolved: {resolved}")
-                    else:
-                        if self.debug_mode:
-                            self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: {our_param} not found at '{value}' (checked repo and Wan2GP); skipping")
-                        continue
-
-                # Special handling for image references
-                elif our_param == "image_refs" and value:
-                    if isinstance(value, list):
-                        # Validate each image path
-                        valid_images = []
-                        for img_path in value:
-                            try:
-                                img_path_obj = Path(img_path)
-                                if img_path_obj.exists():
-                                    valid_images.append(str(img_path_obj.resolve()))
-                                else:
-                                    if self.debug_mode:
-                                        self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Image ref does not exist: {img_path}")
-                            except Exception as e:
-                                if self.debug_mode:
-                                    self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Error processing image ref '{img_path}': {e}")
-
-                        if valid_images:
-                            wgp_params["image_refs"] = valid_images
-                            if self.debug_mode:
-                                self.logger.info(f"[PARAM_DEBUG] Task {task.id}: Validated {len(valid_images)} image references")
-                    else:
-                        # Single image reference
-                        try:
-                            img_path_obj = Path(value)
-                            if img_path_obj.exists():
-                                wgp_params["image_refs"] = [str(img_path_obj.resolve())]
-                                if self.debug_mode:
-                                    self.logger.info(f"[PARAM_DEBUG] Task {task.id}: Validated single image reference")
-                            else:
-                                if self.debug_mode:
-                                    self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Single image ref does not exist: {value}")
-                        except Exception as e:
-                            if self.debug_mode:
-                                self.logger.warning(f"[PARAM_DEBUG] Task {task.id}: Error processing single image ref '{value}': {e}")
-                
-                else:
-                    # Normal parameter mapping
-                    wgp_params[wgp_param] = value
-        
-        # Handle LoRA parameter format conversion
-        if "activated_loras" in task.parameters:
-            wgp_params["lora_names"] = task.parameters["activated_loras"]
-        if "loras_multipliers" in task.parameters:
-            # Convert from string format to list
-            if isinstance(task.parameters["loras_multipliers"], str):
-                multipliers_str = task.parameters["loras_multipliers"]
-
-                # Detect phase-config format (contains semicolons)
-                if ";" in multipliers_str:
-                    # Phase-config format: space-separated strings like "1.0;0 0;1.0"
-                    # Keep as strings, don't convert to floats
-                    wgp_params["lora_multipliers"] = [x.strip() for x in multipliers_str.split() if x.strip()]
-                else:
-                    # Regular format: comma-separated floats like "1.0,0.8"
-                    wgp_params["lora_multipliers"] = [float(x.strip()) for x in multipliers_str.split(",") if x.strip()]
-            else:
-                wgp_params["lora_multipliers"] = task.parameters["loras_multipliers"]
-
-        # Ensure additional_loras is forwarded so LoRA processing can normalize/download them
-        if "additional_loras" in task.parameters:
-            wgp_params["additional_loras"] = task.parameters["additional_loras"]
-            dprint(f"[LORA_PROCESS] Task {task.id}: Forwarded {len(task.parameters['additional_loras'])} additional LoRAs to processor")
-        
-        # Parameter resolution is now handled by WanOrchestrator._resolve_parameters()
-        # This provides clean separation: HeadlessTaskQueue manages tasks, WanOrchestrator handles parameters
+        # Log the parsed config
         if self.debug_mode:
-            self.logger.info(f"[TASK_CONVERSION] Converting task {task.id} for model '{task.model}' - parameter resolution delegated to orchestrator")
-
-        # Filter out database/infrastructure parameters that should not be passed to WanGP
-        db_params_to_remove = ["supabase_url", "supabase_anon_key", "supabase_access_token"]
-        for param in db_params_to_remove:
-            if param in wgp_params:
-                self.logger.debug(f"[PARAM_FILTER] Removing infrastructure parameter '{param}' from WanGP params")
-                wgp_params.pop(param)
-
-        # DEBUG: Check if _parsed_phase_config made it through param_mapping
-        if "_parsed_phase_config" in wgp_params:
-            self.logger.info(f"[PARAM_MAPPING_CHECK] Task {task.id}: ✅ _parsed_phase_config PRESENT in wgp_params before LoRA processing")
-        else:
-            self.logger.warning(f"[PARAM_MAPPING_CHECK] Task {task.id}: ❌ _parsed_phase_config MISSING from wgp_params before LoRA processing")
-            self.logger.info(f"[PARAM_MAPPING_CHECK] Task {task.id}: Available keys: {list(wgp_params.keys())}")
-
-        # Apply sampler-specific CFG settings if available
-        sample_solver = task.parameters.get("sample_solver", wgp_params.get("sample_solver", ""))
-        if sample_solver:
-            self._apply_sampler_cfg_preset(task.model, sample_solver, wgp_params)
-
-        # Complete LoRA processing pipeline using centralized utilities
-        # CRITICAL: lora_utils imports wgp, so we must change to Wan2GP directory first
-        import sys
-        source_dir = Path(__file__).parent / "source"
-        if str(source_dir) not in sys.path:
-            sys.path.insert(0, str(source_dir))
-        from lora_utils import process_all_loras
-
-        # Use centralized LoRA processing pipeline
-        dprint(f"[LORA_PROCESS] Task {task.id}: Starting centralized LoRA processing for model {task.model}")
-
-        # Ensure we're in Wan2GP directory (may not be if orchestrator hasn't initialized yet)
-        _saved_cwd_for_lora = os.getcwd()
-        if _saved_cwd_for_lora != self.wan_dir:
-            os.chdir(self.wan_dir)
-            dprint(f"[LORA_PROCESS] Changed to {self.wan_dir} for LoRA processing")
-
-        try:
-            wgp_params = process_all_loras(
-                params=wgp_params,
-                task_params=task.parameters,
-                model_name=task.model,
-                orchestrator_payload=task.parameters.get("orchestrator_payload"),
-                task_id=task.id,
-                dprint=dprint
-            )
-        finally:
-            # Only restore if we changed it
-            if _saved_cwd_for_lora != self.wan_dir:
-                os.chdir(_saved_cwd_for_lora)
-                dprint(f"[LORA_PROCESS] Restored to {_saved_cwd_for_lora}")
+            config.log_summary(self.logger.info)
         
-        dprint(f"[LORA_PROCESS] Task {task.id}: Centralized LoRA processing complete")
-
+        # Handle LoRA downloads if any are pending
+        if config.lora.has_pending_downloads():
+            self.logger.info(f"[LORA_PROCESS] Task {task.id}: {len(config.lora.get_pending_downloads())} LoRAs need downloading")
+            
+            # Ensure we're in Wan2GP directory for LoRA operations
+            _saved_cwd = os.getcwd()
+            if _saved_cwd != self.wan_dir:
+                os.chdir(self.wan_dir)
+            
+            try:
+                from source.lora_utils import _download_lora_from_url
+                
+                for url, mult in list(config.lora.get_pending_downloads().items()):
+                    try:
+                        local_path = _download_lora_from_url(url, task.id, dprint, model_type=task.model)
+                        if local_path:
+                            config.lora.mark_downloaded(url, local_path)
+                            self.logger.info(f"[LORA_DOWNLOAD] Task {task.id}: Downloaded {os.path.basename(local_path)}")
+                        else:
+                            self.logger.warning(f"[LORA_DOWNLOAD] Task {task.id}: Failed to download {url}")
+                    except Exception as e:
+                        self.logger.warning(f"[LORA_DOWNLOAD] Task {task.id}: Error downloading {url}: {e}")
+            finally:
+                if _saved_cwd != self.wan_dir:
+                    os.chdir(_saved_cwd)
+        
+        # Validate before conversion
+        errors = config.validate()
+        if errors:
+            self.logger.warning(f"[TASK_CONFIG] Task {task.id}: Validation warnings: {errors}")
+        
+        # Convert to WGP format (single conversion point)
+        wgp_params = config.to_wgp_format()
+        
+        # Ensure prompt and model are set
+        wgp_params["prompt"] = task.prompt
+        wgp_params["model"] = task.model
+        
+        # Filter out infrastructure params
+        for param in ["supabase_url", "supabase_anon_key", "supabase_access_token"]:
+            wgp_params.pop(param, None)
+        
+        if self.debug_mode:
+            self.logger.info(f"[TASK_CONVERSION] Task {task.id}: Converted with {len(wgp_params)} params")
+            self.logger.debug(f"[TASK_CONVERSION] Task {task.id}: LoRAs: {wgp_params.get('activated_loras', [])}")
         
         return wgp_params
     
