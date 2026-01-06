@@ -60,6 +60,11 @@ test_results_comparison/
 tests/
 tests_output/
 
+# Keep tests ignored by default, but allow tracking specific regression tests
+!tests/
+tests/*
+!tests/test_lora_flow.py
+
 # Task database files
 tasks.db-shm
 tasks.db-wal
