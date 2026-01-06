@@ -112,7 +112,7 @@ def _download_lora_from_url(url: str, task_id: str, dprint=None) -> str:
 
             # Download using HuggingFace hub. Some hubs require `subfolder` to locate
             # the file, but we want the final artifact at `loras/<filename>` because
-            # WGP and `_check_lora_exists` look in the root directory.
+            # WGP expects LoRAs in the root loras directory.
             if len(subfolder) > 0:
                 hf_hub_download(repo_id=repo_id, filename=filename, local_dir=lora_dir, subfolder=subfolder)
                 # If the file landed under a nested path, move it up to lora_dir
