@@ -645,18 +645,34 @@ def process_all_loras(params: Dict[str, Any], task_params: Dict[str, Any], model
     # Step 3.5: Parse phase_config if present in orchestrator_payload OR task_params
     # For orchestrator tasks: phase_config is in orchestrator_payload
     # For segment tasks: phase_config is at top level of task_params
+    # 
+    # IMPORTANT: Skip if LoRAs have already been resolved to absolute paths (by LoraResolver)
+    # This prevents overwriting resolved paths with raw URLs when the segment handler has
+    # already done the resolution.
+    lora_names_current = params.get("lora_names", [])
+    loras_already_resolved = any(
+        isinstance(name, str) and (name.startswith("/") or name.startswith("\\"))
+        for name in lora_names_current
+    )
+    
+    if loras_already_resolved:
+        if dprint:
+            dprint(f"[LORA_PROCESS] Task {task_id}: LoRAs already resolved to absolute paths - skipping phase_config re-parsing")
+    
     phase_config = None
     phase_config_source = None
     model_name_for_phase = None
     
-    if orchestrator_payload and "phase_config" in orchestrator_payload:
-        phase_config = orchestrator_payload["phase_config"]
-        phase_config_source = "orchestrator_payload"
-        model_name_for_phase = orchestrator_payload.get("model_name")
-    elif task_params and "phase_config" in task_params:
-        phase_config = task_params["phase_config"]
-        phase_config_source = "task_params"
-        model_name_for_phase = task_params.get("model_name")
+    # Only re-parse phase_config if LoRAs haven't been resolved yet
+    if not loras_already_resolved:
+        if orchestrator_payload and "phase_config" in orchestrator_payload:
+            phase_config = orchestrator_payload["phase_config"]
+            phase_config_source = "orchestrator_payload"
+            model_name_for_phase = orchestrator_payload.get("model_name")
+        elif task_params and "phase_config" in task_params:
+            phase_config = task_params["phase_config"]
+            phase_config_source = "task_params"
+            model_name_for_phase = task_params.get("model_name")
     
     if phase_config:
         if dprint:
