@@ -789,6 +789,74 @@ def process_all_loras(params: Dict[str, Any], task_params: Dict[str, Any], model
     return params
 
 
+def process_lora_config(lora_config, task_id: str = "unknown", dprint=None):
+    """
+    Process a LoRAConfig object - download pending LoRAs and verify local ones.
+    
+    This is the new typed API for LoRA processing. It operates on a LoRAConfig
+    object rather than mutating a params dict.
+    
+    Args:
+        lora_config: LoRAConfig object with entries to process
+        task_id: Task ID for logging
+        dprint: Optional debug print function
+        
+    Returns:
+        The same LoRAConfig object with pending entries resolved to local paths
+    """
+    from source.params import LoRAConfig, LoRAStatus
+    
+    if not isinstance(lora_config, LoRAConfig):
+        raise TypeError(f"Expected LoRAConfig, got {type(lora_config)}")
+    
+    if dprint:
+        dprint(f"[LORA_PROCESS_V2] Task {task_id}: Processing {len(lora_config)} LoRA entries")
+    
+    # Process each entry
+    for entry in lora_config.entries:
+        if entry.status == LoRAStatus.PENDING and entry.url:
+            # Download this LoRA
+            if dprint:
+                dprint(f"[LORA_PROCESS_V2] Task {task_id}: Downloading {entry.url}")
+            
+            try:
+                local_path = _download_lora_from_url(entry.url, task_id, dprint)
+                if local_path:
+                    entry.mark_downloaded(local_path)
+                    if dprint:
+                        dprint(f"[LORA_PROCESS_V2] Task {task_id}: Downloaded to {local_path}")
+                else:
+                    if dprint:
+                        dprint(f"[LORA_PROCESS_V2] Task {task_id}: Download failed for {entry.url}")
+            except Exception as e:
+                if dprint:
+                    dprint(f"[LORA_PROCESS_V2] Task {task_id}: Error downloading {entry.url}: {e}")
+                    
+        elif entry.status == LoRAStatus.LOCAL:
+            # Verify local file exists
+            filename = entry.get_wgp_filename()
+            if filename and not _check_lora_exists(filename):
+                if dprint:
+                    dprint(f"[LORA_PROCESS_V2] Task {task_id}: Local LoRA not found: {filename}")
+                # Try auto-download if it looks like a known LoRA
+                if _download_lora_auto(filename, "local", dprint):
+                    if dprint:
+                        dprint(f"[LORA_PROCESS_V2] Task {task_id}: Auto-downloaded {filename}")
+    
+    # Validate the result
+    errors = lora_config.validate()
+    if errors:
+        if dprint:
+            dprint(f"[LORA_PROCESS_V2] Task {task_id}: Validation warnings: {errors}")
+    
+    if dprint:
+        ready = len(lora_config.filenames)
+        pending = len(lora_config.pending_downloads)
+        dprint(f"[LORA_PROCESS_V2] Task {task_id}: Complete - {ready} ready, {pending} still pending")
+    
+    return lora_config
+
+
 def cleanup_legacy_lora_collisions():
     """
     Remove legacy generic LoRA filenames that collide with new uniquely-named versions.

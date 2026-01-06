@@ -76,7 +76,7 @@ DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
 
 ### Supabase and specialized handlers
 
-- **Supabase Edge Functions**: Task lifecycle ops (claim, complete, fetch predecessors) happen via Edge Functions when in Supabase mode, keeping RLS intact.
+- **Supabase Edge Functions**: Task lifecycle ops (claim, complete, fetch predecessors) happen via Edge Functions when in Supabase mode, keeping RLS intact. Canonical completion function is `complete-task` (hyphen).
 - **Uploads**: `worker.py` and specialized task handlers use `prepare_output_path_with_upload` and `upload_and_get_final_output_location` to save locally first, then upload to Supabase Storage with stable paths `{task_id}/{filename}`.
 - **Chaining**: Orchestrators like `travel_between_images` queue sub-tasks (segments/stitch) via DB rows; after each primitive generation, `worker.py` runs chaining logic to advance the DAG.
 
@@ -155,7 +155,7 @@ DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
 
 ## Top-level scripts
 
-* **worker.py** – Headless service that polls the `tasks` database, claims work, and executes tasks via the HeadlessTaskQueue system. Includes specialized handlers for OpenPose and RIFE interpolation tasks with automatic Supabase storage upload. Includes 4 Qwen image editing task types (qwen_image_edit, qwen_image_style, image_inpaint, annotated_image_edit) handled by `QwenHandler`. All Qwen tasks use the qwen_image_edit_20B model with automatic LoRA management via `LoraResolver`. Supports both SQLite and Supabase backends via `--db-type` flag with queue-based processing architecture. Features centralized logging that batches logs with heartbeats for orchestrator integration.
+* **worker.py** – Headless service that polls the `tasks` database, claims work, and executes tasks via the HeadlessTaskQueue system. Includes specialized handlers for OpenPose and RIFE interpolation tasks with automatic Supabase storage upload. Includes 5 Qwen image editing task types (qwen_image_edit, qwen_image_hires, qwen_image_style, image_inpaint, annotated_image_edit) handled by `QwenHandler`. All Qwen tasks support optional two-pass hires fix via `hires_scale` parameter. All Qwen tasks use the qwen_image_edit_20B model with automatic LoRA management via `LoraResolver`. Supports both SQLite and Supabase backends via `--db-type` flag with queue-based processing architecture. Features centralized logging that batches logs with heartbeats for orchestrator integration.
 * **add_task.py** – Lightweight CLI helper to queue a single new task into SQLite/Supabase. Accepts a JSON payload (or file) and inserts it into the `tasks` table.
 * **generate_test_tasks.py** – Developer utility that back-fills the database with synthetic images/prompts for integration testing and local benchmarking.
 * **tests/test_travel_workflow_db_edge_functions.py** – Comprehensive test script to verify Supabase Edge Functions, authentication, and database operations for the headless worker.
@@ -185,11 +185,13 @@ All task types support automatic upload to Supabase Storage when configured:
 * **join_clips**: Joined video clips with VACE transitions → Supabase bucket  
 * **Standard WGP tasks**: All video outputs → Supabase bucket
 * **Specialized handlers**: OpenPose masks, RIFE interpolations, etc. → Supabase bucket
-* **Qwen Image Edit tasks**: All 4 Qwen task types → Supabase bucket with public URLs
+* **Qwen Image Edit tasks**: All 5 Qwen task types → Supabase bucket with public URLs
   * **qwen_image_edit**: Basic image editing with optional LoRAs
   * **qwen_image_style**: Style transfer between images (auto-prompt modification, Lightning/Style/Subject LoRAs)
+  * **qwen_image_hires**: Dedicated two-pass hires fix generation
   * **image_inpaint**: Inpainting with green mask overlay compositing
   * **annotated_image_edit**: Scene annotation editing with specialized LoRA
+  * **Hires fix**: All Qwen task types support optional two-pass hires fix when `hires_scale` param is set (latent upscale + refinement pass)
 
 ### Database behavior
 * **SQLite mode**: `output_location` contains relative paths (e.g., `files/video.mp4`)
@@ -225,8 +227,15 @@ This is the main application package.
 * **travel_segment_processor.py** – Shared processor for travel segment handling. Contains unified logic for guide video creation, mask video creation, and video_prompt_type construction used by both `travel_between_images.py` and `worker.py`.
 * **lora_utils.py** – Centralized LoRA processing system with `process_all_loras()` function. Handles LoRA detection, optimization, download, and formatting. Supports auto-download of LightI2X/CausVid LoRAs and multiple input formats.
 * **lora_resolver.py** – Unified LoRA format resolution class (`LoraResolver`). Resolves all 8 LoRA input formats into validated absolute paths. Handles normalization, URL downloads (wget), path validation, and deduplication.
+* **params/** – Typed parameter dataclasses for clean parameter flow. Provides canonical representations that parse once at system boundary and convert to WGP format only at the final WGP call. Enabled via `USE_TYPED_CONFIG=1` env var.
+  * **base.py** – `ParamGroup` ABC with precedence utilities and `flatten_params()` helper.
+  * **lora.py** – `LoRAConfig` and `LoRAEntry` for typed LoRA handling. Uses entry objects (not parallel arrays) to preserve ordering.
+  * **vace.py** – `VACEConfig` for video guide/mask parameters.
+  * **generation.py** – `GenerationConfig` for core generation parameters.
+  * **phase.py** – `PhaseConfig` that wraps existing `parse_phase_config()` function.
+  * **task.py** – `TaskConfig` combining all param groups with `from_db_task()`, `from_segment_params()`, and `to_wgp_format()` methods.
 * **model_handlers/** – Package for model-specific task handlers.
-  * **qwen_handler.py** – Qwen-specific preprocessing and parameter transformation. Handles 4 Qwen task types: `qwen_image_edit`, `image_inpaint`, `annotated_image_edit`, `qwen_image_style`. Manages resolution capping, composite image creation (green masks), system prompt selection, and LoRA coordination.
+  * **qwen_handler.py** – Qwen-specific preprocessing and parameter transformation. Handles 5 Qwen task types: `qwen_image_edit`, `qwen_image_hires`, `image_inpaint`, `annotated_image_edit`, `qwen_image_style`. Manages resolution capping, composite image creation (green masks), system prompt selection, LoRA coordination, and two-pass hires fix configuration.
 
 
 ### source/sm_functions/ sub-package
