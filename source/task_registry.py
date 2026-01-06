@@ -15,6 +15,7 @@ from source.logging_utils import headless_logger
 from source.worker_utils import make_task_dprint, log_ram_usage, cleanup_generated_files, dprint
 from source.task_conversion import db_task_to_generation_task, parse_phase_config
 from source.phase_config import apply_phase_config_patch
+from source.lora_resolver import LoraResolver
 
 # Import task handlers
 # These imports should be available from the environment where this module is used
@@ -315,6 +316,25 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                     generation_params["activated_loras"] = parsed_phase_config["lora_names"]
                 if "lora_multipliers" in parsed_phase_config:
                     generation_params["loras_multipliers"] = " ".join(str(m) for m in parsed_phase_config["lora_multipliers"])
+                
+                # CRITICAL: Run LoRA resolution after phase_config parsing
+                # phase_config extracts LoRA URLs which need to be downloaded and resolved to absolute paths
+                if any(key in generation_params for key in ["activated_loras", "loras_multipliers", "additional_loras"]):
+                    wan_root = Path(__file__).parent.parent / "Wan2GP"
+                    lora_resolver = LoraResolver(
+                        wan_root=str(wan_root),
+                        task_id=task_id,
+                        dprint=dprint_func
+                    )
+                    resolved_lora_names, resolved_lora_multipliers = lora_resolver.resolve_all_lora_formats(
+                        params=generation_params,
+                        model_type=model_name,
+                        task_params=segment_params
+                    )
+                    if resolved_lora_names:
+                        generation_params["activated_loras"] = resolved_lora_names
+                        generation_params["loras_multipliers"] = " ".join(str(m) for m in resolved_lora_multipliers)
+                        headless_logger.info(f"Resolved {len(resolved_lora_names)} LoRAs from phase_config", task_id=task_id)
                 
                 if "_patch_config" in parsed_phase_config:
                     apply_phase_config_patch(parsed_phase_config, model_name, task_id)
