@@ -43,7 +43,24 @@ python debug.py task <task_id> --json
 
 # View just logs
 python debug.py task <task_id> --logs-only
+
+# Filter for LoRA-related logs
+python debug.py task <task_id> --logs-only 2>&1 | grep -E "LORA|LoRA|lora"
+
+# Filter for errors/warnings
+python debug.py task <task_id> --logs-only 2>&1 | grep -E "ERROR|WARNING|❌"
 ```
+
+### Key Log Tags to Look For
+
+| Tag | Meaning |
+|-----|---------|
+| `[LORA_PROCESS]` | LoRA handling in queue |
+| `[LORA_DOWNLOAD]` | URL download attempts |
+| `[TASK_CONVERSION]` | TaskConfig parsing |
+| `activated_loras:` | Final LoRAs sent to WGP |
+| `LoRAs need downloading` | Pending URLs detected |
+| `Downloaded` | Successful download |
 
 ## Test Task Details
 
