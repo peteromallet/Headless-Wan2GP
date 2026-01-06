@@ -167,6 +167,14 @@ def normalize_lora_format(params: Dict[str, Any], task_id: str = "unknown", dpri
     # Convert activated_loras to lora_names
     if "activated_loras" in params:
         loras = params["activated_loras"]
+        
+        # DEBUG: Log what activated_loras contains BEFORE conversion
+        if dprint:
+            dprint(f"[LORA_NORM] Task {task_id}: activated_loras BEFORE conversion: {loras[:2] if isinstance(loras, list) and loras else loras}...")
+            if isinstance(loras, list) and loras:
+                first = loras[0]
+                dprint(f"[LORA_NORM] Task {task_id}: First activated_lora: '{first}' starts_with_slash={first.startswith('/') if isinstance(first, str) else 'N/A'}")
+        
         if isinstance(loras, str):
             # Convert comma-separated string to list
             params["lora_names"] = [lora.strip() for lora in loras.split(",") if lora.strip()]
@@ -175,7 +183,7 @@ def normalize_lora_format(params: Dict[str, Any], task_id: str = "unknown", dpri
         del params["activated_loras"]  # Remove old format
         
         if dprint:
-            dprint(f"[LORA_NORM] Task {task_id}: Converted activated_loras to lora_names: {params.get('lora_names', [])}")
+            dprint(f"[LORA_NORM] Task {task_id}: Converted activated_loras to lora_names: {params.get('lora_names', [])[:2]}...")
     
     # Convert loras_multipliers string to list
     if "loras_multipliers" in params:
@@ -650,14 +658,27 @@ def process_all_loras(params: Dict[str, Any], task_params: Dict[str, Any], model
     # This prevents overwriting resolved paths with raw URLs when the segment handler has
     # already done the resolution.
     lora_names_current = params.get("lora_names", [])
+    
+    # DEBUG: Log what we're checking
+    if dprint:
+        dprint(f"[LORA_RESOLVE_CHECK] Task {task_id}: Checking if LoRAs already resolved...")
+        dprint(f"[LORA_RESOLVE_CHECK] Task {task_id}: lora_names_current = {lora_names_current[:3] if lora_names_current else '[]'}{'...' if len(lora_names_current) > 3 else ''}")
+        if lora_names_current:
+            first_lora = lora_names_current[0]
+            dprint(f"[LORA_RESOLVE_CHECK] Task {task_id}: First LoRA: '{first_lora}' (type={type(first_lora).__name__})")
+            dprint(f"[LORA_RESOLVE_CHECK] Task {task_id}: Starts with '/': {str(first_lora).startswith('/') if isinstance(first_lora, str) else 'N/A (not string)'}")
+    
     loras_already_resolved = any(
         isinstance(name, str) and (name.startswith("/") or name.startswith("\\"))
         for name in lora_names_current
     )
     
+    if dprint:
+        dprint(f"[LORA_RESOLVE_CHECK] Task {task_id}: loras_already_resolved = {loras_already_resolved}")
+    
     if loras_already_resolved:
         if dprint:
-            dprint(f"[LORA_PROCESS] Task {task_id}: LoRAs already resolved to absolute paths - skipping phase_config re-parsing")
+            dprint(f"[LORA_PROCESS] Task {task_id}: ✅ LoRAs already resolved to absolute paths - skipping phase_config re-parsing")
     
     phase_config = None
     phase_config_source = None

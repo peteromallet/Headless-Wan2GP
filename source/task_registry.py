@@ -332,9 +332,17 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                         task_params=segment_params
                     )
                     if resolved_lora_names:
+                        # DEBUG: Log exactly what LoraResolver returned
+                        dprint_func(f"[LORA_RESOLVER_OUTPUT] Task {task_id}: LoraResolver returned {len(resolved_lora_names)} paths:")
+                        for i, lora_path in enumerate(resolved_lora_names):
+                            dprint_func(f"[LORA_RESOLVER_OUTPUT] Task {task_id}:   [{i}] '{lora_path}' (starts_with_slash={lora_path.startswith('/') if isinstance(lora_path, str) else 'N/A'})")
+                        
                         generation_params["activated_loras"] = resolved_lora_names
                         generation_params["loras_multipliers"] = " ".join(str(m) for m in resolved_lora_multipliers)
                         headless_logger.info(f"Resolved {len(resolved_lora_names)} LoRAs from phase_config", task_id=task_id)
+                        
+                        # DEBUG: Verify what we stored
+                        dprint_func(f"[LORA_RESOLVER_OUTPUT] Task {task_id}: Stored in generation_params['activated_loras']: {generation_params.get('activated_loras', [])[:2]}...")
                 
                 if "_patch_config" in parsed_phase_config:
                     apply_phase_config_patch(parsed_phase_config, model_name, task_id)
