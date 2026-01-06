@@ -17,18 +17,19 @@ from urllib.parse import unquote
 from source.logging_utils import headless_logger
 
 
-def _download_lora_from_url(url: str, task_id: str, dprint=None) -> str:
+def _download_lora_from_url(url: str, task_id: str, dprint=None, model_type: str = None) -> str:
     """
     Download a LoRA from URL to appropriate local directory.
-    
+
     Args:
         url: LoRA download URL
         task_id: Task ID for logging
         dprint: Optional debug print function
-        
+        model_type: Model type to determine correct LoRA directory (e.g., "wan_2_2_vace_lightning_baseline_2_2_2")
+
     Returns:
         Local filename of downloaded LoRA
-        
+
     Raises:
         Exception: If download fails
     """
@@ -54,7 +55,9 @@ def _download_lora_from_url(url: str, task_id: str, dprint=None) -> str:
         # Check ALL standard lora directories and delete old generic versions
         lora_search_dirs = [
             "loras",
+            "loras/wan",
             "Wan2GP/loras",
+            "Wan2GP/loras/wan",
             "loras_i2v",
             "Wan2GP/loras_i2v",
             "loras_hunyuan_i2v",
@@ -77,9 +80,14 @@ def _download_lora_from_url(url: str, task_id: str, dprint=None) -> str:
                         if dprint:
                             dprint(f"[LORA_DOWNLOAD] Task {task_id}: ⚠️  Failed to delete old LoRA {old_path}: {e}")
     
-    # Determine LoRA directory: prefer the WGP-visible root 'loras'
-    lora_dir = "loras"
-    
+    # Determine LoRA directory based on model type
+    # For Wan 2.2 models, WGP expects loras in "loras/wan/" subdirectory
+    # For other models, use root "loras/" directory
+    if model_type and ("wan" in model_type.lower() or "vace" in model_type.lower()):
+        lora_dir = os.path.join("loras", "wan")
+    else:
+        lora_dir = "loras"
+
     local_path = os.path.join(lora_dir, local_filename)
     
     if dprint:
