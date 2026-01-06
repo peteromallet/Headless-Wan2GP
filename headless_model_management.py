@@ -1149,7 +1149,7 @@ class HeadlessTaskQueue:
                 
                 for url, mult in list(config.lora.get_pending_downloads().items()):
                     try:
-                        local_path = _download_lora_from_url(url, task.id, dprint)
+                        local_path = _download_lora_from_url(url, task.id, dprint, model_type=task.model)
                         if local_path:
                             config.lora.mark_downloaded(url, local_path)
                             self.logger.info(f"[LORA_DOWNLOAD] Task {task.id}: Downloaded {os.path.basename(local_path)}")
