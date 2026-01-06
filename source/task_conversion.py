@@ -6,7 +6,6 @@ from pathlib import Path
 import numpy as np
 
 from source.logging_utils import headless_logger
-from source.lora_resolver import LoraResolver
 from source.model_handlers.qwen_handler import QwenHandler
 from source.common_utils import extract_orchestrator_parameters
 from headless_model_management import GenerationTask
@@ -315,21 +314,8 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
     if "steps" in db_task_params and "num_inference_steps" not in generation_params:
         generation_params["num_inference_steps"] = db_task_params["steps"]
     
-    # Resolve LoRA formats
-    if any(key in generation_params for key in ["activated_loras", "loras_multipliers", "additional_loras"]):
-        lora_resolver = LoraResolver(
-            wan_root=wan2gp_path, 
-            task_id=task_id,
-            dprint=dprint_wrapper
-        )
-        resolved_lora_names, resolved_lora_multipliers = lora_resolver.resolve_all_lora_formats(
-            params=generation_params,
-            model_type=model,
-            task_params=db_task_params
-        )
-        if resolved_lora_names:
-            generation_params["lora_names"] = resolved_lora_names
-            generation_params["lora_multipliers"] = resolved_lora_multipliers
+    # Note: LoRA resolution is handled centrally in HeadlessTaskQueue._convert_to_wgp_task()
+    # via TaskConfig/LoRAConfig which detects URLs and downloads them automatically
 
     # Qwen Task Handlers
     qwen_handler = QwenHandler(
@@ -411,27 +397,8 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
                 generation_params["_parsed_phase_config"] = parsed_phase_config
                 generation_params["_phase_config_model_name"] = model
             
-            # CRITICAL: Run LoRA resolution AGAIN after phase_config parsing
-            # phase_config extracts LoRA URLs into additional_loras, which need to be
-            # downloaded and resolved to absolute paths BEFORE being passed to WGP
-            if any(key in generation_params for key in ["activated_loras", "loras_multipliers", "additional_loras"]):
-                headless_logger.debug(f"Re-running LoRA resolution after phase_config parsing", task_id=task_id)
-                phase_lora_resolver = LoraResolver(
-                    wan_root=wan2gp_path, 
-                    task_id=task_id,
-                    dprint=dprint_wrapper
-                )
-                resolved_lora_names, resolved_lora_multipliers = phase_lora_resolver.resolve_all_lora_formats(
-                    params=generation_params,
-                    model_type=model,
-                    task_params=db_task_params
-                )
-                if resolved_lora_names:
-                    # Update with resolved absolute paths
-                    generation_params["activated_loras"] = resolved_lora_names
-                    # Keep the phase-format multipliers from parse_phase_config
-                    generation_params["loras_multipliers"] = " ".join(str(m) for m in resolved_lora_multipliers)
-                    headless_logger.info(f"Resolved {len(resolved_lora_names)} LoRAs from phase_config", task_id=task_id)
+            # Note: LoRA URL resolution is handled centrally in HeadlessTaskQueue._convert_to_wgp_task()
+            # URLs in activated_loras are detected by LoRAConfig.from_params() and downloaded there
         except Exception as e:
             raise ValueError(f"Task {task_id}: Invalid phase_config: {e}")
 
