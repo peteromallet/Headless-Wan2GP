@@ -8,13 +8,17 @@ Supports T2V, VACE, and Flux generation without running the Gradio UI.
 import os
 import sys
 import traceback
-from typing import Optional, List, Union
+from typing import Optional, List, Union, TYPE_CHECKING
 
 # Import structured logging
 from source.logging_utils import (
     orchestrator_logger, model_logger, generation_logger,
     safe_repr, safe_dict_repr, safe_log_params, safe_log_change
 )
+
+# Type hints for TaskConfig (avoid circular import)
+if TYPE_CHECKING:
+    from source.params import TaskConfig
 
 
 def _notify_worker_model_switch(old_model: Optional[str], new_model: str):
@@ -1943,6 +1947,61 @@ class WanOrchestrator:
         if not self._is_t2v():
             generation_logger.warning(f"Current model {self.current_model} may not be optimized for T2V")
         return self.generate(prompt=prompt, model_type=model_type, **kwargs)
+    
+    def generate_with_config(self, config: 'TaskConfig') -> str:
+        """
+        Generate content using a typed TaskConfig object.
+        
+        This is the new typed API that provides cleaner parameter handling:
+        1. All parameters are already parsed and validated in TaskConfig
+        2. LoRAs are already resolved (downloaded if needed)
+        3. Phase config is already applied
+        
+        Args:
+            config: TaskConfig object with all generation parameters
+            
+        Returns:
+            Path to generated output file(s)
+            
+        Example:
+            from source.params import TaskConfig
+            
+            config = TaskConfig.from_db_task(task.parameters, task_id=task.id)
+            result = orchestrator.generate_with_config(config)
+        """
+        # Import here to avoid circular import
+        from source.params import TaskConfig
+        
+        if not isinstance(config, TaskConfig):
+            raise TypeError(f"Expected TaskConfig, got {type(config)}")
+        
+        if not self.current_model:
+            raise RuntimeError("No model loaded. Call load_model() first.")
+        
+        # Log what we're generating
+        generation_logger.info(f"[GENERATE_CONFIG] Task {config.task_id}: Starting generation with typed config")
+        if not config.lora.is_empty():
+            generation_logger.info(f"[GENERATE_CONFIG] Task {config.task_id}: LoRAs: {config.lora.filenames}")
+        if not config.phase.is_empty():
+            generation_logger.info(f"[GENERATE_CONFIG] Task {config.task_id}: Phases: {config.phase.num_phases}")
+        
+        # Convert to WGP format
+        wgp_params = config.to_wgp_format()
+        
+        # Ensure prompt is set
+        prompt = wgp_params.pop('prompt', config.generation.prompt)
+        if not prompt:
+            raise ValueError("No prompt provided in TaskConfig")
+        
+        # Determine model type
+        model_type = wgp_params.pop('model', None) or config.model or self.current_model
+        
+        # Call the standard generate method with unpacked params
+        return self.generate(
+            prompt=prompt,
+            model_type=model_type,
+            **wgp_params
+        )
     
     def generate_vace(self, 
                      prompt: str, 

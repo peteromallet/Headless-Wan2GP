@@ -259,6 +259,11 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             
         print(f"!!! DEBUG TASK REGISTRY !!! generation_params image_start: {generation_params.get('image_start')}")
         
+        # ═══════════════════════════════════════════════════════════════════════════
+        # Parameter extraction with precedence: individual > segment > orchestrator
+        # Note: Typed TaskConfig conversion happens in HeadlessTaskQueue (single point)
+        # ═══════════════════════════════════════════════════════════════════════════
+        
         # Additional LoRAs: individual_segment_params > top-level > orchestrator_details
         additional_loras = (
             individual_params.get("additional_loras") or 
