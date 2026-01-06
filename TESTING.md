@@ -2,6 +2,20 @@
 
 Quick guide to test the worker with real task configurations.
 
+## Automated Tests (Unit/Integration)
+
+Run the LoRA flow test suite:
+
+```bash
+python -m pytest tests/test_lora_flow.py -v
+```
+
+This runs 18 tests covering:
+- URL detection and PENDING status
+- Phase config parsing (2 and 3 phases)
+- Download simulation and WGP format conversion
+- Deduplication and edge cases
+
 ## Prerequisites
 
 1. **Environment**: Ensure `.env` has `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`
