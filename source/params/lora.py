@@ -111,7 +111,7 @@ class LoRAConfig(ParamGroup):
         else:
             multipliers = []
         
-        # Create entries from filenames
+        # Create entries from filenames (could be URLs, absolute paths, or filenames)
         for i, filename in enumerate(filenames):
             mult = multipliers[i] if i < len(multipliers) else 1.0
             # Try to convert to float if it's a simple number
@@ -121,13 +121,27 @@ class LoRAConfig(ParamGroup):
                 except ValueError:
                     pass
             
-            entries.append(LoRAEntry(
-                filename=filename,
-                local_path=filename if os.path.isabs(filename) else None,
-                multiplier=mult,
-                status=LoRAStatus.LOCAL,
-                source='params'
-            ))
+            # Detect if this is a URL that needs downloading
+            is_url = filename.startswith(('http://', 'https://'))
+            
+            if is_url:
+                # URL needs downloading
+                entries.append(LoRAEntry(
+                    url=filename,
+                    filename=os.path.basename(filename),
+                    multiplier=mult,
+                    status=LoRAStatus.PENDING,
+                    source='params_url'
+                ))
+            else:
+                # Local file or filename
+                entries.append(LoRAEntry(
+                    filename=filename,
+                    local_path=filename if os.path.isabs(filename) else None,
+                    multiplier=mult,
+                    status=LoRAStatus.LOCAL,
+                    source='params'
+                ))
         
         # Handle additional_loras (URLs needing download)
         additional_loras = params.get('additional_loras', {})
