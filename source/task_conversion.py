@@ -206,10 +206,10 @@ def parse_phase_config(phase_config: dict, num_inference_steps: int, task_id: st
             except Exception as e:
                 headless_logger.warning(f"Could not prepare phase_config patch: {e}", task_id=task_id)
 
-    # CRITICAL: lora_names must contain the URLs so LoraResolver can:
-    # 1. Associate each URL with its corresponding phase-format multiplier
-    # 2. Download the LoRA files from the URLs
-    # 3. Return resolved absolute paths
+    # CRITICAL: lora_names must contain the URLs so LoRAConfig can:
+    # 1. Detect URLs and mark them as PENDING for download
+    # 2. Associate each URL with its corresponding phase-format multiplier
+    # 3. Download via _download_lora_from_url() in the queue
     # Without this, activated_loras ends up empty and the multipliers aren't associated
     result["lora_names"] = all_lora_urls
     result["lora_multipliers"] = lora_multipliers

@@ -155,7 +155,7 @@ DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
 
 ## Top-level scripts
 
-* **worker.py** – Headless service that polls the `tasks` database, claims work, and executes tasks via the HeadlessTaskQueue system. Includes specialized handlers for OpenPose and RIFE interpolation tasks with automatic Supabase storage upload. Includes 5 Qwen image editing task types (qwen_image_edit, qwen_image_hires, qwen_image_style, image_inpaint, annotated_image_edit) handled by `QwenHandler`. All Qwen tasks support optional two-pass hires fix via `hires_scale` parameter. All Qwen tasks use the qwen_image_edit_20B model with automatic LoRA management via `LoraResolver`. Supports both SQLite and Supabase backends via `--db-type` flag with queue-based processing architecture. Features centralized logging that batches logs with heartbeats for orchestrator integration.
+* **worker.py** – Headless service that polls the `tasks` database, claims work, and executes tasks via the HeadlessTaskQueue system. Includes specialized handlers for OpenPose and RIFE interpolation tasks with automatic Supabase storage upload. Includes 5 Qwen image editing task types (qwen_image_edit, qwen_image_hires, qwen_image_style, image_inpaint, annotated_image_edit) handled by `QwenHandler`. All Qwen tasks support optional two-pass hires fix via `hires_scale` parameter. All Qwen tasks use the qwen_image_edit_20B model with automatic LoRA management via typed `LoRAConfig`. Supports both SQLite and Supabase backends via `--db-type` flag with queue-based processing architecture. Features centralized logging that batches logs with heartbeats for orchestrator integration.
 * **add_task.py** – Lightweight CLI helper to queue a single new task into SQLite/Supabase. Accepts a JSON payload (or file) and inserts it into the `tasks` table.
 * **generate_test_tasks.py** – Developer utility that back-fills the database with synthetic images/prompts for integration testing and local benchmarking.
 * **tests/test_travel_workflow_db_edge_functions.py** – Comprehensive test script to verify Supabase Edge Functions, authentication, and database operations for the headless worker.
@@ -225,9 +225,8 @@ This is the main application package.
 * **specialized_handlers.py** – Contains handlers for specific, non-standard tasks like OpenPose generation and RIFE interpolation. Uses Supabase-compatible upload functions for all outputs.
 * **video_utils.py** – Provides utilities for video manipulation like cross-fading, frame extraction, and color matching.
 * **travel_segment_processor.py** – Shared processor for travel segment handling. Contains unified logic for guide video creation, mask video creation, and video_prompt_type construction used by both `travel_between_images.py` and `worker.py`.
-* **lora_utils.py** – Centralized LoRA processing system with `process_all_loras()` function. Handles LoRA detection, optimization, download, and formatting. Supports auto-download of LightI2X/CausVid LoRAs and multiple input formats.
-* **lora_resolver.py** – Unified LoRA format resolution class (`LoraResolver`). Resolves all 8 LoRA input formats into validated absolute paths. Handles normalization, URL downloads (wget), path validation, and deduplication.
-* **params/** – Typed parameter dataclasses for clean parameter flow. Provides canonical representations that parse once at system boundary and convert to WGP format only at the final WGP call. Enabled via `USE_TYPED_CONFIG=1` env var.
+* **lora_utils.py** – LoRA download and cleanup utilities. Contains `_download_lora_from_url()` for HuggingFace/direct URL downloads with collision-safe filenames, and `cleanup_legacy_lora_collisions()` for removing old generic LoRA files.
+* **params/** – Typed parameter dataclasses (`TaskConfig`, `LoRAConfig`, `VACEConfig`, etc.) for clean parameter flow. Provides canonical representations that parse once at system boundary and convert to WGP format only at the final WGP call. `LoRAConfig` handles URL detection, deduplication, download tracking, and WGP format conversion.
   * **base.py** – `ParamGroup` ABC with precedence utilities and `flatten_params()` helper.
   * **lora.py** – `LoRAConfig` and `LoRAEntry` for typed LoRA handling. Uses entry objects (not parallel arrays) to preserve ordering.
   * **vace.py** – `VACEConfig` for video guide/mask parameters.
@@ -382,27 +381,31 @@ Comprehensive debugging system for video generation pipeline with detailed frame
 
 This debugging system provides comprehensive visibility into the video generation pipeline to identify exactly where frame counts change and why final outputs might have unexpected lengths.
 
+
 ## LoRA Support
 
-### Centralized LoRA Processing System
+### Typed Parameter System
 
-The system features a comprehensive LoRA processing pipeline that consolidates all LoRA handling into a single entry point:
+The system uses typed dataclasses (`source/params/`) for clean parameter handling with a single source of truth:
 
-* **`source/lora_utils.py`** – Central LoRA processing module with `process_all_loras()` function
-* **`source/lora_resolver.py`** – Unified LoRA format resolution class (`LoraResolver`) that handles all 8 LoRA input formats
-* **Auto-Download Support** – Automatically downloads missing LightI2X and CausVid LoRAs from HuggingFace
-* **Format Normalization** – Handles multiple input formats (`activated_loras`, `loras_multipliers`, `additional_loras`, Qwen format, etc.)
-* **URL Processing** – Supports `additional_loras` dict format with automatic URL downloads (wget)
+* **`source/params/lora.py`** – `LoRAConfig` and `LoRAEntry` dataclasses for LoRA handling
+* **`source/params/task.py`** – `TaskConfig` that orchestrates all parameter groups
+* **`source/lora_utils.py`** – Download utilities (`_download_lora_from_url`) and legacy cleanup
 
+**LoRA Flow:**
+1. `TaskConfig.from_db_task()` parses all params at system boundary
+2. `LoRAConfig` detects URLs (marks as `PENDING`) vs local files (marks as `LOCAL`)
+3. Queue downloads PENDING LoRAs via `_download_lora_from_url()`
+4. `config.to_wgp_format()` converts to WGP format, excluding any unresolved URLs
 
-### Additional LoRA Support
+### Key Features
 
-* **Multiple Formats**: Supports `activated_loras` (list), `loras_multipliers` (string), and `additional_loras` (dict with URLs)
-* **URL Downloads**: `additional_loras` can contain `{"url": multiplier}` pairs for automatic download and processing
-* **Directory Structure**: Auto-detects correct LoRA directories based on model type (WAN → `loras/`, Hunyuan → `loras_hunyuan/`, etc.)
+* **URL Detection**: Automatically identifies `http://`/`https://` in `activated_loras` and marks for download
+* **Deduplication**: Same LoRA from multiple sources is deduplicated by filename
+* **Phase-Config Multipliers**: Preserves `1.2;0.6;0.0` format for multi-phase generation
+* **Safe Exclusion**: PENDING entries never reach WGP (prevents "missing LoRA" errors from URLs)
+* **Collision-Safe Downloads**: HuggingFace LoRAs with generic names get parent folder prefix
 * **WGP Compatibility**: All processing outputs standard WGP-compatible parameter formats
-
-All LoRA processing automatically configures optimal generation parameters and handles downloads/activation through the centralized pipeline.
 
 ## Environment & config knobs (non-exhaustive)
 
