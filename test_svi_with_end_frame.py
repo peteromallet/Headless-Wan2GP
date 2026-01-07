@@ -198,7 +198,7 @@ def main():
         prompt=args.prompt,
         image_start=image_start,
         image_end=image_end,
-        input_ref_images=[anchor],  # SVI anchor image
+        image_refs=[anchor],  # SVI anchor image (WGP expects image_refs, not input_ref_images)
         image_prompt_type="T",  # Use image as prompt
         video_length=args.frames,
         resolution="768x576",
