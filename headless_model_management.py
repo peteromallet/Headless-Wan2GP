@@ -940,7 +940,7 @@ class HeadlessTaskQueue:
             # CRITICAL: Restore model patches to prevent contamination across tasks
             if _patch_applied and _parsed_phase_config_for_restore and _model_name_for_restore:
                 try:
-                    from worker import restore_model_patches
+                    from source.phase_config import restore_model_patches
                     restore_model_patches(
                         _parsed_phase_config_for_restore,
                         _model_name_for_restore,
