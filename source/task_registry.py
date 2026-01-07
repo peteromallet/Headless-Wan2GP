@@ -178,8 +178,12 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             dprint_func(f"[SVI_MODE] Task {task_id}: SVI mode enabled for segment {segment_idx}")
         
         # =============================================================================
-        # SVI MODE: Chain segments using last frame of predecessor as start image
+        # SVI MODE: Chain segments using predecessor video for overlapped_latents
+        # SVI Pro uses the last ~9 frames (5 + sliding_window_overlap) from predecessor
+        # to create temporal continuity via overlapped_latents in the VAE
         # =============================================================================
+        svi_predecessor_video_for_source = None  # Will be set for SVI continuation
+        
         if use_svi and (segment_idx > 0 or svi_predecessor_video_url):
             dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Using SVI end frame chaining mode")
             
@@ -217,14 +221,19 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                         dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Failed to download predecessor video: {e_dl}")
                         predecessor_video_path = None
                 
-                # Extract last frame from predecessor video as start image
+                # SVI CRITICAL: Pass the predecessor VIDEO (not just 1 frame) to WGP
+                # WGP uses prefix_video[:, -(5 + overlap_size):] to create overlapped_latents
                 if predecessor_video_path and Path(predecessor_video_path).exists():
+                    svi_predecessor_video_for_source = predecessor_video_path
+                    dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Will pass predecessor video as video_source: {predecessor_video_path}")
+                    
+                    # Still extract last frame for image_start (anchor reference)
                     start_ref_path = sm_extract_last_frame_as_image(
                         predecessor_video_path, 
                         segment_processing_dir, 
                         task_id
                     )
-                    dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Extracted last frame as start_ref: {start_ref_path}")
+                    dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Extracted last frame as anchor start_ref: {start_ref_path}")
                 else:
                     dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: ERROR - Predecessor video not available at {predecessor_video_path}")
             
@@ -454,6 +463,18 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             if start_ref_path:
                 generation_params["image_refs_paths"] = [str(Path(start_ref_path).resolve())]
                 dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Set image_refs_paths to start image: {start_ref_path}")
+            
+            # CRITICAL: Pass predecessor video as video_source for SVI continuation
+            # WGP uses prefix_video[:, -(5 + overlap_size):] to create overlapped_latents
+            # This provides temporal continuity between segments (uses last ~9 frames)
+            if svi_predecessor_video_for_source:
+                generation_params["video_source"] = str(Path(svi_predecessor_video_for_source).resolve())
+                dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Set video_source for SVI continuation: {svi_predecessor_video_for_source}")
+            
+            # SVI Pro sliding window overlap = 4 frames (standard for SVI)
+            # This tells WGP how many frames to extract for overlapped_latents
+            generation_params["sliding_window_overlap"] = 4
+            dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Set sliding_window_overlap=4 for SVI")
             
             # Add SVI generation parameters from segment_params (set by orchestrator)
             for key in ["guidance_phases", "num_inference_steps", "guidance_scale", "guidance2_scale",

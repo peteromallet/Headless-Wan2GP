@@ -2335,7 +2335,12 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         dprint(f"Stitch Task {stitch_task_id_str}: Parsed resolution (w,h): {parsed_res_wh}")
 
         final_fps = full_orchestrator_payload.get("fps_helpers", 16)
-        expanded_frame_overlaps = full_orchestrator_payload["frame_overlap_expanded"]
+        # CRITICAL: Use stitch_params overlay settings, NOT the orchestrator's default!
+        # For SVI mode, frame_overlap_settings_expanded contains [4, 4, ...] (SVI_STITCH_OVERLAP)
+        # For VACE mode, it contains the configured overlap values
+        # Fallback to orchestrator's frame_overlap_expanded only if not provided
+        expanded_frame_overlaps = stitch_params.get("frame_overlap_settings_expanded") or full_orchestrator_payload.get("frame_overlap_expanded", [])
+        dprint(f"[STITCH DEBUG] Using overlap settings from stitch_params: {expanded_frame_overlaps[:5]}... (len={len(expanded_frame_overlaps)})")
         crossfade_sharp_amt = full_orchestrator_payload.get("crossfade_sharp_amt", 0.3)
         initial_continued_video_path_str = full_orchestrator_payload.get("continue_from_video_resolved_path")
 
