@@ -633,22 +633,16 @@ class WanAny2V:
             # - Without end frame: Original SVI with anchor + zero padding
             # This maintains VAE temporal coherence while mask controls what model generates
             if svi_pro:
-                print(f"[SVI_ENDFRAME] Entering SVI Pro encoding path")
-                print(f"[SVI_ENDFRAME] frame_num={frame_num}, control_pre_frames_count={control_pre_frames_count}, lat_frames={lat_frames}")
-                print(f"[SVI_ENDFRAME] any_end_frame={any_end_frame}, image_end is None={image_end is None}")
                 use_extended_overlapped_latents = False
                 remaining_frames = frame_num - control_pre_frames_count
                 
-                # Get anchor/reference image (used as both start and padding)
+                # Get anchor/reference image
                 if input_ref_images is None or len(input_ref_images)==0:                        
                     if pre_video_frame is None: raise Exception("Missing Reference Image")
                     image_ref = pre_video_frame
-                    print(f"[SVI_ENDFRAME] Using pre_video_frame as anchor")
                 else:
                     image_ref = input_ref_images[ min(window_no, len(input_ref_images))-1 ]
-                    print(f"[SVI_ENDFRAME] Using input_ref_images[{min(window_no, len(input_ref_images))-1}] as anchor")
                 image_ref = convert_image_to_tensor(image_ref).unsqueeze(1).to(device=self.device, dtype=self.VAE_dtype)
-                print(f"[SVI_ENDFRAME] Anchor pixel shape: {image_ref.shape}")
                 
                 if overlapped_latents is not None:
                     post_decode_pre_trim = 1
@@ -658,75 +652,27 @@ class WanAny2V:
                 
                 if any_end_frame:
                     # SVI + END FRAME: Encode anchor and end separately, pad middle with ZEROS
-                    # This matches original SVI approach (zeros in middle) but adds end frame support
-                    # lat_y = [anchor_latent | zeros | zeros | ... | end_latent]
-                    print(f"\n{'='*60}")
-                    print(f"[SVI_ENDFRAME] Building lat_y with END FRAME support")
-                    print(f"{'='*60}")
-                    
-                    # Encode anchor image to latent
+                    # lat_y = [anchor_latent | zeros | end_latent]
                     image_ref_latents = self.vae.encode([image_ref], VAE_tile_size)[0]
-                    print(f"[SVI_ENDFRAME] 1. Anchor latent:")
-                    print(f"[SVI_ENDFRAME]    Shape: {image_ref_latents.shape}")
-                    print(f"[SVI_ENDFRAME]    Stats: mean={image_ref_latents.mean().item():.4f}, min={image_ref_latents.min().item():.4f}, max={image_ref_latents.max().item():.4f}")
-                    
-                    # Encode end image to latent
                     end_latents = self.vae.encode([img_end_frame], VAE_tile_size, any_end_frame=vae_end_frame_mode)[0]
-                    print(f"[SVI_ENDFRAME] 2. End latent:")
-                    print(f"[SVI_ENDFRAME]    Shape: {end_latents.shape}")
-                    print(f"[SVI_ENDFRAME]    Stats: mean={end_latents.mean().item():.4f}, min={end_latents.min().item():.4f}, max={end_latents.max().item():.4f}")
                     
-                    # Calculate padding length: total - anchor - end - overlap (if any)
-                    # Original SVI formula: pad_len = lat_frames + ref_images_count - image_ref_latents.shape[1] - overlap_len
-                    # Ours adds: - end_latents.shape[1]
                     overlap_len = overlapped_latents.shape[2] if overlapped_latents is not None else 0
                     anchor_len = image_ref_latents.shape[1]
                     end_len = end_latents.shape[1]
                     pad_len = lat_frames + ref_images_count - anchor_len - end_len - overlap_len
                     
-                    print(f"[SVI_ENDFRAME] 3. Padding calculation (LIKE ORIGINAL SVI):")
-                    print(f"[SVI_ENDFRAME]    lat_frames={lat_frames}, ref_images_count={ref_images_count}")
-                    print(f"[SVI_ENDFRAME]    anchor_len={anchor_len}, end_len={end_len}, overlap_len={overlap_len}")
-                    print(f"[SVI_ENDFRAME]    pad_len = {lat_frames} + {ref_images_count} - {anchor_len} - {end_len} - {overlap_len} = {pad_len}")
-                    
-                    # Create zero padding for middle frames (EXACTLY LIKE ORIGINAL)
-                    # Original: pad_latents = torch.zeros(image_ref_latents.shape[0], pad_len, lat_h, lat_w, device=..., dtype=...)
                     pad_latents = torch.zeros(image_ref_latents.shape[0], pad_len, lat_h, lat_w, 
                                               device=image_ref_latents.device, dtype=image_ref_latents.dtype)
-                    print(f"[SVI_ENDFRAME] 4. Zero padding (MATCHES ORIGINAL SVI torch.zeros):")
-                    print(f"[SVI_ENDFRAME]    Shape: {pad_latents.shape}")
-                    print(f"[SVI_ENDFRAME]    Stats: mean={pad_latents.mean().item():.4f}, min={pad_latents.min().item():.4f}, max={pad_latents.max().item():.4f}")
-                    print(f"[SVI_ENDFRAME]    All zeros? {(pad_latents == 0).all().item()}")
                     
-                    # Build lat_y: [anchor | (overlap) | zeros | end]
-                    # Original SVI: lat_y = torch.concat([image_ref_latents, pad_latents], dim=1)
-                    # Ours adds end_latents at the end
                     if overlapped_latents is None:
                         lat_y = torch.concat([image_ref_latents, pad_latents, end_latents], dim=1).to(self.device)
-                        print(f"[SVI_ENDFRAME] 5. Final lat_y = [anchor({anchor_len}) | zeros({pad_len}) | end({end_len})]")
                     else:
                         lat_y = torch.concat([image_ref_latents, overlapped_latents.squeeze(0), pad_latents, end_latents], dim=1).to(self.device)
-                        print(f"[SVI_ENDFRAME] 5. Final lat_y = [anchor({anchor_len}) | overlap({overlap_len}) | zeros({pad_len}) | end({end_len})]")
-                    
-                    print(f"[SVI_ENDFRAME]    Total shape: {lat_y.shape}, expected: ({image_ref_latents.shape[0]}, {lat_frames + ref_images_count}, {lat_h}, {lat_w})")
-                    
-                    # Verify structure
-                    print(f"[SVI_ENDFRAME] 6. Verification:")
-                    print(f"[SVI_ENDFRAME]    lat_y[:, 0] (anchor): mean={lat_y[:, 0].mean().item():.4f}")
-                    print(f"[SVI_ENDFRAME]    lat_y[:, 1] (should be zero): mean={lat_y[:, 1].mean().item():.4f}, all_zero={(lat_y[:, 1] == 0).all().item()}")
-                    if pad_len > 1:
-                        mid_idx = anchor_len + pad_len // 2
-                        print(f"[SVI_ENDFRAME]    lat_y[:, {mid_idx}] (middle, should be zero): mean={lat_y[:, mid_idx].mean().item():.4f}, all_zero={(lat_y[:, mid_idx] == 0).all().item()}")
-                    print(f"[SVI_ENDFRAME]    lat_y[:, -1] (end): mean={lat_y[:, -1].mean().item():.4f}")
-                    print(f"{'='*60}\n")
                     
                     image_ref_latents = end_latents = None
                 else:
-                    # No end frame - use original SVI approach
-                    # Encode anchor separately, then pad with zeros in latent space
+                    # No end frame - use original SVI approach: [anchor_latent | zeros]
                     image_ref_latents = self.vae.encode([image_ref], VAE_tile_size)[0]
-                    print(f"[SVI_ENDFRAME] No end frame - using original SVI: [anchor | zeros]")
-                    print(f"[SVI_ENDFRAME] Anchor latent shape: {image_ref_latents.shape}")
                     
                     pad_len = lat_frames + ref_images_count - image_ref_latents.shape[1] - (overlapped_latents.shape[2] if overlapped_latents is not None else 0)
                     pad_latents = torch.zeros(image_ref_latents.shape[0], pad_len, lat_h, lat_w, device=image_ref_latents.device, dtype=image_ref_latents.dtype)
@@ -771,16 +717,10 @@ class WanAny2V:
 
             msk = torch.ones(1, frame_num + ref_images_count * 4, lat_h, lat_w, device=self.device)
             if svi_pro and any_end_frame:
-                # SVI + end frame: first and last LATENT frames known
-                # lat_y = [anchor_latent | zeros | end_latent]
-                # mask = [1,1,1,1 | 0,0,0,...,0 | 1,1,1,1]
-                print(f"[SVI_ENDFRAME] Mask initial shape: {msk.shape}")
+                # SVI + end frame: mask = [1,1,1,1 | 0,0,0,...,0 | 1,1,1,1]
                 msk[:, 1:] = 0
                 msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:] ], dim=1)
-                print(f"[SVI_ENDFRAME] Mask after first expansion: {msk.shape}")
-                msk[:, -4:] = 1  # Mark last latent frame (4 sub-frames) as known for end frame
-                print(f"[SVI_ENDFRAME] Mask: first 4 = anchor (known), middle = zeros (generate), last 4 = end (known)")
-                print(f"[SVI_ENDFRAME] Mask sum check - first4: {msk[:, :4].sum().item()}, last4: {msk[:, -4:].sum().item()}, middle: {msk[:, 4:-4].sum().item()}")
+                msk[:, -4:] = 1  # Mark last latent frame as known for end frame
             elif any_end_frame:
                 msk[:, control_pre_frames_count: -1] = 0
                 if add_frames_for_end_image:
@@ -1230,17 +1170,6 @@ class WanAny2V:
             return guide_scale, guidance_switch_done, trans, denoising_extra
         update_loras_slists(self.model, loras_slists, len(original_timesteps), phase_switch_step= phase_switch_step, phase_switch_step2= phase_switch_step2)
         if self.model2 is not None: update_loras_slists(self.model2, loras_slists, len(original_timesteps), phase_switch_step= phase_switch_step, phase_switch_step2= phase_switch_step2)
-        
-        # [LORA_PHASE_DEBUG] Log the denoising phase boundaries
-        print(f"\n[LORA_PHASE_DEBUG] Denoising phase boundaries:")
-        print(f"[LORA_PHASE_DEBUG]   Total steps: {len(original_timesteps)}")
-        print(f"[LORA_PHASE_DEBUG]   Phase switch step (1→2): {phase_switch_step}")
-        print(f"[LORA_PHASE_DEBUG]   Phase switch step (2→3): {phase_switch_step2}")
-        print(f"[LORA_PHASE_DEBUG]   Guide phases: {guide_phases}")
-        print(f"[LORA_PHASE_DEBUG]   Switch threshold (noise level): {switch_threshold}")
-        if guide_phases >= 3:
-            print(f"[LORA_PHASE_DEBUG]   Switch threshold2 (noise level): {switch2_threshold}")
-        
         callback(-1, None, True, override_num_inference_steps = updated_num_steps, denoising_extra = denoising_extra)
 
         def clear():
@@ -1334,40 +1263,10 @@ class WanAny2V:
         torch.cuda.empty_cache()
         # denoising
         trans = self.model
-        _lora_phase_logged = set()  # Track which phases we've logged
         for i, t in enumerate(tqdm(timesteps)):
-            _prev_guide_scale = guide_scale
             guide_scale, guidance_switch_done, trans, denoising_extra = update_guidance(i, t, guide_scale, guide2_scale, guidance_switch_done, switch_threshold, trans, 2, denoising_extra)
             guide_scale, guidance_switch2_done, trans, denoising_extra = update_guidance(i, t, guide_scale, guide3_scale, guidance_switch2_done, switch2_threshold, trans, 3, denoising_extra)
             offload.set_step_no_for_lora(trans, start_step_no + i)
-            
-            # [LORA_PHASE_DEBUG] Log at phase transitions and first/last step
-            _current_phase = 1
-            if i >= phase_switch_step: _current_phase = 2
-            if i >= phase_switch_step2: _current_phase = 3
-            
-            if i == 0 or i == len(timesteps) - 1 or _current_phase not in _lora_phase_logged:
-                _lora_phase_logged.add(_current_phase)
-                _model_name = "High Noise (model1)" if trans == self.model else "Low Noise (model2)"
-                print(f"[LORA_PHASE_DEBUG] Step {i}/{len(timesteps)-1} | t={t.item():.0f} | Phase {_current_phase} | CFG={guide_scale:.1f} | Model={_model_name}")
-                # Log active LoRA multipliers at this step if available
-                if hasattr(trans, '_loras_slists') and trans._loras_slists is not None:
-                    try:
-                        _step_idx = start_step_no + i
-                        _lora_names = getattr(trans, '_loras_names', [])
-                        for _lora_idx, _lora_name in enumerate(_lora_names):
-                            _slist = trans._loras_slists[_lora_idx] if _lora_idx < len(trans._loras_slists) else None
-                            if _slist is not None:
-                                if isinstance(_slist, list) and _step_idx < len(_slist):
-                                    _mult = _slist[_step_idx]
-                                elif isinstance(_slist, (int, float)):
-                                    _mult = _slist
-                                else:
-                                    _mult = "?"
-                                print(f"[LORA_PHASE_DEBUG]   LoRA[{_lora_idx}] '{os.path.basename(_lora_name)}' mult={_mult}")
-                    except Exception as e:
-                        print(f"[LORA_PHASE_DEBUG]   (Could not read LoRA multipliers: {e})")
-            
             timestep = torch.stack([t])
 
             if timestep_injection:

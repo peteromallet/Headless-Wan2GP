@@ -5385,59 +5385,6 @@ def generate_video(
         if trans2_lora is not None: 
             offload.sync_models_loras(trans_lora, trans2_lora)
         
-        # [LORA_PHASE_DEBUG] Log detailed LoRA phase configuration
-        print(f"\n{'='*70}")
-        print(f"[LORA_PHASE_DEBUG] LoRA Phase Configuration")
-        print(f"{'='*70}")
-        print(f"[LORA_PHASE_DEBUG] Total LoRAs loaded: {len(loras_selected)}")
-        print(f"[LORA_PHASE_DEBUG] Guidance phases: {guidance_phases}")
-        print(f"[LORA_PHASE_DEBUG] Num inference steps: {num_inference_steps}")
-        print(f"[LORA_PHASE_DEBUG] Model switch phase: {model_switch_phase}")
-        print(f"[LORA_PHASE_DEBUG] Switch threshold (phase 1→2): {switch_threshold}")
-        if guidance_phases >= 3:
-            print(f"[LORA_PHASE_DEBUG] Switch threshold2 (phase 2→3): {switch_threshold2}")
-        
-        if loras_slists is not None:
-            print(f"\n[LORA_PHASE_DEBUG] Per-LoRA phase multipliers:")
-            for i, lora_path in enumerate(loras_selected):
-                lora_name = os.path.basename(lora_path)
-                phase1_mult = loras_slists["phase1"][i] if i < len(loras_slists["phase1"]) else "N/A"
-                phase2_mult = loras_slists["phase2"][i] if i < len(loras_slists["phase2"]) else "N/A"
-                phase3_mult = loras_slists["phase3"][i] if i < len(loras_slists["phase3"]) else "N/A"
-                is_shared = loras_slists["shared"][i] if i < len(loras_slists["shared"]) else False
-                
-                print(f"  [{i}] {lora_name}")
-                print(f"      Phase 1: {phase1_mult} | Phase 2: {phase2_mult} | Phase 3: {phase3_mult}")
-                print(f"      Shared across phases: {is_shared}")
-        
-        print(f"\n[LORA_PHASE_DEBUG] Expanded per-step multipliers (loras_list_mult_choices_nums):")
-        for i, (lora_path, mult) in enumerate(zip(loras_selected, loras_list_mult_choices_nums)):
-            lora_name = os.path.basename(lora_path)
-            if isinstance(mult, list):
-                print(f"  [{i}] {lora_name}: {mult}")
-            else:
-                print(f"  [{i}] {lora_name}: {mult} (constant)")
-        
-        # Log LoRAs actually loaded into model
-        print(f"\n[LORA_PHASE_DEBUG] LoRAs loaded into transformer:")
-        loaded_lora_count = getattr(trans_lora, '_loras_count', 0) if hasattr(trans_lora, '_loras_count') else len(getattr(trans_lora, '_loras', []))
-        print(f"  Loaded count: {loaded_lora_count}")
-        if hasattr(trans_lora, '_loras_names'):
-            for idx, name in enumerate(trans_lora._loras_names):
-                print(f"  [{idx}] {os.path.basename(name)}")
-        elif hasattr(trans_lora, '_loras'):
-            for idx, lora in enumerate(trans_lora._loras):
-                print(f"  [{idx}] {lora}")
-        
-        # Check for load errors
-        if hasattr(trans_lora, '_loras_errors') and len(trans_lora._loras_errors) > 0:
-            print(f"\n[LORA_PHASE_DEBUG] ⚠️ LoRA load errors:")
-            for err_idx, err_msg in trans_lora._loras_errors:
-                print(f"  [{err_idx}] {err_msg}")
-        else:
-            print(f"\n[LORA_PHASE_DEBUG] ✅ No LoRA load errors")
-        print(f"{'='*70}\n")
-        
     seed = None if seed == -1 else seed
     # negative_prompt = "" # not applicable in the inference
     model_filename = get_model_filename(base_model_type)  
