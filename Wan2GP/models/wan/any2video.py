@@ -700,9 +700,11 @@ class WanAny2V:
 
             msk = torch.ones(1, frame_num + ref_images_count * 4, lat_h, lat_w, device=self.device)
             if svi_pro and any_end_frame:
-                # SVI + end frame: first and last frames known
-                msk[:, 1: -1] = 0
-                msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:-1], torch.repeat_interleave(msk[:, -1:], repeats=4, dim=1) ], dim=1)
+                # SVI + end frame: first and last LATENT frames known
+                # Use same expansion as SVI (keeps shape divisible by 4), then mark last latent frame
+                msk[:, 1:] = 0
+                msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:] ], dim=1)
+                msk[:, -4:] = 1  # Mark last latent frame (4 sub-frames) as known for end frame
             elif any_end_frame:
                 msk[:, control_pre_frames_count: -1] = 0
                 if add_frames_for_end_image:
