@@ -2322,17 +2322,22 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         num_expected_new_segments = full_orchestrator_payload["num_new_segments_to_generate"]
         print(f"[IMMEDIATE DEBUG] num_expected_new_segments: {num_expected_new_segments}")
         
-        # Ensure parsed_res_wh is a tuple of integers for stitch task with model grid snapping
+        # Parse resolution from payload - but DON'T snap to model grid yet!
+        # The actual resolution will be determined from the input segment videos.
+        # Snapping is only needed for generation, not for stitching existing videos.
         parsed_res_wh_str = full_orchestrator_payload["parsed_resolution_wh"]
         try:
-            parsed_res_raw = sm_parse_resolution(parsed_res_wh_str)
-            if parsed_res_raw is None:
+            parsed_res_wh_from_payload = sm_parse_resolution(parsed_res_wh_str)
+            if parsed_res_wh_from_payload is None:
                 raise ValueError(f"sm_parse_resolution returned None for input: {parsed_res_wh_str}")
-            parsed_res_wh = snap_resolution_to_model_grid(parsed_res_raw)
+            # NOTE: We use this as a fallback only. Actual resolution comes from input videos.
         except Exception as e_parse_res_stitch:
             msg = f"Stitch Task {stitch_task_id_str}: Invalid format or error parsing parsed_resolution_wh '{parsed_res_wh_str}': {e_parse_res_stitch}"
             print(f"[ERROR Task {stitch_task_id_str}]: {msg}"); return False, msg
-        dprint(f"Stitch Task {stitch_task_id_str}: Parsed resolution (w,h): {parsed_res_wh}")
+        dprint(f"Stitch Task {stitch_task_id_str}: Payload resolution (w,h): {parsed_res_wh_from_payload} (will use actual video resolution)")
+        
+        # Placeholder - will be set from actual input video after loading
+        parsed_res_wh = None
 
         final_fps = full_orchestrator_payload.get("fps_helpers", 16)
         # CRITICAL: Use stitch_params overlay settings, NOT the orchestrator's default!
@@ -2355,7 +2360,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         segment_video_paths_for_stitch = []
         if initial_continued_video_path_str and Path(initial_continued_video_path_str).exists():
             dprint(f"Stitch: Prepending initial continued video: {initial_continued_video_path_str}")
-            # Check the continue video properties
+            # Check the continue video properties (resolution comparison deferred until actual resolution is determined)
             cap = cv2.VideoCapture(str(initial_continued_video_path_str))
             if cap.isOpened():
                 continue_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -2363,9 +2368,7 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                 continue_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                 cap.release()
                 dprint(f"Stitch: Continue video properties - Resolution: {continue_width}x{continue_height}, Frames: {continue_frame_count}")
-                dprint(f"Stitch: Target resolution for stitching: {parsed_res_wh[0]}x{parsed_res_wh[1]}")
-                if continue_width != parsed_res_wh[0] or continue_height != parsed_res_wh[1]:
-                    dprint(f"Stitch: WARNING - Continue video resolution mismatch! Will need resizing during crossfade.")
+                # Note: Resolution will be determined from first video in list (which will be this continue video)
             else:
                 dprint(f"Stitch: ERROR - Could not open continue video for property check")
             segment_video_paths_for_stitch.append(str(Path(initial_continued_video_path_str).resolve()))
@@ -2535,6 +2538,33 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         if len(segment_video_paths_for_stitch) == 1 and total_videos_for_stitch > 1:
             dprint(f"Stitch: Only one video segment found ({segment_video_paths_for_stitch[0]}) but {total_videos_for_stitch} were expected. Using this single video as the 'stitched' output.")
             # No actual stitching needed, just move/copy this single video to final dest.
+
+        # --- 2c. Determine ACTUAL resolution from input videos ---
+        # CRITICAL: Use the actual resolution of the input segment videos, not the snapped payload resolution.
+        # This prevents dimension changes during stitching (e.g., 902x508 → 896x496).
+        first_video_path = segment_video_paths_for_stitch[0]
+        try:
+            cap = cv2.VideoCapture(first_video_path)
+            if cap.isOpened():
+                actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                cap.release()
+                parsed_res_wh = (actual_width, actual_height)
+                print(f"[STITCH_RESOLUTION] Using actual video resolution: {actual_width}x{actual_height}")
+                dprint(f"Stitch: Using actual video resolution from first segment: {actual_width}x{actual_height}")
+                
+                # Log if there's a difference from payload resolution
+                if parsed_res_wh_from_payload and parsed_res_wh != parsed_res_wh_from_payload:
+                    print(f"[STITCH_RESOLUTION] ⚠️  Payload resolution was {parsed_res_wh_from_payload}, actual is {parsed_res_wh}")
+                    dprint(f"Stitch: Resolution difference - payload: {parsed_res_wh_from_payload}, actual: {parsed_res_wh}")
+            else:
+                cap.release()
+                raise ValueError(f"Could not open first video: {first_video_path}")
+        except Exception as e_res:
+            # Fallback to payload resolution (without snapping) if we can't read the video
+            print(f"[STITCH_RESOLUTION] ⚠️  Could not read resolution from video, using payload: {e_res}")
+            dprint(f"Stitch: Warning - could not get resolution from video ({e_res}), using payload resolution")
+            parsed_res_wh = parsed_res_wh_from_payload
 
         # --- 3. Stitching (Crossfade or Concatenate) --- 
         current_stitched_video_path: Path | None = None # This will hold the path to the current version of the stitched video
