@@ -5671,14 +5671,35 @@ def generate_video(
                     sample_fit_canvas = None
                 guide_start_frame =  prefix_video.shape[1]
             if image_end is not None:
-                image_end_list=  image_end if isinstance(image_end, list) else [image_end]
-                if len(image_end_list) >= window_no:
-                    new_height, new_width = image_size                    
-                    image_end_tensor, _, _ = calculate_dimensions_and_resize_image(image_end_list[window_no-1], new_height, new_width, sample_fit_canvas, fit_crop, block_size = block_size)
-                    # image_end_tensor =image_end_list[window_no-1].resize((new_width, new_height), resample=Image.Resampling.LANCZOS) 
-                    refresh_preview["image_end"] = image_end_tensor 
+                # For sliding windows: a single end image should apply to the FINAL window (so the whole continuation can land on it),
+                # while a list of end images can still target specific windows.
+                image_end_list = image_end if isinstance(image_end, list) else [image_end]
+                is_last_window = (window_no == total_windows)
+                use_end_this_window = False
+                end_idx = window_no - 1
+
+                if sliding_window and len(image_end_list) == 1:
+                    # One end image provided → treat as "final target"
+                    use_end_this_window = is_last_window
+                    end_idx = 0
+                else:
+                    # Multiple end images provided → use per-window if available
+                    use_end_this_window = len(image_end_list) >= window_no
+
+                if use_end_this_window:
+                    new_height, new_width = image_size
+                    image_end_tensor, _, _ = calculate_dimensions_and_resize_image(
+                        image_end_list[end_idx],
+                        new_height,
+                        new_width,
+                        sample_fit_canvas,
+                        fit_crop,
+                        block_size=block_size,
+                    )
+                    # image_end_tensor = image_end_list[end_idx].resize((new_width, new_height), resample=Image.Resampling.LANCZOS)
+                    refresh_preview["image_end"] = image_end_tensor
                     image_end_tensor = convert_image_to_tensor(image_end_tensor)
-                image_end_list= None
+                image_end_list = None
             window_start_frame = guide_start_frame - (reuse_frames if window_no > 1 else source_video_overlap_frames_count)
             guide_end_frame = guide_start_frame + current_video_length - (source_video_overlap_frames_count if window_no == 1 else reuse_frames)
             alignment_shift = source_video_frames_count if reset_control_aligment else 0
