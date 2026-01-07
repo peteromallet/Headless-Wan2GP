@@ -623,15 +623,61 @@ class WanAny2V:
                 img_end_frame = image_end.unsqueeze(1).to(self.device)
             clip_image_start, clip_image_end = image_start, image_end
 
-            if any_end_frame:
+            # SVI Pro encoding path - supports both with and without end frames
+            if svi_pro:
+                use_extended_overlapped_latents = False
+                remaining_frames = frame_num - control_pre_frames_count
+                
+                # Get anchor/reference image
+                if input_ref_images is None or len(input_ref_images)==0:                        
+                    if pre_video_frame is None: raise Exception("Missing Reference Image")
+                    image_ref = pre_video_frame
+                else:
+                    image_ref = input_ref_images[ min(window_no, len(input_ref_images))-1 ]
+                image_ref = convert_image_to_tensor(image_ref).unsqueeze(1).to(device=self.device, dtype=self.VAE_dtype)
+                
+                if overlapped_latents is not None:
+                    post_decode_pre_trim = 1
+                elif prefix_video is not None and prefix_video.shape[1] >= (5 + overlap_size):
+                    overlapped_latents = self.vae.encode([torch.cat( [prefix_video[:, -(5 + overlap_size):]], dim=1)], VAE_tile_size)[0][:, -overlap_size//4: ].unsqueeze(0)
+                    post_decode_pre_trim = 1
+                    
+                # Encode anchor image
+                image_ref_latents = self.vae.encode([image_ref], VAE_tile_size)[0]
+                
+                # Calculate padding length, accounting for end frame if present
+                end_frame_latent_count = 1 if any_end_frame else 0
+                pad_len = lat_frames + ref_images_count - image_ref_latents.shape[1] - (overlapped_latents.shape[2] if overlapped_latents is not None else 0) - end_frame_latent_count
+                pad_latents = torch.zeros(image_ref_latents.shape[0], pad_len, lat_h, lat_w, device=image_ref_latents.device, dtype=image_ref_latents.dtype)
+                
+                # Build latent structure: [anchor | overlap | padding | (end_frame)]
+                if any_end_frame:
+                    # Encode end frame
+                    end_frame_latents = self.vae.encode([img_end_frame], VAE_tile_size)[0]
+                    if overlapped_latents is None:
+                        lat_y = torch.concat([image_ref_latents, pad_latents, end_frame_latents], dim=1).to(self.device)
+                    else:
+                        lat_y = torch.concat([image_ref_latents, overlapped_latents.squeeze(0), pad_latents, end_frame_latents], dim=1).to(self.device)
+                    end_frame_latents = None
+                else:
+                    if overlapped_latents is None:
+                        lat_y = torch.concat([image_ref_latents, pad_latents], dim=1).to(self.device)
+                    else:
+                        lat_y = torch.concat([image_ref_latents, overlapped_latents.squeeze(0), pad_latents], dim=1).to(self.device)
+                image_ref_latents = None
+                padded_frames = None
+                
+            # Non-SVI paths (original logic)
+            elif any_end_frame:
                 enc= torch.concat([
                         control_video,
                         torch.zeros( (3, frame_num-control_pre_frames_count-1,  height, width), device=self.device, dtype= self.VAE_dtype),
                         img_end_frame,
                 ], dim=1).to(self.device)
+                padded_frames = None
             else:
                 remaining_frames = frame_num - control_pre_frames_count
-                if svi_pro or svi_mode and svi_ref_pad_num != 0:
+                if svi_mode and svi_ref_pad_num != 0:
                     use_extended_overlapped_latents = False
                     if input_ref_images is None or len(input_ref_images)==0:                        
                         if pre_video_frame is None: raise Exception("Missing Reference Image")
@@ -639,27 +685,11 @@ class WanAny2V:
                     else:
                         image_ref = input_ref_images[ min(window_no, len(input_ref_images))-1 ]
                     image_ref = convert_image_to_tensor(image_ref).unsqueeze(1).to(device=self.device, dtype=self.VAE_dtype)
-                    if svi_pro:
-                        if overlapped_latents is not None:
-                            post_decode_pre_trim = 1
-                        elif prefix_video is not None and prefix_video.shape[1] >= (5 + overlap_size):
-                            overlapped_latents = self.vae.encode([torch.cat( [prefix_video[:, -(5 + overlap_size):]], dim=1)], VAE_tile_size)[0][:, -overlap_size//4: ].unsqueeze(0)
-                            post_decode_pre_trim = 1
-                            
-                        image_ref_latents = self.vae.encode([image_ref], VAE_tile_size)[0]
-                        pad_len = lat_frames + ref_images_count - image_ref_latents.shape[1] - (overlapped_latents.shape[2] if overlapped_latents is not None else 0)
-                        pad_latents = torch.zeros(image_ref_latents.shape[0], pad_len, lat_h, lat_w, device=image_ref_latents.device, dtype=image_ref_latents.dtype)
-                        if overlapped_latents is None:
-                            lat_y = torch.concat([image_ref_latents, pad_latents], dim=1).to(self.device)
-                        else:
-                            lat_y = torch.concat([image_ref_latents, overlapped_latents.squeeze(0), pad_latents], dim=1).to(self.device)
-                        image_ref_latents = None
-                    else:
-                        svi_ref_pad_num = remaining_frames if svi_ref_pad_num == -1 else min(svi_ref_pad_num, remaining_frames)  
-                        padded_frames = image_ref.expand(-1, svi_ref_pad_num, -1, -1)
-                        if remaining_frames > svi_ref_pad_num:
-                            padded_frames = torch.cat([padded_frames, torch.zeros((3, remaining_frames - svi_ref_pad_num, height, width), device=self.device, dtype=self.VAE_dtype)], dim=1)
-                        enc = torch.concat([control_video, padded_frames], dim=1).to(self.device)
+                    svi_ref_pad_num = remaining_frames if svi_ref_pad_num == -1 else min(svi_ref_pad_num, remaining_frames)  
+                    padded_frames = image_ref.expand(-1, svi_ref_pad_num, -1, -1)
+                    if remaining_frames > svi_ref_pad_num:
+                        padded_frames = torch.cat([padded_frames, torch.zeros((3, remaining_frames - svi_ref_pad_num, height, width), device=self.device, dtype=self.VAE_dtype)], dim=1)
+                    enc = torch.concat([control_video, padded_frames], dim=1).to(self.device)
                 else:
                     enc= torch.concat([ control_video, torch.zeros( (3, remaining_frames, height, width), device=self.device, dtype= self.VAE_dtype) ], dim=1).to(self.device)
                 padded_frames = None
@@ -669,7 +699,11 @@ class WanAny2V:
 
 
             msk = torch.ones(1, frame_num + ref_images_count * 4, lat_h, lat_w, device=self.device)
-            if any_end_frame:
+            if svi_pro and any_end_frame:
+                # SVI + end frame: first and last frames known
+                msk[:, 1: -1] = 0
+                msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:-1], torch.repeat_interleave(msk[:, -1:], repeats=4, dim=1) ], dim=1)
+            elif any_end_frame:
                 msk[:, control_pre_frames_count: -1] = 0
                 if add_frames_for_end_image:
                     msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:-1], torch.repeat_interleave(msk[:, -1:], repeats=4, dim=1) ], dim=1)
