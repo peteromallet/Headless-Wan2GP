@@ -92,6 +92,7 @@ def main():
     parser.add_argument("--num-start-frames", type=int, default=3, help="Number of frames to extract from end of start video")
     parser.add_argument("--output-dir", default="outputs", help="Output directory")
     parser.add_argument("--dry-run", action="store_true", help="Just show what would be done")
+    parser.add_argument("--use-regular-i2v", action="store_true", help="Use regular I2V encoding (better for end frames) instead of SVI encoding")
     args = parser.parse_args()
     
     # Resolve paths
@@ -148,9 +149,17 @@ def main():
         main_output_dir=str(output_dir)
     )
     
-    # Load the SVI model
-    model_key = "wan_2_2_i2v_lightning_svi_3_3"
-    print(f"\n📦 Loading model: {model_key}")
+    # Load the model
+    # Two options:
+    # 1. wan_2_2_i2v_lightning_svi_3_3 - SVI encoding (anchor separate) - better for continuations
+    # 2. wan_2_2_i2v_lightning_svi_endframe - Regular I2V encoding (start+end together) - better for transitions
+    if args.use_regular_i2v:
+        model_key = "wan_2_2_i2v_lightning_svi_endframe"
+        print("\n📦 Using REGULAR I2V encoding with SVI LoRAs (recommended for end frames)")
+    else:
+        model_key = "wan_2_2_i2v_lightning_svi_3_3"
+        print("\n📦 Using SVI hybrid encoding (may have discontinuity with end frames)")
+    print(f"Model: {model_key}")
     orchestrator.load_model(model_key)
     
     # Load images
@@ -198,16 +207,31 @@ def main():
     print(f"[DEBUG] image_start: {type(image_start)}, size: {image_start.size if image_start else 'None'}")
     print(f"[DEBUG] image_end: {type(image_end)}, size: {image_end.size if image_end else 'None'}")
     print(f"[DEBUG] anchor: {type(anchor)}, size: {anchor.size if anchor else 'None'}")
-    output_path = orchestrator.generate(
-        prompt=args.prompt,
-        image_start=image_start,
-        image_end=image_end,
-        image_refs=[anchor],  # SVI anchor image (WGP expects image_refs, not input_ref_images)
-        image_prompt_type="T",  # Use image as prompt
-        video_prompt_type="I",  # CRITICAL: "I" enables image_refs to be passed through to SVI
-        video_length=args.frames,
-        resolution="768x576",
-    )
+    
+    if args.use_regular_i2v:
+        # Regular I2V: just use image_start and image_end, no separate anchor needed
+        print("[DEBUG] Using regular I2V path - encoding [start|zeros|end] together")
+        output_path = orchestrator.generate(
+            prompt=args.prompt,
+            image_start=image_start,
+            image_end=image_end,
+            image_prompt_type="SE",  # Start + End frame mode
+            video_length=args.frames,
+            resolution="768x576",
+        )
+    else:
+        # SVI hybrid: separate anchor + [zeros|end]
+        print("[DEBUG] Using SVI hybrid path - anchor encoded separately")
+        output_path = orchestrator.generate(
+            prompt=args.prompt,
+            image_start=image_start,
+            image_end=image_end,
+            image_refs=[anchor],  # SVI anchor image (WGP expects image_refs, not input_ref_images)
+            image_prompt_type="T",  # Use image as prompt
+            video_prompt_type="I",  # CRITICAL: "I" enables image_refs to be passed through to SVI
+            video_length=args.frames,
+            resolution="768x576",
+        )
     
     print("\n" + "=" * 60)
     print("✅ Generation complete!")
