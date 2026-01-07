@@ -1015,6 +1015,43 @@ class WanOrchestrator:
         else:
             generation_logger.info(f"[DEBUG_KWARGS] image_start NOT in kwargs")
 
+        # ------------------------------------------------------------------
+        # SVI / Image-Refs Path Bridging (GROUND TRUTH FIX)
+        # ------------------------------------------------------------------
+        # Our task pipeline often passes `image_refs_paths` (list[str]) so we can
+        # keep tasks JSON-serializable. Wan2GP/WGP expects `image_refs` as a list
+        # of PIL.Image objects.
+        #
+        # If we don't convert here, logs will show `image_refs: None` and SVI's
+        # anchor reference won't actually be used (can cause odd end-frame behavior).
+        try:
+            if (
+                "image_refs_paths" in kwargs
+                and kwargs.get("image_refs") in (None, "", [])
+                and isinstance(kwargs["image_refs_paths"], (list, tuple))
+                and len(kwargs["image_refs_paths"]) > 0
+            ):
+                from PIL import Image
+                from PIL import ImageOps
+
+                refs: list = []
+                for p in kwargs["image_refs_paths"]:
+                    if not p:
+                        continue
+                    try:
+                        img = Image.open(str(p)).convert("RGB")
+                        img = ImageOps.exif_transpose(img)
+                        refs.append(img)
+                    except Exception as e_img:
+                        generation_logger.warning(f"[SVI_GROUND_TRUTH] Failed to load image_ref path '{p}': {e_img}")
+                if refs:
+                    kwargs["image_refs"] = refs
+                    generation_logger.info(f"[SVI_GROUND_TRUTH] Converted image_refs_paths -> image_refs (count={len(refs)})")
+                else:
+                    generation_logger.warning("[SVI_GROUND_TRUTH] image_refs_paths provided but no images could be loaded")
+        except Exception as e_refs:
+            generation_logger.warning(f"[SVI_GROUND_TRUTH] Exception while converting image_refs_paths -> image_refs: {e_refs}")
+
         # Smoke-mode short-circuit: create a sample output and return its path
         if self.smoke_mode:
             from pathlib import Path
