@@ -1184,6 +1184,17 @@ class WanAny2V:
             return guide_scale, guidance_switch_done, trans, denoising_extra
         update_loras_slists(self.model, loras_slists, len(original_timesteps), phase_switch_step= phase_switch_step, phase_switch_step2= phase_switch_step2)
         if self.model2 is not None: update_loras_slists(self.model2, loras_slists, len(original_timesteps), phase_switch_step= phase_switch_step, phase_switch_step2= phase_switch_step2)
+        
+        # [LORA_PHASE_DEBUG] Log the denoising phase boundaries
+        print(f"\n[LORA_PHASE_DEBUG] Denoising phase boundaries:")
+        print(f"[LORA_PHASE_DEBUG]   Total steps: {len(original_timesteps)}")
+        print(f"[LORA_PHASE_DEBUG]   Phase switch step (1→2): {phase_switch_step}")
+        print(f"[LORA_PHASE_DEBUG]   Phase switch step (2→3): {phase_switch_step2}")
+        print(f"[LORA_PHASE_DEBUG]   Guide phases: {guide_phases}")
+        print(f"[LORA_PHASE_DEBUG]   Switch threshold (noise level): {switch_threshold}")
+        if guide_phases >= 3:
+            print(f"[LORA_PHASE_DEBUG]   Switch threshold2 (noise level): {switch2_threshold}")
+        
         callback(-1, None, True, override_num_inference_steps = updated_num_steps, denoising_extra = denoising_extra)
 
         def clear():
@@ -1277,10 +1288,40 @@ class WanAny2V:
         torch.cuda.empty_cache()
         # denoising
         trans = self.model
+        _lora_phase_logged = set()  # Track which phases we've logged
         for i, t in enumerate(tqdm(timesteps)):
+            _prev_guide_scale = guide_scale
             guide_scale, guidance_switch_done, trans, denoising_extra = update_guidance(i, t, guide_scale, guide2_scale, guidance_switch_done, switch_threshold, trans, 2, denoising_extra)
             guide_scale, guidance_switch2_done, trans, denoising_extra = update_guidance(i, t, guide_scale, guide3_scale, guidance_switch2_done, switch2_threshold, trans, 3, denoising_extra)
             offload.set_step_no_for_lora(trans, start_step_no + i)
+            
+            # [LORA_PHASE_DEBUG] Log at phase transitions and first/last step
+            _current_phase = 1
+            if i >= phase_switch_step: _current_phase = 2
+            if i >= phase_switch_step2: _current_phase = 3
+            
+            if i == 0 or i == len(timesteps) - 1 or _current_phase not in _lora_phase_logged:
+                _lora_phase_logged.add(_current_phase)
+                _model_name = "High Noise (model1)" if trans == self.model else "Low Noise (model2)"
+                print(f"[LORA_PHASE_DEBUG] Step {i}/{len(timesteps)-1} | t={t.item():.0f} | Phase {_current_phase} | CFG={guide_scale:.1f} | Model={_model_name}")
+                # Log active LoRA multipliers at this step if available
+                if hasattr(trans, '_loras_slists') and trans._loras_slists is not None:
+                    try:
+                        _step_idx = start_step_no + i
+                        _lora_names = getattr(trans, '_loras_names', [])
+                        for _lora_idx, _lora_name in enumerate(_lora_names):
+                            _slist = trans._loras_slists[_lora_idx] if _lora_idx < len(trans._loras_slists) else None
+                            if _slist is not None:
+                                if isinstance(_slist, list) and _step_idx < len(_slist):
+                                    _mult = _slist[_step_idx]
+                                elif isinstance(_slist, (int, float)):
+                                    _mult = _slist
+                                else:
+                                    _mult = "?"
+                                print(f"[LORA_PHASE_DEBUG]   LoRA[{_lora_idx}] '{os.path.basename(_lora_name)}' mult={_mult}")
+                    except Exception as e:
+                        print(f"[LORA_PHASE_DEBUG]   (Could not read LoRA multipliers: {e})")
+            
             timestep = torch.stack([t])
 
             if timestep_injection:
