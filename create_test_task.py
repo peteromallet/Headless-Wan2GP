@@ -6,6 +6,7 @@ Usage:
     python create_test_task.py travel_orchestrator
     python create_test_task.py qwen_image_style
     python create_test_task.py --list
+    python create_test_task.py --all  # Create one of each type
 """
 
 import os
@@ -139,7 +140,8 @@ def create_task(task_type: str, dry_run: bool = False) -> str:
     
     # Deep copy and update params
     params = json.loads(json.dumps(template["params"]))
-    
+
+    # Update task-specific fields with generated IDs
     if task_type == "travel_orchestrator":
         params["orchestrator_details"]["run_id"] = timestamp
         params["orchestrator_details"]["orchestrator_task_id"] = f"test_travel_{timestamp[:14]}"
@@ -202,24 +204,49 @@ def list_tasks():
         print()
 
 
+def create_all_tasks(dry_run: bool = False):
+    """Create one task of each type."""
+    print(f"\n{'🔍 DRY RUN - ' if dry_run else ''}Creating one task of each type...\n")
+
+    created_ids = []
+    for task_type in TEST_TASKS.keys():
+        try:
+            task_id = create_task(task_type, dry_run=dry_run)
+            created_ids.append((task_type, task_id))
+            print()  # Add spacing between tasks
+        except Exception as e:
+            print(f"❌ Failed to create {task_type}: {e}\n")
+
+    if created_ids and not dry_run:
+        print("\n" + "=" * 80)
+        print(f"✅ Successfully created {len(created_ids)} test tasks:")
+        for task_type, task_id in created_ids:
+            print(f"   {task_type:<25} → {task_id}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Create test tasks for worker testing")
     parser.add_argument("task_type", nargs="?", help="Task type to create (travel_orchestrator, qwen_image_style)")
     parser.add_argument("--list", "-l", action="store_true", help="List available task templates")
+    parser.add_argument("--all", "-a", action="store_true", help="Create one task of each type")
     parser.add_argument("--dry-run", "-n", action="store_true", help="Show what would be created without creating")
-    
+
     args = parser.parse_args()
-    
+
     if args.list:
         list_tasks()
         return
-    
+
+    if args.all:
+        create_all_tasks(dry_run=args.dry_run)
+        return
+
     if not args.task_type:
         parser.print_help()
         print("\n")
         list_tasks()
         return
-    
+
     create_task(args.task_type, dry_run=args.dry_run)
 
 
