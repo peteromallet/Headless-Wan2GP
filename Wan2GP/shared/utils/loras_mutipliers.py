@@ -113,6 +113,15 @@ def update_loras_slists(trans, slists_dict, num_inference_steps, phase_switch_st
     sz = len(slists_dict["phase1"])
     slists = [ expand_slist(slists_dict, i, num_inference_steps, phase_switch_step, phase_switch_step2 ) for i in range(sz)  ]
     nos = [str(l) for l in range(sz)]
+    
+    # [LORA_PHASE_DEBUG] Log the actual per-step schedules being activated
+    print(f"\n[LORA_PHASE_DEBUG] update_loras_slists() - Activating LoRA schedules:")
+    print(f"[LORA_PHASE_DEBUG]   num_inference_steps: {num_inference_steps}")
+    print(f"[LORA_PHASE_DEBUG]   phase_switch_step: {phase_switch_step}")
+    print(f"[LORA_PHASE_DEBUG]   phase_switch_step2: {phase_switch_step2}")
+    for i, slist in enumerate(slists):
+        print(f"[LORA_PHASE_DEBUG]   LoRA[{i}] schedule: {slist}")
+    
     offload.activate_loras(trans, nos, slists ) 
 
 
