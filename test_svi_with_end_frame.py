@@ -186,11 +186,12 @@ def main():
     # Load or use anchor image
     if anchor_image:
         anchor = Image.open(str(anchor_image)).convert("RGB")
+        print(f"Using custom anchor image: {anchor.size}")
     else:
-        # Use first start frame as anchor
-        anchor = start_frames[0] if start_frames else image_start
-    
-    print(f"Using anchor image: {anchor.size if anchor else 'None'}")
+        # For SVI, anchor should match image_start for consistent generation
+        # (WGP defaults to pre_video_frame = last frame of source, which is image_start)
+        anchor = image_start
+        print(f"Using image_start as anchor (recommended for SVI): {anchor.size if anchor else 'None'}")
     
     # Generate
     print("\n🎬 Starting generation...")
