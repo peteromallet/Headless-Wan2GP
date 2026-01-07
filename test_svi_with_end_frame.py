@@ -135,6 +135,12 @@ def main():
         print(f"  Frames: {args.frames}")
         return
     
+    # Remove cached settings to ensure fresh config values are used
+    cached_settings = WAN2GP_ROOT / "settings" / "wan_2_2_i2v_lightning_svi_3_3_settings.json"
+    if cached_settings.exists():
+        print(f"\n🗑️  Removing cached settings: {cached_settings}")
+        cached_settings.unlink()
+    
     # Change to Wan2GP directory (required for wgp.py imports)
     os.chdir(WAN2GP_ROOT)
     sys.path.insert(0, str(WAN2GP_ROOT))
