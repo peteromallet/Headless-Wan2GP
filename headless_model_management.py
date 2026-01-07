@@ -865,14 +865,7 @@ class HeadlessTaskQueue:
 
             self.logger.info(f"[PHASE_CONFIG] Applying model patch in GenerationWorker for '{model_name}'")
 
-            # Import apply_phase_config_patch from worker
-            import sys
-            from pathlib import Path
-            worker_dir = Path(__file__).parent
-            if str(worker_dir) not in sys.path:
-                sys.path.insert(0, str(worker_dir))
-
-            from worker import apply_phase_config_patch
+            from source.phase_config import apply_phase_config_patch
             apply_phase_config_patch(parsed_phase_config, model_name, task.id)
             _patch_applied = True
 

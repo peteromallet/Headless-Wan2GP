@@ -327,7 +327,7 @@ The submodule is updated periodically using standard git submodule commands. Onl
 | Task type / sub-task | Entrypoint function | File |
 |----------------------|---------------------|------|
 | Travel orchestrator  | `_handle_travel_orchestrator_task` | `sm_functions/travel_between_images.py` |
-| Travel segment       | `_handle_travel_segment_task`      | " " |
+| Travel segment       | `_handle_travel_segment_via_queue` | `source/task_registry.py` |
 | Travel stitch        | `_handle_travel_stitch_task`       | " " |
 | Single image video   | Direct queue integration (wan_2_2_t2i) | `worker.py` (direct routing)   |
 | Join clips           | `_handle_join_clips_task`          | `sm_functions/join_clips.py` |
