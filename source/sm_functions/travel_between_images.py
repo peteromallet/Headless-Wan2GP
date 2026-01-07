@@ -3185,18 +3185,28 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
             print(f"[STITCH_FINAL_ANALYSIS]   Overlap settings: {expanded_frame_overlaps}")
             # Calculate expected final length for analysis
             try:
-                # Try to calculate expected final length from orchestrator data
-                expected_segment_frames = full_orchestrator_payload.get("segment_frames_expanded", [])
-                if expected_segment_frames:
-                    total_input_frames = sum(expected_segment_frames)
-                    total_overlaps = sum(expanded_frame_overlaps)
+                # Ground-truth expected length: compute from the actual decoded segment frame counts.
+                # This avoids misleading results when orchestrator payload contains expanded/per-frame arrays.
+                actual_segment_counts = []
+                for p in segment_video_paths_for_stitch:
+                    try:
+                        fc, _fps = sm_get_video_frame_count_and_fps(str(p))
+                        if fc is None:
+                            continue
+                        actual_segment_counts.append(int(fc))
+                    except Exception:
+                        continue
+
+                if actual_segment_counts:
+                    total_input_frames = sum(actual_segment_counts)
+                    total_overlaps = sum(expanded_frame_overlaps) if expanded_frame_overlaps else 0
                     expected_final_length = total_input_frames - total_overlaps
-                    print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: {expected_final_length}")
+                    print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames (from actual segments): {expected_final_length}")
                     print(f"[STITCH_FINAL_ANALYSIS]   Actual final frames: {final_frame_count}")
                     if final_frame_count != expected_final_length:
                         print(f"[STITCH_FINAL_ANALYSIS]   ⚠️  FINAL LENGTH MISMATCH! Expected {expected_final_length}, got {final_frame_count}")
                 else:
-                    print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: Not available (no segment_frames_expanded)")
+                    print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: Not available (could not count input segments)")
                     print(f"[STITCH_FINAL_ANALYSIS]   Actual final frames: {final_frame_count}")
             except Exception as e:
                 print(f"[STITCH_FINAL_ANALYSIS]   Expected final frames: Not calculated ({e})")
