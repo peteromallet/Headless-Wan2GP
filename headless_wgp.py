@@ -1155,10 +1155,14 @@ class WanOrchestrator:
 
         # Set up VACE parameters
         # Only disable VACE if model doesn't support it AND no VACE params were provided
+        # BUT preserve video_prompt_type if caller explicitly set it (e.g., "I" for SVI image_refs)
         if not is_vace and not video_guide and not video_mask:
             video_guide = None
             video_mask = None
-            video_prompt_type = "disabled"
+            # Only set to "disabled" if caller didn't explicitly request a prompt type
+            # "I" is used for SVI to enable image_refs passthrough
+            if video_prompt_type is None or video_prompt_type == "":
+                video_prompt_type = "disabled"
             control_net_weight = 0.0
             control_net_weight2 = 0.0
 

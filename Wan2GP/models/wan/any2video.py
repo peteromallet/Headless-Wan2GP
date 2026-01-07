@@ -627,6 +627,9 @@ class WanAny2V:
             # - Start: SVI-style anchor encoding (separate, for stability)
             # - End: I2V-style encoding (zeros + end_frame together, for proper end frame handling)
             if svi_pro:
+                print(f"[SVI_HYBRID] Entering SVI Pro encoding path")
+                print(f"[SVI_HYBRID] frame_num={frame_num}, control_pre_frames_count={control_pre_frames_count}, lat_frames={lat_frames}")
+                print(f"[SVI_HYBRID] any_end_frame={any_end_frame}, image_end is None={image_end is None}")
                 use_extended_overlapped_latents = False
                 remaining_frames = frame_num - control_pre_frames_count
                 
@@ -634,9 +637,12 @@ class WanAny2V:
                 if input_ref_images is None or len(input_ref_images)==0:                        
                     if pre_video_frame is None: raise Exception("Missing Reference Image")
                     image_ref = pre_video_frame
+                    print(f"[SVI_HYBRID] Using pre_video_frame as anchor")
                 else:
                     image_ref = input_ref_images[ min(window_no, len(input_ref_images))-1 ]
+                    print(f"[SVI_HYBRID] Using input_ref_images[{min(window_no, len(input_ref_images))-1}] as anchor")
                 image_ref = convert_image_to_tensor(image_ref).unsqueeze(1).to(device=self.device, dtype=self.VAE_dtype)
+                print(f"[SVI_HYBRID] Anchor pixel shape: {image_ref.shape}")
                 
                 if overlapped_latents is not None:
                     post_decode_pre_trim = 1
@@ -646,6 +652,7 @@ class WanAny2V:
                     
                 # SVI: Encode anchor image separately (for stability/reference)
                 image_ref_latents = self.vae.encode([image_ref], VAE_tile_size)[0]
+                print(f"[SVI_HYBRID] Anchor latent shape: {image_ref_latents.shape}")
                 
                 if any_end_frame:
                     # HYBRID: SVI anchor start + I2V-style rest with end frame
@@ -653,20 +660,26 @@ class WanAny2V:
                     # The end frame lands naturally at the end of the latent sequence
                     remaining_pixel_frames = frame_num - control_pre_frames_count  # 80 for 81 total
                     middle_frames_count = remaining_pixel_frames - 1  # 79 zeros
+                    print(f"[SVI_HYBRID] Building rest: {middle_frames_count} zeros + 1 end frame = {remaining_pixel_frames} pixel frames")
                     rest_enc = torch.concat([
                         torch.zeros((3, middle_frames_count, height, width), device=self.device, dtype=self.VAE_dtype),
                         img_end_frame,
                     ], dim=1).to(self.device)
+                    print(f"[SVI_HYBRID] Rest pixel shape: {rest_enc.shape}")
                     
                     # Encode rest: 80 frames → (80-1)//4 + 1 = 20 latents
                     # With anchor's 1 latent = 21 total (correct for 81 frames)
                     rest_latents = self.vae.encode([rest_enc], VAE_tile_size)[0]
+                    print(f"[SVI_HYBRID] Rest latent shape: {rest_latents.shape}")
+                    expected_rest_latents = (remaining_pixel_frames - 1) // 4 + 1
+                    print(f"[SVI_HYBRID] Expected rest latents: {expected_rest_latents}, actual: {rest_latents.shape[1]}")
                     
                     # Combine: [SVI anchor | rest with end frame at end]
                     if overlapped_latents is None:
                         lat_y = torch.concat([image_ref_latents, rest_latents], dim=1).to(self.device)
                     else:
                         lat_y = torch.concat([image_ref_latents, overlapped_latents.squeeze(0), rest_latents], dim=1).to(self.device)
+                    print(f"[SVI_HYBRID] Final lat_y shape: {lat_y.shape}, expected time dim: {lat_frames}")
                     rest_latents = None
                 else:
                     # No end frame - use original SVI approach with zero padding
@@ -714,9 +727,13 @@ class WanAny2V:
             if svi_pro and any_end_frame:
                 # SVI + end frame: first and last LATENT frames known
                 # Use same expansion as SVI (keeps shape divisible by 4), then mark last latent frame
+                print(f"[SVI_HYBRID] Mask initial shape: {msk.shape}")
                 msk[:, 1:] = 0
                 msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:] ], dim=1)
+                print(f"[SVI_HYBRID] Mask after first expansion: {msk.shape}")
                 msk[:, -4:] = 1  # Mark last latent frame (4 sub-frames) as known for end frame
+                print(f"[SVI_HYBRID] Mask known frames: first 4 (anchor) + last 4 (end)")
+                print(f"[SVI_HYBRID] Mask sum check - first4: {msk[:, :4].sum().item()}, last4: {msk[:, -4:].sum().item()}, middle: {msk[:, 4:-4].sum().item()}")
             elif any_end_frame:
                 msk[:, control_pre_frames_count: -1] = 0
                 if add_frames_for_end_image:
