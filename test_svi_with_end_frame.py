@@ -201,7 +201,7 @@ def main():
         input_ref_images=[anchor],  # SVI anchor image
         image_prompt_type="T",  # Use image as prompt
         video_length=args.frames,
-        resolution="1280x720",
+        resolution="768x576",
     )
     
     print("\n" + "=" * 60)
