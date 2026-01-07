@@ -195,12 +195,16 @@ def main():
     
     # Generate
     print("\n🎬 Starting generation...")
+    print(f"[DEBUG] image_start: {type(image_start)}, size: {image_start.size if image_start else 'None'}")
+    print(f"[DEBUG] image_end: {type(image_end)}, size: {image_end.size if image_end else 'None'}")
+    print(f"[DEBUG] anchor: {type(anchor)}, size: {anchor.size if anchor else 'None'}")
     output_path = orchestrator.generate(
         prompt=args.prompt,
         image_start=image_start,
         image_end=image_end,
         image_refs=[anchor],  # SVI anchor image (WGP expects image_refs, not input_ref_images)
         image_prompt_type="T",  # Use image as prompt
+        video_prompt_type="I",  # CRITICAL: "I" enables image_refs to be passed through to SVI
         video_length=args.frames,
         resolution="768x576",
     )
