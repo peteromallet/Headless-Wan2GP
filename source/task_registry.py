@@ -45,7 +45,8 @@ from source.common_utils import (
 from source.video_utils import (
     prepare_vace_ref_for_segment as sm_prepare_vace_ref_for_segment,
     create_guide_video_for_travel_segment as sm_create_guide_video_for_travel_segment,
-    extract_last_frame_as_image as sm_extract_last_frame_as_image
+    extract_last_frame_as_image as sm_extract_last_frame_as_image,
+    get_video_frame_count_and_fps as sm_get_video_frame_count_and_fps
 )
 from source import db_operations as db_ops
 from headless_model_management import HeadlessTaskQueue, GenerationTask
@@ -240,6 +241,16 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                         frames_needed = 5 + overlap_size  # 9 frames total
                         start_frame = max(0, int(pred_frames) - frames_needed)
                         
+                        # GROUND TRUTH LOG: Predecessor video analysis
+                        dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}: ========== PREDECESSOR ANALYSIS ==========")
+                        dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}: Predecessor video: {predecessor_video_path}")
+                        dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}: Predecessor total frames: {pred_frames}")
+                        dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}: Extracting frames [{start_frame}:{pred_frames}] (last {frames_needed} frames)")
+                        dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}: Frame range breakdown:")
+                        dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}:   - Frames 0-{start_frame-1}: Will be DISCARDED (not needed)")
+                        dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}:   - Frames {start_frame}-{pred_frames-1}: Will be EXTRACTED (last {frames_needed} frames)")
+                        dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}:   - Last 4 frames [{pred_frames-4}:{pred_frames-1}]: OVERLAP frames for stitching")
+                        
                         trimmed_prefix_filename = f"svi_prefix_{segment_idx:02d}_last{frames_needed}frames_{uuid.uuid4().hex[:6]}.mp4"
                         trimmed_prefix_path = segment_processing_dir / trimmed_prefix_filename
                         
@@ -253,8 +264,14 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                         )
                         
                         if trimmed_result and Path(trimmed_result).exists():
+                            # Verify extracted prefix video
+                            prefix_frames, prefix_fps = sm_get_video_frame_count_and_fps(trimmed_result)
                             svi_predecessor_video_for_source = str(trimmed_result)
-                            dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Extracted last {frames_needed} frames from predecessor ({pred_frames} total) -> {trimmed_result}")
+                            dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}: ✅ Extracted prefix video: {prefix_frames} frames (expected: {frames_needed})")
+                            dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}: Prefix video path: {trimmed_result}")
+                            dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}: This prefix will be passed to WGP as video_source")
+                            if prefix_frames != frames_needed:
+                                dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}: ⚠️  WARNING: Extracted {prefix_frames} frames, expected {frames_needed}")
                         else:
                             # Fallback: use full video if extraction failed
                             svi_predecessor_video_for_source = predecessor_video_path
@@ -507,7 +524,20 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             # IMPORTANT: Must NOT set image_start when video_source is set, otherwise
             # wgp.py prioritizes image_start and creates only a 1-frame prefix_video!
             if svi_predecessor_video_for_source:
-                generation_params["video_source"] = str(Path(svi_predecessor_video_for_source).resolve())
+                video_source_path = str(Path(svi_predecessor_video_for_source).resolve())
+                generation_params["video_source"] = video_source_path
+                
+                # GROUND TRUTH LOG: What WGP will receive
+                try:
+                    wgp_input_frames, wgp_input_fps = sm_get_video_frame_count_and_fps(video_source_path)
+                    dprint_func(f"[SVI_GROUND_TRUTH] Task {task_id}: ========== WGP INPUT ANALYSIS ==========")
+                    dprint_func(f"[SVI_GROUND_TRUTH] Task {task_id}: video_source: {video_source_path}")
+                    dprint_func(f"[SVI_GROUND_TRUTH] Task {task_id}: video_source frames: {wgp_input_frames}")
+                    dprint_func(f"[SVI_GROUND_TRUTH] Task {task_id}: WGP will extract last 9 frames from this for overlapped_latents")
+                    dprint_func(f"[SVI_GROUND_TRUTH] Task {task_id}: WGP will prepend ALL {wgp_input_frames} frames to output")
+                except Exception as e_wgp_log:
+                    dprint_func(f"[SVI_GROUND_TRUTH] Task {task_id}: Could not analyze video_source: {e_wgp_log}")
+                
                 # Remove image_start so WGP uses video_source for multi-frame prefix_video
                 # The anchor image is provided via image_refs instead
                 if "image_start" in generation_params:
