@@ -1990,6 +1990,64 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
             # If move failed, keep original paths for further processing
             final_video_path_for_db = str(video_to_process_abs_path)
 
+        # ------------------------------------------------------------------
+        # SVI Continuation Output Trim
+        # ------------------------------------------------------------------
+        # When using SVI continuation via `video_source`, Wan2GP's `wgp.py` prepends
+        # the prefix video frames to the generated sample (so the output contains
+        # both previous + new frames). For our segment-based travel pipeline we
+        # want each segment output to be exactly the requested `video_length`
+        # (4N+1) frames, so stitching does not double-count prior segments.
+        try:
+            use_svi = bool(full_orchestrator_payload.get("use_svi") or wgp_task_params.get("use_svi") or chain_details.get("use_svi"))
+            if use_svi and isinstance(segment_idx_completed, int) and segment_idx_completed > 0:
+                expected_segment_frames = full_orchestrator_payload.get("segment_frames_expanded", [])
+                expected_len = expected_segment_frames[segment_idx_completed] if (
+                    isinstance(expected_segment_frames, list)
+                    and segment_idx_completed < len(expected_segment_frames)
+                    and isinstance(expected_segment_frames[segment_idx_completed], int)
+                ) else None
+
+                if expected_len and expected_len > 0:
+                    actual_frames, actual_fps = sm_get_video_frame_count_and_fps(str(video_to_process_abs_path))
+                    dprint(f"[SVI_PREFIX_TRIM] Seg {segment_idx_completed}: actual_frames={actual_frames}, expected_len={expected_len}, fps={actual_fps}")
+                    if actual_frames and actual_frames > expected_len:
+                        from source.video_utils import extract_frame_range_to_video as sm_extract_frame_range_to_video
+
+                        start_frame = max(0, int(actual_frames) - int(expected_len))
+                        trim_filename = f"seg{segment_idx_completed:02d}_trimmed_{timestamp_short}_{unique_suffix}{video_to_process_abs_path.suffix}"
+                        trimmed_video_abs_path, _ = prepare_output_path(
+                            task_id=wgp_task_id,
+                            filename=trim_filename,
+                            main_output_dir_base=output_base_for_files,
+                            task_type="travel_segment"
+                        )
+
+                        fps_for_trim = float(actual_fps) if actual_fps and actual_fps > 0 else float(full_orchestrator_payload.get("fps_helpers", 16))
+                        trimmed_result = sm_extract_frame_range_to_video(
+                            source_video=str(video_to_process_abs_path),
+                            output_path=str(trimmed_video_abs_path),
+                            start_frame=start_frame,
+                            end_frame=None,
+                            fps=fps_for_trim,
+                            dprint_func=dprint
+                        )
+                        if trimmed_result and Path(trimmed_result).exists():
+                            print(f"[SVI_PREFIX_TRIM] Trimmed seg{segment_idx_completed:02d}: kept last {expected_len} frames (start_frame={start_frame}) -> {trimmed_result}")
+                            debug_video_analysis(Path(trimmed_result), f"SVI_TRIMMED_Seg{segment_idx_completed}", wgp_task_id)
+                            # Replace the working video with the trimmed one
+                            try:
+                                if video_to_process_abs_path.exists():
+                                    video_to_process_abs_path.unlink()
+                            except Exception:
+                                pass
+                            video_to_process_abs_path = Path(trimmed_result)
+                            final_video_path_for_db = str(video_to_process_abs_path)
+                        else:
+                            dprint(f"[SVI_PREFIX_TRIM] WARNING: Trim failed for seg {segment_idx_completed}; keeping untrimmed output.")
+        except Exception as e_svi_trim:
+            dprint(f"[SVI_PREFIX_TRIM] WARNING: Exception while trimming SVI segment output: {e_svi_trim}")
+
         # --- Post-generation Processing Chain ---
         # Saturation and Brightness are only applied to segments AFTER the first one.
         if is_subsequent_segment_val or is_first_new_segment_after_continue:
@@ -2778,7 +2836,6 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
                             try:
                                 file_size = video_path_obj.stat().st_size
                                 # Try to get basic video info
-                                import cv2
                                 cap = cv2.VideoCapture(str(video_path))
                                 frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if cap.isOpened() else -1
                                 fps = cap.get(cv2.CAP_PROP_FPS) if cap.isOpened() else -1
