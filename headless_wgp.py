@@ -1177,8 +1177,8 @@ class WanOrchestrator:
             # Don't set LoRA parameters - let WGP extract them from model JSON via get_transformer_loras()
             # WGP will call get_transformer_loras(model_type) to get LoRAs from the temp model file
         else:
-            # Normal mode: LoRAs are already validated absolute paths from LoraResolver
-            # (worker.py called LoraResolver.resolve_all_lora_formats() before passing to us)
+            # Normal mode: LoRAs are already validated paths from LoRAConfig
+            # (task_registry.py downloaded URLs and resolved paths before passing to us)
             # We just need to format them for WGP's expected string format
             
             # Check both function param (lora_names) AND kwargs (activated_loras) since callers

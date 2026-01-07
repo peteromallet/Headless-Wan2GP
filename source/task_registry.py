@@ -15,7 +15,8 @@ from source.logging_utils import headless_logger
 from source.worker_utils import make_task_dprint, log_ram_usage, cleanup_generated_files, dprint
 from source.task_conversion import db_task_to_generation_task, parse_phase_config
 from source.phase_config import apply_phase_config_patch
-from source.lora_resolver import LoraResolver
+from source.params.lora import LoRAConfig
+from source.lora_utils import _download_lora_from_url
 
 # Import task handlers
 # These imports should be available from the environment where this module is used
@@ -320,29 +321,31 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 # CRITICAL: Run LoRA resolution after phase_config parsing
                 # phase_config extracts LoRA URLs which need to be downloaded and resolved to absolute paths
                 if any(key in generation_params for key in ["activated_loras", "loras_multipliers", "additional_loras"]):
-                    wan_root = Path(__file__).parent.parent / "Wan2GP"
-                    lora_resolver = LoraResolver(
-                        wan_root=str(wan_root),
-                        task_id=task_id,
-                        dprint=dprint_func
-                    )
-                    resolved_lora_names, resolved_lora_multipliers = lora_resolver.resolve_all_lora_formats(
-                        params=generation_params,
-                        model_type=model_name,
-                        task_params=segment_params
-                    )
-                    if resolved_lora_names:
-                        # DEBUG: Log exactly what LoraResolver returned
-                        dprint_func(f"[LORA_RESOLVER_OUTPUT] Task {task_id}: LoraResolver returned {len(resolved_lora_names)} paths:")
-                        for i, lora_path in enumerate(resolved_lora_names):
-                            dprint_func(f"[LORA_RESOLVER_OUTPUT] Task {task_id}:   [{i}] '{lora_path}' (starts_with_slash={lora_path.startswith('/') if isinstance(lora_path, str) else 'N/A'})")
+                    lora_config = LoRAConfig.from_params(generation_params, task_id=task_id)
+                    
+                    # Download any pending LoRAs
+                    if lora_config.has_pending_downloads():
+                        for url in lora_config.get_pending_downloads().keys():
+                            if url:
+                                local_filename = _download_lora_from_url(
+                                    url=url,
+                                    task_id=task_id,
+                                    dprint=dprint_func,
+                                    model_type=model_name,
+                                )
+                                lora_config.mark_downloaded(url, local_filename)
+                    
+                    # Convert to WGP format
+                    wgp_lora = lora_config.to_wgp_format()
+                    if wgp_lora["activated_loras"]:
+                        # DEBUG: Log exactly what LoRAConfig resolved
+                        dprint_func(f"[LORA_CONFIG_OUTPUT] Task {task_id}: Resolved {len(wgp_lora['activated_loras'])} LoRAs:")
+                        for i, lora_path in enumerate(wgp_lora["activated_loras"]):
+                            dprint_func(f"[LORA_CONFIG_OUTPUT] Task {task_id}:   [{i}] '{lora_path}'")
                         
-                        generation_params["activated_loras"] = resolved_lora_names
-                        generation_params["loras_multipliers"] = " ".join(str(m) for m in resolved_lora_multipliers)
-                        headless_logger.info(f"Resolved {len(resolved_lora_names)} LoRAs from phase_config", task_id=task_id)
-                        
-                        # DEBUG: Verify what we stored
-                        dprint_func(f"[LORA_RESOLVER_OUTPUT] Task {task_id}: Stored in generation_params['activated_loras']: {generation_params.get('activated_loras', [])[:2]}...")
+                        generation_params["activated_loras"] = wgp_lora["activated_loras"]
+                        generation_params["loras_multipliers"] = wgp_lora["loras_multipliers"]
+                        headless_logger.info(f"Resolved {len(wgp_lora['activated_loras'])} LoRAs from phase_config", task_id=task_id)
                 
                 if "_patch_config" in parsed_phase_config:
                     apply_phase_config_patch(parsed_phase_config, model_name, task_id)
