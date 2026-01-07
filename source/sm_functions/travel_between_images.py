@@ -2014,7 +2014,12 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                     if actual_frames and actual_frames > expected_len:
                         from source.video_utils import extract_frame_range_to_video as sm_extract_frame_range_to_video
 
-                        start_frame = max(0, int(actual_frames) - int(expected_len))
+                        # CRITICAL: For SVI continuation, we need to preserve the last 4 prefix frames
+                        # for stitching overlap. So we keep expected_len + SVI_STITCH_OVERLAP frames.
+                        # This ensures: last 4 prefix frames (overlap) + expected_len generated frames
+                        frames_to_keep = int(expected_len) + SVI_STITCH_OVERLAP
+                        start_frame = max(0, int(actual_frames) - frames_to_keep)
+                        dprint(f"[SVI_PREFIX_TRIM] Seg {segment_idx_completed}: Keeping last {frames_to_keep} frames (last {SVI_STITCH_OVERLAP} prefix + {expected_len} generated), start_frame={start_frame}")
                         trim_filename = f"seg{segment_idx_completed:02d}_trimmed_{timestamp_short}_{unique_suffix}{video_to_process_abs_path.suffix}"
                         trimmed_video_abs_path, _ = prepare_output_path(
                             task_id=wgp_task_id,
@@ -2033,7 +2038,7 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                             dprint_func=dprint
                         )
                         if trimmed_result and Path(trimmed_result).exists():
-                            print(f"[SVI_PREFIX_TRIM] Trimmed seg{segment_idx_completed:02d}: kept last {expected_len} frames (start_frame={start_frame}) -> {trimmed_result}")
+                            print(f"[SVI_PREFIX_TRIM] Trimmed seg{segment_idx_completed:02d}: kept last {frames_to_keep} frames ({SVI_STITCH_OVERLAP} overlap + {expected_len} generated, start_frame={start_frame}) -> {trimmed_result}")
                             debug_video_analysis(Path(trimmed_result), f"SVI_TRIMMED_Seg{segment_idx_completed}", wgp_task_id)
                             # Replace the working video with the trimmed one
                             try:
