@@ -467,8 +467,19 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             # CRITICAL: Pass predecessor video as video_source for SVI continuation
             # WGP uses prefix_video[:, -(5 + overlap_size):] to create overlapped_latents
             # This provides temporal continuity between segments (uses last ~9 frames)
+            # IMPORTANT: Must NOT set image_start when video_source is set, otherwise
+            # wgp.py prioritizes image_start and creates only a 1-frame prefix_video!
             if svi_predecessor_video_for_source:
                 generation_params["video_source"] = str(Path(svi_predecessor_video_for_source).resolve())
+                # Remove image_start so WGP uses video_source for multi-frame prefix_video
+                # The anchor image is provided via image_refs instead
+                if "image_start" in generation_params:
+                    del generation_params["image_start"]
+                    dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Removed image_start (anchor provided via image_refs)")
+                # CRITICAL: Set image_prompt_type to include "V" to enable video_source usage
+                # SVI2Pro allows "SVL" - we use "SV" for start+video continuation
+                generation_params["image_prompt_type"] = "SV"
+                dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Set image_prompt_type='SV' for video continuation")
                 dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Set video_source for SVI continuation: {svi_predecessor_video_for_source}")
             
             # SVI Pro sliding window overlap = 4 frames (standard for SVI)
