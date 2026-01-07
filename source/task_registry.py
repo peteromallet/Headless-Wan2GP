@@ -10,6 +10,7 @@ from pathlib import Path
 import time
 import traceback
 import json
+import uuid
 
 from source.logging_utils import headless_logger
 from source.worker_utils import make_task_dprint, log_ram_usage, cleanup_generated_files, dprint
@@ -221,13 +222,49 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                         dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Failed to download predecessor video: {e_dl}")
                         predecessor_video_path = None
                 
-                # SVI CRITICAL: Pass the predecessor VIDEO (not just 1 frame) to WGP
-                # WGP uses prefix_video[:, -(5 + overlap_size):] to create overlapped_latents
+                # SVI CRITICAL: Extract only the last ~9 frames (5 + overlap_size) from predecessor
+                # WGP uses prefix_video[:, -(5 + overlap_size):] to create overlapped_latents,
+                # but then prepends the ENTIRE prefix_video to output. By extracting only the
+                # last frames ourselves, we limit what gets prepended.
                 if predecessor_video_path and Path(predecessor_video_path).exists():
-                    svi_predecessor_video_for_source = predecessor_video_path
-                    dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Will pass predecessor video as video_source: {predecessor_video_path}")
+                    from source.video_utils import (
+                        get_video_frame_count_and_fps as sm_get_video_frame_count_and_fps,
+                        extract_frame_range_to_video as sm_extract_frame_range_to_video
+                    )
                     
-                    # Still extract last frame for image_start (anchor reference)
+                    # Get predecessor video frame count
+                    pred_frames, pred_fps = sm_get_video_frame_count_and_fps(predecessor_video_path)
+                    if pred_frames and pred_frames > 0:
+                        # Extract last 9 frames (5 + overlap_size=4) for SVI overlapped_latents
+                        overlap_size = 4  # SVI_STITCH_OVERLAP
+                        frames_needed = 5 + overlap_size  # 9 frames total
+                        start_frame = max(0, int(pred_frames) - frames_needed)
+                        
+                        trimmed_prefix_filename = f"svi_prefix_{segment_idx:02d}_last{frames_needed}frames_{uuid.uuid4().hex[:6]}.mp4"
+                        trimmed_prefix_path = segment_processing_dir / trimmed_prefix_filename
+                        
+                        trimmed_result = sm_extract_frame_range_to_video(
+                            source_video=predecessor_video_path,
+                            output_path=str(trimmed_prefix_path),
+                            start_frame=start_frame,
+                            end_frame=None,  # To end
+                            fps=float(pred_fps) if pred_fps and pred_fps > 0 else 16.0,
+                            dprint_func=dprint_func
+                        )
+                        
+                        if trimmed_result and Path(trimmed_result).exists():
+                            svi_predecessor_video_for_source = str(trimmed_result)
+                            dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Extracted last {frames_needed} frames from predecessor ({pred_frames} total) -> {trimmed_result}")
+                        else:
+                            # Fallback: use full video if extraction failed
+                            svi_predecessor_video_for_source = predecessor_video_path
+                            dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: WARNING - Failed to extract last frames, using full predecessor video")
+                    else:
+                        # Fallback: use full video if we can't get frame count
+                        svi_predecessor_video_for_source = predecessor_video_path
+                        dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Could not get predecessor frame count, using full video")
+                    
+                    # Still extract last frame for image_refs (anchor reference)
                     start_ref_path = sm_extract_last_frame_as_image(
                         predecessor_video_path, 
                         segment_processing_dir, 
