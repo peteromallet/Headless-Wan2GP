@@ -168,23 +168,104 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         top_level_images = segment_params.get("input_image_paths_resolved", [])
         orchestrator_images = full_orchestrator_payload.get("input_image_paths_resolved", [])
         
-        print(f"!!! DEBUG TASK REGISTRY !!! segment_idx: {segment_idx}, individual_images: {len(individual_images)}, top_level_images: {len(top_level_images)}, orchestrator_images: {len(orchestrator_images)}")
+        dprint_func(f"[IMG_RESOLVE] Task {task_id}: segment_idx={segment_idx}, individual_images={len(individual_images)}, top_level_images={len(top_level_images)}, orchestrator_images={len(orchestrator_images)}")
         
         is_continuing = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
+        use_svi = segment_params.get("use_svi", False) or full_orchestrator_payload.get("use_svi", False)
+        svi_predecessor_video_url = segment_params.get("svi_predecessor_video_url") or full_orchestrator_payload.get("svi_predecessor_video_url")
         
+        if use_svi:
+            dprint_func(f"[SVI_MODE] Task {task_id}: SVI mode enabled for segment {segment_idx}")
+        
+        # =============================================================================
+        # SVI MODE: Chain segments using last frame of predecessor as start image
+        # =============================================================================
+        if use_svi and (segment_idx > 0 or svi_predecessor_video_url):
+            dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Using SVI end frame chaining mode")
+            
+            predecessor_output_url = None
+            
+            # Priority 1: Manually specified predecessor video URL
+            if svi_predecessor_video_url:
+                dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Using manually specified predecessor video: {svi_predecessor_video_url}")
+                predecessor_output_url = svi_predecessor_video_url
+            # Priority 2: Fetch from dependency chain (for segment_idx > 0)
+            elif segment_idx > 0:
+                task_dependency_id, predecessor_output_url = db_ops.get_predecessor_output_via_edge_function(task_id)
+                if task_dependency_id and predecessor_output_url:
+                    dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Found predecessor {task_dependency_id} with output: {predecessor_output_url}")
+                else:
+                    dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: ERROR - Could not fetch predecessor output (dep_id={task_dependency_id})")
+            
+            if predecessor_output_url:
+                # Download predecessor video if it's a URL
+                predecessor_video_path = predecessor_output_url
+                if predecessor_output_url.startswith("http"):
+                    try:
+                        from source.common_utils import download_file as sm_download_file
+                        local_filename = Path(predecessor_output_url).name
+                        local_download_path = segment_processing_dir / f"svi_predecessor_{segment_idx:02d}_{local_filename}"
+                        
+                        if not local_download_path.exists():
+                            sm_download_file(predecessor_output_url, segment_processing_dir, local_download_path.name)
+                            dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Downloaded predecessor video to {local_download_path}")
+                        else:
+                            dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Predecessor video already exists at {local_download_path}")
+                        
+                        predecessor_video_path = str(local_download_path)
+                    except Exception as e_dl:
+                        dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Failed to download predecessor video: {e_dl}")
+                        predecessor_video_path = None
+                
+                # Extract last frame from predecessor video as start image
+                if predecessor_video_path and Path(predecessor_video_path).exists():
+                    start_ref_path = sm_extract_last_frame_as_image(
+                        predecessor_video_path, 
+                        segment_processing_dir, 
+                        task_id
+                    )
+                    dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: Extracted last frame as start_ref: {start_ref_path}")
+                else:
+                    dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: ERROR - Predecessor video not available at {predecessor_video_path}")
+            
+            # For SVI, end_ref is the target image from input array
+            target_end_idx = segment_idx + 1 if segment_idx > 0 else 1
+            if svi_predecessor_video_url and segment_idx == 0:
+                target_end_idx = 1 if len(orchestrator_images) > 1 else 0
+            
+            if len(orchestrator_images) > target_end_idx:
+                end_ref_path = orchestrator_images[target_end_idx]
+                dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: end_ref from input_images[{target_end_idx}]: {end_ref_path}")
+            elif len(orchestrator_images) > 0:
+                end_ref_path = orchestrator_images[-1]
+                dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: end_ref fallback to last input image: {end_ref_path}")
+        
+        # =============================================================================
+        # SVI MODE: First segment uses input images normally (no manual predecessor)
+        # =============================================================================
+        elif use_svi and segment_idx == 0:
+            dprint_func(f"[SVI_CHAINING] Seg {segment_idx}: First segment in SVI mode - using input images")
+            if len(orchestrator_images) > 0:
+                start_ref_path = orchestrator_images[0]
+            if len(orchestrator_images) > 1:
+                end_ref_path = orchestrator_images[1]
+        
+        # =============================================================================
+        # NON-SVI MODES: Original logic
+        # =============================================================================
         # Check individual_segment_params first (highest priority for standalone)
-        if individual_params.get("start_image_url") or individual_params.get("end_image_url"):
+        elif individual_params.get("start_image_url") or individual_params.get("end_image_url"):
             start_ref_path = individual_params.get("start_image_url")
             end_ref_path = individual_params.get("end_image_url")
-            print(f"!!! DEBUG TASK REGISTRY !!! Using individual_segment_params URLs: start={start_ref_path}")
+            dprint_func(f"[IMG_RESOLVE] Task {task_id}: Using individual_segment_params URLs: start={start_ref_path}")
         elif len(individual_images) >= 2:
             start_ref_path = individual_images[0]
             end_ref_path = individual_images[1]
-            print(f"!!! DEBUG TASK REGISTRY !!! Using individual_segment_params array: start={start_ref_path}")
+            dprint_func(f"[IMG_RESOLVE] Task {task_id}: Using individual_segment_params array: start={start_ref_path}")
         elif is_standalone and len(top_level_images) >= 2:
             start_ref_path = top_level_images[0]
             end_ref_path = top_level_images[1]
-            print(f"!!! DEBUG TASK REGISTRY !!! Using top-level images directly: start={start_ref_path}")
+            dprint_func(f"[IMG_RESOLVE] Task {task_id}: Using top-level images directly: start={start_ref_path}")
         elif is_continuing:
             if segment_idx == 0:
                 continued_video_path = full_orchestrator_payload.get("continue_from_video_resolved_path")
@@ -197,17 +278,17 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                     start_ref_path = orchestrator_images[segment_idx - 1]
                     end_ref_path = orchestrator_images[segment_idx]
         else:
-            print("!!! DEBUG TASK REGISTRY !!! Entering ELSE block (from scratch)")
+            dprint_func(f"[IMG_RESOLVE] Task {task_id}: Using orchestrator images (from scratch)")
             if len(orchestrator_images) > segment_idx:
                 start_ref_path = orchestrator_images[segment_idx]
             
             if len(orchestrator_images) > segment_idx + 1:
                 end_ref_path = orchestrator_images[segment_idx + 1]
-        print(f"!!! DEBUG TASK REGISTRY !!! start_ref_path after logic: {start_ref_path}")
+        dprint_func(f"[IMG_RESOLVE] Task {task_id}: start_ref_path after logic: {start_ref_path}")
         
         if start_ref_path:
             start_ref_path = sm_download_image_if_url(start_ref_path, segment_processing_dir, task_id, debug_mode=debug_enabled)
-            print(f"!!! DEBUG TASK REGISTRY !!! start_ref_path AFTER DOWNLOAD: {start_ref_path}")
+            dprint_func(f"[IMG_RESOLVE] Task {task_id}: start_ref_path AFTER DOWNLOAD: {start_ref_path}")
         if end_ref_path:
             end_ref_path = sm_download_image_if_url(end_ref_path, segment_processing_dir, task_id, debug_mode=debug_enabled)
 
@@ -259,7 +340,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         if end_ref_path: 
             generation_params["image_end"] = str(Path(end_ref_path).resolve())
             
-        print(f"!!! DEBUG TASK REGISTRY !!! generation_params image_start: {generation_params.get('image_start')}")
+        dprint_func(f"[IMG_RESOLVE] Task {task_id}: generation_params image_start: {generation_params.get('image_start')}")
         
         # ═══════════════════════════════════════════════════════════════════════════
         # Parameter extraction with precedence: individual > segment > orchestrator
@@ -356,6 +437,36 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         if guide_video_path: generation_params["video_guide"] = str(guide_video_path)
         if mask_video_path_for_wgp: generation_params["video_mask"] = str(mask_video_path_for_wgp.resolve())
         generation_params["video_prompt_type"] = video_prompt_type_str
+        
+        # =============================================================================
+        # SVI MODE: Add SVI-specific generation parameters
+        # =============================================================================
+        if use_svi:
+            dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Configuring WGP payload for SVI mode")
+            
+            # Enable SVI encoding mode
+            generation_params["svi2pro"] = True
+            
+            # SVI requires video_prompt_type="I" to enable image_refs passthrough
+            generation_params["video_prompt_type"] = "I"
+            
+            # Set image_refs to start image (anchor for SVI encoding)
+            if start_ref_path:
+                generation_params["image_refs_paths"] = [str(Path(start_ref_path).resolve())]
+                dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Set image_refs_paths to start image: {start_ref_path}")
+            
+            # Add SVI generation parameters from segment_params (set by orchestrator)
+            for key in ["guidance_phases", "num_inference_steps", "guidance_scale", "guidance2_scale",
+                       "flow_shift", "switch_threshold", "model_switch_phase", "sample_solver"]:
+                if key in segment_params and segment_params[key] is not None:
+                    generation_params[key] = segment_params[key]
+                    dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Set {key}={segment_params[key]}")
+            
+            # Merge SVI LoRAs with existing additional_loras
+            from source.sm_functions.travel_between_images import get_svi_additional_loras
+            existing_payload_loras = generation_params.get("additional_loras", {})
+            generation_params["additional_loras"] = get_svi_additional_loras(existing_payload_loras)
+            dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Merged SVI LoRAs into additional_loras")
         
         # === WGP SUBMISSION DIAGNOSTIC SUMMARY ===
         # Log key frame-related parameters before WGP submission
