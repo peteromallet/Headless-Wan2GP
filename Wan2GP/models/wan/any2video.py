@@ -660,31 +660,66 @@ class WanAny2V:
                     # SVI + END FRAME: Encode anchor and end separately, pad middle with ZEROS
                     # This matches original SVI approach (zeros in middle) but adds end frame support
                     # lat_y = [anchor_latent | zeros | zeros | ... | end_latent]
+                    print(f"\n{'='*60}")
+                    print(f"[SVI_ENDFRAME] Building lat_y with END FRAME support")
+                    print(f"{'='*60}")
                     
                     # Encode anchor image to latent
                     image_ref_latents = self.vae.encode([image_ref], VAE_tile_size)[0]
-                    print(f"[SVI_ENDFRAME] Anchor latent shape: {image_ref_latents.shape}")
+                    print(f"[SVI_ENDFRAME] 1. Anchor latent:")
+                    print(f"[SVI_ENDFRAME]    Shape: {image_ref_latents.shape}")
+                    print(f"[SVI_ENDFRAME]    Stats: mean={image_ref_latents.mean().item():.4f}, min={image_ref_latents.min().item():.4f}, max={image_ref_latents.max().item():.4f}")
                     
                     # Encode end image to latent
                     end_latents = self.vae.encode([img_end_frame], VAE_tile_size, any_end_frame=vae_end_frame_mode)[0]
-                    print(f"[SVI_ENDFRAME] End latent shape: {end_latents.shape}")
+                    print(f"[SVI_ENDFRAME] 2. End latent:")
+                    print(f"[SVI_ENDFRAME]    Shape: {end_latents.shape}")
+                    print(f"[SVI_ENDFRAME]    Stats: mean={end_latents.mean().item():.4f}, min={end_latents.min().item():.4f}, max={end_latents.max().item():.4f}")
                     
                     # Calculate padding length: total - anchor - end - overlap (if any)
+                    # Original SVI formula: pad_len = lat_frames + ref_images_count - image_ref_latents.shape[1] - overlap_len
+                    # Ours adds: - end_latents.shape[1]
                     overlap_len = overlapped_latents.shape[2] if overlapped_latents is not None else 0
-                    pad_len = lat_frames + ref_images_count - image_ref_latents.shape[1] - end_latents.shape[1] - overlap_len
-                    print(f"[SVI_ENDFRAME] lat_frames={lat_frames}, ref_images_count={ref_images_count}, pad_len={pad_len}, overlap_len={overlap_len}")
+                    anchor_len = image_ref_latents.shape[1]
+                    end_len = end_latents.shape[1]
+                    pad_len = lat_frames + ref_images_count - anchor_len - end_len - overlap_len
                     
-                    # Create zero padding for middle frames
+                    print(f"[SVI_ENDFRAME] 3. Padding calculation (LIKE ORIGINAL SVI):")
+                    print(f"[SVI_ENDFRAME]    lat_frames={lat_frames}, ref_images_count={ref_images_count}")
+                    print(f"[SVI_ENDFRAME]    anchor_len={anchor_len}, end_len={end_len}, overlap_len={overlap_len}")
+                    print(f"[SVI_ENDFRAME]    pad_len = {lat_frames} + {ref_images_count} - {anchor_len} - {end_len} - {overlap_len} = {pad_len}")
+                    
+                    # Create zero padding for middle frames (EXACTLY LIKE ORIGINAL)
+                    # Original: pad_latents = torch.zeros(image_ref_latents.shape[0], pad_len, lat_h, lat_w, device=..., dtype=...)
                     pad_latents = torch.zeros(image_ref_latents.shape[0], pad_len, lat_h, lat_w, 
                                               device=image_ref_latents.device, dtype=image_ref_latents.dtype)
+                    print(f"[SVI_ENDFRAME] 4. Zero padding (MATCHES ORIGINAL SVI torch.zeros):")
+                    print(f"[SVI_ENDFRAME]    Shape: {pad_latents.shape}")
+                    print(f"[SVI_ENDFRAME]    Stats: mean={pad_latents.mean().item():.4f}, min={pad_latents.min().item():.4f}, max={pad_latents.max().item():.4f}")
+                    print(f"[SVI_ENDFRAME]    All zeros? {(pad_latents == 0).all().item()}")
                     
                     # Build lat_y: [anchor | (overlap) | zeros | end]
+                    # Original SVI: lat_y = torch.concat([image_ref_latents, pad_latents], dim=1)
+                    # Ours adds end_latents at the end
                     if overlapped_latents is None:
                         lat_y = torch.concat([image_ref_latents, pad_latents, end_latents], dim=1).to(self.device)
+                        print(f"[SVI_ENDFRAME] 5. Final lat_y = [anchor({anchor_len}) | zeros({pad_len}) | end({end_len})]")
                     else:
                         lat_y = torch.concat([image_ref_latents, overlapped_latents.squeeze(0), pad_latents, end_latents], dim=1).to(self.device)
+                        print(f"[SVI_ENDFRAME] 5. Final lat_y = [anchor({anchor_len}) | overlap({overlap_len}) | zeros({pad_len}) | end({end_len})]")
                     
-                    print(f"[SVI_ENDFRAME] Final lat_y shape: {lat_y.shape}, expected frames: {lat_frames}")
+                    print(f"[SVI_ENDFRAME]    Total shape: {lat_y.shape}, expected: ({image_ref_latents.shape[0]}, {lat_frames + ref_images_count}, {lat_h}, {lat_w})")
+                    
+                    # Verify structure
+                    print(f"[SVI_ENDFRAME] 6. Verification:")
+                    print(f"[SVI_ENDFRAME]    lat_y[:, 0] (anchor): mean={lat_y[:, 0].mean().item():.4f}")
+                    print(f"[SVI_ENDFRAME]    lat_y[:, 1] (should be zero): mean={lat_y[:, 1].mean().item():.4f}, all_zero={(lat_y[:, 1] == 0).all().item()}")
+                    if pad_len > 1:
+                        mid_idx = anchor_len + pad_len // 2
+                        print(f"[SVI_ENDFRAME]    lat_y[:, {mid_idx}] (middle, should be zero): mean={lat_y[:, mid_idx].mean().item():.4f}, all_zero={(lat_y[:, mid_idx] == 0).all().item()}")
+                    print(f"[SVI_ENDFRAME]    lat_y[:, -1] (end): mean={lat_y[:, -1].mean().item():.4f}")
+                    print(f"{'='*60}\n")
+                    
                     image_ref_latents = end_latents = None
                 else:
                     # No end frame - use original SVI approach
