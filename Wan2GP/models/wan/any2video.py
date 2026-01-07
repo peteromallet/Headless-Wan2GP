@@ -623,9 +623,10 @@ class WanAny2V:
                 img_end_frame = image_end.unsqueeze(1).to(self.device)
             clip_image_start, clip_image_end = image_start, image_end
 
-            # SVI Pro encoding path - hybrid approach:
-            # - Start: SVI-style anchor encoding (separate, for stability)
-            # - End: I2V-style encoding (zeros + end_frame together, for proper end frame handling)
+            # SVI Pro encoding path - kijai-style approach:
+            # - With end frame: Fill middle with START image (not zeros), encode all together
+            # - Without end frame: Original SVI with anchor + zero padding
+            # This maintains VAE temporal coherence while mask controls what model generates
             if svi_pro:
                 print(f"[SVI_HYBRID] Entering SVI Pro encoding path")
                 print(f"[SVI_HYBRID] frame_num={frame_num}, control_pre_frames_count={control_pre_frames_count}, lat_frames={lat_frames}")
@@ -633,7 +634,7 @@ class WanAny2V:
                 use_extended_overlapped_latents = False
                 remaining_frames = frame_num - control_pre_frames_count
                 
-                # Get anchor/reference image
+                # Get anchor/reference image (used as both start and padding)
                 if input_ref_images is None or len(input_ref_images)==0:                        
                     if pre_video_frame is None: raise Exception("Missing Reference Image")
                     image_ref = pre_video_frame
@@ -649,47 +650,41 @@ class WanAny2V:
                 elif prefix_video is not None and prefix_video.shape[1] >= (5 + overlap_size):
                     overlapped_latents = self.vae.encode([torch.cat( [prefix_video[:, -(5 + overlap_size):]], dim=1)], VAE_tile_size)[0][:, -overlap_size//4: ].unsqueeze(0)
                     post_decode_pre_trim = 1
-                    
-                # SVI: Encode anchor image separately (for stability/reference)
-                image_ref_latents = self.vae.encode([image_ref], VAE_tile_size)[0]
-                print(f"[SVI_HYBRID] Anchor latent shape: {image_ref_latents.shape}")
                 
                 if any_end_frame:
-                    # HYBRID: SVI anchor start + I2V-style rest with end frame
-                    # Build [zeros | end_frame] as pixels and encode together
-                    # The end frame lands naturally at the end of the latent sequence
-                    remaining_pixel_frames = frame_num - control_pre_frames_count  # 80 for 81 total
-                    middle_frames_count = remaining_pixel_frames - 1  # 79 zeros
-                    print(f"[SVI_HYBRID] Building rest: {middle_frames_count} zeros + 1 end frame = {remaining_pixel_frames} pixel frames")
-                    rest_enc = torch.concat([
-                        torch.zeros((3, middle_frames_count, height, width), device=self.device, dtype=self.VAE_dtype),
-                        img_end_frame,
+                    # KIJAI-STYLE: Fill middle frames with START image (not zeros)
+                    # This maintains VAE temporal coherence, mask controls generation
+                    # [start | start_repeated | end] encoded together
+                    middle_frames_count = frame_num - control_pre_frames_count - 1  # 79 for 81 total
+                    
+                    # Expand anchor to fill middle frames (like kijai's empty_frame_pad_image)
+                    anchor_expanded = image_ref.expand(-1, middle_frames_count, -1, -1)  # Repeat anchor for middle
+                    
+                    print(f"[SVI_HYBRID] Building: start(1) + anchor_padded({middle_frames_count}) + end(1) = {frame_num} frames")
+                    enc = torch.concat([
+                        control_video,       # Start frame (from image_start)
+                        anchor_expanded,     # Middle frames filled with anchor (not zeros!)
+                        img_end_frame,       # End frame
                     ], dim=1).to(self.device)
-                    print(f"[SVI_HYBRID] Rest pixel shape: {rest_enc.shape}")
+                    print(f"[SVI_HYBRID] Pixel sequence shape: {enc.shape}")
                     
-                    # Encode rest: 80 frames → (80-1)//4 + 1 = 20 latents
-                    # With anchor's 1 latent = 21 total (correct for 81 frames)
-                    rest_latents = self.vae.encode([rest_enc], VAE_tile_size)[0]
-                    print(f"[SVI_HYBRID] Rest latent shape: {rest_latents.shape}")
-                    expected_rest_latents = (remaining_pixel_frames - 1) // 4 + 1
-                    print(f"[SVI_HYBRID] Expected rest latents: {expected_rest_latents}, actual: {rest_latents.shape[1]}")
-                    
-                    # Combine: [SVI anchor | rest with end frame at end]
-                    if overlapped_latents is None:
-                        lat_y = torch.concat([image_ref_latents, rest_latents], dim=1).to(self.device)
-                    else:
-                        lat_y = torch.concat([image_ref_latents, overlapped_latents.squeeze(0), rest_latents], dim=1).to(self.device)
-                    print(f"[SVI_HYBRID] Final lat_y shape: {lat_y.shape}, expected time dim: {lat_frames}")
-                    rest_latents = None
+                    # Encode everything together - maintains VAE temporal coherence
+                    lat_y = self.vae.encode([enc], VAE_tile_size)[0]
+                    print(f"[SVI_HYBRID] Encoded lat_y shape: {lat_y.shape}, expected: {lat_frames}")
+                    enc = None
                 else:
-                    # No end frame - use original SVI approach with zero padding
+                    # No end frame - use original SVI approach
+                    # Encode anchor separately, then pad with zeros in latent space
+                    image_ref_latents = self.vae.encode([image_ref], VAE_tile_size)[0]
+                    print(f"[SVI_HYBRID] Anchor latent shape: {image_ref_latents.shape}")
+                    
                     pad_len = lat_frames + ref_images_count - image_ref_latents.shape[1] - (overlapped_latents.shape[2] if overlapped_latents is not None else 0)
                     pad_latents = torch.zeros(image_ref_latents.shape[0], pad_len, lat_h, lat_w, device=image_ref_latents.device, dtype=image_ref_latents.dtype)
                     if overlapped_latents is None:
                         lat_y = torch.concat([image_ref_latents, pad_latents], dim=1).to(self.device)
                     else:
                         lat_y = torch.concat([image_ref_latents, overlapped_latents.squeeze(0), pad_latents], dim=1).to(self.device)
-                image_ref_latents = None
+                    image_ref_latents = None
                 padded_frames = None
                 
             # Non-SVI paths (original logic)
