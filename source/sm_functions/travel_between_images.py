@@ -59,6 +59,51 @@ from ..video_utils import (
 )
 # Legacy wgp_utils import removed - now using task_queue system exclusively
 
+# =============================================================================
+# SVI (Stable Video Infinity) Configuration for End Frame Chaining
+# =============================================================================
+# SVI LoRAs with phase multipliers (format: "phase1_mult;phase2_mult")
+# These LoRAs enable SVI encoding which uses anchor images for consistent long-form generation
+SVI_LORAS = {
+    # SVI Pro LoRAs (high noise for phase 1, low noise for phase 2)
+    "https://huggingface.co/DeepBeepMeep/Wan2.2/resolve/main/SVI_Wan2.2-I2V-A14B_high_noise_lora_v2.0_pro.safetensors": "1;0",
+    "https://huggingface.co/DeepBeepMeep/Wan2.2/resolve/main/SVI_Wan2.2-I2V-A14B_low_noise_lora_v2.0_pro.safetensors": "0;1",
+    # LightX2V acceleration LoRAs
+    "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors": "1.2;0",
+    "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors": "0;1",
+}
+
+# SVI-specific generation parameters
+SVI_DEFAULT_PARAMS = {
+    "guidance_phases": 2,           # 2-phase setup for SVI LoRAs
+    "num_inference_steps": 6,       # Lightning steps
+    "guidance_scale": 1,            # Low guidance for Lightning
+    "guidance2_scale": 1,
+    "flow_shift": 5,
+    "switch_threshold": 883,        # Phase switch threshold
+    "model_switch_phase": 1,        # Switch model at phase 1
+    "sample_solver": "euler",
+}
+
+# SVI stitch overlap - smaller than VACE since end/start frames should match
+SVI_STITCH_OVERLAP = 4  # frames
+
+
+def get_svi_additional_loras(existing_loras: dict = None) -> dict:
+    """
+    Get SVI LoRAs merged with any existing additional_loras.
+    
+    Args:
+        existing_loras: Existing additional_loras dict to merge with
+        
+    Returns:
+        Merged dict of URL -> phase_multiplier
+    """
+    merged = dict(existing_loras) if existing_loras else {}
+    merged.update(SVI_LORAS)
+    return merged
+
+
 # Add debugging helper function
 def debug_video_analysis(video_path: str | Path, label: str, task_id: str = "unknown") -> dict:
     """Analyze a video file and return comprehensive debug info"""
@@ -205,10 +250,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         existing_stitch = existing_child_tasks['stitch']
         
         expected_segments = orchestrator_payload.get("num_new_segments_to_generate", 0)
-        # Some runs intentionally do NOT create a stitch task (e.g. independent_segments=True).
-        # In that case, the orchestrator should be considered complete once all segments complete.
+        # Some runs intentionally do NOT create a stitch task (e.g. independent_segments=True, or i2v non-SVI).
+        # In those cases, the orchestrator should be considered complete once all segments complete.
+        travel_mode = orchestrator_payload.get("model_type", "vace")
+        use_svi = bool(orchestrator_payload.get("use_svi", False))
         independent_segments = bool(orchestrator_payload.get("independent_segments", False))
-        required_stitch_count = 0 if independent_segments else 1
+        should_create_stitch = bool(
+            use_svi
+            or (travel_mode == "vace" and not independent_segments)
+        )
+        required_stitch_count = 1 if should_create_stitch else 0
         
         if existing_segments or existing_stitch:
             dprint(f"[IDEMPOTENCY] Found existing child tasks: {len(existing_segments)} segments, {len(existing_stitch)} stitch tasks")
@@ -1471,10 +1522,18 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             # Get travel mode for dependency logic
             travel_mode = orchestrator_payload.get("model_type", "vace")
             independent_segments = orchestrator_payload.get("independent_segments", False)
+            use_svi = orchestrator_payload.get("use_svi", False)
             
             # Determine dependency strictly from previously resolved actual DB IDs
-            # I2V MODE: Independent segments (no dependency on previous task)
-            if travel_mode == "i2v":
+            # SVI MODE: Sequential segments (each depends on previous for end frame chaining)
+            # I2V MODE (non-SVI): Independent segments (no dependency on previous task)
+            # VACE MODE: Sequential by default, independent if explicitly set
+            
+            if use_svi:
+                # SVI mode: ALWAYS sequential - each segment needs previous output for start frame
+                previous_segment_task_id = actual_segment_db_id_by_index.get(idx - 1) if idx > 0 else None
+                dprint(f"[DEBUG_DEPENDENCY_CHAIN] Segment {idx} (SVI mode): Sequential dependency on previous segment: {previous_segment_task_id}")
+            elif travel_mode == "i2v":
                 previous_segment_task_id = None
                 dprint(f"[DEBUG_DEPENDENCY_CHAIN] Segment {idx} (i2v mode): No dependency on previous segment")
             elif travel_mode == "vace" and independent_segments:
@@ -1484,8 +1543,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 # VACE MODE (Sequential): Dependent on previous segment
                 previous_segment_task_id = actual_segment_db_id_by_index.get(idx - 1) if idx > 0 else None
 
-                # Defensive fallback: if we somehow don't have the previous segment's DB ID yet,
-                # try to resolve it from existing_segment_task_ids, and then from DB.
+            # Defensive fallback for sequential modes (SVI or VACE non-independent)
+            if (use_svi or (travel_mode == "vace" and not independent_segments)):
                 if idx > 0 and not previous_segment_task_id:
                     fallback_prev = existing_segment_task_ids.get(idx - 1)
                     if fallback_prev:
@@ -1595,18 +1654,21 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 if segment_negative_prompt:
                     dprint(f"[PROMPT_FALLBACK] Segment {idx}: Using orchestrator negative_prompt (segment negative_prompt was empty)")
 
-            # Calculate segment_frames_target with context frames for segments after the first
-            # Context frames are ONLY needed for sequential (non-independent) segments that continue
-            # from the previous segment's video. Independent segments generate from scratch using keyframes.
+            # Calculate segment_frames_target with context frames for segments after the first.
+            # Context frames are ONLY needed for sequential VACE segments that continue from the
+            # previous segment's VIDEO. For SVI chaining, we continue from the previous segment's
+            # LAST FRAME as an image, so we should NOT inflate the frame count with overlap here.
             base_segment_frames = expanded_segment_frames[idx]
-            if idx > 0 and current_frame_overlap_from_previous > 0 and not independent_segments:
+            if idx > 0 and current_frame_overlap_from_previous > 0 and (not independent_segments) and (not use_svi):
                 # Sequential mode: add context frames for continuity with previous segment
                 segment_frames_target_with_context = base_segment_frames + current_frame_overlap_from_previous
                 dprint(f"[CONTEXT_FRAMES] Segment {idx}: base={base_segment_frames}, context={current_frame_overlap_from_previous}, total={segment_frames_target_with_context}")
             else:
                 # First segment OR independent mode: no context frames needed
                 segment_frames_target_with_context = base_segment_frames
-                if independent_segments and idx > 0:
+                if use_svi and idx > 0:
+                    dprint(f"[CONTEXT_FRAMES] Segment {idx}: base={base_segment_frames}, no context (SVI mode)")
+                elif independent_segments and idx > 0:
                     dprint(f"[CONTEXT_FRAMES] Segment {idx}: base={base_segment_frames}, no context (independent mode)")
                 else:
                     dprint(f"[CONTEXT_FRAMES] Segment {idx}: base={base_segment_frames}, no context needed")
@@ -1674,14 +1736,50 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 # Original and trimmed structure videos for reference
                 "structure_original_video_url": orchestrator_payload.get("structure_original_video_url"),
                 "structure_trimmed_video_url": orchestrator_payload.get("structure_trimmed_video_url"),
+                
+                # SVI (Stable Video Infinity) end frame chaining
+                "use_svi": use_svi,
             }
             
             # Add extracted parameters at top level for queue processing
             segment_payload.update(extracted_params)
             
+            # SVI-specific configuration: merge SVI LoRAs and set parameters
+            if use_svi:
+                dprint(f"[SVI_CONFIG] Segment {idx}: Configuring SVI mode")
+                
+                # Merge SVI LoRAs with any existing additional_loras
+                existing_loras = segment_payload.get("additional_loras", {})
+                segment_payload["additional_loras"] = get_svi_additional_loras(existing_loras)
+                dprint(f"[SVI_CONFIG] Segment {idx}: Added SVI LoRAs to additional_loras")
+                
+                # Force SVI generation parameters (SVI LoRAs are 2-phase and expect these defaults)
+                for key, value in SVI_DEFAULT_PARAMS.items():
+                    prev_val = segment_payload.get(key, None)
+                    if prev_val != value:
+                        segment_payload[key] = value
+                        dprint(f"[SVI_CONFIG] Segment {idx}: Set {key}={value} (was {prev_val})")
+                
+                # SVI requires svi2pro=True for encoding mode
+                segment_payload["svi2pro"] = True
+                
+                # SVI requires video_prompt_type="I" to enable image_refs
+                segment_payload["video_prompt_type"] = "I"
+                
+                # For SVI, use smaller overlap since end/start frames should mostly match
+                # - overlap_with_next applies to current segment when stitching into the next one
+                # - overlap_from_previous applies to the NEXT segment when stitching back into this one
+                segment_payload["frame_overlap_with_next"] = SVI_STITCH_OVERLAP if idx < (num_segments - 1) else 0
+                segment_payload["frame_overlap_from_previous"] = SVI_STITCH_OVERLAP if idx > 0 else 0
+                dprint(
+                    f"[SVI_CONFIG] Segment {idx}: "
+                    f"frame_overlap_from_previous={segment_payload['frame_overlap_from_previous']} "
+                    f"frame_overlap_with_next={segment_payload['frame_overlap_with_next']} (SVI mode)"
+                )
+            
             # Log any additional_loras found for debugging
-            if extracted_params.get("additional_loras"):
-                dprint(f"Orchestrator: Added additional_loras to segment {idx} payload: {extracted_params['additional_loras']}")
+            if segment_payload.get("additional_loras"):
+                dprint(f"Orchestrator: Added additional_loras to segment {idx} payload: {segment_payload['additional_loras']}")
 
             # [DEEP_DEBUG] Log segment payload values AFTER creation
             dprint(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: SEGMENT {idx} PAYLOAD CREATED")
@@ -1708,65 +1806,75 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 print(f"[WARN] ⚠️  Segment {idx} dependency verification failed (likely replication lag): {e_ver}")
         
         # After loop, enqueue the stitch task (check for idempotency)
-        # SKIP if independent segments or I2V mode
-        # TEMPORARILY DISABLED: Commented out stitch task creation to prevent excess generation
-        # if independent_segments or travel_mode == "i2v":
-        #      dprint(f"[STITCHING] Skipping stitch task creation for independent/i2v mode")
-        #      stitch_created = 0
-        # else:
-        #      stitch_created = 0
-        #      if not stitch_already_exists:
-        #         final_stitched_video_name = f"travel_final_stitched_{run_id}.mp4"
-        #         # Stitcher saves its final primary output directly under main_output_dir (e.g., ./steerable_motion_output/)
-        #         # NOT under current_run_output_dir (which is .../travel_run_XYZ/)
-        #         # The main_output_dir_base is the one passed to worker.py (e.g. server's ./outputs or steerable_motion's ./steerable_motion_output)
-        #         # The orchestrator_payload["main_output_dir_for_run"] is this main_output_dir_base.
-        #         final_stitched_output_path = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))) / final_stitched_video_name
-
-        #         stitch_payload = {
-        #             "orchestrator_task_id_ref": orchestrator_task_id_str,
-        #             "orchestrator_run_id": run_id,
-        #             "project_id": orchestrator_project_id, # Added project_id
-        #             "num_total_segments_generated": num_segments,
-        #             "current_run_base_output_dir": str(current_run_output_dir.resolve()), # Stitcher needs this to find segment outputs
-        #             "frame_overlap_settings_expanded": expanded_frame_overlap,
-        #             "crossfade_sharp_amt": orchestrator_payload.get("crossfade_sharp_amt", 0.3),
-        #             "parsed_resolution_wh": orchestrator_payload["parsed_resolution_wh"],
-        #             "fps_final_video": orchestrator_payload.get("fps_helpers", 16),
-        #             "upscale_factor": orchestrator_payload.get("upscale_factor", 0.0),
-        #             "upscale_model_name": orchestrator_payload.get("upscale_model_name"),
-        #             "seed_for_upscale": orchestrator_payload.get("seed_base", 12345) + 5000, # Consistent seed for upscale
-        #             "debug_mode_enabled": orchestrator_payload.get("debug_mode_enabled", False),
-        #             "skip_cleanup_enabled": orchestrator_payload.get("skip_cleanup_enabled", False),
-        #             "initial_continued_video_path": orchestrator_payload.get("continue_from_video_resolved_path"),
-        #             "final_stitched_output_path": str(final_stitched_output_path.resolve()),
-        #              # For upscale polling, if stitcher enqueues an upscale sub-task
-        #             "poll_interval_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_interval", 15),
-        #             "poll_timeout_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_timeout", 1800),
-        #             "full_orchestrator_payload": orchestrator_payload, # Added this line
-        #         }
-        #         
-        #         # Stitch should depend on the last segment's actual DB row ID
-        #         previous_segment_task_id = actual_segment_db_id_by_index.get(num_segments - 1)
-        #         dprint(f"[DEBUG_DEPENDENCY_CHAIN] Creating stitch task, depends_on (last seg idx {num_segments-1}): {previous_segment_task_id}")
-        #         actual_stitch_db_row_id = db_ops.add_task_to_db(
-        #             task_payload=stitch_payload, 
-        #             task_type_str="travel_stitch",
-        #             dependant_on=previous_segment_task_id
-        #         )
-        #         dprint(f"[DEBUG_DEPENDENCY_CHAIN] Stitch task created with actual DB ID: {actual_stitch_db_row_id}")
-        #         # Post-insert verification of dependency from DB
-        #         try:
-        #             dep_saved = db_ops.get_task_dependency(actual_stitch_db_row_id)
-        #             dprint(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Stitch saved dependant_on={dep_saved} (expected {previous_segment_task_id})")
-        #         except Exception as e_ver2:
-        #             dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for stitch ({actual_stitch_db_row_id}): {e_ver2}")
-        #         stitch_created = 1
-        #      else:
-        #         dprint(f"[IDEMPOTENCY] Skipping stitch task creation - already exists with ID {existing_stitch_task_id}")
-        
-        # Stitch task creation disabled - always set to 0
+        # SKIP if independent segments or non-SVI I2V mode
+        # SVI mode REQUIRES stitching since segments are chained sequentially
         stitch_created = 0
+        
+        # Determine if we should create a stitch task
+        should_create_stitch = False
+        if use_svi:
+            # SVI mode: Always create stitch task (segments are sequential with end frame chaining)
+            should_create_stitch = True
+            # For SVI, use the small overlap value
+            stitch_overlap_settings = [SVI_STITCH_OVERLAP] * (num_segments - 1) if num_segments > 1 else []
+            dprint(f"[STITCHING] SVI mode: Creating stitch task with overlap={SVI_STITCH_OVERLAP}")
+        elif travel_mode == "vace" and not independent_segments:
+            # VACE sequential mode: Create stitch task with configured overlaps
+            should_create_stitch = True
+            stitch_overlap_settings = expanded_frame_overlap
+            dprint(f"[STITCHING] VACE sequential mode: Creating stitch task with overlaps={expanded_frame_overlap}")
+        else:
+            dprint(f"[STITCHING] Skipping stitch task creation (mode={travel_mode}, independent={independent_segments}, use_svi={use_svi})")
+        
+        if should_create_stitch and not stitch_already_exists:
+            final_stitched_video_name = f"travel_final_stitched_{run_id}.mp4"
+            # Stitcher saves its final primary output directly under main_output_dir (e.g., ./steerable_motion_output/)
+            # NOT under current_run_output_dir (which is .../travel_run_XYZ/)
+            final_stitched_output_path = Path(orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))) / final_stitched_video_name
+
+            stitch_payload = {
+                "orchestrator_task_id_ref": orchestrator_task_id_str,
+                "orchestrator_run_id": run_id,
+                "project_id": orchestrator_project_id,
+                "num_total_segments_generated": num_segments,
+                "current_run_base_output_dir": str(current_run_output_dir.resolve()),
+                "frame_overlap_settings_expanded": stitch_overlap_settings,  # Use mode-specific overlap
+                "crossfade_sharp_amt": orchestrator_payload.get("crossfade_sharp_amt", 0.3),
+                "parsed_resolution_wh": orchestrator_payload["parsed_resolution_wh"],
+                "fps_final_video": orchestrator_payload.get("fps_helpers", 16),
+                "upscale_factor": orchestrator_payload.get("upscale_factor", 0.0),
+                "upscale_model_name": orchestrator_payload.get("upscale_model_name"),
+                "seed_for_upscale": orchestrator_payload.get("seed_base", 12345) + 5000,
+                "debug_mode_enabled": orchestrator_payload.get("debug_mode_enabled", False),
+                "skip_cleanup_enabled": orchestrator_payload.get("skip_cleanup_enabled", False),
+                "initial_continued_video_path": orchestrator_payload.get("continue_from_video_resolved_path"),
+                "final_stitched_output_path": str(final_stitched_output_path.resolve()),
+                "poll_interval_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_interval", 15),
+                "poll_timeout_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_timeout", 1800),
+                "full_orchestrator_payload": orchestrator_payload,
+                "use_svi": use_svi,  # Pass SVI flag to stitch task
+            }
+            
+            # Stitch should depend on the last segment's actual DB row ID
+            last_segment_task_id = actual_segment_db_id_by_index.get(num_segments - 1)
+            dprint(f"[DEBUG_DEPENDENCY_CHAIN] Creating stitch task, depends_on (last seg idx {num_segments-1}): {last_segment_task_id}")
+            actual_stitch_db_row_id = db_ops.add_task_to_db(
+                task_payload=stitch_payload, 
+                task_type_str="travel_stitch",
+                dependant_on=last_segment_task_id
+            )
+            dprint(f"[DEBUG_DEPENDENCY_CHAIN] Stitch task created with actual DB ID: {actual_stitch_db_row_id}")
+            
+            # Post-insert verification of dependency from DB
+            try:
+                dep_saved = db_ops.get_task_dependency(actual_stitch_db_row_id)
+                dprint(f"[DEBUG_DEPENDENCY_CHAIN][VERIFY] Stitch saved dependant_on={dep_saved} (expected {last_segment_task_id})")
+                print(f"[ORCHESTRATOR] ✅ Stitch task created: task_id={actual_stitch_db_row_id}")
+            except Exception as e_ver2:
+                dprint(f"[WARN][DEBUG_DEPENDENCY_CHAIN] Could not verify dependant_on for stitch ({actual_stitch_db_row_id}): {e_ver2}")
+            stitch_created = 1
+        elif stitch_already_exists:
+            dprint(f"[IDEMPOTENCY] Skipping stitch task creation - already exists with ID {existing_stitch_task_id}")
 
         generation_success = True
         if segments_created > 0:
@@ -1881,7 +1989,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
         dprint(f"Segment {segment_idx} (Task {segment_task_id_str}): Processing in {segment_processing_dir.resolve()} | image_download_dir={segment_image_download_dir}")
 
         # --- Reference Image Determination (Start/End) ---
-        # Used for both Color Matching (VACE) and I2V input generation
+        # Used for both Color Matching (VACE) and I2V/SVI input generation
         start_ref_path, end_ref_path = None, None
         
         input_images_resolved = full_orchestrator_payload.get("input_image_paths_resolved", [])
@@ -1890,8 +1998,93 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
              print(f"[DEBUG_REF_PATH] First image: {input_images_resolved[0]}")
 
         is_continuing = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
+        use_svi = segment_params.get("use_svi", False)
         
-        if is_continuing:
+        # Check for manually specified predecessor video URL (for SVI mode)
+        # This allows continuing from any video without relying on the dependency chain
+        svi_predecessor_video_url = segment_params.get("svi_predecessor_video_url") or full_orchestrator_payload.get("svi_predecessor_video_url")
+        
+        # =============================================================================
+        # SVI MODE: Chain segments using last frame of predecessor as start image
+        # =============================================================================
+        if use_svi and (segment_idx > 0 or svi_predecessor_video_url):
+            dprint(f"[SVI_CHAINING] Seg {segment_idx}: Using SVI end frame chaining mode")
+            
+            predecessor_output_url = None
+            
+            # Priority 1: Manually specified predecessor video URL
+            if svi_predecessor_video_url:
+                dprint(f"[SVI_CHAINING] Seg {segment_idx}: Using manually specified predecessor video: {svi_predecessor_video_url}")
+                predecessor_output_url = svi_predecessor_video_url
+            # Priority 2: Fetch from dependency chain (for segment_idx > 0)
+            elif segment_idx > 0:
+                task_dependency_id, predecessor_output_url = db_ops.get_predecessor_output_via_edge_function(segment_task_id_str)
+                if task_dependency_id and predecessor_output_url:
+                    dprint(f"[SVI_CHAINING] Seg {segment_idx}: Found predecessor {task_dependency_id} with output: {predecessor_output_url}")
+                else:
+                    dprint(f"[SVI_CHAINING] Seg {segment_idx}: ERROR - Could not fetch predecessor output (dep_id={task_dependency_id})")
+            
+            if predecessor_output_url:
+                # Download predecessor video if it's a URL
+                predecessor_video_path = predecessor_output_url
+                if predecessor_output_url.startswith("http"):
+                    try:
+                        from ..common_utils import download_file as sm_download_file
+                        local_filename = Path(predecessor_output_url).name
+                        local_download_path = segment_processing_dir / f"svi_predecessor_{segment_idx:02d}_{local_filename}"
+                        
+                        if not local_download_path.exists():
+                            sm_download_file(predecessor_output_url, segment_processing_dir, local_download_path.name)
+                            dprint(f"[SVI_CHAINING] Seg {segment_idx}: Downloaded predecessor video to {local_download_path}")
+                        else:
+                            dprint(f"[SVI_CHAINING] Seg {segment_idx}: Predecessor video already exists at {local_download_path}")
+                        
+                        predecessor_video_path = str(local_download_path)
+                    except Exception as e_dl:
+                        dprint(f"[SVI_CHAINING] Seg {segment_idx}: Failed to download predecessor video: {e_dl}")
+                        predecessor_video_path = None
+                
+                # Extract last frame from predecessor video as start image
+                if predecessor_video_path and Path(predecessor_video_path).exists():
+                    start_ref_path = sm_extract_last_frame_as_image(
+                        predecessor_video_path, 
+                        segment_processing_dir, 
+                        segment_task_id_str
+                    )
+                    dprint(f"[SVI_CHAINING] Seg {segment_idx}: Extracted last frame as start_ref: {start_ref_path}")
+                else:
+                    dprint(f"[SVI_CHAINING] Seg {segment_idx}: ERROR - Predecessor video not available at {predecessor_video_path}")
+            
+            # For SVI, end_ref is the target image from input array
+            # When using manual predecessor on segment 0, end_ref should be input_images[1]
+            # For segment N, end_ref should be input_images[N+1]
+            target_end_idx = segment_idx + 1 if segment_idx > 0 else 1
+            if svi_predecessor_video_url and segment_idx == 0:
+                # Manual predecessor on first segment: end is input_images[1] (or [0] if only one image)
+                target_end_idx = 1 if len(input_images_resolved) > 1 else 0
+            
+            if len(input_images_resolved) > target_end_idx:
+                end_ref_path = input_images_resolved[target_end_idx]
+                dprint(f"[SVI_CHAINING] Seg {segment_idx}: end_ref from input_images[{target_end_idx}]: {end_ref_path}")
+            elif len(input_images_resolved) > 0:
+                # Fallback: use the last available image
+                end_ref_path = input_images_resolved[-1]
+                dprint(f"[SVI_CHAINING] Seg {segment_idx}: end_ref fallback to last input image: {end_ref_path}")
+        
+        # =============================================================================
+        # SVI MODE: First segment uses input images normally (no manual predecessor)
+        # =============================================================================
+        elif use_svi and segment_idx == 0:
+            dprint(f"[SVI_CHAINING] Seg {segment_idx}: First segment in SVI mode - using input images")
+            if len(input_images_resolved) > 0:
+                start_ref_path = input_images_resolved[0]
+            if len(input_images_resolved) > 1:
+                end_ref_path = input_images_resolved[1]
+        
+        # =============================================================================
+        # NON-SVI MODES: Original logic for VACE and regular I2V
+        # =============================================================================
+        elif is_continuing:
             if segment_idx == 0:
                 continued_video_path = full_orchestrator_payload.get("continue_from_video_resolved_path")
                 if continued_video_path and Path(continued_video_path).exists():
@@ -1903,7 +2096,7 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
                 if len(input_images_resolved) > segment_idx:
                     start_ref_path = input_images_resolved[segment_idx - 1]
                     end_ref_path = input_images_resolved[segment_idx]
-        else: # From scratch
+        else: # From scratch (non-SVI)
             if len(input_images_resolved) > segment_idx:
                 start_ref_path = input_images_resolved[segment_idx]
             
@@ -2360,6 +2553,35 @@ def _handle_travel_segment_task(task_params_from_db: dict, main_output_dir_base:
             # Pass additional_loras in dict format - HeadlessTaskQueue handles conversion centrally
             wgp_payload["additional_loras"] = additional_loras
             dprint(f"Seg {segment_idx}: Added {len(additional_loras)} additional LoRAs to payload")
+
+        # =============================================================================
+        # SVI MODE: Add SVI-specific generation parameters
+        # =============================================================================
+        if use_svi:
+            dprint(f"[SVI_PAYLOAD] Seg {segment_idx}: Configuring WGP payload for SVI mode")
+            
+            # Enable SVI encoding mode
+            wgp_payload["svi2pro"] = True
+            
+            # SVI requires video_prompt_type="I" to enable image_refs passthrough
+            wgp_payload["video_prompt_type"] = "I"
+            
+            # Set image_refs to start image (anchor for SVI encoding)
+            if start_ref_path:
+                wgp_payload["image_refs_paths"] = [str(Path(start_ref_path).resolve())]
+                dprint(f"[SVI_PAYLOAD] Seg {segment_idx}: Set image_refs to start image: {start_ref_path}")
+            
+            # Add SVI generation parameters from segment_params (set by orchestrator)
+            for key in ["guidance_phases", "num_inference_steps", "guidance_scale", "guidance2_scale",
+                       "flow_shift", "switch_threshold", "model_switch_phase", "sample_solver"]:
+                if key in segment_params and segment_params[key] is not None:
+                    wgp_payload[key] = segment_params[key]
+                    dprint(f"[SVI_PAYLOAD] Seg {segment_idx}: Set {key}={segment_params[key]}")
+            
+            # Merge SVI LoRAs with payload's additional_loras
+            existing_payload_loras = wgp_payload.get("additional_loras", {})
+            wgp_payload["additional_loras"] = get_svi_additional_loras(existing_payload_loras)
+            dprint(f"[SVI_PAYLOAD] Seg {segment_idx}: Added SVI LoRAs to payload")
 
         if full_orchestrator_payload.get("params_json_str_override"):
             try:
