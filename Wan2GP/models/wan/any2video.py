@@ -623,7 +623,9 @@ class WanAny2V:
                 img_end_frame = image_end.unsqueeze(1).to(self.device)
             clip_image_start, clip_image_end = image_start, image_end
 
-            # SVI Pro encoding path - supports both with and without end frames
+            # SVI Pro encoding path - hybrid approach:
+            # - Start: SVI-style anchor encoding (separate, for stability)
+            # - End: I2V-style encoding (zeros + end_frame together, for proper end frame handling)
             if svi_pro:
                 use_extended_overlapped_latents = False
                 remaining_frames = frame_num - control_pre_frames_count
@@ -642,24 +644,34 @@ class WanAny2V:
                     overlapped_latents = self.vae.encode([torch.cat( [prefix_video[:, -(5 + overlap_size):]], dim=1)], VAE_tile_size)[0][:, -overlap_size//4: ].unsqueeze(0)
                     post_decode_pre_trim = 1
                     
-                # Encode anchor image
+                # SVI: Encode anchor image separately (for stability/reference)
                 image_ref_latents = self.vae.encode([image_ref], VAE_tile_size)[0]
                 
-                # Calculate padding length, accounting for end frame if present
-                end_frame_latent_count = 1 if any_end_frame else 0
-                pad_len = lat_frames + ref_images_count - image_ref_latents.shape[1] - (overlapped_latents.shape[2] if overlapped_latents is not None else 0) - end_frame_latent_count
-                pad_latents = torch.zeros(image_ref_latents.shape[0], pad_len, lat_h, lat_w, device=image_ref_latents.device, dtype=image_ref_latents.dtype)
-                
-                # Build latent structure: [anchor | overlap | padding | (end_frame)]
                 if any_end_frame:
-                    # Encode end frame
-                    end_frame_latents = self.vae.encode([img_end_frame], VAE_tile_size)[0]
+                    # HYBRID: SVI anchor start + I2V-style rest with end frame
+                    # Build [zeros | end_frame] as pixels and encode together
+                    # The end frame lands naturally at the end of the latent sequence
+                    remaining_pixel_frames = frame_num - control_pre_frames_count  # 80 for 81 total
+                    middle_frames_count = remaining_pixel_frames - 1  # 79 zeros
+                    rest_enc = torch.concat([
+                        torch.zeros((3, middle_frames_count, height, width), device=self.device, dtype=self.VAE_dtype),
+                        img_end_frame,
+                    ], dim=1).to(self.device)
+                    
+                    # Encode rest: 80 frames → (80-1)//4 + 1 = 20 latents
+                    # With anchor's 1 latent = 21 total (correct for 81 frames)
+                    rest_latents = self.vae.encode([rest_enc], VAE_tile_size)[0]
+                    
+                    # Combine: [SVI anchor | rest with end frame at end]
                     if overlapped_latents is None:
-                        lat_y = torch.concat([image_ref_latents, pad_latents, end_frame_latents], dim=1).to(self.device)
+                        lat_y = torch.concat([image_ref_latents, rest_latents], dim=1).to(self.device)
                     else:
-                        lat_y = torch.concat([image_ref_latents, overlapped_latents.squeeze(0), pad_latents, end_frame_latents], dim=1).to(self.device)
-                    end_frame_latents = None
+                        lat_y = torch.concat([image_ref_latents, overlapped_latents.squeeze(0), rest_latents], dim=1).to(self.device)
+                    rest_latents = None
                 else:
+                    # No end frame - use original SVI approach with zero padding
+                    pad_len = lat_frames + ref_images_count - image_ref_latents.shape[1] - (overlapped_latents.shape[2] if overlapped_latents is not None else 0)
+                    pad_latents = torch.zeros(image_ref_latents.shape[0], pad_len, lat_h, lat_w, device=image_ref_latents.device, dtype=image_ref_latents.dtype)
                     if overlapped_latents is None:
                         lat_y = torch.concat([image_ref_latents, pad_latents], dim=1).to(self.device)
                     else:
