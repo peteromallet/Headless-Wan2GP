@@ -1835,6 +1835,14 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "orchestrator_task_id_ref": orchestrator_task_id_str,
                 "orchestrator_run_id": run_id,
                 "project_id": orchestrator_project_id,
+                # IMPORTANT: generation.ts / complete_task expects this at the TOP LEVEL for travel_stitch.
+                # (Some older payloads also include it under orchestrator_details; we keep full_orchestrator_payload
+                # for backward compatibility, but top-level is the correct contract.)
+                "parent_generation_id": (
+                    task_params_from_db.get("parent_generation_id")
+                    or orchestrator_payload.get("parent_generation_id")
+                    or orchestrator_payload.get("orchestrator_details", {}).get("parent_generation_id")
+                ),
                 "num_total_segments_generated": num_segments,
                 "current_run_base_output_dir": str(current_run_output_dir.resolve()),
                 "frame_overlap_settings_expanded": stitch_overlap_settings,  # Use mode-specific overlap
@@ -2048,16 +2056,65 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                             dprint_func=dprint
                         )
                         if trimmed_result and Path(trimmed_result).exists():
-                            # Verify trimmed output
+                            # Verify trimmed output (debug-only)
                             trimmed_frames, trimmed_fps = sm_get_video_frame_count_and_fps(trimmed_result)
-                            print(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: ✅ Trimmed video: {trimmed_frames} frames (expected: {frames_to_keep})")
-                            print(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: Trimmed video path: {trimmed_result}")
-                            print(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: Final output breakdown:")
-                            print(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}:   - First {SVI_STITCH_OVERLAP} frames: OVERLAP (from predecessor)")
-                            print(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}:   - Next {expected_len} frames: NEW GENERATED")
-                            print(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}:   - Total: {trimmed_frames} frames")
-                            if trimmed_frames != frames_to_keep:
-                                print(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: ⚠️  WARNING: Trimmed {trimmed_frames} frames, expected {frames_to_keep}")
+                            debug_enabled = bool(
+                                full_orchestrator_payload.get("debug_mode_enabled", False)
+                                or db_ops.debug_mode
+                            )
+                            if debug_enabled:
+                                dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: ✅ Trimmed video: {trimmed_frames} frames (expected: {frames_to_keep})")
+                                dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: Trimmed video path: {trimmed_result}")
+                                dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: Final output breakdown:")
+                                dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}:   - First {SVI_STITCH_OVERLAP} frames: OVERLAP (from predecessor)")
+                                dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}:   - Next {expected_len} frames: NEW GENERATED")
+                                dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}:   - Total: {trimmed_frames} frames")
+                                if trimmed_frames != frames_to_keep:
+                                    dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: ⚠️  WARNING: Trimmed {trimmed_frames} frames, expected {frames_to_keep}")
+
+                                # Optional duplication detector: does the *final frame* appear earlier?
+                                try:
+                                    import hashlib
+                                    import cv2
+
+                                    cap = cv2.VideoCapture(str(trimmed_result))
+                                    if cap.isOpened() and trimmed_frames and trimmed_frames > 1:
+                                        last_idx = int(trimmed_frames) - 1
+                                        # Sample a small set of earlier frames to avoid heavy IO
+                                        sample_idxs = list(range(0, min(32, last_idx)))
+                                        # Always include the overlap boundary and near-end region
+                                        sample_idxs += [SVI_STITCH_OVERLAP - 1] if SVI_STITCH_OVERLAP - 1 < last_idx else []
+                                        sample_idxs += list(range(max(0, last_idx - 24), last_idx))
+                                        sample_idxs = sorted(set([i for i in sample_idxs if 0 <= i < last_idx]))
+
+                                        def _hash_frame(frame_bgr) -> str:
+                                            return hashlib.md5(frame_bgr.tobytes()).hexdigest()[:12]
+
+                                        # Read last frame
+                                        cap.set(cv2.CAP_PROP_POS_FRAMES, last_idx)
+                                        ok_last, fr_last = cap.read()
+                                        last_hash = _hash_frame(fr_last) if ok_last and fr_last is not None else None
+
+                                        dup_hits = []
+                                        if last_hash:
+                                            for i in sample_idxs:
+                                                cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+                                                ok, fr = cap.read()
+                                                if not ok or fr is None:
+                                                    continue
+                                                if _hash_frame(fr) == last_hash:
+                                                    dup_hits.append(i)
+                                                    if len(dup_hits) >= 5:
+                                                        break
+                                        cap.release()
+
+                                        if last_hash:
+                                            if dup_hits:
+                                                dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: ⚠️  FINAL-FRAME DUPLICATION DETECTED (hash={last_hash}) at frames={dup_hits} (sampled)")
+                                            else:
+                                                dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: Final-frame hash={last_hash} not seen in sampled earlier frames")
+                                except Exception as e_hash:
+                                    dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: WARNING: frame-hash duplication check failed: {e_hash}")
                             debug_video_analysis(Path(trimmed_result), f"SVI_TRIMMED_Seg{segment_idx_completed}", wgp_task_id)
                             # Replace the working video with the trimmed one
                             try:

@@ -1043,14 +1043,18 @@ class WanOrchestrator:
                         img = ImageOps.exif_transpose(img)
                         refs.append(img)
                     except Exception as e_img:
-                        generation_logger.warning(f"[SVI_GROUND_TRUTH] Failed to load image_ref path '{p}': {e_img}")
+                        if debug_mode:
+                            generation_logger.warning(f"[SVI_GROUND_TRUTH] Failed to load image_ref path '{p}': {e_img}")
                 if refs:
                     kwargs["image_refs"] = refs
-                    generation_logger.info(f"[SVI_GROUND_TRUTH] Converted image_refs_paths -> image_refs (count={len(refs)})")
+                    if debug_mode:
+                        generation_logger.info(f"[SVI_GROUND_TRUTH] Converted image_refs_paths -> image_refs (count={len(refs)})")
                 else:
-                    generation_logger.warning("[SVI_GROUND_TRUTH] image_refs_paths provided but no images could be loaded")
+                    if debug_mode:
+                        generation_logger.warning("[SVI_GROUND_TRUTH] image_refs_paths provided but no images could be loaded")
         except Exception as e_refs:
-            generation_logger.warning(f"[SVI_GROUND_TRUTH] Exception while converting image_refs_paths -> image_refs: {e_refs}")
+            if debug_mode:
+                generation_logger.warning(f"[SVI_GROUND_TRUTH] Exception while converting image_refs_paths -> image_refs: {e_refs}")
 
         # Smoke-mode short-circuit: create a sample output and return its path
         if self.smoke_mode:
