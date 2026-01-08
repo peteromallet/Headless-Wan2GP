@@ -563,10 +563,12 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Set image_prompt_type='SV' for video continuation")
                 dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Set video_source for SVI continuation: {svi_predecessor_video_for_source}")
             
-            # SVI Pro sliding window overlap = 4 frames (standard for SVI)
+            # SVI Pro sliding window overlap - MUST be 5 or 9 (not 4!)
+            # WGP applies latent alignment: (x-1)//4*4+1, so:
+            #   4 → 1 (wrong!), 5 → 5 (ok), 9 → 9 (best for 9-frame prefix)
             # This tells WGP how many frames to extract for overlapped_latents
-            generation_params["sliding_window_overlap"] = 4
-            dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Set sliding_window_overlap=4 for SVI")
+            generation_params["sliding_window_overlap"] = 9
+            dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Set sliding_window_overlap=9 for SVI (9-frame prefix)")
 
             # IMPORTANT (SVI continuation frame accounting):
             # When `video_source` is provided, WGP will:
@@ -584,7 +586,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             if svi_predecessor_video_for_source:
                 try:
                     desired_new_frames = int(total_frames_for_segment) if total_frames_for_segment else 0
-                    overlap_size = int(generation_params.get("sliding_window_overlap") or 4)
+                    overlap_size = int(generation_params.get("sliding_window_overlap") or 9)
                     current_video_length = int(generation_params.get("video_length") or 0)
                     if desired_new_frames > 0 and overlap_size > 0:
                         # Only bump if the payload is still "new-frames based" (avoid double-bumping).
