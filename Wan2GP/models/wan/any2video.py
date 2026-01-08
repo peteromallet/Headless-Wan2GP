@@ -743,8 +743,11 @@ class WanAny2V:
                     print(f"[SVI_BROWN_FRAME_DIAG]   start_pixels pixel range: min={start_pixels.min().item():.3f}, max={start_pixels.max().item():.3f}")
                     
                     # Calculate empty frame count
-                    # frame_num = start_frame_count + empty_frame_count + 1 (end frame)
-                    empty_frame_count = frame_num - svi_start_frame_count - 1
+                    # For Wan 2.2, we repeat the end frame 4x to fill the entire last latent frame.
+                    # This ensures the mask (msk[:, -4:] = 1) aligns with actual end frame content,
+                    # not zeros. For Wan 2.1, we keep single end frame since it uses different expansion.
+                    end_frame_repeat_count = 4 if model_type == "i2v_2_2" else 1
+                    empty_frame_count = frame_num - svi_start_frame_count - end_frame_repeat_count
                     
                     # Build empty pixels.
                     # By default kijai uses ZERO frames here. In practice, for very low step counts (e.g. 6-step lightning),
@@ -776,17 +779,22 @@ class WanAny2V:
                         print(f"[SVI_DEBUG] empty_pixels.shape={empty_pixels.shape}, empty_pixels content={_content}")
                     
                     # Build concatenated pixel tensor: [start | zeros_or_anchor | end]
-                    concatenated = torch.cat([start_pixels, empty_pixels, img_end_frame], dim=1).to(self.device)
+                    # For Wan 2.2, repeat end frame to fill entire last latent (aligns with mask fix)
+                    if end_frame_repeat_count > 1:
+                        end_pixels = img_end_frame.expand(-1, end_frame_repeat_count, -1, -1)
+                    else:
+                        end_pixels = img_end_frame
+                    concatenated = torch.cat([start_pixels, empty_pixels, end_pixels], dim=1).to(self.device)
                     
                     # [SVI_BROWN_FRAME_DIAG] Comprehensive concatenated tensor diagnostics
                     print(f"[SVI_BROWN_FRAME_DIAG] ═══════════════════════════════════════════════════════════════")
                     print(f"[SVI_BROWN_FRAME_DIAG] CONCATENATED PIXEL TENSOR FOR VAE ENCODE")
                     print(f"[SVI_BROWN_FRAME_DIAG] concatenated.shape={concatenated.shape} (expected: [3, {frame_num}, {height}, {width}])")
-                    print(f"[SVI_BROWN_FRAME_DIAG]   breakdown: start[:{svi_start_frame_count}] + empty[{svi_start_frame_count}:{svi_start_frame_count+empty_frame_count}] + end[{svi_start_frame_count+empty_frame_count}:]")
+                    print(f"[SVI_BROWN_FRAME_DIAG]   breakdown: start[:{svi_start_frame_count}] + empty[{svi_start_frame_count}:{svi_start_frame_count+empty_frame_count}] + end_repeated({end_frame_repeat_count})[{svi_start_frame_count+empty_frame_count}:]")
                     print(f"[SVI_BROWN_FRAME_DIAG] Pixel value ranges (expected: -1 to 1):")
                     print(f"[SVI_BROWN_FRAME_DIAG]   start_pixels: min={start_pixels.min().item():.3f}, max={start_pixels.max().item():.3f}")
                     print(f"[SVI_BROWN_FRAME_DIAG]   empty_pixels: min={empty_pixels.min().item():.3f}, max={empty_pixels.max().item():.3f}")
-                    print(f"[SVI_BROWN_FRAME_DIAG]   img_end_frame: min={img_end_frame.min().item():.3f}, max={img_end_frame.max().item():.3f}")
+                    print(f"[SVI_BROWN_FRAME_DIAG]   end_pixels({end_frame_repeat_count}x): min={end_pixels.min().item():.3f}, max={end_pixels.max().item():.3f}")
                     print(f"[SVI_BROWN_FRAME_DIAG]   concatenated: min={concatenated.min().item():.3f}, max={concatenated.max().item():.3f}")
                     print(f"[SVI_BROWN_FRAME_DIAG] dtype={concatenated.dtype}, device={concatenated.device}")
                     
