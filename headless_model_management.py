@@ -980,34 +980,14 @@ class HeadlessTaskQueue:
             else:
                 dprint(f"[GENERATION_DEBUG] Task {task.id}: Using T2V generation path")
                 
-                # Capture stdout from WGP to our logger for SVI diagnostics
-                import sys
-                class StdoutCapture:
-                    def __init__(self, logger, original_stdout):
-                        self.logger = logger
-                        self.original = original_stdout
-                        self.buffer = []
-                    def write(self, msg):
-                        self.original.write(msg)  # Still output to terminal
-                        if msg.strip():  # Only log non-empty lines
-                            # Route SVI diagnostics to our logger
-                            if any(tag in msg for tag in ['[SVI_', '[LORA_', '[GENERATE_', '[TEXT_ENCODE']):
-                                self.logger.info(f"[WGP_STDOUT] {msg.rstrip()}")
-                    def flush(self):
-                        self.original.flush()
-                
-                original_stdout = sys.stdout
-                capture = StdoutCapture(self.logger, original_stdout)
-                sys.stdout = capture
-                try:
-                    # T2V or other models - pass model_type for proper parameter resolution
-                    result = self.orchestrator.generate_t2v(
-                        prompt=task.prompt,
-                        model_type=task.model,  # ← CRITICAL: Pass model type for parameter resolution
-                        **generation_params
-                    )
-                finally:
-                    sys.stdout = original_stdout
+                # T2V or other models - pass model_type for proper parameter resolution
+                # Note: WGP stdout is captured to svi_debug.txt file instead of logger
+                # to avoid recursion issues
+                result = self.orchestrator.generate_t2v(
+                    prompt=task.prompt,
+                    model_type=task.model,  # ← CRITICAL: Pass model type for parameter resolution
+                    **generation_params
+                )
             
             self.logger.info(f"{worker_name} generation completed for task {task.id}: {result}")
 
