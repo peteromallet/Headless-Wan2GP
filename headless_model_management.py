@@ -880,18 +880,35 @@ class HeadlessTaskQueue:
             _patch_applied = True
 
         # Handle svi2pro: This is a model_def property, not a generate() parameter
-        # We need to patch it into wgp.models_def before generation
+        # We need to patch it into BOTH wgp.models_def AND wan_model.model_def
+        # because the model captures model_def at load time, not at generation time
         _svi2pro_original = None
         _svi2pro_patched = False
+        _wan_model_patched = False
         if generation_params.get("svi2pro"):
             try:
                 import wgp
                 model_key = task.model
+                
+                # Patch 1: wgp.models_def (for any new model loads)
                 if model_key in wgp.models_def:
                     _svi2pro_original = wgp.models_def[model_key].get("svi2pro")
                     wgp.models_def[model_key]["svi2pro"] = True
                     _svi2pro_patched = True
                     self.logger.info(f"[SVI2PRO] Patched wgp.models_def['{model_key}']['svi2pro'] = True (was: {_svi2pro_original})", task_id=task.id)
+                
+                # Patch 2: wan_model.model_def DIRECTLY (the actual object used during generation)
+                # This is critical because the model was loaded BEFORE we patched models_def
+                if hasattr(wgp, 'wan_model') and wgp.wan_model is not None:
+                    if hasattr(wgp.wan_model, 'model_def') and wgp.wan_model.model_def is not None:
+                        wgp.wan_model.model_def["svi2pro"] = True
+                        _wan_model_patched = True
+                        self.logger.info(f"[SVI2PRO] ✅ Also patched wan_model.model_def['svi2pro'] = True", task_id=task.id)
+                    else:
+                        self.logger.warning(f"[SVI2PRO] ⚠️ wan_model exists but has no model_def", task_id=task.id)
+                else:
+                    self.logger.warning(f"[SVI2PRO] ⚠️ wgp.wan_model not found - model may not be loaded yet", task_id=task.id)
+                    
             except Exception as e:
                 self.logger.warning(f"[SVI2PRO] Failed to patch svi2pro: {e}", task_id=task.id)
             # Remove from generation_params since it's not a generate() parameter
@@ -979,17 +996,28 @@ class HeadlessTaskQueue:
                     self.logger.warning(f"[PHASE_CONFIG] Failed to restore model patches for task {task.id}: {restore_error}")
             
             # Restore svi2pro if we patched it
-            if _svi2pro_patched:
+            if _svi2pro_patched or _wan_model_patched:
                 try:
                     import wgp
                     model_key = task.model
-                    if model_key in wgp.models_def:
+                    
+                    # Restore wgp.models_def
+                    if _svi2pro_patched and model_key in wgp.models_def:
                         if _svi2pro_original is None:
-                            # Remove the key if it wasn't there originally
                             wgp.models_def[model_key].pop("svi2pro", None)
                         else:
                             wgp.models_def[model_key]["svi2pro"] = _svi2pro_original
                         self.logger.info(f"[SVI2PRO] Restored wgp.models_def['{model_key}']['svi2pro'] to {_svi2pro_original}", task_id=task.id)
+                    
+                    # Restore wan_model.model_def
+                    if _wan_model_patched and hasattr(wgp, 'wan_model') and wgp.wan_model is not None:
+                        if hasattr(wgp.wan_model, 'model_def') and wgp.wan_model.model_def is not None:
+                            if _svi2pro_original is None:
+                                wgp.wan_model.model_def.pop("svi2pro", None)
+                            else:
+                                wgp.wan_model.model_def["svi2pro"] = _svi2pro_original
+                            self.logger.info(f"[SVI2PRO] Restored wan_model.model_def['svi2pro'] to {_svi2pro_original}", task_id=task.id)
+                            
                 except Exception as restore_error:
                     self.logger.warning(f"[SVI2PRO] Failed to restore svi2pro for task {task.id}: {restore_error}")
 

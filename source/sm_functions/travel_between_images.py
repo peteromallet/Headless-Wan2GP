@@ -128,6 +128,33 @@ def debug_video_analysis(video_path: str | Path, label: str, task_id: str = "unk
 
         travel_logger.debug(f"{label}: {debug_info['frame_count']} frames, {debug_info['fps']} fps, {debug_info['duration_seconds']:.2f}s, {debug_info['file_size_mb']} MB", task_id=task_id)
 
+        # Lightweight color diagnostic: sample a few frames and compute mean BGR.
+        # Helps detect "brown tint" / channel or range issues without decoding entire video.
+        try:
+            if frame_count and frame_count > 0:
+                cap = cv2.VideoCapture(str(path_obj))
+                if cap.isOpened():
+                    sample_idxs = [0, max(0, int(frame_count // 2)), max(0, int(frame_count - 1))]
+                    samples = {}
+                    for idx in sample_idxs:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, float(idx))
+                        ok, fr = cap.read()
+                        if not ok or fr is None:
+                            samples[str(idx)] = None
+                            continue
+                        # OpenCV frames are BGR uint8; mean per channel is robust for tint detection.
+                        mean_bgr = tuple(float(x) for x in fr.mean(axis=(0, 1)))
+                        samples[str(idx)] = {
+                            "mean_bgr": mean_bgr,
+                            "shape": tuple(int(x) for x in fr.shape),
+                        }
+                    cap.release()
+                    debug_info["frame_color_samples"] = samples
+                    travel_logger.debug(f"[FrameBrowningIssue] {label}: frame_color_samples={samples}", task_id=task_id)
+        except Exception as e_color:
+            # Never fail the pipeline due to debug sampling.
+            travel_logger.debug(f"[FrameBrowningIssue] {label}: color sample failed: {e_color}", task_id=task_id)
+
         return debug_info
 
     except Exception as e:
