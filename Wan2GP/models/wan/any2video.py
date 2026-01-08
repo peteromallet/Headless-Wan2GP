@@ -557,7 +557,11 @@ class WanAny2V:
         wanmove = model_type in ["wanmove"]
         scail = model_type in ["scail"] 
         svi_pro = model_def.get("svi2pro", False)
-        svi_mode = 2 if svi_pro  else 0 
+        svi_mode = 2 if svi_pro  else 0
+        
+        # Early SVI status log (always shown when debug mode, helps trace if patching worked)
+        if getattr(offload, 'default_verboseLevel', 0) >= 2:
+            print(f"[SVI_STATUS] svi_pro={svi_pro} (from model_def.get('svi2pro')), any_end_frame will be checked later") 
         svi_ref_pad_num = 0
         start_step_no = 0
         ref_images_count = inner_latent_frames = 0
@@ -638,6 +642,10 @@ class WanAny2V:
                 
                 # Debug logging for SVI path - enabled via --verbose 2 or higher
                 _svi_debug = getattr(offload, 'default_verboseLevel', 0) >= 2
+                
+                if _svi_debug:
+                    print(f"[SVI_DEBUG] ========== ENTERED SVI_PRO PATH ==========")
+                    print(f"[SVI_DEBUG] any_end_frame={any_end_frame}, remaining_frames={remaining_frames}")
                 
                 # Get anchor/reference image
                 if input_ref_images is None or len(input_ref_images)==0:                        
