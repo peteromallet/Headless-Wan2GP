@@ -1744,7 +1744,9 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             segment_payload.update(extracted_params)
             
             # SVI-specific configuration: merge SVI LoRAs and set parameters
-            if use_svi:
+            # IMPORTANT: First segment (idx == 0) does NOT use SVI mode - it generates normally.
+            # Only subsequent segments use SVI end frame chaining from the previous segment's output.
+            if use_svi and idx > 0:
                 dprint(f"[SVI_CONFIG] Segment {idx}: Configuring SVI mode")
                 
                 # Merge SVI LoRAs with any existing additional_loras
@@ -1775,6 +1777,11 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     f"frame_overlap_from_previous={segment_payload['frame_overlap_from_previous']} "
                     f"frame_overlap_with_next={segment_payload['frame_overlap_with_next']} (SVI mode)"
                 )
+            elif use_svi and idx == 0:
+                # First segment: disable SVI mode - generate normally from start image
+                segment_payload["use_svi"] = False
+                segment_payload["svi2pro"] = False
+                dprint(f"[SVI_CONFIG] Segment {idx}: First segment - SVI disabled (use_svi=False, svi2pro=False)")
             
             # Log any additional_loras found for debugging
             if segment_payload.get("additional_loras"):
