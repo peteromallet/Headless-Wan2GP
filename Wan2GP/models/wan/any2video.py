@@ -567,6 +567,8 @@ class WanAny2V:
         print(f"[SVI_ENCODING_STATUS] ═══════════════════════════════════════════════════════")
         print(f"[SVI_ENCODING_STATUS] svi_pro={svi_pro} | model_def.svi2pro={model_def.get('svi2pro', 'NOT_SET')}")
         print(f"[SVI_ENCODING_STATUS] model_type={model_type} | input_video_shape={input_video.shape if input_video is not None else 'None'}")
+        print(f"[SVI_ENCODING_STATUS] model_def id={id(model_def)} | self.model_def id={id(self.model_def)}")
+        print(f"[SVI_ENCODING_STATUS] model_def keys with 'svi': {[k for k in model_def.keys() if 'svi' in k.lower()]}")
         print(f"[SVI_ENCODING_STATUS] Will use SVI encoding path: {svi_pro}")
         print(f"[SVI_ENCODING_STATUS] ═══════════════════════════════════════════════════════")
         
