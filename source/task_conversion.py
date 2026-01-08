@@ -200,6 +200,14 @@ def parse_phase_config(phase_config: dict, num_inference_steps: int, task_id: st
                 if "model" in temp_config:
                     temp_config["model"]["loras"] = []
                     temp_config["model"]["loras_multipliers"] = []
+                    # Enable SVI mode if phase_config has SVI LoRAs or svi2pro flag
+                    svi_loras_present = any(
+                        "SVI" in lora_url or "svi" in lora_url.lower() 
+                        for lora_url in all_lora_urls
+                    )
+                    if svi_loras_present or phase_config.get("svi2pro", False):
+                        temp_config["model"]["svi2pro"] = True
+                        headless_logger.debug(f"[PATCH_CONFIG] Added svi2pro=True to model definition (SVI LoRAs detected)", task_id=task_id)
 
                 result["_patch_config"] = temp_config
                 result["_patch_model_name"] = model_name

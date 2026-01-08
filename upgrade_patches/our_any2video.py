@@ -961,8 +961,21 @@ class WanAny2V:
                 print(f"[PHASE_SWITCH_DEBUG] Calling callback({step_no}, denoising_extra='{denoising_extra}')")
                 callback(step_no, denoising_extra = denoising_extra)
             return guide_scale, guidance_switch_done, trans, denoising_extra
+        # [LORA_UPDATE_CONFIRM] Log when update_loras_slists is called
+        if loras_slists is not None and len(loras_slists.get("phase1", [])) > 0:
+            num_loras = len(loras_slists.get("phase1", []))
+            print(f"[LORA_UPDATE_CONFIRM] Calling update_loras_slists with {num_loras} LoRAs, {updated_num_steps} steps")
+            print(f"[LORA_UPDATE_CONFIRM]   phase_switch_step={phase_switch_step}, phase_switch_step2={phase_switch_step2}")
+            for i in range(num_loras):
+                p1 = loras_slists["phase1"][i]
+                p2 = loras_slists["phase2"][i]
+                p3 = loras_slists["phase3"][i]
+                print(f"[LORA_UPDATE_CONFIRM]   LoRA[{i}]: phase1={p1}, phase2={p2}, phase3={p3}")
+        else:
+            print(f"[LORA_UPDATE_CONFIRM] ⚠️ loras_slists is None or empty - no phase-aware multipliers!")
         update_loras_slists(self.model, loras_slists, updated_num_steps, phase_switch_step= phase_switch_step, phase_switch_step2= phase_switch_step2)
         if self.model2 is not None: update_loras_slists(self.model2, loras_slists, updated_num_steps, phase_switch_step= phase_switch_step, phase_switch_step2= phase_switch_step2)
+        print(f"[LORA_UPDATE_CONFIRM] ✅ update_loras_slists completed for model1{' and model2' if self.model2 is not None else ''}")
         callback(-1, None, True, override_num_inference_steps = updated_num_steps, denoising_extra = denoising_extra)
 
         def clear():
@@ -1080,7 +1093,22 @@ class WanAny2V:
                 _first_step_time = _first_step_start
             guide_scale, guidance_switch_done, trans, denoising_extra = update_guidance(i, t, guide_scale, guide2_scale, guidance_switch_done, switch_threshold, trans, 2, denoising_extra)
             guide_scale, guidance_switch2_done, trans, denoising_extra = update_guidance(i, t, guide_scale, guide3_scale, guidance_switch2_done, switch2_threshold, trans, 3, denoising_extra)
-            offload.set_step_no_for_lora(trans, start_step_no + i)
+            
+            # [LORA_STEP_TRACE] Log current LoRA step being set
+            current_lora_step = start_step_no + i
+            offload.set_step_no_for_lora(trans, current_lora_step)
+            
+            # Log LoRA step at key moments: first step, phase switches, last step
+            if i == 0:
+                print(f"[LORA_STEP_TRACE] Step {i}: set_step_no_for_lora({current_lora_step}), t={t:.1f}, guide_scale={guide_scale}")
+                # Try to get current LoRA multipliers from the model
+                if hasattr(trans, '_loras') and trans._loras:
+                    try:
+                        for lora_idx, lora in enumerate(trans._loras[:5]):  # Limit to first 5
+                            mult = getattr(lora, 'current_multiplier', getattr(lora, 'multiplier', '?'))
+                            print(f"[LORA_STEP_TRACE]   LoRA[{lora_idx}] current multiplier: {mult}")
+                    except Exception as e:
+                        print(f"[LORA_STEP_TRACE]   Could not inspect LoRA multipliers: {e}")
             timestep = torch.stack([t])
 
             if timestep_injection:

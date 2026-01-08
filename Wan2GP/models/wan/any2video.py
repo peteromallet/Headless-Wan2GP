@@ -556,12 +556,16 @@ class WanAny2V:
         steadydancer = model_type in ["steadydancer"]
         wanmove = model_type in ["wanmove"]
         scail = model_type in ["scail"] 
+        # Check model_def first, then fallback to kwargs (allows headless to override)
         svi_pro = model_def.get("svi2pro", False)
+        if not svi_pro and bbargs.get("svi2pro", False):
+            svi_pro = True
+            print(f"[SVI_STATUS] svi2pro=True from kwargs (model_def didn't have it)")
         svi_mode = 2 if svi_pro  else 0
         
         # Early SVI status log (always shown when debug mode, helps trace if patching worked)
         if getattr(offload, 'default_verboseLevel', 0) >= 2:
-            print(f"[SVI_STATUS] svi_pro={svi_pro} (from model_def.get('svi2pro')), any_end_frame will be checked later") 
+            print(f"[SVI_STATUS] svi_pro={svi_pro} (model_def={model_def.get('svi2pro', False)}, kwargs={bbargs.get('svi2pro', False)}), any_end_frame will be checked later") 
         svi_ref_pad_num = 0
         start_step_no = 0
         ref_images_count = inner_latent_frames = 0

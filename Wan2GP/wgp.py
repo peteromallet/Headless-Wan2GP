@@ -5377,13 +5377,22 @@ def generate_video(
     if len(loras_selected) > 0:
         pinnedLora = loaded_profile !=5  # and transformer_loras_filenames == None False # # # 
         split_linear_modules_map = getattr(trans,"split_linear_modules_map", None)
+        # [LORA_LOAD_CONFIRM] Log before loading
+        print(f"[LORA_LOAD_CONFIRM] Loading {len(loras_selected)} LoRAs into transformer:")
+        for idx, (lora_path, mult) in enumerate(zip(loras_selected, loras_list_mult_choices_nums)):
+            lora_name = os.path.basename(lora_path)
+            print(f"[LORA_LOAD_CONFIRM]   [{idx}] {lora_name} @ multiplier={mult}")
         offload.load_loras_into_model(trans_lora, loras_selected, loras_list_mult_choices_nums, activate_all_loras=True, preprocess_sd=get_loras_preprocessor(trans, base_model_type), pinnedLora=pinnedLora, split_linear_modules_map = split_linear_modules_map) 
         errors = trans_lora._loras_errors
         if len(errors) > 0:
             error_files = [msg for _ ,  msg  in errors]
             raise gr.Error("Error while loading Loras: " + ", ".join(error_files))
+        # [LORA_LOAD_CONFIRM] Confirm successful loading
+        loaded_count = len(getattr(trans_lora, '_loras', [])) if hasattr(trans_lora, '_loras') else 'unknown'
+        print(f"[LORA_LOAD_CONFIRM] ✅ Successfully loaded LoRAs. trans_lora._loras count: {loaded_count}")
         if trans2_lora is not None: 
             offload.sync_models_loras(trans_lora, trans2_lora)
+            print(f"[LORA_LOAD_CONFIRM] ✅ Synced LoRAs to trans2_lora")
         
     seed = None if seed == -1 else seed
     # negative_prompt = "" # not applicable in the inference
@@ -5955,6 +5964,15 @@ def generate_video(
                 send_cmd("output")
 
             try:
+                # [LORA_SLISTS_CONFIRM] Log loras_slists being passed to generate
+                if loras_slists is not None and len(loras_slists.get("phase1", [])) > 0:
+                    print(f"[LORA_SLISTS_CONFIRM] Passing loras_slists to wan_model.generate():")
+                    print(f"[LORA_SLISTS_CONFIRM]   phase1 multipliers: {loras_slists.get('phase1', [])}")
+                    print(f"[LORA_SLISTS_CONFIRM]   phase2 multipliers: {loras_slists.get('phase2', [])}")
+                    print(f"[LORA_SLISTS_CONFIRM]   phase3 multipliers: {loras_slists.get('phase3', [])}")
+                    print(f"[LORA_SLISTS_CONFIRM]   num_inference_steps={num_inference_steps}, guidance_phases={guidance_phases}")
+                else:
+                    print(f"[LORA_SLISTS_CONFIRM] No loras_slists or empty - LoRAs may not have phase-aware multipliers")
                 samples = wan_model.generate(
                     input_prompt = prompt,
                     image_start = image_start_tensor,  
