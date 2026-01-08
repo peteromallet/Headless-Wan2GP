@@ -428,9 +428,12 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         if additional_loras:
             generation_params["additional_loras"] = additional_loras
 
-        explicit_steps = (segment_params.get("num_inference_steps") or segment_params.get("steps") or 
-                          full_orchestrator_payload.get("num_inference_steps") or full_orchestrator_payload.get("steps"))
-        if explicit_steps: generation_params["num_inference_steps"] = explicit_steps
+        # IMPORTANT: Do NOT treat orchestrator/UI `steps` as diffusion `num_inference_steps`.
+        # In travel payloads, `steps` often means "timeline steps" (UI concept), whereas
+        # diffusion steps must come from `num_inference_steps` (or `phase_config.steps_per_phase`).
+        explicit_steps = (segment_params.get("num_inference_steps") or full_orchestrator_payload.get("num_inference_steps"))
+        if explicit_steps:
+            generation_params["num_inference_steps"] = explicit_steps
         
         explicit_guidance = (segment_params.get("guidance_scale") or full_orchestrator_payload.get("guidance_scale"))
         if explicit_guidance: generation_params["guidance_scale"] = explicit_guidance
