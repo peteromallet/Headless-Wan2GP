@@ -5973,6 +5973,12 @@ def generate_video(
                     print(f"[LORA_SLISTS_CONFIRM]   num_inference_steps={num_inference_steps}, guidance_phases={guidance_phases}")
                 else:
                     print(f"[LORA_SLISTS_CONFIRM] No loras_slists or empty - LoRAs may not have phase-aware multipliers")
+                # Diagnostic: Log input_video (pre_video_guide) shape before calling generate
+                if pre_video_guide is not None:
+                    print(f"[SVI_VIDEO_SOURCE_DIAG] pre_video_guide shape: {pre_video_guide.shape} (passed as input_video)")
+                    print(f"[SVI_VIDEO_SOURCE_DIAG] source_video_overlap_frames_count={source_video_overlap_frames_count}, reuse_frames={reuse_frames}")
+                else:
+                    print(f"[SVI_VIDEO_SOURCE_DIAG] pre_video_guide is None (no video continuation)")
                 samples = wan_model.generate(
                     input_prompt = prompt,
                     image_start = image_start_tensor,  
