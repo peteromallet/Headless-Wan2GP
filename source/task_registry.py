@@ -173,7 +173,9 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         dprint_func(f"[IMG_RESOLVE] Task {task_id}: segment_idx={segment_idx}, individual_images={len(individual_images)}, top_level_images={len(top_level_images)}, orchestrator_images={len(orchestrator_images)}")
         
         is_continuing = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
-        use_svi = segment_params.get("use_svi", False) or full_orchestrator_payload.get("use_svi", False)
+        # IMPORTANT: Check if use_svi is explicitly set in segment_params (even if False)
+        # Only fall back to full_orchestrator_payload if key is missing from segment_params
+        use_svi = segment_params["use_svi"] if "use_svi" in segment_params else full_orchestrator_payload.get("use_svi", False)
         svi_predecessor_video_url = segment_params.get("svi_predecessor_video_url") or full_orchestrator_payload.get("svi_predecessor_video_url")
         
         if use_svi:
