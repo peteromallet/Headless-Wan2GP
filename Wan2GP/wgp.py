@@ -5659,11 +5659,26 @@ def generate_video(
 
             image_start_tensor = image_end_tensor = None
             if window_no == 1 and (video_source is not None or image_start is not None):
+                print(f"[SVI_BROWN_FRAME_DIAG] ═══════════════════════════════════════════════════════════════")
+                print(f"[SVI_BROWN_FRAME_DIAG] PREFIX VIDEO LOADING (window_no={window_no})")
+                print(f"[SVI_BROWN_FRAME_DIAG] video_source={video_source}")
+                print(f"[SVI_BROWN_FRAME_DIAG] image_start={'present' if image_start is not None else 'None'}")
+                print(f"[SVI_BROWN_FRAME_DIAG] reuse_frames={reuse_frames}")
+                # Write critical SVI diagnostics to a file for debugging
+                try:
+                    with open("/workspace/Headless-Wan2GP/svi_debug.txt", "w") as f:
+                        f.write(f"[WGP_SVI_DIAG] reuse_frames={reuse_frames}\n")
+                        f.write(f"[WGP_SVI_DIAG] video_source={video_source}\n")
+                        f.write(f"[WGP_SVI_DIAG] sliding_window={sliding_window}\n")
+                        f.write(f"[WGP_SVI_DIAG] model_type={model_type}\n")
+                except: pass
+                
                 if image_start is not None:
                     image_start_tensor, new_height, new_width = calculate_dimensions_and_resize_image(image_start, height, width, sample_fit_canvas, fit_crop, block_size = block_size)
                     if fit_crop: refresh_preview["image_start"] = image_start_tensor 
                     image_start_tensor = convert_image_to_tensor(image_start_tensor)
                     pre_video_guide =  prefix_video = image_start_tensor.unsqueeze(1)
+                    print(f"[SVI_BROWN_FRAME_DIAG] Using image_start as prefix (single frame)")
                 else:
                     prefix_video  = preprocess_video(width=width, height=height,video_in=video_source, max_frames= parsed_keep_frames_video_source , start_frame = 0, fit_canvas= sample_fit_canvas, fit_crop = fit_crop, target_fps = fps, block_size = block_size )
                     prefix_video  = prefix_video.permute(3, 0, 1, 2)
@@ -5672,9 +5687,23 @@ def generate_video(
 
                     new_height, new_width = prefix_video.shape[-2:]                    
                     pre_video_guide =  prefix_video[:, -reuse_frames:]
+                    print(f"[SVI_BROWN_FRAME_DIAG] Loaded video_source: prefix_video.shape={prefix_video.shape}")
+                    print(f"[SVI_BROWN_FRAME_DIAG] pre_video_guide = prefix_video[:, -{reuse_frames}:] → shape={pre_video_guide.shape}")
+                    # Pixel value diagnostics
+                    print(f"[SVI_BROWN_FRAME_DIAG] prefix_video pixel range: min={prefix_video.min().item():.3f}, max={prefix_video.max().item():.3f} (expected: -1 to 1)")
+                    print(f"[SVI_BROWN_FRAME_DIAG] prefix_video dtype={prefix_video.dtype}, device={prefix_video.device}")
+                    
                 pre_video_frame = convert_tensor_to_image(prefix_video[:, -1])
                 source_video_overlap_frames_count = pre_video_guide.shape[1]
                 source_video_frames_count = prefix_video.shape[1]
+                
+                print(f"[SVI_BROWN_FRAME_DIAG] RESULT: source_video_overlap_frames_count={source_video_overlap_frames_count}")
+                if source_video_overlap_frames_count == 0:
+                    print(f"[SVI_BROWN_FRAME_DIAG] ⚠️  WARNING: 0 overlap frames! pre_video_guide is empty!")
+                elif source_video_overlap_frames_count == 1:
+                    print(f"[SVI_BROWN_FRAME_DIAG] ⚠️  WARNING: Only 1 frame - this is single-frame mode, not video continuation!")
+                print(f"[SVI_BROWN_FRAME_DIAG] ═══════════════════════════════════════════════════════════════")
+                
                 if sample_fit_canvas != None: 
                     image_size  = pre_video_guide.shape[-2:]
                     sample_fit_canvas = None
