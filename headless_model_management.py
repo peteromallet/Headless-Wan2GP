@@ -334,6 +334,16 @@ class HeadlessTaskQueue:
                     self.logger.info(f"[LAZY_INIT] ✅ Now in Wan2GP directory, importing WanOrchestrator...")
 
                 from headless_wgp import WanOrchestrator
+                
+                # Set mmgp verbose level for debug logging in any2video.py SVI path etc
+                if self.debug_mode:
+                    try:
+                        from mmgp import offload
+                        offload.default_verboseLevel = 2
+                        self.logger.info("[LAZY_INIT] Set offload.default_verboseLevel=2 for debug logging")
+                    except ImportError:
+                        pass
+                
                 self.orchestrator = WanOrchestrator(self.wan_dir, main_output_dir=self.main_output_dir)
             finally:
                 sys.argv = _saved_argv_for_import  # Restore original arguments
