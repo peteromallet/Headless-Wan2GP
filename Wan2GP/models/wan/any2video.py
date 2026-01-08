@@ -803,34 +803,24 @@ class WanAny2V:
 
             msk = torch.ones(1, frame_num + ref_images_count * 4, lat_h, lat_w, device=self.device)
             if svi_pro and any_end_frame:
-                # Ground-truth (kijai): build mask in pixel-frame space, then
-                # repeat the first frame (4x) and the end frame (4x) once.
+                # IMPORTANT (brown/grey middle frames): for SVI continuations we commonly have
+                # start frames (prefix context) + empty placeholder frames + an end frame.
                 #
-                # We adapt this for continuation by allowing multiple known "start" frames
-                # (e.g. prefix context frames), not just the first frame.
-                base_frames = frame_num
-                msk = torch.zeros(1, base_frames, lat_h, lat_w, device=self.device, dtype=lat_y.dtype)
-                if svi_start_frame_count > 0:
-                    msk[:, :svi_start_frame_count] = 1
-                msk[:, -1:] = 1
-
-                if _svi_debug:
-                    # Summarize mask before expansion
-                    mask_known_frames = (msk[0, :, 0, 0] > 0.5).sum().item()
-                    print(f"[SVI_DEBUG] MASK (pixel-frame space, before expansion):")
-                    print(f"[SVI_DEBUG]   base_frames={base_frames}, svi_start_frame_count={svi_start_frame_count}")
-                    print(f"[SVI_DEBUG]   known frames: first {svi_start_frame_count} + last 1 = {mask_known_frames} total")
-                    print(f"[SVI_DEBUG]   generate frames: {base_frames - mask_known_frames} (middle)")
-
-                start_mask_repeated = torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1)
-                end_mask_repeated = torch.repeat_interleave(msk[:, -1:], repeats=4, dim=1)
-                msk = torch.cat([start_mask_repeated, msk[:, 1:-1], end_mask_repeated], dim=1)
-                
-                if _svi_debug:
-                    print(f"[SVI_DEBUG] MASK (after expansion): msk.shape={msk.shape}")
-                    print(f"[SVI_DEBUG]   first 4 subframes (start): all 1s (known)")
-                    print(f"[SVI_DEBUG]   last 4 subframes (end): all 1s (known)")
-                    print(f"[SVI_DEBUG]   middle: {msk.shape[1] - 8} subframes ({'mixed' if svi_start_frame_count > 1 else '0s (generate)'})")
+                # In this case, we want:
+                # - known/preserved frames => 1 (start frames + end frame)
+                # - frames to generate     => 0 (the in-between frames)
+                #
+                # Use the same mask packing logic as the non-SVI end-frame path to keep the
+                # temporal packing consistent with Wan2.2 (4N+1 -> expand first frame by 4).
+                msk = torch.ones(1, frame_num + ref_images_count * 4, lat_h, lat_w, device=self.device, dtype=lat_y.dtype)
+                msk[:, control_pre_frames_count:-1] = 0
+                msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
+                try:
+                    known = int((msk[0, :, 0, 0] > 0.5).sum().item())
+                    total = int(msk.shape[1])
+                    print(f"[SVI_MASK_FIX] Applied standard end-frame mask packing for SVI_PRO. known={known}/{total} (1=preserve, 0=generate), control_pre_frames_count={control_pre_frames_count}")
+                except Exception:
+                    print(f"[SVI_MASK_FIX] Applied standard end-frame mask packing for SVI_PRO (summary unavailable)")
             elif any_end_frame:
                 msk[:, control_pre_frames_count: -1] = 0
                 if add_frames_for_end_image:
