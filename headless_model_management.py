@@ -879,6 +879,24 @@ class HeadlessTaskQueue:
             apply_phase_config_patch(parsed_phase_config, model_name, task.id)
             _patch_applied = True
 
+        # Handle svi2pro: This is a model_def property, not a generate() parameter
+        # We need to patch it into wgp.models_def before generation
+        _svi2pro_original = None
+        _svi2pro_patched = False
+        if generation_params.get("svi2pro"):
+            try:
+                import wgp
+                model_key = task.model
+                if model_key in wgp.models_def:
+                    _svi2pro_original = wgp.models_def[model_key].get("svi2pro")
+                    wgp.models_def[model_key]["svi2pro"] = True
+                    _svi2pro_patched = True
+                    self.logger.info(f"[SVI2PRO] Patched wgp.models_def['{model_key}']['svi2pro'] = True (was: {_svi2pro_original})", task_id=task.id)
+            except Exception as e:
+                self.logger.warning(f"[SVI2PRO] Failed to patch svi2pro: {e}", task_id=task.id)
+            # Remove from generation_params since it's not a generate() parameter
+            generation_params.pop("svi2pro", None)
+
         # Log generation parameters for debugging
         dprint(f"[GENERATION_DEBUG] Task {task.id}: Generation parameters:")
         for key, value in generation_params.items():
@@ -959,6 +977,21 @@ class HeadlessTaskQueue:
                     self.logger.info(f"[PHASE_CONFIG] Restored original model definition for '{_model_name_for_restore}' after task {task.id}")
                 except Exception as restore_error:
                     self.logger.warning(f"[PHASE_CONFIG] Failed to restore model patches for task {task.id}: {restore_error}")
+            
+            # Restore svi2pro if we patched it
+            if _svi2pro_patched:
+                try:
+                    import wgp
+                    model_key = task.model
+                    if model_key in wgp.models_def:
+                        if _svi2pro_original is None:
+                            # Remove the key if it wasn't there originally
+                            wgp.models_def[model_key].pop("svi2pro", None)
+                        else:
+                            wgp.models_def[model_key]["svi2pro"] = _svi2pro_original
+                        self.logger.info(f"[SVI2PRO] Restored wgp.models_def['{model_key}']['svi2pro'] to {_svi2pro_original}", task_id=task.id)
+                except Exception as restore_error:
+                    self.logger.warning(f"[SVI2PRO] Failed to restore svi2pro for task {task.id}: {restore_error}")
 
     def _model_supports_vace(self, model_key: str) -> bool:
         """
