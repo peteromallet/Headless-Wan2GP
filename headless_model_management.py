@@ -901,9 +901,19 @@ class HeadlessTaskQueue:
                 # This is critical because the model was loaded BEFORE we patched models_def
                 if hasattr(wgp, 'wan_model') and wgp.wan_model is not None:
                     if hasattr(wgp.wan_model, 'model_def') and wgp.wan_model.model_def is not None:
+                        # Diagnostic: check if they're the same object
+                        models_def_obj = wgp.models_def.get(model_key)
+                        wan_model_def_obj = wgp.wan_model.model_def
+                        same_object = models_def_obj is wan_model_def_obj
+                        self.logger.info(f"[SVI2PRO_DIAG] models_def['{model_key}'] id={id(models_def_obj)}, wan_model.model_def id={id(wan_model_def_obj)}, same_object={same_object}", task_id=task.id)
+                        
+                        # Patch it
                         wgp.wan_model.model_def["svi2pro"] = True
                         _wan_model_patched = True
-                        self.logger.info(f"[SVI2PRO] ✅ Also patched wan_model.model_def['svi2pro'] = True", task_id=task.id)
+                        
+                        # Verify the patch took effect
+                        verify_value = wgp.wan_model.model_def.get("svi2pro")
+                        self.logger.info(f"[SVI2PRO] ✅ Patched wan_model.model_def['svi2pro'] = True (verify read-back: {verify_value})", task_id=task.id)
                     else:
                         self.logger.warning(f"[SVI2PRO] ⚠️ wan_model exists but has no model_def", task_id=task.id)
                 else:
