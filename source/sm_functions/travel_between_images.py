@@ -2021,22 +2021,41 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                     dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: ========== WGP OUTPUT ANALYSIS ==========")
                     dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: WGP output video: {video_to_process_abs_path}")
                     dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: WGP output total frames: {actual_frames}")
-                    dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: Expected segment length: {expected_len} frames")
+                    dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: Desired NEW frames for segment: {expected_len} frames")
+
+                    # Optional: show what we actually requested from WGP (passed through task_registry)
+                    try:
+                        requested_video_length = wgp_task_params.get("video_length")
+                        overlap_size = wgp_task_params.get("sliding_window_overlap") or SVI_STITCH_OVERLAP
+                        video_source_dbg = wgp_task_params.get("video_source")
+                        if requested_video_length and overlap_size:
+                            requested_video_length_i = int(requested_video_length)
+                            overlap_size_i = int(overlap_size)
+                            new_frames_expected_from_wgp = requested_video_length_i - overlap_size_i
+                            dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: WGP request video_length={requested_video_length_i}, overlap_size={overlap_size_i}")
+                            dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: Expected NEW frames from diffusion = video_length - overlap = {new_frames_expected_from_wgp}")
+                            if isinstance(video_source_dbg, str) and video_source_dbg:
+                                dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: video_source (prefix clip): {video_source_dbg}")
+                    except Exception:
+                        pass
                     
                     if actual_frames and actual_frames > expected_len:
                         from source.video_utils import extract_frame_range_to_video as sm_extract_frame_range_to_video
 
                         # CRITICAL: For SVI continuation, we need to preserve the last 4 prefix frames
                         # for stitching overlap. So we keep expected_len + SVI_STITCH_OVERLAP frames.
-                        # This ensures: last 4 prefix frames (overlap) + expected_len generated frames
+                        # This ensures: last 4 prefix frames (overlap) + expected_len NEW frames
                         frames_to_keep = int(expected_len) + SVI_STITCH_OVERLAP
                         start_frame = max(0, int(actual_frames) - frames_to_keep)
                         
-                        dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: WGP prepended {actual_frames - expected_len} extra frames (prefix frames)")
+                        # NOTE: "extra frames" here is not simply "prefix length":
+                        # WGP output structure is: [prefix_frames] + [generated_frames with overlap removed]
+                        # So the net-added frame count vs desired_new_frames depends on both prefix length AND overlap removal.
+                        dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: Net frames beyond desired_new_frames: {actual_frames - expected_len}")
                         dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: Frame breakdown:")
                         dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}:   - Frames 0-{start_frame-1}: Will be DISCARDED (extra prefix)")
                         dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}:   - Frames {start_frame}-{start_frame+SVI_STITCH_OVERLAP-1}: OVERLAP frames (last 4 prefix, kept for stitching)")
-                        dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}:   - Frames {start_frame+SVI_STITCH_OVERLAP}-{actual_frames-1}: Generated frames ({expected_len} frames)")
+                        dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}:   - Frames {start_frame+SVI_STITCH_OVERLAP}-{actual_frames-1}: NEW frames ({expected_len} frames)")
                         dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: Keeping frames [{start_frame}:{actual_frames}] = {frames_to_keep} frames total")
                         trim_filename = f"seg{segment_idx_completed:02d}_trimmed_{timestamp_short}_{unique_suffix}{video_to_process_abs_path.suffix}"
                         trimmed_video_abs_path, _ = prepare_output_path(
@@ -2067,7 +2086,7 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
                                 dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: Trimmed video path: {trimmed_result}")
                                 dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: Final output breakdown:")
                                 dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}:   - First {SVI_STITCH_OVERLAP} frames: OVERLAP (from predecessor)")
-                                dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}:   - Next {expected_len} frames: NEW GENERATED")
+                                dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}:   - Next {expected_len} frames: NEW")
                                 dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}:   - Total: {trimmed_frames} frames")
                                 if trimmed_frames != frames_to_keep:
                                     dprint(f"[SVI_GROUND_TRUTH] Seg {segment_idx_completed}: ⚠️  WARNING: Trimmed {trimmed_frames} frames, expected {frames_to_keep}")
