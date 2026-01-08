@@ -927,11 +927,13 @@ class HeadlessTaskQueue:
                         # rather than switching to noise/anchor padding.
                         wgp.wan_model.model_def["svi_empty_frames_mode"] = "zeros"
                         
-                        # Also patch wgp.models_def for consistency
+                        # Also patch wgp.models_def for consistency (this is what test_any_sliding_window reads!)
                         if model_key in wgp.models_def:
+                            _sw_before = wgp.models_def[model_key].get("sliding_window", "NOT_SET")
                             wgp.models_def[model_key]["sliding_window"] = True
                             wgp.models_def[model_key]["sliding_window_defaults"] = {"overlap_default": 4}
                             wgp.models_def[model_key]["svi_empty_frames_mode"] = "zeros"
+                            self.logger.info(f"[SVI2PRO] Patched wgp.models_def['{model_key}']['sliding_window'] = True (was: {_sw_before})", task_id=task.id)
                         
                         _wan_model_patched = True
                         

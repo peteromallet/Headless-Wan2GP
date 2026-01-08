@@ -5443,15 +5443,31 @@ def generate_video(
 
     reset_control_aligment = "T" in video_prompt_type
 
-    if test_any_sliding_window(model_type) :
+    # [SVI_REUSE_FRAMES_DIAG] Critical diagnostic for understanding video continuation
+    _sliding_window_test = test_any_sliding_window(model_type)
+    _model_def_sliding_window = get_model_def(model_type).get("sliding_window", "NOT_SET") if get_model_def(model_type) else "NO_MODEL_DEF"
+    print(f"[SVI_REUSE_FRAMES_DIAG] ═══════════════════════════════════════════════════════════════")
+    print(f"[SVI_REUSE_FRAMES_DIAG] model_type={model_type}")
+    print(f"[SVI_REUSE_FRAMES_DIAG] test_any_sliding_window() = {_sliding_window_test}")
+    print(f"[SVI_REUSE_FRAMES_DIAG] model_def['sliding_window'] = {_model_def_sliding_window}")
+    print(f"[SVI_REUSE_FRAMES_DIAG] video_source = {'SET' if video_source is not None else 'None'}")
+    print(f"[SVI_REUSE_FRAMES_DIAG] sliding_window_overlap = {sliding_window_overlap}")
+    
+    if _sliding_window_test:
         if video_source is not None:
             current_video_length +=  sliding_window_overlap - 1
         sliding_window = current_video_length > sliding_window_size
         reuse_frames = min(sliding_window_size - latent_size, sliding_window_overlap) 
+        print(f"[SVI_REUSE_FRAMES_DIAG] BRANCH: sliding_window=True path taken")
+        print(f"[SVI_REUSE_FRAMES_DIAG]   reuse_frames = min({sliding_window_size} - {latent_size}, {sliding_window_overlap}) = {reuse_frames}")
     else:
         sliding_window = False
         sliding_window_size = current_video_length
         reuse_frames = 0
+        print(f"[SVI_REUSE_FRAMES_DIAG] BRANCH: sliding_window=False path taken → reuse_frames=0!")
+        print(f"[SVI_REUSE_FRAMES_DIAG] ⚠️  This means video_source context will be IGNORED!")
+    print(f"[SVI_REUSE_FRAMES_DIAG] FINAL: reuse_frames={reuse_frames}, sliding_window={sliding_window}")
+    print(f"[SVI_REUSE_FRAMES_DIAG] ═══════════════════════════════════════════════════════════════")
 
     original_image_refs = image_refs
     image_refs = None if image_refs is None else ([] + image_refs) # work on a copy as it is going to be modified
