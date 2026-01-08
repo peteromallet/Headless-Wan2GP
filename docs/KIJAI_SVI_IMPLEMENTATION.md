@@ -140,9 +140,8 @@ else:
 # Step 2: Build empty frames (zeros by default, like kijai)
 empty_pixels = image_ref.new_zeros((C, empty_frame_count, H, W))
 
-# Optional: pad with anchor (equivalent to kijai's empty_frame_pad_image)
-if model_def.get("svi_pad_empty_frames_with_anchor", False):
-    empty_pixels = image_ref.expand(-1, empty_frame_count, -1, -1).clone()
+# Optional: other modes (svi_empty_frames_mode = zeros|anchor|noise)
+# Default is zeros, matching kijai and original Wan2GP
 
 # Step 3: Concatenate in pixel space: [start | empty | end]
 concatenated = torch.cat([start_pixels, empty_pixels, img_end_frame], dim=1)
@@ -166,8 +165,8 @@ msk = torch.cat([start_mask_repeated, msk[:, 1:-1], end_mask_repeated], dim=1)
 | Aspect | Kijai | Our Wan2GP |
 |--------|-------|------------|
 | Empty frames | Zeros by default | Zeros by default |
-| Optional padding | `empty_frame_pad_image` param | `svi_pad_empty_frames_with_anchor` model config |
-| Start frames | Single start_image | Single anchor OR prefix context frames |
+| Optional padding | `empty_frame_pad_image` param | `svi_empty_frames_mode` model config (zeros/anchor/noise) |
+| Start frames | Single start_image | Single anchor OR `control_video` context |
 | VAE encode | Single encode with `end_=` | Single encode with `any_end_frame=` |
 | Mask expansion | First 4x + last 4x | First 4x + last 4x (matching kijai) |
 
@@ -177,8 +176,8 @@ msk = torch.cat([start_mask_repeated, msk[:, 1:-1], end_mask_repeated], dim=1)
 
 ```json
 {
-  "svi2pro": true,                           // Enable SVI Pro encoding path
-  "svi_pad_empty_frames_with_anchor": false  // Optional: pad empties with anchor (kijai's empty_frame_pad_image equivalent)
+  "svi2pro": true,                    // Enable SVI Pro encoding path
+  "svi_empty_frames_mode": "zeros"    // Options: zeros (default), anchor, noise
 }
 ```
 
