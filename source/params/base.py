@@ -61,21 +61,21 @@ class ParamGroup(ABC):
         """
         Flatten nested DB params with documented precedence.
         
-        Precedence: top_level > orchestrator_details > orchestrator_payload
+        Precedence: top_level > orchestrator_details > full_orchestrator_payload (legacy)
         """
         result = {}
         
-        # Start with orchestrator_payload (lowest precedence)
-        if "orchestrator_payload" in db_params and isinstance(db_params["orchestrator_payload"], dict):
-            result.update(db_params["orchestrator_payload"])
+        # Start with full_orchestrator_payload (legacy name, lowest precedence)
+        if "full_orchestrator_payload" in db_params and isinstance(db_params["full_orchestrator_payload"], dict):
+            result.update(db_params["full_orchestrator_payload"])
         
-        # Then orchestrator_details (medium precedence)
+        # Then orchestrator_details (canonical name, medium precedence)
         if "orchestrator_details" in db_params and isinstance(db_params["orchestrator_details"], dict):
             result.update(db_params["orchestrator_details"])
         
         # Finally top-level params (highest precedence)
         for key, value in db_params.items():
-            if key not in ("orchestrator_payload", "orchestrator_details"):
+            if key not in ("full_orchestrator_payload", "orchestrator_details"):
                 result[key] = value
         
         return result

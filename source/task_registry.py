@@ -667,7 +667,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                             "orchestrator_task_id_ref": orchestrator_task_id_ref,
                             "orchestrator_run_id": orchestrator_run_id,
                             "segment_index_completed": segment_idx,
-                            "full_orchestrator_payload": full_orchestrator_payload,
+                            "orchestrator_details": full_orchestrator_payload,  # Canonical name
                             "segment_processing_dir_for_saturation": str(segment_processing_dir),
                             "is_first_new_segment_after_continue": segment_params.get("is_first_segment", False) and full_orchestrator_payload.get("continue_from_video_resolved_path"),
                             "is_subsequent_segment": not segment_params.get("is_first_segment", True),

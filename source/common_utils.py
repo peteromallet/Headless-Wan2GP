@@ -112,8 +112,7 @@ def extract_orchestrator_parameters(db_task_params: dict, task_id: str = "unknow
                     if dprint:
                         dprint(f"Task {task_id}: Extracted {orchestrator_key} from orchestrator_details")
         
-        # Pass orchestrator_details as orchestrator_payload for LoRA processing
-        extracted_params["orchestrator_payload"] = orchestrator_details
+        # Note: orchestrator_details is already in db_task_params, no need to duplicate
         
         if dprint and extracted_count > 0:
             dprint(f"Task {task_id}: Extracted {extracted_count} parameters from orchestrator_details")
