@@ -339,7 +339,7 @@ def _generate_vlm_prompts_for_joins(
         if str(wan_dir) not in sys.path:
             sys.path.insert(0, str(wan_dir))
         
-        from Wan2GP.wan.utils.prompt_extend import QwenPromptExpander
+        from Wan2GP.shared.utils.prompt_extend import QwenPromptExpander
         from ..vlm_utils import download_qwen_vlm_if_needed
         
         # Log memory before loading (same as vlm_utils.py)

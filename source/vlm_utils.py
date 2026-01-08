@@ -403,7 +403,7 @@ def generate_transition_prompts_batch(
         if str(wan_dir) not in sys.path:
             sys.path.insert(0, str(wan_dir))
 
-        from Wan2GP.wan.utils.prompt_extend import QwenPromptExpander
+        from Wan2GP.shared.utils.prompt_extend import QwenPromptExpander
 
         # Log memory BEFORE loading
         if torch.cuda.is_available():
@@ -690,7 +690,7 @@ def generate_single_image_prompt(
         if str(wan_dir) not in sys.path:
             sys.path.insert(0, str(wan_dir))
 
-        from Wan2GP.wan.utils.prompt_extend import QwenPromptExpander
+        from Wan2GP.shared.utils.prompt_extend import QwenPromptExpander
 
         dprint(f"[VLM_SINGLE] Generating prompt for single image: {Path(image_path).name}")
 
@@ -822,7 +822,7 @@ def generate_single_image_prompts_batch(
         if str(wan_dir) not in sys.path:
             sys.path.insert(0, str(wan_dir))
 
-        from Wan2GP.wan.utils.prompt_extend import QwenPromptExpander
+        from Wan2GP.shared.utils.prompt_extend import QwenPromptExpander
 
         # Log memory BEFORE loading
         if torch.cuda.is_available():
