@@ -29,6 +29,8 @@ if start_image is not None and end_image is not None:
 
 **Key:** Empty frames are **zero pixels**, not zero latents.
 
+**Nuance (multi-frame refs):** In the `not fun_or_fl2v_model` branch, kijai uses `zero_frames = torch.zeros(..., num_frames-1, ...)` (it does **not** subtract `start_image.shape[0]` / `end_image.shape[0]`). In practice this path assumes `start_image` and `end_image` are typically **single-frame** (so `1 + (num_frames-1) + 1 = num_frames+1`, matching `base_frames`). If you pass multi-frame start/end batches, the concatenated pixel timeline becomes `start_T + (num_frames-1) + end_T`, and will no longer match `base_frames` unless `start_T=end_T=1`.
+
 ### Step 2: Optional Empty Frame Padding (empty_frame_pad_image)
 
 ```python
@@ -88,7 +90,7 @@ mask = mask.movedim(1, 2)[0]  # [4, T, H, W]
 y = vae.encode([concatenated], device, end_=(end_image is not None and not fun_or_fl2v_model), tiled=tiled_vae)[0]
 ```
 
-**Key:** The `end_=True` flag tells the VAE to handle the end frame specially (fresh cache for decode).
+**Key:** The `end_=True` flag switches kijai’s VAE into a **different encode/decode mode** (internally `encode_2` / `decode_2`; and in tiled mode it also increases the latent time length by +1). This is only enabled when `end_image is not None and not fun_or_fl2v_model`.
 
 ## Kijai's WanVideoSVIProEmbeds (nodes.py lines 913-966)
 
