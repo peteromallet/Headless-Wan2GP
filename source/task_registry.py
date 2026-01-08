@@ -565,6 +565,41 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             # This tells WGP how many frames to extract for overlapped_latents
             generation_params["sliding_window_overlap"] = 4
             dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Set sliding_window_overlap=4 for SVI")
+
+            # IMPORTANT (SVI continuation frame accounting):
+            # When `video_source` is provided, WGP will:
+            #   - generate `video_length` frames total
+            #   - discard the first `sliding_window_overlap` frames of the generated sample
+            #   - prepend the prefix video frames (pixels) to the output
+            #
+            # Therefore the number of **new** frames produced by diffusion is:
+            #   new_frames = video_length - sliding_window_overlap
+            #
+            # In our travel pipeline, `segment_frames_target` / `segment_frames_expanded[idx]` represent
+            # the desired number of **new** frames for the segment (4N+1). To actually get that many
+            # new frames while still maintaining overlap for stitching, we must request:
+            #   video_length = desired_new_frames + sliding_window_overlap
+            if svi_predecessor_video_for_source:
+                try:
+                    desired_new_frames = int(total_frames_for_segment) if total_frames_for_segment else 0
+                    overlap_size = int(generation_params.get("sliding_window_overlap") or 4)
+                    current_video_length = int(generation_params.get("video_length") or 0)
+                    if desired_new_frames > 0 and overlap_size > 0:
+                        # Only bump if the payload is still "new-frames based" (avoid double-bumping).
+                        if current_video_length == desired_new_frames:
+                            generation_params["video_length"] = desired_new_frames + overlap_size
+                            dprint_func(
+                                f"[SVI_PAYLOAD] Task {task_id}: SVI continuation => bump video_length "
+                                f"{current_video_length} -> {generation_params['video_length']} "
+                                f"(desired_new_frames={desired_new_frames}, overlap_size={overlap_size})"
+                            )
+                        else:
+                            dprint_func(
+                                f"[SVI_PAYLOAD] Task {task_id}: SVI continuation => NOT bumping video_length "
+                                f"(current={current_video_length}, desired_new_frames={desired_new_frames}, overlap_size={overlap_size})"
+                            )
+                except Exception as e_len_bump:
+                    dprint_func(f"[SVI_PAYLOAD] Task {task_id}: WARNING: Could not adjust video_length for SVI continuation: {e_len_bump}")
             
             # Add SVI generation parameters from segment_params (set by orchestrator)
             for key in ["guidance_phases", "num_inference_steps", "guidance_scale", "guidance2_scale",
@@ -620,17 +655,24 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 
                 # Orchestrator mode: run chaining
                 chain_success, chain_message, final_chained_path = _handle_travel_chaining_after_wgp(
-                    wgp_task_params={"travel_chain_details": {
-                        "orchestrator_task_id_ref": orchestrator_task_id_ref,
-                        "orchestrator_run_id": orchestrator_run_id,
-                        "segment_index_completed": segment_idx,
-                        "full_orchestrator_payload": full_orchestrator_payload,
-                        "segment_processing_dir_for_saturation": str(segment_processing_dir),
-                        "is_first_new_segment_after_continue": segment_params.get("is_first_segment", False) and full_orchestrator_payload.get("continue_from_video_resolved_path"),
-                        "is_subsequent_segment": not segment_params.get("is_first_segment", True),
-                        "colour_match_videos": colour_match_videos,
-                        "cm_start_ref_path": None, "cm_end_ref_path": None, "show_input_images": False, "start_image_path": None, "end_image_path": None,
-                    }},
+                    wgp_task_params={
+                        # Provide minimal ground-truth frame params for downstream debug logging / trimming analysis.
+                        "use_svi": use_svi,
+                        "video_length": generation_params.get("video_length"),
+                        "sliding_window_overlap": generation_params.get("sliding_window_overlap"),
+                        "video_source": generation_params.get("video_source"),
+                        "travel_chain_details": {
+                            "orchestrator_task_id_ref": orchestrator_task_id_ref,
+                            "orchestrator_run_id": orchestrator_run_id,
+                            "segment_index_completed": segment_idx,
+                            "full_orchestrator_payload": full_orchestrator_payload,
+                            "segment_processing_dir_for_saturation": str(segment_processing_dir),
+                            "is_first_new_segment_after_continue": segment_params.get("is_first_segment", False) and full_orchestrator_payload.get("continue_from_video_resolved_path"),
+                            "is_subsequent_segment": not segment_params.get("is_first_segment", True),
+                            "colour_match_videos": colour_match_videos,
+                            "cm_start_ref_path": None, "cm_end_ref_path": None, "show_input_images": False, "start_image_path": None, "end_image_path": None,
+                        }
+                    },
                     actual_wgp_output_video_path=status.result_path,
                     image_download_dir=segment_processing_dir,
                     main_output_dir_base=main_output_dir_base,
