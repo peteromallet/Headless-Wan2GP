@@ -923,20 +923,16 @@ class HeadlessTaskQueue:
 
                         # CRITICAL: In the kijai-style SVI+end-frame pixel concatenation path, the middle frames
                         # are initialized as zeros before VAE encode (matching kijai and original Wan2GP).
-                        # Use noise-filled empty frames - zeros cause swirls/incoherence with 6-step lightning
-                        # because the model can't bridge a large gap of VAE-encoded zeros in few steps
-                        wgp.wan_model.model_def["svi_empty_frames_mode"] = "noise"
+                        # Use zeros for empty frames (standard approach, matching kijai)
+                        wgp.wan_model.model_def["svi_empty_frames_mode"] = "zeros"
                         
                         # Also patch wgp.models_def for consistency (this is what test_any_sliding_window reads!)
                         if model_key in wgp.models_def:
                             _sw_before = wgp.models_def[model_key].get("sliding_window", "NOT_SET")
                             wgp.models_def[model_key]["sliding_window"] = True
                             wgp.models_def[model_key]["sliding_window_defaults"] = {"overlap_default": 4}
-                            # Use noise-filled empty frames for better 6-step lightning results
-                            # Zeros make it hard for lightning models to generate coherent middle frames
-                            wgp.models_def[model_key]["svi_empty_frames_mode"] = "noise"
+                            wgp.models_def[model_key]["svi_empty_frames_mode"] = "zeros"
                             self.logger.info(f"[SVI2PRO] Patched wgp.models_def['{model_key}']['sliding_window'] = True (was: {_sw_before})", task_id=task.id)
-                            self.logger.info(f"[SVI2PRO] Using svi_empty_frames_mode='noise' for better lightning compatibility", task_id=task.id)
                         
                         _wan_model_patched = True
                         
