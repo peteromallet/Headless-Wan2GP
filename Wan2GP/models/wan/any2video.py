@@ -730,6 +730,19 @@ class WanAny2V:
                         start_pixels = prefix_video[:, -prefix_context_count:].to(device=self.device, dtype=self.VAE_dtype)
                         svi_start_frame_count = prefix_context_count
                         post_decode_pre_trim = 1
+
+                        # IMPORTANT:
+                        # In this kijai-style SVI+end-frame path, we VAE-encode `start_pixels` into `lat_y`.
+                        # If the mask later uses a smaller `control_pre_frames_count` (e.g. from `input_video`),
+                        # we end up *encoding* more known frames than we *preserve*, which can wash out / grey
+                        # the transition because those frames get treated as "generate" despite being pre-filled.
+                        # Align the mask's preserved-frame count with the actual start pixel context we encoded.
+                        _orig_control_pre_frames_count = control_pre_frames_count
+                        control_pre_frames_count = svi_start_frame_count
+                        print(
+                            f"[SVI_MASK_ALIGN] Aligning control_pre_frames_count to svi_start_frame_count "
+                            f"for SVI+end-frame continuation: {_orig_control_pre_frames_count} -> {control_pre_frames_count}"
+                        )
                         
                         # [SVI_BROWN_FRAME_DIAG] Log continuation path details
                         print(f"[SVI_BROWN_FRAME_DIAG] ✅ CONTINUATION MODE ACTIVATED")
