@@ -907,13 +907,24 @@ class HeadlessTaskQueue:
                         same_object = models_def_obj is wan_model_def_obj
                         self.logger.info(f"[SVI2PRO_DIAG] models_def['{model_key}'] id={id(models_def_obj)}, wan_model.model_def id={id(wan_model_def_obj)}, same_object={same_object}", task_id=task.id)
                         
-                        # Patch it
+                        # Patch svi2pro
                         wgp.wan_model.model_def["svi2pro"] = True
+                        
+                        # CRITICAL: Also patch sliding_window=True - required for video continuation
+                        # Without this, reuse_frames=0 and video_source context is ignored
+                        _sliding_window_original = wgp.wan_model.model_def.get("sliding_window")
+                        wgp.wan_model.model_def["sliding_window"] = True
+                        
+                        # Also patch wgp.models_def for consistency
+                        if model_key in wgp.models_def:
+                            wgp.models_def[model_key]["sliding_window"] = True
+                        
                         _wan_model_patched = True
                         
-                        # Verify the patch took effect
-                        verify_value = wgp.wan_model.model_def.get("svi2pro")
-                        self.logger.info(f"[SVI2PRO] ✅ Patched wan_model.model_def['svi2pro'] = True (verify read-back: {verify_value})", task_id=task.id)
+                        # Verify the patches took effect
+                        verify_svi2pro = wgp.wan_model.model_def.get("svi2pro")
+                        verify_sliding = wgp.wan_model.model_def.get("sliding_window")
+                        self.logger.info(f"[SVI2PRO] ✅ Patched wan_model.model_def: svi2pro={verify_svi2pro}, sliding_window={verify_sliding} (was: {_sliding_window_original})", task_id=task.id)
                     else:
                         self.logger.warning(f"[SVI2PRO] ⚠️ wan_model exists but has no model_def", task_id=task.id)
                 else:
@@ -1005,7 +1016,7 @@ class HeadlessTaskQueue:
                 except Exception as restore_error:
                     self.logger.warning(f"[PHASE_CONFIG] Failed to restore model patches for task {task.id}: {restore_error}")
             
-            # Restore svi2pro if we patched it
+            # Restore svi2pro and sliding_window if we patched them
             if _svi2pro_patched or _wan_model_patched:
                 try:
                     import wgp
@@ -1017,6 +1028,8 @@ class HeadlessTaskQueue:
                             wgp.models_def[model_key].pop("svi2pro", None)
                         else:
                             wgp.models_def[model_key]["svi2pro"] = _svi2pro_original
+                        # Also restore sliding_window
+                        wgp.models_def[model_key].pop("sliding_window", None)
                         self.logger.info(f"[SVI2PRO] Restored wgp.models_def['{model_key}']['svi2pro'] to {_svi2pro_original}", task_id=task.id)
                     
                     # Restore wan_model.model_def
@@ -1026,7 +1039,9 @@ class HeadlessTaskQueue:
                                 wgp.wan_model.model_def.pop("svi2pro", None)
                             else:
                                 wgp.wan_model.model_def["svi2pro"] = _svi2pro_original
-                            self.logger.info(f"[SVI2PRO] Restored wan_model.model_def['svi2pro'] to {_svi2pro_original}", task_id=task.id)
+                            # Also restore sliding_window
+                            wgp.wan_model.model_def.pop("sliding_window", None)
+                            self.logger.info(f"[SVI2PRO] Restored wan_model.model_def: svi2pro={_svi2pro_original}, sliding_window=removed", task_id=task.id)
                             
                 except Exception as restore_error:
                     self.logger.warning(f"[SVI2PRO] Failed to restore svi2pro for task {task.id}: {restore_error}")
