@@ -571,6 +571,14 @@ class WanAny2V:
         print(f"[SVI_ENCODING_STATUS] model_def keys with 'svi': {[k for k in model_def.keys() if 'svi' in k.lower()]}")
         print(f"[SVI_ENCODING_STATUS] Will use SVI encoding path: {svi_pro}")
         print(f"[SVI_ENCODING_STATUS] ═══════════════════════════════════════════════════════")
+        # Write critical SVI diagnostics to a file for debugging
+        try:
+            with open("/workspace/Headless-Wan2GP/svi_debug.txt", "a") as f:
+                f.write(f"[ANY2VIDEO_SVI_DIAG] svi_pro={svi_pro}\n")
+                f.write(f"[ANY2VIDEO_SVI_DIAG] model_def.svi2pro={model_def.get('svi2pro', 'NOT_SET')}\n")
+                f.write(f"[ANY2VIDEO_SVI_DIAG] input_video_shape={input_video.shape if input_video is not None else 'None'}\n")
+                f.write(f"[ANY2VIDEO_SVI_DIAG] prefix_video_shape={prefix_video.shape if prefix_video is not None else 'None'}\n")
+        except: pass
         
         # Early SVI status log (always shown when debug mode, helps trace if patching worked)
         if getattr(offload, 'default_verboseLevel', 0) >= 2:
@@ -622,6 +630,13 @@ class WanAny2V:
                 image_start = input_video[:, -1]
                 control_pre_frames_count = preframes_count
                 control_video = input_video
+                # Write critical control frame diagnostic
+                try:
+                    with open("/workspace/Headless-Wan2GP/svi_debug.txt", "a") as f:
+                        f.write(f"[ANY2VIDEO_CONTROL] control_pre_frames_count={control_pre_frames_count}\n")
+                        f.write(f"[ANY2VIDEO_CONTROL] preframes_count={preframes_count}\n")
+                        f.write(f"[ANY2VIDEO_CONTROL] input_video.shape={input_video.shape}\n")
+                except: pass
 
             color_reference_frame = image_start.unsqueeze(1).clone()
 
@@ -682,6 +697,25 @@ class WanAny2V:
                     # Build [start_frames | zeros_or_anchor | end_frame] in pixels
                     # Then single VAE encode with end_=True
                     # ============================================================
+                    
+                    # [SVI_BROWN_FRAME_DIAG] ALWAYS log critical SVI+end-frame path info
+                    print(f"[SVI_BROWN_FRAME_DIAG] ═══════════════════════════════════════════════════════════════")
+                    print(f"[SVI_BROWN_FRAME_DIAG] SVI + END FRAME ENCODING PATH")
+                    print(f"[SVI_BROWN_FRAME_DIAG] frame_num={frame_num}, height={height}, width={width}")
+                    print(f"[SVI_BROWN_FRAME_DIAG] image_ref.shape={image_ref.shape}")
+                    print(f"[SVI_BROWN_FRAME_DIAG] img_end_frame.shape={img_end_frame.shape if img_end_frame is not None else 'None'}")
+                    print(f"[SVI_BROWN_FRAME_DIAG] prefix_video={'None' if prefix_video is None else f'shape={prefix_video.shape}'}")
+                    print(f"[SVI_BROWN_FRAME_DIAG] overlap_size={overlap_size}, vae_end_frame_mode={vae_end_frame_mode}")
+                    print(f"[SVI_BROWN_FRAME_DIAG] Condition for continuation: prefix_video.shape[1] >= {5 + overlap_size}")
+                    if prefix_video is not None:
+                        print(f"[SVI_BROWN_FRAME_DIAG]   → prefix_video.shape[1]={prefix_video.shape[1]}, threshold={5 + overlap_size}")
+                        print(f"[SVI_BROWN_FRAME_DIAG]   → Will use CONTINUATION mode: {prefix_video.shape[1] >= (5 + overlap_size)}")
+                        # Pixel value diagnostics for prefix_video
+                        print(f"[SVI_BROWN_FRAME_DIAG]   → prefix_video pixel range: min={prefix_video.min().item():.3f}, max={prefix_video.max().item():.3f}")
+                        print(f"[SVI_BROWN_FRAME_DIAG]   → prefix_video dtype={prefix_video.dtype}, device={prefix_video.device}")
+                    else:
+                        print(f"[SVI_BROWN_FRAME_DIAG]   → Will use FIRST SEGMENT mode (single anchor frame)")
+                    
                     if _svi_debug:
                         print(f"[SVI_DEBUG] ========== SVI + END FRAME PATH (kijai-style) ==========")
                         print(f"[SVI_DEBUG] frame_num={frame_num}, height={height}, width={width}")
@@ -696,6 +730,13 @@ class WanAny2V:
                         start_pixels = prefix_video[:, -prefix_context_count:].to(device=self.device, dtype=self.VAE_dtype)
                         svi_start_frame_count = prefix_context_count
                         post_decode_pre_trim = 1
+                        
+                        # [SVI_BROWN_FRAME_DIAG] Log continuation path details
+                        print(f"[SVI_BROWN_FRAME_DIAG] ✅ CONTINUATION MODE ACTIVATED")
+                        print(f"[SVI_BROWN_FRAME_DIAG]   start_pixels = prefix_video[:, -{prefix_context_count}:]")
+                        print(f"[SVI_BROWN_FRAME_DIAG]   start_pixels.shape={start_pixels.shape}")
+                        print(f"[SVI_BROWN_FRAME_DIAG]   start_pixels pixel range: min={start_pixels.min().item():.3f}, max={start_pixels.max().item():.3f}")
+                        
                         if _svi_debug:
                             print(f"[SVI_DEBUG] CONTINUATION mode: using last {prefix_context_count} prefix frames as start")
                             print(f"[SVI_DEBUG] start_pixels.shape={start_pixels.shape}")
@@ -703,6 +744,13 @@ class WanAny2V:
                         # First segment: use anchor image as single start frame
                         start_pixels = image_ref
                         svi_start_frame_count = 1
+                        
+                        # [SVI_BROWN_FRAME_DIAG] Log first segment path
+                        print(f"[SVI_BROWN_FRAME_DIAG] ⚠️  FIRST SEGMENT MODE (single anchor frame)")
+                        if prefix_video is not None:
+                            print(f"[SVI_BROWN_FRAME_DIAG]   ⚠️  prefix_video exists but has only {prefix_video.shape[1]} frames (need {5 + overlap_size})")
+                        print(f"[SVI_BROWN_FRAME_DIAG]   start_pixels.shape={start_pixels.shape}")
+                        
                         if _svi_debug:
                             print(f"[SVI_DEBUG] FIRST SEGMENT mode: using anchor image as single start frame")
                             print(f"[SVI_DEBUG] start_pixels.shape={start_pixels.shape}")
@@ -730,13 +778,36 @@ class WanAny2V:
                     # Build concatenated pixel tensor: [start | zeros_or_anchor | end]
                     concatenated = torch.cat([start_pixels, empty_pixels, img_end_frame], dim=1).to(self.device)
                     
+                    # [SVI_BROWN_FRAME_DIAG] Comprehensive concatenated tensor diagnostics
+                    print(f"[SVI_BROWN_FRAME_DIAG] ═══════════════════════════════════════════════════════════════")
+                    print(f"[SVI_BROWN_FRAME_DIAG] CONCATENATED PIXEL TENSOR FOR VAE ENCODE")
+                    print(f"[SVI_BROWN_FRAME_DIAG] concatenated.shape={concatenated.shape} (expected: [3, {frame_num}, {height}, {width}])")
+                    print(f"[SVI_BROWN_FRAME_DIAG]   breakdown: start[:{svi_start_frame_count}] + empty[{svi_start_frame_count}:{svi_start_frame_count+empty_frame_count}] + end[{svi_start_frame_count+empty_frame_count}:]")
+                    print(f"[SVI_BROWN_FRAME_DIAG] Pixel value ranges (expected: -1 to 1):")
+                    print(f"[SVI_BROWN_FRAME_DIAG]   start_pixels: min={start_pixels.min().item():.3f}, max={start_pixels.max().item():.3f}")
+                    print(f"[SVI_BROWN_FRAME_DIAG]   empty_pixels: min={empty_pixels.min().item():.3f}, max={empty_pixels.max().item():.3f}")
+                    print(f"[SVI_BROWN_FRAME_DIAG]   img_end_frame: min={img_end_frame.min().item():.3f}, max={img_end_frame.max().item():.3f}")
+                    print(f"[SVI_BROWN_FRAME_DIAG]   concatenated: min={concatenated.min().item():.3f}, max={concatenated.max().item():.3f}")
+                    print(f"[SVI_BROWN_FRAME_DIAG] dtype={concatenated.dtype}, device={concatenated.device}")
+                    
+                    # Warn if pixel values look wrong
+                    _cat_min, _cat_max = concatenated.min().item(), concatenated.max().item()
+                    if _cat_min < -1.1 or _cat_max > 1.1:
+                        print(f"[SVI_BROWN_FRAME_DIAG] ⚠️  WARNING: Pixel values outside expected -1 to 1 range!")
+                    if _cat_min >= 0 and _cat_max <= 1:
+                        print(f"[SVI_BROWN_FRAME_DIAG] ⚠️  WARNING: Pixel values in 0-1 range, may need -1 to 1 normalization!")
+                    if _cat_min >= 0 and _cat_max > 1:
+                        print(f"[SVI_BROWN_FRAME_DIAG] ⚠️  WARNING: Pixel values suggest 0-255 range, needs normalization!")
+                    
                     if _svi_debug:
                         print(f"[SVI_DEBUG] concatenated pixel tensor: {concatenated.shape}")
                         print(f"[SVI_DEBUG]   breakdown: start[:{svi_start_frame_count}] + empty[{svi_start_frame_count}:{svi_start_frame_count+empty_frame_count}] + end[{svi_start_frame_count+empty_frame_count}:]")
                         print(f"[SVI_DEBUG]   total pixel frames: {concatenated.shape[1]} (expected: {frame_num})")
                     
                     # Single VAE encode with end frame mode (like kijai's end_= parameter)
+                    print(f"[SVI_BROWN_FRAME_DIAG] Calling VAE encode with any_end_frame={vae_end_frame_mode}")
                     lat_y = self.vae.encode([concatenated], VAE_tile_size, any_end_frame=vae_end_frame_mode)[0]
+                    print(f"[SVI_BROWN_FRAME_DIAG] VAE encode complete: lat_y.shape={lat_y.shape}")
                     
                     if _svi_debug:
                         print(f"[SVI_DEBUG] VAE encoded: lat_y.shape={lat_y.shape}")
@@ -804,6 +875,15 @@ class WanAny2V:
 
 
             msk = torch.ones(1, frame_num + ref_images_count * 4, lat_h, lat_w, device=self.device)
+            
+            # [SVI_BROWN_FRAME_DIAG] Log mask construction parameters
+            print(f"[SVI_BROWN_FRAME_DIAG] ═══════════════════════════════════════════════════════════════")
+            print(f"[SVI_BROWN_FRAME_DIAG] MASK CONSTRUCTION")
+            print(f"[SVI_BROWN_FRAME_DIAG] svi_pro={svi_pro}, any_end_frame={any_end_frame}")
+            print(f"[SVI_BROWN_FRAME_DIAG] frame_num={frame_num}, ref_images_count={ref_images_count}")
+            print(f"[SVI_BROWN_FRAME_DIAG] control_pre_frames_count={control_pre_frames_count}")
+            print(f"[SVI_BROWN_FRAME_DIAG] lat_y.shape={lat_y.shape if 'lat_y' in dir() and lat_y is not None else 'not_set_yet'}")
+            
             if svi_pro and any_end_frame:
                 # IMPORTANT (brown/grey middle frames): for SVI continuations we commonly have
                 # start frames (prefix context) + empty placeholder frames + an end frame.
@@ -815,8 +895,25 @@ class WanAny2V:
                 # Use the same mask packing logic as the non-SVI end-frame path to keep the
                 # temporal packing consistent with Wan2.2 (4N+1 -> expand first frame by 4).
                 msk = torch.ones(1, frame_num + ref_images_count * 4, lat_h, lat_w, device=self.device, dtype=lat_y.dtype)
+                
+                # [SVI_BROWN_FRAME_DIAG] Log pre-modification mask
+                print(f"[SVI_BROWN_FRAME_DIAG] Initial mask shape: {msk.shape}, all ones")
+                print(f"[SVI_BROWN_FRAME_DIAG] Setting msk[:, {control_pre_frames_count}:-1] = 0 (frames to GENERATE)")
+                
                 msk[:, control_pre_frames_count:-1] = 0
+                
+                # [SVI_BROWN_FRAME_DIAG] Log after zeroing
+                _known_before_expand = int((msk[0, :, 0, 0] > 0.5).sum().item())
+                _total_before_expand = msk.shape[1]
+                print(f"[SVI_BROWN_FRAME_DIAG] After zeroing: {_known_before_expand} known / {_total_before_expand} total")
+                print(f"[SVI_BROWN_FRAME_DIAG]   Known frames: indices 0:{control_pre_frames_count} (start) + index -1 (end)")
+                print(f"[SVI_BROWN_FRAME_DIAG]   Generate frames: indices {control_pre_frames_count}:-1")
+                
                 msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
+                
+                # [SVI_BROWN_FRAME_DIAG] Log after expansion
+                print(f"[SVI_BROWN_FRAME_DIAG] After first-frame expansion: msk.shape={msk.shape}")
+                
                 try:
                     known = int((msk[0, :, 0, 0] > 0.5).sum().item())
                     total = int(msk.shape[1])
@@ -834,6 +931,23 @@ class WanAny2V:
                 msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:] ], dim=1)
             msk = msk.view(1, msk.shape[1] // 4, 4, lat_h, lat_w)
             msk = msk.transpose(1, 2)[0]
+            
+            # [SVI_BROWN_FRAME_DIAG] Final mask summary
+            try:
+                _final_mask_known = int((msk.flatten() > 0.5).sum().item())
+                _final_mask_total = msk.numel()
+                _final_mask_generate = _final_mask_total - _final_mask_known
+                print(f"[SVI_BROWN_FRAME_DIAG] ═══════════════════════════════════════════════════════════════")
+                print(f"[SVI_BROWN_FRAME_DIAG] FINAL MASK SUMMARY")
+                print(f"[SVI_BROWN_FRAME_DIAG] msk.shape={msk.shape}")
+                print(f"[SVI_BROWN_FRAME_DIAG] Known (preserve) elements: {_final_mask_known}")
+                print(f"[SVI_BROWN_FRAME_DIAG] Generate elements: {_final_mask_generate}")
+                print(f"[SVI_BROWN_FRAME_DIAG] Ratio: {_final_mask_known}/{_final_mask_total} = {_final_mask_known/_final_mask_total*100:.1f}% known")
+                if _final_mask_generate == 0:
+                    print(f"[SVI_BROWN_FRAME_DIAG] ⚠️  WARNING: No frames marked for generation! Model will preserve all frames!")
+                print(f"[SVI_BROWN_FRAME_DIAG] ═══════════════════════════════════════════════════════════════")
+            except Exception as e:
+                print(f"[SVI_BROWN_FRAME_DIAG] Could not compute mask summary: {e}")
 
             image_start = image_end = img_end_frame = image_ref = control_video = None
 
