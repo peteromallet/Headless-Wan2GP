@@ -920,11 +920,18 @@ class HeadlessTaskQueue:
                         # Without this, sliding_window_overlap=4 becomes 1 via: (4-1)//4*4+1 = 1
                         # The original SVI model has overlap_default=4, which makes the formula skip
                         wgp.wan_model.model_def["sliding_window_defaults"] = {"overlap_default": 4}
+
+                        # CRITICAL: In our kijai-style SVI+end-frame pixel concatenation path, the middle frames
+                        # are currently constructed as zeros by default. This can manifest as grey/washed-out
+                        # middle frames because the VAE encodes a long run of constant 0 pixels.
+                        # Enable anchor-padding for empty frames (kijai "empty_frame_pad_image" analogue).
+                        wgp.wan_model.model_def["svi_pad_empty_frames_with_anchor"] = True
                         
                         # Also patch wgp.models_def for consistency
                         if model_key in wgp.models_def:
                             wgp.models_def[model_key]["sliding_window"] = True
                             wgp.models_def[model_key]["sliding_window_defaults"] = {"overlap_default": 4}
+                            wgp.models_def[model_key]["svi_pad_empty_frames_with_anchor"] = True
                         
                         _wan_model_patched = True
                         
