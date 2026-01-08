@@ -307,9 +307,9 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
     if "phase_config" in extracted_params:
         db_task_params["phase_config"] = extracted_params["phase_config"]
 
-    for param in ["additional_loras", "orchestrator_payload"]:
-        if param in extracted_params and param not in generation_params:
-            generation_params[param] = extracted_params[param]
+    # Copy additional_loras from extracted params if not already in generation_params
+    if "additional_loras" in extracted_params and "additional_loras" not in generation_params:
+        generation_params["additional_loras"] = extracted_params["additional_loras"]
     
     if "steps" in db_task_params and "num_inference_steps" not in generation_params:
         generation_params["num_inference_steps"] = db_task_params["steps"]

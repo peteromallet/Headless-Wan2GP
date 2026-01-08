@@ -1720,7 +1720,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "continue_from_video_resolved_path_for_guide": orchestrator_payload.get("continue_from_video_resolved_path") if idx == 0 else None,
                 "consolidated_end_anchor_idx": orchestrator_payload.get("_consolidated_end_anchors", [None] * num_segments)[idx] if orchestrator_payload.get("_consolidated_end_anchors") else None,
                 "consolidated_keyframe_positions": orchestrator_payload.get("_consolidated_keyframe_positions", [None] * num_segments)[idx] if orchestrator_payload.get("_consolidated_end_anchors") else None,
-                "full_orchestrator_payload": orchestrator_payload, # Ensure full payload is passed to segment
+                "orchestrator_details": orchestrator_payload, # Canonical name for full orchestrator payload
                 
                 # Structure video guidance parameters
                 "structure_video_path": structure_video_path,
@@ -1865,7 +1865,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "final_stitched_output_path": str(final_stitched_output_path.resolve()),
                 "poll_interval_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_interval", 15),
                 "poll_timeout_from_orchestrator": orchestrator_payload.get("original_common_args", {}).get("poll_timeout", 1800),
-                "full_orchestrator_payload": orchestrator_payload,
+                "orchestrator_details": orchestrator_payload,  # Canonical name
                 "use_svi": use_svi,  # Pass SVI flag to stitch task
             }
             
@@ -1948,7 +1948,8 @@ def _handle_travel_chaining_after_wgp(wgp_task_params: dict, actual_wgp_output_v
         orchestrator_task_id_ref = chain_details["orchestrator_task_id_ref"]
         orchestrator_run_id = chain_details["orchestrator_run_id"]
         segment_idx_completed = chain_details["segment_index_completed"]
-        full_orchestrator_payload = chain_details["full_orchestrator_payload"]
+        # Support both canonical (orchestrator_details) and legacy (full_orchestrator_payload) names
+        full_orchestrator_payload = chain_details.get("orchestrator_details") or chain_details.get("full_orchestrator_payload")
         segment_processing_dir_for_saturation_str = chain_details["segment_processing_dir_for_saturation"]
 
         is_first_new_segment_after_continue = chain_details.get("is_first_new_segment_after_continue", False)
@@ -2463,14 +2464,15 @@ def _handle_travel_stitch_task(task_params_from_db: dict, main_output_dir_base: 
         # --- 1. Initialization & Parameter Extraction --- 
         orchestrator_task_id_ref = stitch_params.get("orchestrator_task_id_ref")
         orchestrator_run_id = stitch_params.get("orchestrator_run_id")
-        full_orchestrator_payload = stitch_params.get("full_orchestrator_payload")
+        # Support both canonical (orchestrator_details) and legacy (full_orchestrator_payload) names
+        full_orchestrator_payload = stitch_params.get("orchestrator_details") or stitch_params.get("full_orchestrator_payload")
 
         print(f"[IMMEDIATE DEBUG] orchestrator_run_id: {orchestrator_run_id}")
         print(f"[IMMEDIATE DEBUG] orchestrator_task_id_ref: {orchestrator_task_id_ref}")
         print(f"[IMMEDIATE DEBUG] full_orchestrator_payload present: {full_orchestrator_payload is not None}")
 
         if not all([orchestrator_task_id_ref, orchestrator_run_id, full_orchestrator_payload]):
-            msg = f"Stitch task {stitch_task_id_str} missing critical orchestrator refs or full_orchestrator_payload."
+            msg = f"Stitch task {stitch_task_id_str} missing critical orchestrator refs or orchestrator_details."
             travel_logger.error(msg, task_id=stitch_task_id_str)
             return False, msg
 
