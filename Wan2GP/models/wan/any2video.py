@@ -724,49 +724,23 @@ class WanAny2V:
                         print(f"[SVI_DEBUG] overlap_size={overlap_size}, vae_end_frame_mode={vae_end_frame_mode}")
                     
                     # Determine start portion (pixels)
-                    if prefix_video is not None and prefix_video.shape[1] >= (5 + overlap_size):
-                        # Continuation: use last (5 + overlap_size) frames from prefix video
-                        prefix_context_count = 5 + overlap_size
-                        start_pixels = prefix_video[:, -prefix_context_count:].to(device=self.device, dtype=self.VAE_dtype)
-                        svi_start_frame_count = prefix_context_count
-                        post_decode_pre_trim = 1
+                    # IMPORTANT: For overlap stitching, SVI is supposed to PRESERVE only `overlap_size` frames.
+                    # In our headless pipeline `control_video`/`input_video` already contains those overlap frames
+                    # (e.g. 4 frames), and `control_pre_frames_count` reflects that.
+                    #
+                    # The original Wan2GP any_end_frame path encodes ONLY `control_video` (not a 5+overlap prefix),
+                    # then masks `msk[:, control_pre_frames_count:-1] = 0` to generate the middle frames.
+                    #
+                    # So: use `control_video` as start_pixels here, keep preserve count = control_pre_frames_count.
+                    start_pixels = control_video.to(device=self.device, dtype=self.VAE_dtype)
+                    svi_start_frame_count = control_pre_frames_count
+                    post_decode_pre_trim = 1
 
-                        # IMPORTANT:
-                        # In this kijai-style SVI+end-frame path, we VAE-encode `start_pixels` into `lat_y`.
-                        # If the mask later uses a smaller `control_pre_frames_count` (e.g. from `input_video`),
-                        # we end up *encoding* more known frames than we *preserve*, which can wash out / grey
-                        # the transition because those frames get treated as "generate" despite being pre-filled.
-                        # Align the mask's preserved-frame count with the actual start pixel context we encoded.
-                        _orig_control_pre_frames_count = control_pre_frames_count
-                        control_pre_frames_count = svi_start_frame_count
-                        print(
-                            f"[SVI_MASK_ALIGN] Aligning control_pre_frames_count to svi_start_frame_count "
-                            f"for SVI+end-frame continuation: {_orig_control_pre_frames_count} -> {control_pre_frames_count}"
-                        )
-                        
-                        # [SVI_BROWN_FRAME_DIAG] Log continuation path details
-                        print(f"[SVI_BROWN_FRAME_DIAG] ✅ CONTINUATION MODE ACTIVATED")
-                        print(f"[SVI_BROWN_FRAME_DIAG]   start_pixels = prefix_video[:, -{prefix_context_count}:]")
-                        print(f"[SVI_BROWN_FRAME_DIAG]   start_pixels.shape={start_pixels.shape}")
-                        print(f"[SVI_BROWN_FRAME_DIAG]   start_pixels pixel range: min={start_pixels.min().item():.3f}, max={start_pixels.max().item():.3f}")
-                        
-                        if _svi_debug:
-                            print(f"[SVI_DEBUG] CONTINUATION mode: using last {prefix_context_count} prefix frames as start")
-                            print(f"[SVI_DEBUG] start_pixels.shape={start_pixels.shape}")
-                    else:
-                        # First segment: use anchor image as single start frame
-                        start_pixels = image_ref
-                        svi_start_frame_count = 1
-                        
-                        # [SVI_BROWN_FRAME_DIAG] Log first segment path
-                        print(f"[SVI_BROWN_FRAME_DIAG] ⚠️  FIRST SEGMENT MODE (single anchor frame)")
-                        if prefix_video is not None:
-                            print(f"[SVI_BROWN_FRAME_DIAG]   ⚠️  prefix_video exists but has only {prefix_video.shape[1]} frames (need {5 + overlap_size})")
-                        print(f"[SVI_BROWN_FRAME_DIAG]   start_pixels.shape={start_pixels.shape}")
-                        
-                        if _svi_debug:
-                            print(f"[SVI_DEBUG] FIRST SEGMENT mode: using anchor image as single start frame")
-                            print(f"[SVI_DEBUG] start_pixels.shape={start_pixels.shape}")
+                    # [SVI_BROWN_FRAME_DIAG] Log start_pixels selection
+                    print(f"[SVI_BROWN_FRAME_DIAG] Using control_video for SVI+end-frame start pixels")
+                    print(f"[SVI_BROWN_FRAME_DIAG]   control_pre_frames_count={control_pre_frames_count}, overlap_size={overlap_size}")
+                    print(f"[SVI_BROWN_FRAME_DIAG]   start_pixels.shape={start_pixels.shape}")
+                    print(f"[SVI_BROWN_FRAME_DIAG]   start_pixels pixel range: min={start_pixels.min().item():.3f}, max={start_pixels.max().item():.3f}")
                     
                     # Calculate empty frame count
                     # frame_num = start_frame_count + empty_frame_count + 1 (end frame)
