@@ -260,6 +260,12 @@ def main():
     debug_mode = cli_args.debug
     if debug_mode:
         enable_debug_mode()
+        # Set Wan2GP verbose level so SVI and other debug logs appear
+        try:
+            from mmgp import offload
+            offload.default_verboseLevel = 2
+        except ImportError:
+            pass  # mmgp not yet available, will be set when model loads
         if not cli_args.save_logging:
             # Automatically save logs to debug/ directory if debug mode is on
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")

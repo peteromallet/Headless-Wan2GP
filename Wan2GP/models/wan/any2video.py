@@ -629,12 +629,15 @@ class WanAny2V:
             clip_image_start, clip_image_end = image_start, image_end
 
             # SVI Pro encoding path - kijai-style approach:
-            # - With end frame: Fill middle with START image (not zeros), encode all together
-            # - Without end frame: Original SVI with anchor + zero padding
-            # This maintains VAE temporal coherence while mask controls what model generates
+            # Pixel-space concatenation with single VAE encode for better temporal coherence.
+            # Empty frames are zeros by default (like kijai), optionally padded with anchor.
+            # Mask controls what the model generates vs preserves.
             if svi_pro:
                 use_extended_overlapped_latents = False
                 remaining_frames = frame_num - control_pre_frames_count
+                
+                # Debug logging for SVI path - enabled via --verbose 2 or higher
+                _svi_debug = getattr(offload, 'default_verboseLevel', 0) >= 2
                 
                 # Get anchor/reference image
                 if input_ref_images is None or len(input_ref_images)==0:                        
@@ -644,34 +647,92 @@ class WanAny2V:
                     image_ref = input_ref_images[ min(window_no, len(input_ref_images))-1 ]
                 image_ref = convert_image_to_tensor(image_ref).unsqueeze(1).to(device=self.device, dtype=self.VAE_dtype)
                 
-                if overlapped_latents is not None:
-                    post_decode_pre_trim = 1
-                elif prefix_video is not None and prefix_video.shape[1] >= (5 + overlap_size):
-                    overlapped_latents = self.vae.encode([torch.cat( [prefix_video[:, -(5 + overlap_size):]], dim=1)], VAE_tile_size)[0][:, -overlap_size//4: ].unsqueeze(0)
-                    post_decode_pre_trim = 1
+                # Track how many start frames we have (for mask construction)
+                svi_start_frame_count = 1  # Default: just anchor
                 
                 if any_end_frame:
-                    # SVI + END FRAME: Encode anchor and end separately, pad middle with ZEROS
-                    # lat_y = [anchor_latent | zeros | end_latent]
-                    image_ref_latents = self.vae.encode([image_ref], VAE_tile_size)[0]
-                    end_latents = self.vae.encode([img_end_frame], VAE_tile_size, any_end_frame=vae_end_frame_mode)[0]
+                    # ============================================================
+                    # kijai-style SVI + END FRAME: Pixel-space concatenation
+                    # Build [start_frames | zeros_or_anchor | end_frame] in pixels
+                    # Then single VAE encode with end_=True
+                    # ============================================================
+                    if _svi_debug:
+                        print(f"[SVI_DEBUG] ========== SVI + END FRAME PATH (kijai-style) ==========")
+                        print(f"[SVI_DEBUG] frame_num={frame_num}, height={height}, width={width}")
+                        print(f"[SVI_DEBUG] image_ref.shape={image_ref.shape}, img_end_frame.shape={img_end_frame.shape}")
+                        print(f"[SVI_DEBUG] prefix_video={'None' if prefix_video is None else prefix_video.shape}")
+                        print(f"[SVI_DEBUG] overlap_size={overlap_size}, vae_end_frame_mode={vae_end_frame_mode}")
                     
-                    overlap_len = overlapped_latents.shape[2] if overlapped_latents is not None else 0
-                    anchor_len = image_ref_latents.shape[1]
-                    end_len = end_latents.shape[1]
-                    pad_len = lat_frames + ref_images_count - anchor_len - end_len - overlap_len
-                    
-                    pad_latents = torch.zeros(image_ref_latents.shape[0], pad_len, lat_h, lat_w, 
-                                              device=image_ref_latents.device, dtype=image_ref_latents.dtype)
-                    
-                    if overlapped_latents is None:
-                        lat_y = torch.concat([image_ref_latents, pad_latents, end_latents], dim=1).to(self.device)
+                    # Determine start portion (pixels)
+                    if prefix_video is not None and prefix_video.shape[1] >= (5 + overlap_size):
+                        # Continuation: use last (5 + overlap_size) frames from prefix video
+                        prefix_context_count = 5 + overlap_size
+                        start_pixels = prefix_video[:, -prefix_context_count:].to(device=self.device, dtype=self.VAE_dtype)
+                        svi_start_frame_count = prefix_context_count
+                        post_decode_pre_trim = 1
+                        if _svi_debug:
+                            print(f"[SVI_DEBUG] CONTINUATION mode: using last {prefix_context_count} prefix frames as start")
+                            print(f"[SVI_DEBUG] start_pixels.shape={start_pixels.shape}")
                     else:
-                        lat_y = torch.concat([image_ref_latents, overlapped_latents.squeeze(0), pad_latents, end_latents], dim=1).to(self.device)
+                        # First segment: use anchor image as single start frame
+                        start_pixels = image_ref
+                        svi_start_frame_count = 1
+                        if _svi_debug:
+                            print(f"[SVI_DEBUG] FIRST SEGMENT mode: using anchor image as single start frame")
+                            print(f"[SVI_DEBUG] start_pixels.shape={start_pixels.shape}")
                     
-                    image_ref_latents = end_latents = None
+                    # Calculate empty frame count
+                    # frame_num = start_frame_count + empty_frame_count + 1 (end frame)
+                    empty_frame_count = frame_num - svi_start_frame_count - 1
+                    
+                    # Build empty pixels.
+                    # Ground-truth (kijai): these are ZERO frames by default, and can optionally be
+                    # replaced by a pad image (empty_frame_pad_image) before VAE encoding.
+                    svi_pad_empty_with_anchor = bool(model_def.get("svi_pad_empty_frames_with_anchor", False))
+                    if empty_frame_count > 0:
+                        empty_pixels = image_ref.new_zeros((image_ref.shape[0], empty_frame_count, height, width))
+                        if svi_pad_empty_with_anchor:
+                            # Closest analogue to kijai's empty_frame_pad_image: use anchor as the pad image.
+                            empty_pixels = image_ref.expand(-1, empty_frame_count, -1, -1).clone()
+                    else:
+                        empty_pixels = image_ref[:, :0]  # Empty tensor with correct shape
+                    
+                    if _svi_debug:
+                        print(f"[SVI_DEBUG] empty_frame_count={empty_frame_count}, svi_pad_empty_with_anchor={svi_pad_empty_with_anchor}")
+                        print(f"[SVI_DEBUG] empty_pixels.shape={empty_pixels.shape}, empty_pixels content={'ZEROS' if not svi_pad_empty_with_anchor else 'ANCHOR_PADDED'}")
+                    
+                    # Build concatenated pixel tensor: [start | zeros_or_anchor | end]
+                    concatenated = torch.cat([start_pixels, empty_pixels, img_end_frame], dim=1).to(self.device)
+                    
+                    if _svi_debug:
+                        print(f"[SVI_DEBUG] concatenated pixel tensor: {concatenated.shape}")
+                        print(f"[SVI_DEBUG]   breakdown: start[:{svi_start_frame_count}] + empty[{svi_start_frame_count}:{svi_start_frame_count+empty_frame_count}] + end[{svi_start_frame_count+empty_frame_count}:]")
+                        print(f"[SVI_DEBUG]   total pixel frames: {concatenated.shape[1]} (expected: {frame_num})")
+                    
+                    # Single VAE encode with end frame mode (like kijai's end_= parameter)
+                    lat_y = self.vae.encode([concatenated], VAE_tile_size, any_end_frame=vae_end_frame_mode)[0]
+                    
+                    if _svi_debug:
+                        print(f"[SVI_DEBUG] VAE encoded: lat_y.shape={lat_y.shape}")
+                        print(f"[SVI_DEBUG]   expected latent frames: {(frame_num - 1) // 4 + 1}")
+                    
+                    # For continuation compatibility, extract overlapped_latents from encoded result
+                    # This is used by downstream code for temporal continuity
+                    if prefix_video is not None and prefix_video.shape[1] >= (5 + overlap_size):
+                        start_latent_count = (svi_start_frame_count - 1) // 4 + 1
+                        overlapped_latents = lat_y[:, :start_latent_count].clone().unsqueeze(0)
+                        if _svi_debug:
+                            print(f"[SVI_DEBUG] Extracted overlapped_latents for continuation: {overlapped_latents.shape}")
+                    
+                    del concatenated, empty_pixels, start_pixels
                 else:
-                    # No end frame - use original SVI approach: [anchor_latent | zeros]
+                    # No end frame - use original SVI approach with zero latent padding
+                    if overlapped_latents is not None:
+                        post_decode_pre_trim = 1
+                    elif prefix_video is not None and prefix_video.shape[1] >= (5 + overlap_size):
+                        overlapped_latents = self.vae.encode([torch.cat([prefix_video[:, -(5 + overlap_size):]], dim=1)], VAE_tile_size)[0][:, -overlap_size//4:].unsqueeze(0)
+                        post_decode_pre_trim = 1
+                    
                     image_ref_latents = self.vae.encode([image_ref], VAE_tile_size)[0]
                     
                     pad_len = lat_frames + ref_images_count - image_ref_latents.shape[1] - (overlapped_latents.shape[2] if overlapped_latents is not None else 0)
@@ -717,10 +778,34 @@ class WanAny2V:
 
             msk = torch.ones(1, frame_num + ref_images_count * 4, lat_h, lat_w, device=self.device)
             if svi_pro and any_end_frame:
-                # SVI + end frame: mask = [1,1,1,1 | 0,0,0,...,0 | 1,1,1,1]
-                msk[:, 1:] = 0
-                msk = torch.concat([ torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:] ], dim=1)
-                msk[:, -4:] = 1  # Mark last latent frame as known for end frame
+                # Ground-truth (kijai): build mask in pixel-frame space, then
+                # repeat the first frame (4x) and the end frame (4x) once.
+                #
+                # We adapt this for continuation by allowing multiple known "start" frames
+                # (e.g. prefix context frames), not just the first frame.
+                base_frames = frame_num
+                msk = torch.zeros(1, base_frames, lat_h, lat_w, device=self.device, dtype=lat_y.dtype)
+                if svi_start_frame_count > 0:
+                    msk[:, :svi_start_frame_count] = 1
+                msk[:, -1:] = 1
+
+                if _svi_debug:
+                    # Summarize mask before expansion
+                    mask_known_frames = (msk[0, :, 0, 0] > 0.5).sum().item()
+                    print(f"[SVI_DEBUG] MASK (pixel-frame space, before expansion):")
+                    print(f"[SVI_DEBUG]   base_frames={base_frames}, svi_start_frame_count={svi_start_frame_count}")
+                    print(f"[SVI_DEBUG]   known frames: first {svi_start_frame_count} + last 1 = {mask_known_frames} total")
+                    print(f"[SVI_DEBUG]   generate frames: {base_frames - mask_known_frames} (middle)")
+
+                start_mask_repeated = torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1)
+                end_mask_repeated = torch.repeat_interleave(msk[:, -1:], repeats=4, dim=1)
+                msk = torch.cat([start_mask_repeated, msk[:, 1:-1], end_mask_repeated], dim=1)
+                
+                if _svi_debug:
+                    print(f"[SVI_DEBUG] MASK (after expansion): msk.shape={msk.shape}")
+                    print(f"[SVI_DEBUG]   first 4 subframes (start): all 1s (known)")
+                    print(f"[SVI_DEBUG]   last 4 subframes (end): all 1s (known)")
+                    print(f"[SVI_DEBUG]   middle: {msk.shape[1] - 8} subframes ({'mixed' if svi_start_frame_count > 1 else '0s (generate)'})")
             elif any_end_frame:
                 msk[:, control_pre_frames_count: -1] = 0
                 if add_frames_for_end_image:
