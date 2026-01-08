@@ -747,20 +747,33 @@ class WanAny2V:
                     empty_frame_count = frame_num - svi_start_frame_count - 1
                     
                     # Build empty pixels.
-                    # Ground-truth (kijai): these are ZERO frames by default, and can optionally be
-                    # replaced by a pad image (empty_frame_pad_image) before VAE encoding.
-                    svi_pad_empty_with_anchor = bool(model_def.get("svi_pad_empty_frames_with_anchor", False))
+                    # By default kijai uses ZERO frames here. In practice, for very low step counts (e.g. 6-step lightning),
+                    # a long run of constant pixels (all zeros OR all-anchor) can produce washed/grey middles or frozen frames.
+                    #
+                    # We support 3 modes:
+                    # - zeros  : original style (all 0 pixels)
+                    # - anchor : fill with the anchor image (can look "frozen" by definition)
+                    # - noise  : fill with random pixels in [-1, 1] (gives diffusion a non-degenerate init)
+                    svi_empty_frames_mode = str(model_def.get("svi_empty_frames_mode", "zeros")).lower()
                     if empty_frame_count > 0:
                         empty_pixels = image_ref.new_zeros((image_ref.shape[0], empty_frame_count, height, width))
-                        if svi_pad_empty_with_anchor:
+                        if svi_empty_frames_mode == "anchor":
                             # Closest analogue to kijai's empty_frame_pad_image: use anchor as the pad image.
                             empty_pixels = image_ref.expand(-1, empty_frame_count, -1, -1).clone()
+                        elif svi_empty_frames_mode == "noise":
+                            noise_type = str(model_def.get("svi_empty_frames_noise_type", "uniform")).lower()
+                            if noise_type == "normal":
+                                empty_pixels = torch.randn_like(empty_pixels).clamp(-1, 1)
+                            else:
+                                # uniform in [-1, 1]
+                                empty_pixels = (torch.rand_like(empty_pixels) * 2 - 1).clamp(-1, 1)
                     else:
                         empty_pixels = image_ref[:, :0]  # Empty tensor with correct shape
                     
                     if _svi_debug:
-                        print(f"[SVI_DEBUG] empty_frame_count={empty_frame_count}, svi_pad_empty_with_anchor={svi_pad_empty_with_anchor}")
-                        print(f"[SVI_DEBUG] empty_pixels.shape={empty_pixels.shape}, empty_pixels content={'ZEROS' if not svi_pad_empty_with_anchor else 'ANCHOR_PADDED'}")
+                        print(f"[SVI_DEBUG] empty_frame_count={empty_frame_count}, svi_empty_frames_mode={svi_empty_frames_mode}")
+                        _content = "ZEROS" if svi_empty_frames_mode == "zeros" else "ANCHOR_PADDED" if svi_empty_frames_mode == "anchor" else "NOISE"
+                        print(f"[SVI_DEBUG] empty_pixels.shape={empty_pixels.shape}, empty_pixels content={_content}")
                     
                     # Build concatenated pixel tensor: [start | zeros_or_anchor | end]
                     concatenated = torch.cat([start_pixels, empty_pixels, img_end_frame], dim=1).to(self.device)

@@ -921,17 +921,20 @@ class HeadlessTaskQueue:
                         # The original SVI model has overlap_default=4, which makes the formula skip
                         wgp.wan_model.model_def["sliding_window_defaults"] = {"overlap_default": 4}
 
-                        # CRITICAL: In our kijai-style SVI+end-frame pixel concatenation path, the middle frames
-                        # are currently constructed as zeros by default. This can manifest as grey/washed-out
-                        # middle frames because the VAE encodes a long run of constant 0 pixels.
-                        # Enable anchor-padding for empty frames (kijai "empty_frame_pad_image" analogue).
-                        wgp.wan_model.model_def["svi_pad_empty_frames_with_anchor"] = True
+                        # CRITICAL: In the kijai-style SVI+end-frame pixel concatenation path, the middle frames
+                        # are initialized as a long run of "empty" pixels before VAE encode.
+                        # - If we use zeros: can look washed/grey in very low-step lightning.
+                        # - If we use anchor: will look "frozen" (by definition).
+                        # Prefer noise-filled empty pixels for low-step runs so diffusion has non-degenerate init.
+                        wgp.wan_model.model_def["svi_empty_frames_mode"] = "noise"
+                        wgp.wan_model.model_def["svi_empty_frames_noise_type"] = "uniform"
                         
                         # Also patch wgp.models_def for consistency
                         if model_key in wgp.models_def:
                             wgp.models_def[model_key]["sliding_window"] = True
                             wgp.models_def[model_key]["sliding_window_defaults"] = {"overlap_default": 4}
-                            wgp.models_def[model_key]["svi_pad_empty_frames_with_anchor"] = True
+                            wgp.models_def[model_key]["svi_empty_frames_mode"] = "noise"
+                            wgp.models_def[model_key]["svi_empty_frames_noise_type"] = "uniform"
                         
                         _wan_model_patched = True
                         
