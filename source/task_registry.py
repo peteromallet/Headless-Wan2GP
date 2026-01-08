@@ -236,15 +236,24 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                     # Get predecessor video frame count
                     pred_frames, pred_fps = sm_get_video_frame_count_and_fps(predecessor_video_path)
                     if pred_frames and pred_frames > 0:
-                        # Extract last 9 frames (5 + overlap_size=4) for SVI overlapped_latents
-                        overlap_size = 4  # SVI_STITCH_OVERLAP
-                        frames_needed = 5 + overlap_size  # 9 frames total
+                        # IMPORTANT GROUND TRUTH:
+                        # Wan2GP SVI continuation uses the last (5 + overlap_size) frames of prefix_video
+                        # to build `overlapped_latents`. The extra 5 frames are *model context*; the
+                        # overlap_size (4) is the actual stitch overlap we keep in the final segment.
+                        #
+                        # So we intentionally extract MORE than 4 frames here (usually 9), but after WGP
+                        # generation we trim the output so only the last 4 prefix frames remain as the
+                        # overlap with the previous segment.
+                        prefix_min_context = 5
+                        overlap_size = 4  # SVI_STITCH_OVERLAP (pixel-frame overlap)
+                        frames_needed = prefix_min_context + overlap_size  # 9 frames total
                         start_frame = max(0, int(pred_frames) - frames_needed)
                         
                         # GROUND TRUTH LOG: Predecessor video analysis
                         dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}: ========== PREDECESSOR ANALYSIS ==========")
                         dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}: Predecessor video: {predecessor_video_path}")
                         dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}: Predecessor total frames: {pred_frames}")
+                        dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}: prefix_min_context={prefix_min_context}, overlap_size={overlap_size} => frames_needed={frames_needed}")
                         dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}: Extracting frames [{start_frame}:{pred_frames}] (last {frames_needed} frames)")
                         dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}: Frame range breakdown:")
                         dprint_func(f"[SVI_GROUND_TRUTH] Seg {segment_idx}:   - Frames 0-{start_frame-1}: Will be DISCARDED (not needed)")

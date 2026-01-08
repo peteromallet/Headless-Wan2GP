@@ -256,7 +256,13 @@ def generate_transition_prompt(
         if str(wan_dir) not in sys.path:
             sys.path.insert(0, str(wan_dir))
 
-        from Wan2GP.wan.utils.prompt_extend import QwenPromptExpander
+        # Wan2GP has moved this helper a few times across forks. Prefer the canonical
+        # location in this repo (`Wan2GP/shared/utils/prompt_extend.py`) and fall back
+        # to older paths for compatibility.
+        try:
+            from Wan2GP.shared.utils.prompt_extend import QwenPromptExpander  # type: ignore
+        except ModuleNotFoundError:
+            from Wan2GP.wan.utils.prompt_extend import QwenPromptExpander  # type: ignore
 
         dprint(f"[VLM_TRANSITION] Generating transition prompt from {Path(start_image_path).name} → {Path(end_image_path).name}")
 
