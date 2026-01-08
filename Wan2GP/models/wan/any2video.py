@@ -563,6 +563,13 @@ class WanAny2V:
             print(f"[SVI_STATUS] svi2pro=True from kwargs (model_def didn't have it)")
         svi_mode = 2 if svi_pro  else 0
         
+        # CRITICAL: Always log SVI status for debugging brown frame issues
+        print(f"[SVI_ENCODING_STATUS] ═══════════════════════════════════════════════════════")
+        print(f"[SVI_ENCODING_STATUS] svi_pro={svi_pro} | model_def.svi2pro={model_def.get('svi2pro', 'NOT_SET')}")
+        print(f"[SVI_ENCODING_STATUS] model_type={model_type} | input_video_shape={input_video.shape if input_video is not None else 'None'}")
+        print(f"[SVI_ENCODING_STATUS] Will use SVI encoding path: {svi_pro}")
+        print(f"[SVI_ENCODING_STATUS] ═══════════════════════════════════════════════════════")
+        
         # Early SVI status log (always shown when debug mode, helps trace if patching worked)
         if getattr(offload, 'default_verboseLevel', 0) >= 2:
             print(f"[SVI_STATUS] svi_pro={svi_pro} (model_def={model_def.get('svi2pro', False)}, kwargs={bbargs.get('svi2pro', False)}), any_end_frame will be checked later") 
@@ -643,6 +650,11 @@ class WanAny2V:
             if svi_pro:
                 use_extended_overlapped_latents = False
                 remaining_frames = frame_num - control_pre_frames_count
+                
+                # CRITICAL: Always log when we enter SVI encoding path
+                print(f"[SVI_ENCODING_PATH] ✅ ENTERED SVI_PRO ENCODING PATH")
+                print(f"[SVI_ENCODING_PATH] control_pre_frames_count={control_pre_frames_count}, remaining_frames={remaining_frames}")
+                print(f"[SVI_ENCODING_PATH] any_end_frame={any_end_frame}, frame_num={frame_num}")
                 
                 # Debug logging for SVI path - enabled via --verbose 2 or higher
                 _svi_debug = getattr(offload, 'default_verboseLevel', 0) >= 2
@@ -785,6 +797,7 @@ class WanAny2V:
 
             if not svi_pro:
                 # For Wan2.2 I2V, use VAE end-frame mode without changing frame_num/mask layout.
+                print(f"[SVI_ENCODING_PATH] ❌ NOT using SVI encoding (svi_pro=False) - using standard VAE encode")
                 lat_y = self.vae.encode([enc], VAE_tile_size, any_end_frame=vae_end_frame_mode or (any_end_frame and add_frames_for_end_image))[0]
 
 

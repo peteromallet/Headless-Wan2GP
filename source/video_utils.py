@@ -1741,7 +1741,13 @@ def extract_last_frame_as_image(video_path: str | Path, output_dir: Path, task_i
 
         if ret:
             output_path = output_dir / f"last_frame_ref_{Path(video_path).stem}.png"
-            cv2.imwrite(str(output_path), frame)
+            # IMPORTANT: OpenCV frames are BGR. If we save with cv2.imwrite and later
+            # read with PIL (RGB), colors will be channel-swapped and can appear as
+            # a warm/brown tint. Save via PIL after converting to RGB to preserve
+            # correct colors across libraries.
+            output_dir.mkdir(parents=True, exist_ok=True)
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            Image.fromarray(frame_rgb).save(str(output_path))
             return str(output_path.resolve())
         dprint(f"Task {task_id_for_log} extract_last_frame_as_image: Failed to read last frame from {video_path}")
         return None
