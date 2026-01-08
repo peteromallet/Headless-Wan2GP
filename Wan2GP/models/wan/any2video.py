@@ -892,8 +892,9 @@ class WanAny2V:
                 # - known/preserved frames => 1 (start frames + end frame)
                 # - frames to generate     => 0 (the in-between frames)
                 #
-                # CRITICAL: Expand BOTH first AND last frame to 4 subframes for VAE temporal alignment
-                # (matching kijai's implementation and the standard any_end_frame path)
+                # Mask expansion must match the model type:
+                # - Wan 2.1 (i2v): expand BOTH first AND last frame to 4 subframes
+                # - Wan 2.2 (i2v_2_2): expand ONLY first frame (end frame handled differently by VAE)
                 msk = torch.ones(1, frame_num + ref_images_count * 4, lat_h, lat_w, device=self.device, dtype=lat_y.dtype)
                 
                 # [SVI_BROWN_FRAME_DIAG] Log pre-modification mask
@@ -909,15 +910,22 @@ class WanAny2V:
                 print(f"[SVI_BROWN_FRAME_DIAG]   Known frames: indices 0:{control_pre_frames_count} (start) + index -1 (end)")
                 print(f"[SVI_BROWN_FRAME_DIAG]   Generate frames: indices {control_pre_frames_count}:-1")
                 
-                # Expand FIRST frame to 4 subframes AND LAST frame to 4 subframes (like kijai)
-                msk = torch.concat([
-                    torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1),  # First frame → 4 subframes
-                    msk[:, 1:-1],                                             # Middle frames unchanged
-                    torch.repeat_interleave(msk[:, -1:], repeats=4, dim=1)   # Last frame → 4 subframes
-                ], dim=1)
-                
-                # [SVI_BROWN_FRAME_DIAG] Log after expansion
-                print(f"[SVI_BROWN_FRAME_DIAG] After first+last frame expansion: msk.shape={msk.shape}")
+                # Match the standard any_end_frame path: use add_frames_for_end_image to decide expansion
+                if add_frames_for_end_image:
+                    # Wan 2.1: expand both first AND last
+                    msk = torch.concat([
+                        torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1),
+                        msk[:, 1:-1],
+                        torch.repeat_interleave(msk[:, -1:], repeats=4, dim=1)
+                    ], dim=1)
+                    print(f"[SVI_BROWN_FRAME_DIAG] After first+last frame expansion (Wan 2.1): msk.shape={msk.shape}")
+                else:
+                    # Wan 2.2: expand only first frame (VAE handles end frame differently)
+                    msk = torch.concat([
+                        torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1),
+                        msk[:, 1:]
+                    ], dim=1)
+                    print(f"[SVI_BROWN_FRAME_DIAG] After first-frame-only expansion (Wan 2.2): msk.shape={msk.shape}")
                 
                 try:
                     known = int((msk[0, :, 0, 0] > 0.5).sum().item())
