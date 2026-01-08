@@ -922,19 +922,16 @@ class HeadlessTaskQueue:
                         wgp.wan_model.model_def["sliding_window_defaults"] = {"overlap_default": 4}
 
                         # CRITICAL: In the kijai-style SVI+end-frame pixel concatenation path, the middle frames
-                        # are initialized as a long run of "empty" pixels before VAE encode.
-                        # - If we use zeros: can look washed/grey in very low-step lightning.
-                        # - If we use anchor: will look "frozen" (by definition).
-                        # Prefer noise-filled empty pixels for low-step runs so diffusion has non-degenerate init.
-                        wgp.wan_model.model_def["svi_empty_frames_mode"] = "noise"
-                        wgp.wan_model.model_def["svi_empty_frames_noise_type"] = "uniform"
+                        # are initialized as zeros before VAE encode (matching kijai and original Wan2GP).
+                        # NOTE: zeros is the standard approach - if it causes grey middles, investigate root cause
+                        # rather than switching to noise/anchor padding.
+                        wgp.wan_model.model_def["svi_empty_frames_mode"] = "zeros"
                         
                         # Also patch wgp.models_def for consistency
                         if model_key in wgp.models_def:
                             wgp.models_def[model_key]["sliding_window"] = True
                             wgp.models_def[model_key]["sliding_window_defaults"] = {"overlap_default": 4}
-                            wgp.models_def[model_key]["svi_empty_frames_mode"] = "noise"
-                            wgp.models_def[model_key]["svi_empty_frames_noise_type"] = "uniform"
+                            wgp.models_def[model_key]["svi_empty_frames_mode"] = "zeros"
                         
                         _wan_model_patched = True
                         
