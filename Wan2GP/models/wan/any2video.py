@@ -926,6 +926,13 @@ class WanAny2V:
                         msk[:, 1:]
                     ], dim=1)
                     print(f"[SVI_BROWN_FRAME_DIAG] After first-frame-only expansion (Wan 2.2): msk.shape={msk.shape}")
+                    
+                    # CRITICAL FIX: Mark the ENTIRE last latent group as "known" (1)
+                    # Without this, only 1/4 of the end frame is protected (position -1 out of 4 in the group)
+                    # This causes the end frame to be distorted during generation.
+                    # By setting msk[:, -4:] = 1, all 4 positions of the last latent frame are preserved.
+                    msk[:, -4:] = 1
+                    print(f"[SVI_BROWN_FRAME_DIAG] Applied end-frame protection fix: msk[:, -4:] = 1 (all 4 positions of last latent frame now known)")
                 
                 try:
                     known = int((msk[0, :, 0, 0] > 0.5).sum().item())
