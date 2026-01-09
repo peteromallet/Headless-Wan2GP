@@ -250,6 +250,9 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                            "flow_shift", "sample_solver", "model_switch_phase",
                            "lora_names", "lora_multipliers", "additional_loras"]:
                     if key in parsed and parsed[key] is not None:
+                        # For additional_loras, only add if it has actual entries (not empty dict)
+                        if key == "additional_loras" and not parsed[key]:
+                            continue
                         orchestrator_payload[key] = parsed[key]
                         dprint(f"[ORCHESTRATOR_PHASE_CONFIG] Added {key} to orchestrator_payload: {parsed[key]}")
 
