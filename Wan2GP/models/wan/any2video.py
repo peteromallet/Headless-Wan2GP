@@ -591,6 +591,7 @@ class WanAny2V:
         last_latent_preview = False
         extended_overlapped_latents = clip_image_start = clip_image_end = image_mask_latents = latent_slice = freqs = post_freqs = None
         use_extended_overlapped_latents = True
+        vae_end_frame_mode = False  # Default: no special VAE end-frame encoding (only Wan 2.1 i2v uses this)
         # SCAIL uses a fixed ref latent frame that should not be noised.
         no_noise_latents_injection = infinitetalk or scail
         timestep_injection = False
