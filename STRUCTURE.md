@@ -1,4 +1,5 @@
 # Headless-Wan2GP Project Structure
+<!-- NOTE: This file is maintained; run pytest via tests/ only -->
 
 ## Overview
 
@@ -23,7 +24,7 @@ Headless-Wan2GP is a queue-based video generation system built around the Wan2GP
 7. **Result flows back**: WanOrchestrator → HeadlessTaskQueue → worker.py → DB status update → optional Supabase upload
 
 **Key improvements:**
-- ✅ **Eliminated blocking waits** in single_image.py and travel_between_images.py
+- ✅ **Eliminated blocking waits** via direct queue integration in task_registry.py
 - ✅ **Model persistence** across sequential tasks (especially beneficial for travel segments)
 - ✅ **Single worker thread** processing (VRAM-friendly)
 - ✅ **Direct queue routing** for simple generation tasks
@@ -31,7 +32,7 @@ Headless-Wan2GP is a queue-based video generation system built around the Wan2GP
 ### Component responsibilities at a glance
 
 - **worker.py**: Polls DB, claims work, routes tasks appropriately:
-  - **Generation tasks** (`single_image`, `vace`, `flux`, `t2v`, etc.) → Direct to HeadlessTaskQueue  
+  - **Generation tasks** (`vace`, `flux`, `t2v`, `i2v`, etc.) → Direct to HeadlessTaskQueue  
   - **Orchestrator tasks** (`travel_orchestrator`) → Orchestrator handlers
   - **Travel segments** → `_handle_travel_segment_via_queue` (eliminates blocking)
   - **Complex tasks** (`travel_stitch`, `dp_final_gen`) → Specialized handlers
@@ -47,7 +48,7 @@ Headless-Wan2GP is a queue-based video generation system built around the Wan2GP
 
 **Before (Triple-Queue Problem):**
 ```
-DB → worker.py → single_image.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
+DB → worker.py → handler.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
                       ↓ BLOCKING WAIT ↓
                    (defeats queue purpose)
 ```
@@ -130,7 +131,6 @@ DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
 │       ├── travel_between_images.py
 │       ├── join_clips.py
 │       ├── join_clips_orchestrator.py
-│       └── single_image.py
 ├── tasks/                      # Task specifications
 │   └── HEADLESS_SUPABASE_TASK.md  # Supabase implementation spec
 ├── supabase/
@@ -166,6 +166,10 @@ DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
 * **AI_AGENT_MAINTENANCE_GUIDE.md** – Guide for AI agents working on this codebase
 * **WORKER_LOGGING_IMPLEMENTATION.md** – Centralized logging implementation guide for GPU workers integrating with orchestrator logging system
 * **HEADLESS_SYSTEM_ARCHITECTURE.md** – Detailed component interactions and system architecture
+* **agent_docs/uni3c/** – Uni3C integration docs:
+  * `STARTING_POINT_AND_STATUS.md` – **Entry point**: dashboard, DoD, risks, phase links
+  * `PHASE_1_*.md` through `PHASE_5_*.md` – Phase-by-phase implementation guides
+  * `_reference/` – Appendix materials (sense check, Kijai code, param definitions)
 
 ## Supabase Upload System
 
@@ -180,7 +184,7 @@ All task types support automatic upload to Supabase Storage when configured:
   * `upload_and_get_final_output_location()` - Handles upload and returns final URL/path for DB
 
 ### Task type coverage
-* **single_image**: Generated images → Supabase bucket with public URLs
+* **Direct queue tasks**: Generated images/videos → Supabase bucket with public URLs
 * **travel_stitch**: Final stitched videos → Supabase bucket
 * **join_clips**: Joined video clips with VACE transitions → Supabase bucket  
 * **Standard WGP tasks**: All video outputs → Supabase bucket
@@ -245,9 +249,12 @@ Task-specific wrappers around the bulky upstream logic. These are imported by `w
 * **join_clips.py** – Bridges two video clips using VACE generation. Extracts context frames from boundaries, generates transition frames, and stitches with crossfade blending.
 * **join_clips_orchestrator.py** – Orchestrates sequential joining of multiple clips. Contains shared core logic (`_create_join_chain_tasks`, `_check_existing_join_tasks`, `_extract_join_settings_from_payload`) used by both `join_clips_orchestrator` and `edit_video_orchestrator`. Supports optional VLM prompt enhancement (Qwen) to generate motion/style/details prompts from boundary frames.
 * **edit_video_orchestrator.py** – Regenerates selected portions of a video. Takes a source video and `portions_to_regenerate` (list of frame ranges), extracts "keeper" clips from non-regenerated portions, then uses the shared join_clips infrastructure to regenerate transitions. Reuses all join_clips_orchestrator core logic for task creation.
-* **single_image.py** – Minimal handler for one-off image-to-video generation without travel or pose manipulation. Generated images are uploaded to Supabase when configured.
 * **magic_edit.py** – Processes images through Replicate's black-forest-labs/flux-kontext-dev-lora model for scene transformations. Supports conditional InScene LoRA usage via `in_scene` parameter (true for scene consistency, false for creative freedom). Integrates with Supabase storage for output handling.
 * **__init__.py** – Re-exports public APIs and common utilities for convenient importing.
+
+### Single-image (single-frame) outputs
+
+Single-frame “image” tasks are handled by the unified queue flow (no separate `single_image.py` handler). When a task produces a single-frame video, the queue converts it to a `.png` via `HeadlessTaskQueue._convert_single_frame_video_to_png()` in `headless_model_management.py`.
 
 ## Additional runtime artefacts & folders
 
@@ -381,7 +388,6 @@ Comprehensive debugging system for video generation pipeline with detailed frame
 
 This debugging system provides comprehensive visibility into the video generation pipeline to identify exactly where frame counts change and why final outputs might have unexpected lengths.
 
-
 ## LoRA Support
 
 ### Typed Parameter System
@@ -406,6 +412,93 @@ The system uses typed dataclasses (`source/params/`) for clean parameter handlin
 * **Safe Exclusion**: PENDING entries never reach WGP (prevents "missing LoRA" errors from URLs)
 * **Collision-Safe Downloads**: HuggingFace LoRAs with generic names get parent folder prefix
 * **WGP Compatibility**: All processing outputs standard WGP-compatible parameter formats
+
+## Adding New Parameters
+
+When adding a new parameter to the system, you need to update multiple locations depending on how the parameter flows through the pipeline. Here's where to add params:
+
+### Parameter Flow Overview
+
+```
+Frontend → orchestrator_details → orchestrator handler → segment params → task_registry → generation_params → WGP
+```
+
+### 1. Orchestrator-Level Parameters
+
+For parameters that affect how the orchestrator creates segments:
+
+| Location | File | What to Update |
+|----------|------|----------------|
+| **Orchestrator handler** | `source/sm_functions/travel_between_images.py` | Read from `orchestrator_payload.get("param_name")` in `_handle_travel_orchestrator_task()` |
+| **Segment payload creation** | Same file, around line 1740 | Add to `segment_payload = { "param_name": value, ... }` |
+
+### 2. Segment-Level Parameters
+
+For parameters that affect individual segment generation:
+
+| Location | File | What to Update |
+|----------|------|----------------|
+| **Segment handler** | `source/task_registry.py` | Read from `segment_params.get("param_name")` in `_handle_travel_segment_via_queue()` |
+| **Generation params** | Same file, around line 330-440 | Add to `generation_params["param_name"] = value` |
+
+### 3. WGP Generation Parameters
+
+For parameters that WGP needs during generation:
+
+| Location | File | What to Update |
+|----------|------|----------------|
+| **Generation params dict** | `source/task_registry.py` | Add to `generation_params` dict before WGP submission |
+| **Model defaults** (optional) | `Wan2GP/defaults/*.json` | Add default value for specific model configs |
+
+### 4. Centralized Extraction (for common params)
+
+For parameters used across multiple task types:
+
+| Location | File | What to Update |
+|----------|------|----------------|
+| **extract_orchestrator_parameters()** | `source/common_utils.py` | Add to `extraction_map` dict (around line 68) |
+
+### Example: Adding a New Feature Flag (e.g., `use_feature_x`)
+
+1. **Frontend** sends `use_feature_x: true` in `orchestrator_details`
+
+2. **Orchestrator** (`travel_between_images.py`):
+   ```python
+   use_feature_x = orchestrator_payload.get("use_feature_x", False)
+   ```
+
+3. **Segment payload** (`travel_between_images.py`, ~line 1740):
+   ```python
+   segment_payload = {
+       ...
+       "use_feature_x": use_feature_x,
+   }
+   ```
+
+4. **Segment handler** (`task_registry.py`):
+   ```python
+   use_feature_x = segment_params.get("use_feature_x", False) or full_orchestrator_payload.get("use_feature_x", False)
+   
+   if use_feature_x:
+       generation_params["feature_x_param"] = value
+   ```
+
+### Key Files for Parameter Changes
+
+| File | Purpose |
+|------|---------|
+| `source/task_registry.py` | **PRIMARY**: Travel segment processing, param → generation_params conversion |
+| `source/sm_functions/travel_between_images.py` | Orchestrator logic, segment payload creation |
+| `source/common_utils.py` | Centralized param extraction (`extract_orchestrator_parameters`) |
+| `source/params/*.py` | Typed param dataclasses (LoRA, VACE, Generation configs) |
+| `Wan2GP/defaults/*.json` | Model-specific default values |
+
+### Common Pitfalls
+
+1. **Missing in task_registry.py**: Parameters set in orchestrator but not read in `_handle_travel_segment_via_queue()` won't reach WGP
+2. **Wrong precedence**: Always check `segment_params` first, then `full_orchestrator_payload` as fallback
+3. **Type coercion**: Use explicit `bool()` or type checks since DB values may be strings
+4. **Logging**: Add `dprint_func()` calls to trace parameter flow for debugging
 
 ## Environment & config knobs (non-exhaustive)
 
