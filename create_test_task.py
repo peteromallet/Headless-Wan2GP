@@ -21,6 +21,76 @@ load_dotenv()
 
 # Test task templates - these are real task configs that exercise the LoRA flow
 TEST_TASKS = {
+    "uni3c_basic": {
+        "description": "Basic Uni3C test - guide video controls motion structure",
+        "task_type": "i2v_22",  # Image-to-video 2.2
+        "params": {
+            "prompt": "A person standing in a dynamic pose",
+            "model": "wan_2_2_i2v_lightning_baseline_3_3",
+            
+            # Source image (start frame)
+            "image_start": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+            
+            # Uni3C parameters
+            "use_uni3c": True,
+            "uni3c_guide_video": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/guidance-videos/onboarding/structure_video_optimized.mp4",
+            "uni3c_strength": 1.0,
+            "uni3c_start_percent": 0.0,
+            "uni3c_end_percent": 1.0,
+            "uni3c_frame_policy": "fit",
+            
+            # Standard generation params
+            "video_length": 49,
+            "resolution": "640x480",
+            "num_inference_steps": 6,
+            "guidance_scale": 3.0,
+            "seed": 42,
+        },
+        "project_id": "ea5709f3-4592-4d5b-b9a5-87ed2ecf07c9"
+    },
+    
+    "uni3c_strength_test": {
+        "description": "Uni3C with strength=0 (should match non-Uni3C output)",
+        "task_type": "i2v_22",
+        "params": {
+            "prompt": "A person standing in a dynamic pose",
+            "model": "wan_2_2_i2v_lightning_baseline_3_3",
+            "image_start": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+            
+            # Uni3C with strength=0 (effectively disabled)
+            "use_uni3c": True,
+            "uni3c_guide_video": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/guidance-videos/onboarding/structure_video_optimized.mp4",
+            "uni3c_strength": 0.0,
+            
+            "video_length": 49,
+            "resolution": "640x480",
+            "num_inference_steps": 6,
+            "guidance_scale": 3.0,
+            "seed": 42,
+        },
+        "project_id": "ea5709f3-4592-4d5b-b9a5-87ed2ecf07c9"
+    },
+    
+    "uni3c_baseline": {
+        "description": "Baseline without Uni3C (for comparison)",
+        "task_type": "i2v_22",
+        "params": {
+            "prompt": "A person standing in a dynamic pose",
+            "model": "wan_2_2_i2v_lightning_baseline_3_3",
+            "image_start": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+            
+            # NO Uni3C - baseline for comparison
+            "use_uni3c": False,
+            
+            "video_length": 49,
+            "resolution": "640x480",
+            "num_inference_steps": 6,
+            "guidance_scale": 3.0,
+            "seed": 42,  # Same seed for comparison
+        },
+        "project_id": "ea5709f3-4592-4d5b-b9a5-87ed2ecf07c9"
+    },
+    
     "travel_orchestrator": {
         "description": "Travel orchestrator with 3-phase Lightning LoRAs (VACE model)",
         "task_type": "travel_orchestrator",
