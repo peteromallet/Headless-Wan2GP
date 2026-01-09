@@ -811,7 +811,7 @@ class WanAny2V:
                         print(f"[SVI_DEBUG]   breakdown: start[:{svi_start_frame_count}] + empty[{svi_start_frame_count}:{svi_start_frame_count+empty_frame_count}] + end[{svi_start_frame_count+empty_frame_count}:]")
                         print(f"[SVI_DEBUG]   total pixel frames: {concatenated.shape[1]} (expected: {frame_num})")
                     
-                    # Single VAE encode with end frame mode (like kijai's end_= parameter)
+                    # Single VAE encode - end frame mode only for Wan 2.1 (matching non-SVI path)
                     print(f"[SVI_BROWN_FRAME_DIAG] Calling VAE encode with any_end_frame={vae_end_frame_mode}")
                     lat_y = self.vae.encode([concatenated], VAE_tile_size, any_end_frame=vae_end_frame_mode)[0]
                     print(f"[SVI_BROWN_FRAME_DIAG] VAE encode complete: lat_y.shape={lat_y.shape}")
