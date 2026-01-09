@@ -107,7 +107,11 @@ def extract_orchestrator_parameters(db_task_params: dict, task_id: str = "unknow
             if orchestrator_key in orchestrator_details:
                 # Only extract if not already present at top level (top level takes precedence)
                 if param_key not in extracted_params:
-                    extracted_params[param_key] = orchestrator_details[orchestrator_key]
+                    value = orchestrator_details[orchestrator_key]
+                    # For additional_loras, only extract if it has actual entries (not empty dict)
+                    if orchestrator_key == "additional_loras" and not value:
+                        continue
+                    extracted_params[param_key] = value
                     extracted_count += 1
                     if dprint:
                         dprint(f"Task {task_id}: Extracted {orchestrator_key} from orchestrator_details")
