@@ -459,6 +459,8 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         # Using _get_param() helper for consistent fallback behavior
         # ═══════════════════════════════════════════════════════════════════════════
         
+        # Travel-only: pass `additional_loras` through on the segment task payload if present,
+        # but DO NOT propagate into `generation_params` (so it won't trigger LoRA downloads/application).
         additional_loras = _get_param(
             "additional_loras",
             individual_params,
@@ -467,8 +469,10 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             default={},
             prefer_truthy=True,  # match previous `a or b or c` behavior for empty dicts
         )
-        if additional_loras:
-            generation_params["additional_loras"] = additional_loras
+        if additional_loras and debug_enabled:
+            dprint_func(
+                f"[TRAVEL_LORA] Task {task_id}: additional_loras present on payload but intentionally ignored for generation ({len(additional_loras)} entries)"
+            )
 
         # IMPORTANT: Do NOT treat orchestrator/UI `steps` as diffusion `num_inference_steps`.
         # In travel payloads, `steps` often means "timeline steps" (UI concept), whereas
@@ -503,10 +507,11 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 
                 generation_params["num_inference_steps"] = phase_config_steps
                 
+                # NOTE: We use lora_names + lora_multipliers directly, NOT additional_loras
                 for key in ["guidance_phases", "switch_threshold", "switch_threshold2",
                            "guidance_scale", "guidance2_scale", "guidance3_scale",
                            "flow_shift", "sample_solver", "model_switch_phase",
-                           "lora_names", "lora_multipliers", "additional_loras"]:
+                           "lora_names", "lora_multipliers"]:
                     if key in parsed_phase_config and parsed_phase_config[key] is not None:
                         generation_params[key] = parsed_phase_config[key]
                 
@@ -517,8 +522,13 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 
                 # CRITICAL: Run LoRA resolution after phase_config parsing
                 # phase_config extracts LoRA URLs which need to be downloaded and resolved to absolute paths
-                if any(key in generation_params for key in ["activated_loras", "loras_multipliers", "additional_loras"]):
-                    lora_config = LoRAConfig.from_params(generation_params, task_id=task_id)
+                # NOTE: Only pass lora_names/loras_multipliers, NOT additional_loras (which is passed through but not processed)
+                if any(key in generation_params for key in ["activated_loras", "loras_multipliers"]):
+                    lora_params_for_config = {
+                        k: v for k, v in generation_params.items() 
+                        if k in ["activated_loras", "loras_multipliers", "lora_names", "lora_multipliers"]
+                    }
+                    lora_config = LoRAConfig.from_params(lora_params_for_config, task_id=task_id)
                     
                     # Download any pending LoRAs
                     if lora_config.has_pending_downloads():
@@ -650,25 +660,40 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                     generation_params[key] = segment_params[key]
                     dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Set {key}={segment_params[key]}")
             
-            # Merge SVI LoRAs with existing additional_loras, applying svi_strength if specified
-            # Note: NOT using prefer_truthy here so that 0 values are preserved (0 = disable that LoRA group)
-            from source.sm_functions.travel_between_images import get_svi_additional_loras
-            existing_payload_loras = generation_params.get("additional_loras", {})
+            # Merge SVI LoRAs with existing LoRAs using direct arrays (not additional_loras dict)
+            from source.sm_functions.travel_between_images import get_svi_lora_arrays
+            
+            # Get existing LoRA arrays from generation_params
+            existing_urls = generation_params.get("activated_loras", [])
+            existing_mults_raw = generation_params.get("loras_multipliers", "")
+            # Parse multipliers: could be space-separated string or list
+            if isinstance(existing_mults_raw, str):
+                existing_mults = existing_mults_raw.split() if existing_mults_raw else []
+            else:
+                existing_mults = list(existing_mults_raw) if existing_mults_raw else []
+            
             svi_strength = _get_param("svi_strength", segment_params, orchestrator_details)
             svi_strength_1 = _get_param("svi_strength_1", segment_params, orchestrator_details)
             svi_strength_2 = _get_param("svi_strength_2", segment_params, orchestrator_details)
-            generation_params["additional_loras"] = get_svi_additional_loras(
-                existing_payload_loras, 
+            
+            merged_urls, merged_mults = get_svi_lora_arrays(
+                existing_urls=existing_urls,
+                existing_multipliers=existing_mults,
                 svi_strength=svi_strength,
                 svi_strength_1=svi_strength_1,
                 svi_strength_2=svi_strength_2
             )
+            
+            # Set directly as WGP-ready format
+            generation_params["activated_loras"] = merged_urls
+            generation_params["loras_multipliers"] = " ".join(merged_mults)
+            
             if svi_strength_1 is not None or svi_strength_2 is not None:
                 dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Merged SVI LoRAs with svi_strength_1={svi_strength_1}, svi_strength_2={svi_strength_2}")
             elif svi_strength is not None:
                 dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Merged SVI LoRAs with svi_strength={svi_strength}")
             else:
-                dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Merged SVI LoRAs into additional_loras")
+                dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Merged {len(merged_urls)} SVI LoRAs into activated_loras")
         
         # === WGP SUBMISSION DIAGNOSTIC SUMMARY ===
         # Log key frame-related parameters before WGP submission
