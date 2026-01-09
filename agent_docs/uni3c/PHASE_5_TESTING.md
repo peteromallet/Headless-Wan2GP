@@ -8,6 +8,48 @@
 - All previous phases complete
 - Can create tasks through normal headless flow
 
+---
+
+## Quick Start: Run Tests
+
+### 1. Start Worker (on GPU machine with venv)
+
+```bash
+source venv/bin/activate && python worker.py \
+  --supabase-url https://wczysqzxlwdndgxitrvc.supabase.co \
+  --supabase-anon-key eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndjenlzcXp4bHdkbmRneGl0cnZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE1MDI4NjgsImV4cCI6MjA2NzA3ODg2OH0.r-4RyHZiDibUjgdgDDM2Vo6x3YpgIO5-BTwfkB2qyYA \
+  --supabase-access-token 3HKcoLeJAFFfTFFeRV6Eu7Lq \
+  --debug \
+  --wgp-profile 5
+```
+
+### 2. Create Test Task (from any machine with .env containing SUPABASE_SERVICE_ROLE_KEY)
+
+```bash
+# Basic Uni3C test (strength=1.0, guide video controls motion)
+python create_test_task.py uni3c_basic
+
+# Baseline without Uni3C (for comparison, same seed)
+python create_test_task.py uni3c_baseline
+
+# Strength=0 test (should match baseline)
+python create_test_task.py uni3c_strength_test
+```
+
+### 3. Monitor Task
+
+```bash
+python debug.py task <task_id>
+# Look for [UNI3C] logs at each layer
+```
+
+### Test Assets (pre-configured in templates)
+
+- **Guide Video**: `https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/guidance-videos/onboarding/structure_video_optimized.mp4`
+- **Source Image**: `https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg`
+
+---
+
 ## Tasks
 
 | Task | Status | Notes |
