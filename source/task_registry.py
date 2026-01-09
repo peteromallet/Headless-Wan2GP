@@ -61,15 +61,31 @@ DIRECT_QUEUE_TASK_TYPES = {
 }
 
 
-def _get_param(key, *sources, default=None):
+_MISSING = object()
+
+
+def _get_param(key, *sources, default=_MISSING, prefer_truthy: bool = False):
     """
     Get a parameter from multiple sources with precedence (first source wins).
-    Skips None values to allow fallback to next source.
+
+    By default, only skips None values.
+    If prefer_truthy=True, also skips falsy non-bool values (e.g. "", {}, [], 0),
+    matching historical `a or b` fallback semantics while still preserving explicit booleans.
     """
     for source in sources:
-        if source and key in source and source[key] is not None:
-            return source[key]
-    return default
+        if not source or key not in source:
+            continue
+
+        value = source[key]
+        if value is None:
+            continue
+
+        if prefer_truthy and not isinstance(value, bool) and not value:
+            continue
+
+        return value
+
+    return None if default is _MISSING else default
 
 
 def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Path, task_id: str, colour_match_videos: bool, mask_active_frames: bool, task_queue: HeadlessTaskQueue, dprint_func, is_standalone: bool = False):
@@ -130,8 +146,8 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         # Legacy alias for backward compatibility in rest of function
         full_orchestrator_payload = orchestrator_details
         
-        # Model name: segment > orchestrator
-        model_name = _get_param("model_name", segment_params, orchestrator_details)
+        # Model name: segment > orchestrator (required)
+        model_name = segment_params.get("model_name") or orchestrator_details["model_name"]
         
         # Prompts: individual > segment > default
         prompt_for_wgp = ensure_valid_prompt(
@@ -142,7 +158,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         )
         
         # Resolution: segment > orchestrator
-        parsed_res_wh_str = _get_param("parsed_resolution_wh", segment_params, orchestrator_details)
+        parsed_res_wh_str = segment_params.get("parsed_resolution_wh") or orchestrator_details["parsed_resolution_wh"]
         parsed_res_raw = sm_parse_resolution(parsed_res_wh_str)
         if parsed_res_raw is None:
             return False, f"Travel segment {task_id}: Invalid resolution format {parsed_res_wh_str}"
@@ -157,8 +173,10 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         )
         
         current_run_base_output_dir_str = _get_param(
-            "current_run_base_output_dir", segment_params,
-            default=orchestrator_details.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
+            "current_run_base_output_dir",
+            segment_params,
+            default=orchestrator_details.get("main_output_dir_for_run", str(main_output_dir_base.resolve())),
+            prefer_truthy=True,
         )
 
         # Convert to Path and resolve relative paths against main_output_dir_base
@@ -194,7 +212,9 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         is_continuing = orchestrator_details.get("continue_from_video_resolved_path") is not None
         # Check use_svi with explicit False handling (False at segment level should override True at orchestrator)
         use_svi = segment_params["use_svi"] if "use_svi" in segment_params else orchestrator_details.get("use_svi", False)
-        svi_predecessor_video_url = _get_param("svi_predecessor_video_url", segment_params, orchestrator_details)
+        svi_predecessor_video_url = _get_param(
+            "svi_predecessor_video_url", segment_params, orchestrator_details, prefer_truthy=True
+        )
         
         if use_svi:
             dprint_func(f"[SVI_MODE] Task {task_id}: SVI mode enabled for segment {segment_idx}")
@@ -439,26 +459,35 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         # Using _get_param() helper for consistent fallback behavior
         # ═══════════════════════════════════════════════════════════════════════════
         
-        additional_loras = _get_param("additional_loras", individual_params, segment_params, orchestrator_details, default={})
+        additional_loras = _get_param(
+            "additional_loras",
+            individual_params,
+            segment_params,
+            orchestrator_details,
+            default={},
+            prefer_truthy=True,  # match previous `a or b or c` behavior for empty dicts
+        )
         if additional_loras:
             generation_params["additional_loras"] = additional_loras
 
         # IMPORTANT: Do NOT treat orchestrator/UI `steps` as diffusion `num_inference_steps`.
         # In travel payloads, `steps` often means "timeline steps" (UI concept), whereas
         # diffusion steps must come from `num_inference_steps` (or `phase_config.steps_per_phase`).
-        explicit_steps = _get_param("num_inference_steps", segment_params, orchestrator_details)
+        explicit_steps = _get_param("num_inference_steps", segment_params, orchestrator_details, prefer_truthy=True)
         if explicit_steps:
             generation_params["num_inference_steps"] = explicit_steps
         
-        explicit_guidance = _get_param("guidance_scale", segment_params, orchestrator_details)
+        explicit_guidance = _get_param("guidance_scale", segment_params, orchestrator_details, prefer_truthy=True)
         if explicit_guidance: 
             generation_params["guidance_scale"] = explicit_guidance
         
-        explicit_flow_shift = _get_param("flow_shift", segment_params, orchestrator_details)
+        explicit_flow_shift = _get_param("flow_shift", segment_params, orchestrator_details, prefer_truthy=True)
         if explicit_flow_shift: 
             generation_params["flow_shift"] = explicit_flow_shift
 
-        phase_config_source = _get_param("phase_config", individual_params, segment_params, orchestrator_details)
+        phase_config_source = _get_param(
+            "phase_config", individual_params, segment_params, orchestrator_details, prefer_truthy=True
+        )
         if phase_config_source:
             try:
                 steps_per_phase = phase_config_source.get("steps_per_phase", [2, 2, 2])
@@ -622,6 +651,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                     dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Set {key}={segment_params[key]}")
             
             # Merge SVI LoRAs with existing additional_loras, applying svi_strength if specified
+            # Note: NOT using prefer_truthy here so that 0 values are preserved (0 = disable that LoRA group)
             from source.sm_functions.travel_between_images import get_svi_additional_loras
             existing_payload_loras = generation_params.get("additional_loras", {})
             svi_strength = _get_param("svi_strength", segment_params, orchestrator_details)
