@@ -23,70 +23,213 @@ load_dotenv()
 TEST_TASKS = {
     "uni3c_basic": {
         "description": "Basic Uni3C test - guide video controls motion structure",
-        "task_type": "i2v_22",  # Image-to-video 2.2
+        "task_type": "individual_travel_segment",
         "params": {
-            "prompt": "A person standing in a dynamic pose",
-            "model": "wan_2_2_i2v_lightning_baseline_3_3",
+            # Model config
+            "model_name": "wan_2_2_i2v_lightning_baseline_2_2_2",
+            "num_frames": 29,
+            "parsed_resolution_wh": "902x508",
+            "seed_to_use": 42,
             
-            # Source image (start frame)
-            "image_start": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+            # Prompts
+            "base_prompt": "",
+            "negative_prompt": "",
             
-            # Uni3C parameters
+            # Generation settings
+            "flow_shift": 5,
+            "sample_solver": "euler",
+            "guidance_scale": 1,
+            "guidance2_scale": 1,
+            "guidance_phases": 2,
+            "num_inference_steps": 6,
+            "switch_threshold": 826.0999755859375,
+            "model_switch_phase": 1,
+            "cfg_zero_step": -1,
+            "cfg_star_switch": 0,
+            
+            # Segment info
+            "segment_index": 0,
+            "is_first_segment": True,
+            "is_last_segment": True,
+            "amount_of_motion": 0.5,
+            "debug_mode_enabled": False,
+            
+            # LoRAs (Lightning 2-phase)
+            "lora_names": [
+                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
+                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"
+            ],
+            "lora_multipliers": ["1.0;0", "0;1.0"],
+            "additional_loras": {
+                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors": 1.0,
+                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors": 0
+            },
+            
+            # Input images
+            "individual_segment_params": {
+                "num_frames": 29,
+                "base_prompt": "",
+                "negative_prompt": "",
+                "seed_to_use": 42,
+                "random_seed": False,
+                "motion_mode": "basic",
+                "advanced_mode": False,
+                "amount_of_motion": 0.5,
+                "start_image_url": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+                "end_image_url": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/e2699835-35d2-4547-85f5-d59219341e4d-u1_3c8779e7-54b4-436c-bfce-9eee8872e370.jpeg",
+                "input_image_paths_resolved": [
+                    "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+                    "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/e2699835-35d2-4547-85f5-d59219341e4d-u1_3c8779e7-54b4-436c-bfce-9eee8872e370.jpeg"
+                ],
+                "after_first_post_generation_brightness": 0,
+                "after_first_post_generation_saturation": 1
+            },
+            "input_image_paths_resolved": [
+                "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+                "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/e2699835-35d2-4547-85f5-d59219341e4d-u1_3c8779e7-54b4-436c-bfce-9eee8872e370.jpeg"
+            ],
+            "after_first_post_generation_brightness": 0,
+            "after_first_post_generation_saturation": 1,
+            
+            # Uni3C parameters - THE NEW STUFF
             "use_uni3c": True,
             "uni3c_guide_video": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/guidance-videos/onboarding/structure_video_optimized.mp4",
             "uni3c_strength": 1.0,
             "uni3c_start_percent": 0.0,
             "uni3c_end_percent": 1.0,
-            "uni3c_frame_policy": "fit",
-            
-            # Standard generation params
-            "video_length": 49,
-            "resolution": "640x480",
-            "num_inference_steps": 6,
-            "guidance_scale": 3.0,
-            "seed": 42,
+            "uni3c_frame_policy": "fit"
         },
         "project_id": "ea5709f3-4592-4d5b-b9a5-87ed2ecf07c9"
     },
     
     "uni3c_strength_test": {
         "description": "Uni3C with strength=0 (should match non-Uni3C output)",
-        "task_type": "i2v_22",
+        "task_type": "individual_travel_segment",
         "params": {
-            "prompt": "A person standing in a dynamic pose",
-            "model": "wan_2_2_i2v_lightning_baseline_3_3",
-            "image_start": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+            "model_name": "wan_2_2_i2v_lightning_baseline_2_2_2",
+            "num_frames": 29,
+            "parsed_resolution_wh": "902x508",
+            "seed_to_use": 42,
+            "base_prompt": "",
+            "negative_prompt": "",
+            "flow_shift": 5,
+            "sample_solver": "euler",
+            "guidance_scale": 1,
+            "guidance2_scale": 1,
+            "guidance_phases": 2,
+            "num_inference_steps": 6,
+            "switch_threshold": 826.0999755859375,
+            "model_switch_phase": 1,
+            "cfg_zero_step": -1,
+            "cfg_star_switch": 0,
+            "segment_index": 0,
+            "is_first_segment": True,
+            "is_last_segment": True,
+            "amount_of_motion": 0.5,
+            "debug_mode_enabled": False,
+            "lora_names": [
+                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
+                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"
+            ],
+            "lora_multipliers": ["1.0;0", "0;1.0"],
+            "additional_loras": {
+                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors": 1.0,
+                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors": 0
+            },
+            "individual_segment_params": {
+                "num_frames": 29,
+                "base_prompt": "",
+                "negative_prompt": "",
+                "seed_to_use": 42,
+                "random_seed": False,
+                "motion_mode": "basic",
+                "advanced_mode": False,
+                "amount_of_motion": 0.5,
+                "start_image_url": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+                "end_image_url": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/e2699835-35d2-4547-85f5-d59219341e4d-u1_3c8779e7-54b4-436c-bfce-9eee8872e370.jpeg",
+                "input_image_paths_resolved": [
+                    "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+                    "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/e2699835-35d2-4547-85f5-d59219341e4d-u1_3c8779e7-54b4-436c-bfce-9eee8872e370.jpeg"
+                ],
+                "after_first_post_generation_brightness": 0,
+                "after_first_post_generation_saturation": 1
+            },
+            "input_image_paths_resolved": [
+                "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+                "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/e2699835-35d2-4547-85f5-d59219341e4d-u1_3c8779e7-54b4-436c-bfce-9eee8872e370.jpeg"
+            ],
+            "after_first_post_generation_brightness": 0,
+            "after_first_post_generation_saturation": 1,
             
             # Uni3C with strength=0 (effectively disabled)
             "use_uni3c": True,
             "uni3c_guide_video": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/guidance-videos/onboarding/structure_video_optimized.mp4",
-            "uni3c_strength": 0.0,
-            
-            "video_length": 49,
-            "resolution": "640x480",
-            "num_inference_steps": 6,
-            "guidance_scale": 3.0,
-            "seed": 42,
+            "uni3c_strength": 0.0
         },
         "project_id": "ea5709f3-4592-4d5b-b9a5-87ed2ecf07c9"
     },
     
     "uni3c_baseline": {
         "description": "Baseline without Uni3C (for comparison)",
-        "task_type": "i2v_22",
+        "task_type": "individual_travel_segment",
         "params": {
-            "prompt": "A person standing in a dynamic pose",
-            "model": "wan_2_2_i2v_lightning_baseline_3_3",
-            "image_start": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+            "model_name": "wan_2_2_i2v_lightning_baseline_2_2_2",
+            "num_frames": 29,
+            "parsed_resolution_wh": "902x508",
+            "seed_to_use": 42,
+            "base_prompt": "",
+            "negative_prompt": "",
+            "flow_shift": 5,
+            "sample_solver": "euler",
+            "guidance_scale": 1,
+            "guidance2_scale": 1,
+            "guidance_phases": 2,
+            "num_inference_steps": 6,
+            "switch_threshold": 826.0999755859375,
+            "model_switch_phase": 1,
+            "cfg_zero_step": -1,
+            "cfg_star_switch": 0,
+            "segment_index": 0,
+            "is_first_segment": True,
+            "is_last_segment": True,
+            "amount_of_motion": 0.5,
+            "debug_mode_enabled": False,
+            "lora_names": [
+                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
+                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"
+            ],
+            "lora_multipliers": ["1.0;0", "0;1.0"],
+            "additional_loras": {
+                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors": 1.0,
+                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors": 0
+            },
+            "individual_segment_params": {
+                "num_frames": 29,
+                "base_prompt": "",
+                "negative_prompt": "",
+                "seed_to_use": 42,
+                "random_seed": False,
+                "motion_mode": "basic",
+                "advanced_mode": False,
+                "amount_of_motion": 0.5,
+                "start_image_url": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+                "end_image_url": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/e2699835-35d2-4547-85f5-d59219341e4d-u1_3c8779e7-54b4-436c-bfce-9eee8872e370.jpeg",
+                "input_image_paths_resolved": [
+                    "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+                    "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/e2699835-35d2-4547-85f5-d59219341e4d-u1_3c8779e7-54b4-436c-bfce-9eee8872e370.jpeg"
+                ],
+                "after_first_post_generation_brightness": 0,
+                "after_first_post_generation_saturation": 1
+            },
+            "input_image_paths_resolved": [
+                "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+                "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/e2699835-35d2-4547-85f5-d59219341e4d-u1_3c8779e7-54b4-436c-bfce-9eee8872e370.jpeg"
+            ],
+            "after_first_post_generation_brightness": 0,
+            "after_first_post_generation_saturation": 1,
             
             # NO Uni3C - baseline for comparison
-            "use_uni3c": False,
-            
-            "video_length": 49,
-            "resolution": "640x480",
-            "num_inference_steps": 6,
-            "guidance_scale": 3.0,
-            "seed": 42,  # Same seed for comparison
+            "use_uni3c": False
         },
         "project_id": "ea5709f3-4592-4d5b-b9a5-87ed2ecf07c9"
     },
