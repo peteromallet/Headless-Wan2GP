@@ -61,6 +61,17 @@ DIRECT_QUEUE_TASK_TYPES = {
 }
 
 
+def _get_param(key, *sources, default=None):
+    """
+    Get a parameter from multiple sources with precedence (first source wins).
+    Skips None values to allow fallback to next source.
+    """
+    for source in sources:
+        if source and key in source and source[key] is not None:
+            return source[key]
+    return default
+
+
 def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Path, task_id: str, colour_match_videos: bool, mask_active_frames: bool, task_queue: HeadlessTaskQueue, dprint_func, is_standalone: bool = False):
     """
     Handle travel segment tasks via direct queue integration to eliminate blocking waits.
@@ -69,6 +80,11 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
     Supports two modes:
     1. Orchestrator mode (is_standalone=False): Requires orchestrator_task_id_ref, orchestrator_run_id, segment_index
     2. Standalone mode (is_standalone=True): full_orchestrator_payload provided directly in params
+    
+    Parameter precedence (highest to lowest):
+    1. individual_segment_params - per-segment overrides
+    2. segment_params (top level) - segment task params
+    3. orchestrator_details - inherited from orchestrator
     """
     headless_logger.debug(f"Starting travel segment queue processing (standalone={is_standalone})", task_id=task_id)
     log_ram_usage("Segment via queue - start", task_id=task_id)
@@ -81,14 +97,14 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         orchestrator_run_id = segment_params.get("orchestrator_run_id")
         segment_idx = segment_params.get("segment_index")
         
-        # Check for orchestrator_details (standard field name) or full_orchestrator_payload (legacy)
-        full_orchestrator_payload = segment_params.get("orchestrator_details") or segment_params.get("full_orchestrator_payload")
+        # Get orchestrator_details (canonical name) or full_orchestrator_payload (legacy alias)
+        orchestrator_details = segment_params.get("orchestrator_details") or segment_params.get("full_orchestrator_payload")
         
         if is_standalone:
             # Standalone mode: use provided payload, default segment_idx to 0
             if segment_idx is None:
                 segment_idx = 0
-            if not full_orchestrator_payload:
+            if not orchestrator_details:
                 return False, f"Individual travel segment {task_id} missing orchestrator_details"
             headless_logger.debug(f"Running in standalone mode (individual_travel_segment)", task_id=task_id)
         else:
@@ -97,33 +113,36 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 return False, f"Travel segment {task_id} missing segment_index"
             
             # If orchestrator_details not inline, try to fetch from parent task
-            if not full_orchestrator_payload:
+            if not orchestrator_details:
                 if not orchestrator_task_id_ref:
                     return False, f"Travel segment {task_id} missing orchestrator_details and orchestrator_task_id_ref"
                 orchestrator_task_raw_params_json = db_ops.get_task_params(orchestrator_task_id_ref)
                 if orchestrator_task_raw_params_json:
                     fetched_params = json.loads(orchestrator_task_raw_params_json) if isinstance(orchestrator_task_raw_params_json, str) else orchestrator_task_raw_params_json
-                    full_orchestrator_payload = fetched_params.get("orchestrator_details")
+                    orchestrator_details = fetched_params.get("orchestrator_details")
             
-            if not full_orchestrator_payload:
+            if not orchestrator_details:
                 return False, f"Travel segment {task_id}: Could not retrieve orchestrator_details"
         
-        # Check for individual_segment_params overrides (highest priority for segment-specific values)
+        # individual_segment_params has highest priority for segment-specific overrides
         individual_params = segment_params.get("individual_segment_params", {})
         
-        # Model name: top-level > orchestrator_details
-        model_name = segment_params.get("model_name") or full_orchestrator_payload["model_name"]
+        # Legacy alias for backward compatibility in rest of function
+        full_orchestrator_payload = orchestrator_details
         
-        # Prompts: individual_segment_params > top-level > defaults
+        # Model name: segment > orchestrator
+        model_name = _get_param("model_name", segment_params, orchestrator_details)
+        
+        # Prompts: individual > segment > default
         prompt_for_wgp = ensure_valid_prompt(
-            individual_params.get("base_prompt") or segment_params.get("base_prompt", " ")
+            _get_param("base_prompt", individual_params, segment_params, default=" ")
         )
         negative_prompt_for_wgp = ensure_valid_negative_prompt(
-            individual_params.get("negative_prompt") or segment_params.get("negative_prompt", " ")
+            _get_param("negative_prompt", individual_params, segment_params, default=" ")
         )
         
-        # Resolution: top-level > orchestrator_details
-        parsed_res_wh_str = segment_params.get("parsed_resolution_wh") or full_orchestrator_payload["parsed_resolution_wh"]
+        # Resolution: segment > orchestrator
+        parsed_res_wh_str = _get_param("parsed_resolution_wh", segment_params, orchestrator_details)
         parsed_res_raw = sm_parse_resolution(parsed_res_wh_str)
         if parsed_res_raw is None:
             return False, f"Travel segment {task_id}: Invalid resolution format {parsed_res_wh_str}"
@@ -137,9 +156,10 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             full_orchestrator_payload["segment_frames_expanded"][segment_idx]
         )
         
-        current_run_base_output_dir_str = segment_params.get("current_run_base_output_dir")
-        if not current_run_base_output_dir_str:
-            current_run_base_output_dir_str = full_orchestrator_payload.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
+        current_run_base_output_dir_str = _get_param(
+            "current_run_base_output_dir", segment_params,
+            default=orchestrator_details.get("main_output_dir_for_run", str(main_output_dir_base.resolve()))
+        )
 
         # Convert to Path and resolve relative paths against main_output_dir_base
         base_dir_path = Path(current_run_base_output_dir_str)
@@ -153,9 +173,8 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         segment_processing_dir = current_run_base_output_dir
         segment_processing_dir.mkdir(parents=True, exist_ok=True)
         
-        debug_enabled = segment_params.get("debug_mode_enabled", full_orchestrator_payload.get("debug_mode_enabled", False))
-
-        travel_mode = full_orchestrator_payload.get("model_type", "vace")
+        debug_enabled = _get_param("debug_mode_enabled", segment_params, orchestrator_details, default=False)
+        travel_mode = orchestrator_details.get("model_type", "vace")
 
         start_ref_path = None
         end_ref_path = None
@@ -172,11 +191,10 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         
         dprint_func(f"[IMG_RESOLVE] Task {task_id}: segment_idx={segment_idx}, individual_images={len(individual_images)}, top_level_images={len(top_level_images)}, orchestrator_images={len(orchestrator_images)}")
         
-        is_continuing = full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
-        # IMPORTANT: Check if use_svi is explicitly set in segment_params (even if False)
-        # Only fall back to full_orchestrator_payload if key is missing from segment_params
-        use_svi = segment_params["use_svi"] if "use_svi" in segment_params else full_orchestrator_payload.get("use_svi", False)
-        svi_predecessor_video_url = segment_params.get("svi_predecessor_video_url") or full_orchestrator_payload.get("svi_predecessor_video_url")
+        is_continuing = orchestrator_details.get("continue_from_video_resolved_path") is not None
+        # Check use_svi with explicit False handling (False at segment level should override True at orchestrator)
+        use_svi = segment_params["use_svi"] if "use_svi" in segment_params else orchestrator_details.get("use_svi", False)
+        svi_predecessor_video_url = _get_param("svi_predecessor_video_url", segment_params, orchestrator_details)
         
         if use_svi:
             dprint_func(f"[SVI_MODE] Task {task_id}: SVI mode enabled for segment {segment_idx}")
@@ -418,37 +436,29 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         
         # ═══════════════════════════════════════════════════════════════════════════
         # Parameter extraction with precedence: individual > segment > orchestrator
-        # Note: Typed TaskConfig conversion happens in HeadlessTaskQueue (single point)
+        # Using _get_param() helper for consistent fallback behavior
         # ═══════════════════════════════════════════════════════════════════════════
         
-        # Additional LoRAs: individual_segment_params > top-level > orchestrator_details
-        additional_loras = (
-            individual_params.get("additional_loras") or 
-            segment_params.get("additional_loras") or 
-            full_orchestrator_payload.get("additional_loras", {})
-        )
+        additional_loras = _get_param("additional_loras", individual_params, segment_params, orchestrator_details, default={})
         if additional_loras:
             generation_params["additional_loras"] = additional_loras
 
         # IMPORTANT: Do NOT treat orchestrator/UI `steps` as diffusion `num_inference_steps`.
         # In travel payloads, `steps` often means "timeline steps" (UI concept), whereas
         # diffusion steps must come from `num_inference_steps` (or `phase_config.steps_per_phase`).
-        explicit_steps = (segment_params.get("num_inference_steps") or full_orchestrator_payload.get("num_inference_steps"))
+        explicit_steps = _get_param("num_inference_steps", segment_params, orchestrator_details)
         if explicit_steps:
             generation_params["num_inference_steps"] = explicit_steps
         
-        explicit_guidance = (segment_params.get("guidance_scale") or full_orchestrator_payload.get("guidance_scale"))
-        if explicit_guidance: generation_params["guidance_scale"] = explicit_guidance
+        explicit_guidance = _get_param("guidance_scale", segment_params, orchestrator_details)
+        if explicit_guidance: 
+            generation_params["guidance_scale"] = explicit_guidance
         
-        explicit_flow_shift = (segment_params.get("flow_shift") or full_orchestrator_payload.get("flow_shift"))
-        if explicit_flow_shift: generation_params["flow_shift"] = explicit_flow_shift
+        explicit_flow_shift = _get_param("flow_shift", segment_params, orchestrator_details)
+        if explicit_flow_shift: 
+            generation_params["flow_shift"] = explicit_flow_shift
 
-        # Phase Config: individual_segment_params > top-level > orchestrator_details
-        phase_config_source = (
-            individual_params.get("phase_config") or 
-            segment_params.get("phase_config") or 
-            full_orchestrator_payload.get("phase_config")
-        )
+        phase_config_source = _get_param("phase_config", individual_params, segment_params, orchestrator_details)
         if phase_config_source:
             try:
                 steps_per_phase = phase_config_source.get("steps_per_phase", [2, 2, 2])
@@ -614,9 +624,9 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             # Merge SVI LoRAs with existing additional_loras, applying svi_strength if specified
             from source.sm_functions.travel_between_images import get_svi_additional_loras
             existing_payload_loras = generation_params.get("additional_loras", {})
-            svi_strength = segment_params.get("svi_strength") or full_orchestrator_payload.get("svi_strength")
-            svi_strength_1 = segment_params.get("svi_strength_1") or full_orchestrator_payload.get("svi_strength_1")
-            svi_strength_2 = segment_params.get("svi_strength_2") or full_orchestrator_payload.get("svi_strength_2")
+            svi_strength = _get_param("svi_strength", segment_params, orchestrator_details)
+            svi_strength_1 = _get_param("svi_strength_1", segment_params, orchestrator_details)
+            svi_strength_2 = _get_param("svi_strength_2", segment_params, orchestrator_details)
             generation_params["additional_loras"] = get_svi_additional_loras(
                 existing_payload_loras, 
                 svi_strength=svi_strength,
