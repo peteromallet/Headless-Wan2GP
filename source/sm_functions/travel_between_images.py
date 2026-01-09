@@ -88,24 +88,31 @@ SVI_DEFAULT_PARAMS = {
 SVI_STITCH_OVERLAP = 4  # frames
 
 
-def get_svi_additional_loras(existing_loras: dict = None, svi_strength: float = None,
-                             svi_strength_1: float = None, svi_strength_2: float = None) -> dict:
+def get_svi_lora_arrays(
+    existing_urls: list = None, 
+    existing_multipliers: list = None,
+    svi_strength: float = None,
+    svi_strength_1: float = None, 
+    svi_strength_2: float = None
+) -> tuple[list, list]:
     """
-    Get SVI LoRAs merged with any existing additional_loras.
+    Get SVI LoRAs as (urls, multipliers) arrays for direct use with activated_loras/loras_multipliers.
+    
+    This replaces the dict-based get_svi_additional_loras() approach, providing arrays that can be
+    directly appended to activated_loras and loras_multipliers without conversion.
     
     Args:
-        existing_loras: Existing additional_loras dict to merge with
+        existing_urls: Existing LoRA URLs list to merge with
+        existing_multipliers: Existing multiplier strings list (phase format like "1.2;0")
         svi_strength: Optional global multiplier to scale ALL SVI LoRA strengths (0.0-1.0+)
-                     If None or 1.0, uses default SVI_LORAS values unchanged
         svi_strength_1: Optional multiplier for high-noise LoRAs (phase 1 active: "X;0" pattern)
-                       Overrides svi_strength for these LoRAs
         svi_strength_2: Optional multiplier for low-noise LoRAs (phase 2 active: "0;X" pattern)
-                       Overrides svi_strength for these LoRAs
         
     Returns:
-        Merged dict of URL -> phase_multiplier
+        Tuple of (urls_list, multipliers_list) - ready for activated_loras and loras_multipliers
     """
-    merged = dict(existing_loras) if existing_loras else {}
+    result_urls = list(existing_urls) if existing_urls else []
+    result_mults = list(existing_multipliers) if existing_multipliers else []
     
     # Determine if any scaling is needed
     has_scaling = (
@@ -114,15 +121,16 @@ def get_svi_additional_loras(existing_loras: dict = None, svi_strength: float = 
         svi_strength_2 is not None
     )
     
-    if has_scaling:
-        scaled_loras = {}
-        for url, phase_mult in SVI_LORAS.items():
+    for url, phase_mult in SVI_LORAS.items():
+        # Skip if already in list (avoid duplicates)
+        if url in result_urls:
+            continue
+            
+        if has_scaling:
             # Parse phase multiplier string (e.g., "1;0" or "1.2;0" or "0;1")
             parts = str(phase_mult).split(";")
             
             # Determine if this is a high-noise (phase 1) or low-noise (phase 2) LoRA
-            # High-noise: first value > 0, second value == 0 (e.g., "1;0", "1.2;0")
-            # Low-noise: first value == 0, second value > 0 (e.g., "0;1")
             is_high_noise = len(parts) >= 2 and float(parts[0]) > 0 and float(parts[1]) == 0
             is_low_noise = len(parts) >= 2 and float(parts[0]) == 0 and float(parts[1]) > 0
             
@@ -142,19 +150,20 @@ def get_svi_additional_loras(existing_loras: dict = None, svi_strength: float = 
                 try:
                     val = float(p)
                     scaled_val = val * strength
-                    # Format: keep integer if whole number, else 2 decimal places
                     if scaled_val == int(scaled_val):
                         scaled_parts.append(str(int(scaled_val)))
                     else:
                         scaled_parts.append(f"{scaled_val:.2g}")
                 except ValueError:
-                    scaled_parts.append(p)  # Keep original if not a number
-            scaled_loras[url] = ";".join(scaled_parts)
-        merged.update(scaled_loras)
-    else:
-        merged.update(SVI_LORAS)
+                    scaled_parts.append(p)
+            scaled_mult = ";".join(scaled_parts)
+        else:
+            scaled_mult = phase_mult
+        
+        result_urls.append(url)
+        result_mults.append(scaled_mult)
     
-    return merged
+    return result_urls, result_mults
 
 
 # Add debugging helper function
@@ -299,14 +308,12 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 )
 
                 # Add parsed values to orchestrator_payload so segments can use them
+                # NOTE: We use lora_names + lora_multipliers directly, NOT additional_loras
                 for key in ["guidance_phases", "switch_threshold", "switch_threshold2",
                            "guidance_scale", "guidance2_scale", "guidance3_scale",
                            "flow_shift", "sample_solver", "model_switch_phase",
-                           "lora_names", "lora_multipliers", "additional_loras"]:
+                           "lora_names", "lora_multipliers"]:
                     if key in parsed and parsed[key] is not None:
-                        # For additional_loras, only add if it has actual entries (not empty dict)
-                        if key == "additional_loras" and not parsed[key]:
-                            continue
                         orchestrator_payload[key] = parsed[key]
                         dprint(f"[ORCHESTRATOR_PHASE_CONFIG] Added {key} to orchestrator_payload: {parsed[key]}")
 
@@ -316,7 +323,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 travel_logger.info(
                     f"phase_config parsed: {parsed['guidance_phases']} phases, "
                     f"steps={total_steps}, "
-                    f"{len(parsed.get('additional_loras', {}))} LoRAs, "
+                    f"{len(parsed.get('lora_names', []))} LoRAs, "
                     f"lora_multipliers={parsed['lora_multipliers']}",
                     task_id=orchestrator_task_id_str
                 )
@@ -521,7 +528,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             # Extract parameter arrays
             expanded_base_prompts = orchestrator_payload["base_prompts_expanded"]
             expanded_negative_prompts = orchestrator_payload["negative_prompts_expanded"]
-            additional_loras = orchestrator_payload.get("additional_loras", [])
+            lora_names = orchestrator_payload.get("lora_names", [])
 
             # Check parameter identity
             prompts_identical = len(set(expanded_base_prompts)) == 1
@@ -532,7 +539,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             if dprint and is_identical:
                 dprint(f"[IDENTICAL_DETECTION] All {num_segments} segments identical - enabling optimizations")
                 dprint(f"  - Unique prompt: '{expanded_base_prompts[0][:50]}...'")
-                dprint(f"  - LoRA count: {len(additional_loras)}")
+                dprint(f"  - LoRA count: {len(lora_names)}")
 
             return {
                 "is_identical": is_identical,
@@ -548,7 +555,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             # Get parameter arrays
             prompts = orchestrator_payload["base_prompts_expanded"]
             neg_prompts = orchestrator_payload["negative_prompts_expanded"]
-            additional_loras = orchestrator_payload.get("additional_loras", [])
+            lora_names = orchestrator_payload.get("lora_names", [])
 
             # Critical safety checks
             all_prompts_identical = len(set(prompts)) == 1
@@ -1833,23 +1840,32 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             if use_svi and idx > 0:
                 dprint(f"[SVI_CONFIG] Segment {idx}: Configuring SVI mode")
                 
-                # Merge SVI LoRAs with any existing additional_loras, applying svi_strength if specified
-                existing_loras = segment_payload.get("additional_loras", {})
+                # Merge SVI LoRAs with existing LoRAs using direct arrays (not additional_loras dict)
+                existing_urls = segment_payload.get("lora_names", [])
+                existing_mults = segment_payload.get("lora_multipliers", [])
+                
                 svi_strength = orchestrator_payload.get("svi_strength")
                 svi_strength_1 = orchestrator_payload.get("svi_strength_1")
                 svi_strength_2 = orchestrator_payload.get("svi_strength_2")
-                segment_payload["additional_loras"] = get_svi_additional_loras(
-                    existing_loras, 
+                
+                merged_urls, merged_mults = get_svi_lora_arrays(
+                    existing_urls=existing_urls,
+                    existing_multipliers=existing_mults,
                     svi_strength=svi_strength,
                     svi_strength_1=svi_strength_1,
                     svi_strength_2=svi_strength_2
                 )
+                
+                # Set directly as arrays for downstream processing
+                segment_payload["lora_names"] = merged_urls
+                segment_payload["lora_multipliers"] = merged_mults
+                
                 if svi_strength_1 is not None or svi_strength_2 is not None:
                     dprint(f"[SVI_CONFIG] Segment {idx}: Added SVI LoRAs with svi_strength_1={svi_strength_1}, svi_strength_2={svi_strength_2}")
                 elif svi_strength is not None:
                     dprint(f"[SVI_CONFIG] Segment {idx}: Added SVI LoRAs with svi_strength={svi_strength}")
                 else:
-                    dprint(f"[SVI_CONFIG] Segment {idx}: Added SVI LoRAs to additional_loras")
+                    dprint(f"[SVI_CONFIG] Segment {idx}: Added {len(merged_urls)} SVI LoRAs to lora_names/lora_multipliers")
                 
                 # Force SVI generation parameters (SVI LoRAs are 2-phase and expect these defaults)
                 for key, value in SVI_DEFAULT_PARAMS.items():
@@ -1880,9 +1896,9 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 segment_payload["svi2pro"] = False
                 dprint(f"[SVI_CONFIG] Segment {idx}: First segment - SVI disabled (use_svi=False, svi2pro=False)")
             
-            # Log any additional_loras found for debugging
-            if segment_payload.get("additional_loras"):
-                dprint(f"Orchestrator: Added additional_loras to segment {idx} payload: {segment_payload['additional_loras']}")
+            # Log LoRA configuration for debugging
+            if segment_payload.get("lora_names"):
+                dprint(f"Orchestrator: Segment {idx} has {len(segment_payload['lora_names'])} LoRAs: {segment_payload['lora_names']}")
 
             # [DEEP_DEBUG] Log segment payload values AFTER creation
             dprint(f"[ORCHESTRATOR_DEBUG] {orchestrator_task_id_str}: SEGMENT {idx} PAYLOAD CREATED")
