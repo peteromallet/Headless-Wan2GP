@@ -310,6 +310,80 @@ Run through the Definition of Done checklist in [STARTING_POINT_AND_STATUS.md](.
 
 ---
 
+## VLM Validation (Automated Motion Comparison)
+
+Instead of relying purely on human visual inspection, use the VLM validation helper to create comparison images that Claude (or another VLM) can analyze.
+
+### Create Comparison Image
+
+```bash
+# After running both baseline and Uni3C tasks with same seed:
+python -m source.uni3c_validation \
+    /path/to/guide_video.mp4 \
+    /path/to/baseline_output.mp4 \
+    /path/to/uni3c_output.mp4 \
+    task_id_here
+```
+
+This creates a comparison grid showing:
+- **Row 1 (Blue)**: Guide video frames (the motion reference)
+- **Row 2 (Brown)**: Baseline output (no Uni3C)
+- **Row 3 (Green)**: Uni3C output (with motion guidance)
+
+### Ask Claude to Validate
+
+Show the comparison image to Claude with this prompt:
+
+```
+Please analyze this Uni3C motion guidance validation image.
+
+The image shows three rows of video frames:
+1. GUIDE VIDEO (blue): Reference motion we want to transfer
+2. BASELINE (brown): Output WITHOUT Uni3C
+3. UNI3C OUTPUT (green): Output WITH Uni3C applied
+
+QUESTION: Does the Uni3C output exhibit motion more similar to 
+the Guide Video than the Baseline does?
+
+Answer: YES/NO/INCONCLUSIVE with reasoning.
+```
+
+### Programmatic Usage
+
+```python
+from source.uni3c_validation import create_uni3c_comparison, create_vlm_validation_prompt
+
+# Create comparison image
+comparison_path = create_uni3c_comparison(
+    guide_video="https://...structure_video_optimized.mp4",
+    baseline_output="./outputs/baseline_task_id.mp4",
+    uni3c_output="./outputs/uni3c_task_id.mp4",
+    task_id="test_001"
+)
+
+# Get prompt for Claude
+prompt = create_vlm_validation_prompt(comparison_path)
+print(prompt)
+
+# Then show comparison_path image to Claude for judgment
+```
+
+### Expected VLM Response
+
+A successful Uni3C integration should get:
+```
+- Guide Motion: [e.g., "Camera pushes forward, subject moves left to right"]
+- Baseline Motion: [e.g., "Random subtle motion, no clear direction"]
+- Uni3C Motion: [e.g., "Camera pushes forward, subject moves left to right"]
+- VERDICT: YES - Uni3C matches guide better than baseline
+- Confidence: HIGH
+- Reasoning: The Uni3C output clearly follows the same camera push 
+  and subject trajectory as the guide video, while baseline shows 
+  unrelated motion.
+```
+
+---
+
 ## Debug Commands
 
 Add to `debug.py` for quick diagnosis:
