@@ -641,12 +641,11 @@ class WanAny2V:
             color_reference_frame = image_start.unsqueeze(1).clone()
 
             any_end_frame = image_end is not None 
-            # VAE "end frame" mode (kijai's `end_=`): treat the last frame as a special-case encode/decode
-            # with a fresh cache. In Wan2GP, legacy behavior used `add_frames_for_end_image` only for
-            # `model_type == "i2v"` (Wan 2.1). For Wan2.2 (`i2v_2_2`) we still want the end-frame-special
-            # VAE behavior, but WITHOUT modifying `frame_num`/mask layout (which would risk shape issues).
-            vae_end_frame_mode = any_end_frame and model_def.get("i2v_class", False) and model_type in ["i2v", "i2v_2_2"]
+            # add_frames_for_end_image: Only Wan 2.1 (i2v) adjusts frame_num and uses special VAE end-frame mode.
+            # Wan 2.2 (i2v_2_2) does NOT use the VAE end-frame mode - it handles end frames differently.
+            # Previous commit 3085732 incorrectly enabled vae_end_frame_mode for i2v_2_2 which broke non-SVI end frames.
             add_frames_for_end_image = any_end_frame and model_type == "i2v"
+            vae_end_frame_mode = add_frames_for_end_image  # Only Wan 2.1 uses VAE end-frame special encoding
             if any_end_frame:
                 color_correction_strength = 0 #disable color correction as transition frames between shots may have a complete different color level than the colors of the new shot
                 if add_frames_for_end_image:
@@ -877,9 +876,9 @@ class WanAny2V:
                 padded_frames = None
 
             if not svi_pro:
-                # For Wan2.2 I2V, use VAE end-frame mode without changing frame_num/mask layout.
+                # Standard VAE encode - end-frame mode only for Wan 2.1 (add_frames_for_end_image)
                 print(f"[SVI_ENCODING_PATH] ❌ NOT using SVI encoding (svi_pro=False) - using standard VAE encode")
-                lat_y = self.vae.encode([enc], VAE_tile_size, any_end_frame=vae_end_frame_mode or (any_end_frame and add_frames_for_end_image))[0]
+                lat_y = self.vae.encode([enc], VAE_tile_size, any_end_frame=vae_end_frame_mode)[0]
 
 
             msk = torch.ones(1, frame_num + ref_images_count * 4, lat_h, lat_w, device=self.device)
