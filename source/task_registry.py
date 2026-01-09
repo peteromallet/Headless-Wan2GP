@@ -611,11 +611,24 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                     generation_params[key] = segment_params[key]
                     dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Set {key}={segment_params[key]}")
             
-            # Merge SVI LoRAs with existing additional_loras
+            # Merge SVI LoRAs with existing additional_loras, applying svi_strength if specified
             from source.sm_functions.travel_between_images import get_svi_additional_loras
             existing_payload_loras = generation_params.get("additional_loras", {})
-            generation_params["additional_loras"] = get_svi_additional_loras(existing_payload_loras)
-            dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Merged SVI LoRAs into additional_loras")
+            svi_strength = segment_params.get("svi_strength") or full_orchestrator_payload.get("svi_strength")
+            svi_strength_1 = segment_params.get("svi_strength_1") or full_orchestrator_payload.get("svi_strength_1")
+            svi_strength_2 = segment_params.get("svi_strength_2") or full_orchestrator_payload.get("svi_strength_2")
+            generation_params["additional_loras"] = get_svi_additional_loras(
+                existing_payload_loras, 
+                svi_strength=svi_strength,
+                svi_strength_1=svi_strength_1,
+                svi_strength_2=svi_strength_2
+            )
+            if svi_strength_1 is not None or svi_strength_2 is not None:
+                dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Merged SVI LoRAs with svi_strength_1={svi_strength_1}, svi_strength_2={svi_strength_2}")
+            elif svi_strength is not None:
+                dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Merged SVI LoRAs with svi_strength={svi_strength}")
+            else:
+                dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Merged SVI LoRAs into additional_loras")
         
         # === WGP SUBMISSION DIAGNOSTIC SUMMARY ===
         # Log key frame-related parameters before WGP submission

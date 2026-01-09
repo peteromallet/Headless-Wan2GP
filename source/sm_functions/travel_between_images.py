@@ -88,18 +88,72 @@ SVI_DEFAULT_PARAMS = {
 SVI_STITCH_OVERLAP = 4  # frames
 
 
-def get_svi_additional_loras(existing_loras: dict = None) -> dict:
+def get_svi_additional_loras(existing_loras: dict = None, svi_strength: float = None,
+                             svi_strength_1: float = None, svi_strength_2: float = None) -> dict:
     """
     Get SVI LoRAs merged with any existing additional_loras.
     
     Args:
         existing_loras: Existing additional_loras dict to merge with
+        svi_strength: Optional global multiplier to scale ALL SVI LoRA strengths (0.0-1.0+)
+                     If None or 1.0, uses default SVI_LORAS values unchanged
+        svi_strength_1: Optional multiplier for high-noise LoRAs (phase 1 active: "X;0" pattern)
+                       Overrides svi_strength for these LoRAs
+        svi_strength_2: Optional multiplier for low-noise LoRAs (phase 2 active: "0;X" pattern)
+                       Overrides svi_strength for these LoRAs
         
     Returns:
         Merged dict of URL -> phase_multiplier
     """
     merged = dict(existing_loras) if existing_loras else {}
-    merged.update(SVI_LORAS)
+    
+    # Determine if any scaling is needed
+    has_scaling = (
+        (svi_strength is not None and svi_strength != 1.0) or
+        svi_strength_1 is not None or
+        svi_strength_2 is not None
+    )
+    
+    if has_scaling:
+        scaled_loras = {}
+        for url, phase_mult in SVI_LORAS.items():
+            # Parse phase multiplier string (e.g., "1;0" or "1.2;0" or "0;1")
+            parts = str(phase_mult).split(";")
+            
+            # Determine if this is a high-noise (phase 1) or low-noise (phase 2) LoRA
+            # High-noise: first value > 0, second value == 0 (e.g., "1;0", "1.2;0")
+            # Low-noise: first value == 0, second value > 0 (e.g., "0;1")
+            is_high_noise = len(parts) >= 2 and float(parts[0]) > 0 and float(parts[1]) == 0
+            is_low_noise = len(parts) >= 2 and float(parts[0]) == 0 and float(parts[1]) > 0
+            
+            # Determine which strength multiplier to use
+            if is_high_noise and svi_strength_1 is not None:
+                strength = svi_strength_1
+            elif is_low_noise and svi_strength_2 is not None:
+                strength = svi_strength_2
+            elif svi_strength is not None:
+                strength = svi_strength
+            else:
+                strength = 1.0
+            
+            # Apply scaling
+            scaled_parts = []
+            for p in parts:
+                try:
+                    val = float(p)
+                    scaled_val = val * strength
+                    # Format: keep integer if whole number, else 2 decimal places
+                    if scaled_val == int(scaled_val):
+                        scaled_parts.append(str(int(scaled_val)))
+                    else:
+                        scaled_parts.append(f"{scaled_val:.2g}")
+                except ValueError:
+                    scaled_parts.append(p)  # Keep original if not a number
+            scaled_loras[url] = ";".join(scaled_parts)
+        merged.update(scaled_loras)
+    else:
+        merged.update(SVI_LORAS)
+    
     return merged
 
 
@@ -1779,10 +1833,23 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             if use_svi and idx > 0:
                 dprint(f"[SVI_CONFIG] Segment {idx}: Configuring SVI mode")
                 
-                # Merge SVI LoRAs with any existing additional_loras
+                # Merge SVI LoRAs with any existing additional_loras, applying svi_strength if specified
                 existing_loras = segment_payload.get("additional_loras", {})
-                segment_payload["additional_loras"] = get_svi_additional_loras(existing_loras)
-                dprint(f"[SVI_CONFIG] Segment {idx}: Added SVI LoRAs to additional_loras")
+                svi_strength = orchestrator_payload.get("svi_strength")
+                svi_strength_1 = orchestrator_payload.get("svi_strength_1")
+                svi_strength_2 = orchestrator_payload.get("svi_strength_2")
+                segment_payload["additional_loras"] = get_svi_additional_loras(
+                    existing_loras, 
+                    svi_strength=svi_strength,
+                    svi_strength_1=svi_strength_1,
+                    svi_strength_2=svi_strength_2
+                )
+                if svi_strength_1 is not None or svi_strength_2 is not None:
+                    dprint(f"[SVI_CONFIG] Segment {idx}: Added SVI LoRAs with svi_strength_1={svi_strength_1}, svi_strength_2={svi_strength_2}")
+                elif svi_strength is not None:
+                    dprint(f"[SVI_CONFIG] Segment {idx}: Added SVI LoRAs with svi_strength={svi_strength}")
+                else:
+                    dprint(f"[SVI_CONFIG] Segment {idx}: Added SVI LoRAs to additional_loras")
                 
                 # Force SVI generation parameters (SVI LoRAs are 2-phase and expect these defaults)
                 for key, value in SVI_DEFAULT_PARAMS.items():
