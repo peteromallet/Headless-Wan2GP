@@ -599,22 +599,27 @@ def process_structure_frames(
 ) -> List[np.ndarray]:
     """
     Process frames with chosen preprocessor, ensuring consistent output count.
-    
+
     Handles the N-1 problem for optical flow (which returns N-1 flows for N frames).
-    
+
     Args:
         frames: List of input frames to preprocess
-        structure_type: Type of preprocessing ("flow", "canny", or "depth")
+        structure_type: Type of preprocessing ("flow", "canny", "depth", or "raw")
         motion_strength: Strength parameter for flow
         canny_intensity: Intensity parameter for canny
         depth_contrast: Contrast parameter for depth
         dprint: Debug print function
-        
+
     Returns:
         List of RGB visualization frames (length = len(frames))
     """
+    # Handle raw type - no preprocessing needed
+    if structure_type == "raw":
+        dprint(f"[STRUCTURE_PREPROCESS] Raw type: returning {len(frames)} frames without preprocessing")
+        return frames
+
     dprint(f"[STRUCTURE_PREPROCESS] Processing {len(frames)} frames with '{structure_type}' preprocessor...")
-    
+
     preprocessor = get_structure_preprocessor(
         structure_type,
         motion_strength,
@@ -783,11 +788,11 @@ def create_structure_guidance_video(
 
     This is the NEW orchestrator-level function that:
     1. Loads and preprocesses frames from the structure video
-    2. Applies the chosen preprocessor (flow, canny, or depth)
+    2. Applies the chosen preprocessor (flow, canny, depth, or raw)
     3. Encodes them as an H.264 video
 
     The resulting video contains structure visualizations that segments can use as
-    VACE guide videos for structural conditioning.
+    VACE guide videos for structural conditioning, or raw frames for Uni3C.
 
     Args:
         structure_video_path: Path to the source structure video
@@ -795,8 +800,13 @@ def create_structure_guidance_video(
         target_resolution: (width, height) for output frames
         target_fps: FPS for the output video
         output_path: Where to save the output video
-        structure_type: Type of preprocessing ("flow", "canny", or "depth"). Default: "flow"
-        motion_strength: Flow strength multiplier (only used for flow)
+        structure_type: Type of preprocessing:
+            - "flow": Optical flow visualization (VACE)
+            - "canny": Edge detection (VACE)
+            - "depth": Depth map estimation (VACE)
+            - "raw": No preprocessing - raw frames only (Uni3C)
+            Default: "flow"
+        motion_strength: Flow strength multiplier (only used for flow, also maps to uni3c_strength for raw)
         canny_intensity: Edge intensity multiplier (only used for canny)
         depth_contrast: Depth contrast adjustment (only used for depth)
         treatment: "adjust" (stretch/compress entire video) or "clip" (temporal sample)
@@ -818,8 +828,12 @@ def create_structure_guidance_video(
     # Log active strength parameter
     if structure_type == "flow" and abs(motion_strength - 1.0) > 1e-6:
         dprint(f"  Motion strength: {motion_strength}")
-    elif structure_type == "canny" and abs(canny_intensity - 1.0) > 1e-6:
+    elif structure_type == "canny" and abs(canny_intensity - 1e-6) > 1e-6:
         dprint(f"  Canny intensity: {canny_intensity}")
+    elif structure_type == "raw":
+        dprint(f"  Raw frames: No preprocessing applied (Uni3C mode)")
+        if abs(motion_strength - 1.0) > 1e-6:
+            dprint(f"  Uni3C strength: {motion_strength} (from motion_strength)")
     elif structure_type == "depth" and abs(depth_contrast - 1.0) > 1e-6:
         dprint(f"  Depth contrast: {depth_contrast}")
 

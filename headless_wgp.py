@@ -1648,15 +1648,42 @@ class WanOrchestrator:
                     pass
                 # Load I2V input images (image_start/image_end) if they are paths
                 # This is required for I2V models which expect PIL images, not paths
+                # Extract target resolution for resizing images to match structure video
+                target_width, target_height = None, None
+                if wgp_params.get('resolution'):
+                    try:
+                        w_str, h_str = wgp_params['resolution'].split('x')
+                        target_width, target_height = int(w_str), int(h_str)
+                        generation_logger.info(f"[PREFLIGHT] Target resolution for image resizing: {target_width}x{target_height}")
+                    except Exception as e_res:
+                        generation_logger.warning(f"[PREFLIGHT] Could not parse resolution '{wgp_params.get('resolution')}': {e_res}")
+
                 for img_param in ['image_start', 'image_end']:
                     val = wgp_params.get(img_param)
                     if val:
                         if isinstance(val, str):
                             generation_logger.info(f"[PREFLIGHT] Loading {img_param} from path: {val}")
-                            wgp_params[img_param] = self._load_image(val, mask=False)
+                            img = self._load_image(val, mask=False)
+                            # Resize to exact target resolution to match structure video
+                            if img and target_width and target_height:
+                                from PIL import Image
+                                if img.size != (target_width, target_height):
+                                    generation_logger.info(f"[PREFLIGHT] Resizing {img_param} from {img.size[0]}x{img.size[1]} to {target_width}x{target_height}")
+                                    img = img.resize((target_width, target_height), Image.LANCZOS)
+                            wgp_params[img_param] = img
                         elif isinstance(val, list) and len(val) > 0 and isinstance(val[0], str):
                             generation_logger.info(f"[PREFLIGHT] Loading {img_param} from list of paths")
-                            wgp_params[img_param] = [self._load_image(p, mask=False) for p in val]
+                            loaded_imgs = []
+                            for p in val:
+                                img = self._load_image(p, mask=False)
+                                # Resize to exact target resolution to match structure video
+                                if img and target_width and target_height:
+                                    from PIL import Image
+                                    if img.size != (target_width, target_height):
+                                        generation_logger.info(f"[PREFLIGHT] Resizing {img_param} image from {img.size[0]}x{img.size[1]} to {target_width}x{target_height}")
+                                        img = img.resize((target_width, target_height), Image.LANCZOS)
+                                loaded_imgs.append(img)
+                            wgp_params[img_param] = loaded_imgs
 
                 # For image-based models, load PIL images instead of passing paths
                 if is_qwen or image_mode == 1:

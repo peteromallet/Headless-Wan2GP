@@ -590,12 +590,13 @@ class WanAny2V:
         vid2vid_init_strength = 0.7,  # 0.0 = pure vid2vid (keep original), 1.0 = pure txt2vid (random noise)
         # Uni3C ControlNet parameters
         use_uni3c = False,  # Master enable flag
-        uni3c_guide_video = None,  # Path to guide video
+        uni3c_guide_video = None,  # Path to guide video (or URL to orchestrator-preprocessed video)
         uni3c_strength = 1.0,  # Strength multiplier (0.0 = no effect, 1.0 = full)
         uni3c_start_percent = 0.0,  # Start applying at this % of denoising
         uni3c_end_percent = 1.0,  # Stop applying at this % of denoising
         uni3c_keep_on_gpu = False,  # If True, don't offload ControlNet between steps
         uni3c_frame_policy = "fit",  # Frame alignment: "fit", "trim", "loop", "off"
+        uni3c_guidance_frame_offset = 0,  # Frame offset for orchestrator-preprocessed video (travel_orchestrator only)
         uni3c_controlnet = None,  # Pre-loaded WanControlNet instance (optional)
         **bbargs
                 ):
@@ -1541,36 +1542,85 @@ class WanAny2V:
                 state_dict, config = load_uni3c_checkpoint(ckpts_dir=ckpts_dir)
                 controlnet = WanControlNet(**config)
                 controlnet.load_state_dict(state_dict, strict=False)
+                # Convert entire model to fp16 (including biases not in checkpoint)
+                controlnet = controlnet.to(torch.float16)
                 controlnet.eval()
                 print(f"[UNI3C] any2video: Loaded controlnet from checkpoint")
             
             # Determine expected in_channels from controlnet
             expected_channels = getattr(controlnet, "in_channels", 20)
             
-            # Download guide video if URL (handles non-travel mode tasks)
-            if uni3c_guide_video.startswith(("http://", "https://")):
-                import tempfile
-                import urllib.request
+            # Check if using orchestrator-preprocessed video (structure_type="raw")
+            if uni3c_guidance_frame_offset > 0 or (uni3c_guide_video.startswith(("http://", "https://")) and "structure_" in uni3c_guide_video):
+                # Orchestrator mode: extract this segment's portion from pre-computed video
+                print(f"[UNI3C] any2video: Using orchestrator-preprocessed guide video")
+                print(f"[UNI3C] any2video:   Frame offset: {uni3c_guidance_frame_offset}")
+                print(f"[UNI3C] any2video:   Extracting {frame_num} frames")
+
+                # Use structure_video_guidance downloader to extract segment's frames
                 from pathlib import Path
-                print(f"[UNI3C] any2video: Downloading guide video from URL...")
-                url_filename = Path(uni3c_guide_video).name or "uni3c_guide.mp4"
-                temp_dir = tempfile.gettempdir()
-                local_path = os.path.join(temp_dir, f"uni3c_{url_filename}")
-                if not os.path.exists(local_path):
-                    urllib.request.urlretrieve(uni3c_guide_video, local_path)
-                    print(f"[UNI3C] any2video: Downloaded to {local_path}")
-                else:
-                    print(f"[UNI3C] any2video: Using cached {local_path}")
-                uni3c_guide_video = local_path
-            
-            # Load and encode guide video
-            guide_video_tensor = self._load_uni3c_guide_video(
-                uni3c_guide_video,
-                target_height=height,
-                target_width=width,
-                target_frames=frame_num,
-                frame_policy=uni3c_frame_policy
-            )
+                import tempfile
+                import sys
+
+                # Add source to path for structure_video_guidance import
+                source_dir = Path(__file__).parent.parent.parent.parent / "source"
+                if str(source_dir) not in sys.path:
+                    sys.path.insert(0, str(source_dir))
+
+                from structure_video_guidance import download_and_extract_motion_frames
+
+                temp_dir = Path(tempfile.gettempdir())
+                guidance_frames = download_and_extract_motion_frames(
+                    structure_motion_video_url=uni3c_guide_video,
+                    frame_start=uni3c_guidance_frame_offset,
+                    frame_count=frame_num,
+                    download_dir=temp_dir,
+                    dprint=print
+                )
+
+                print(f"[UNI3C] any2video: Extracted {len(guidance_frames)} frames from orchestrator video")
+
+                # Convert frames to tensor: [F, H, W, C] -> [C, F, H, W], range [0,255] -> [-1, 1]
+                # Resize if needed
+                import cv2
+                resized_frames = []
+                for frame in guidance_frames:
+                    if frame.shape[:2] != (height, width):
+                        frame = cv2.resize(frame, (width, height))
+                    resized_frames.append(frame)
+
+                video = np.stack(resized_frames, axis=0)  # [F, H, W, C]
+                video = video.astype(np.float32)
+                video = (video / 127.5) - 1.0  # [-1, 1] (Wan2GP convention)
+                guide_video_tensor = torch.from_numpy(video).permute(3, 0, 1, 2)  # [C, F, H, W]
+
+                print(f"[UNI3C] any2video: Guide video tensor shape: {tuple(guide_video_tensor.shape)}, dtype: {guide_video_tensor.dtype}")
+            else:
+                # Standard mode: download full video and apply frame policy
+                # Download guide video if URL (handles non-travel mode tasks)
+                if uni3c_guide_video.startswith(("http://", "https://")):
+                    import tempfile
+                    import urllib.request
+                    from pathlib import Path
+                    print(f"[UNI3C] any2video: Downloading guide video from URL...")
+                    url_filename = Path(uni3c_guide_video).name or "uni3c_guide.mp4"
+                    temp_dir = tempfile.gettempdir()
+                    local_path = os.path.join(temp_dir, f"uni3c_{url_filename}")
+                    if not os.path.exists(local_path):
+                        urllib.request.urlretrieve(uni3c_guide_video, local_path)
+                        print(f"[UNI3C] any2video: Downloaded to {local_path}")
+                    else:
+                        print(f"[UNI3C] any2video: Using cached {local_path}")
+                    uni3c_guide_video = local_path
+
+                # Load and encode guide video
+                guide_video_tensor = self._load_uni3c_guide_video(
+                    uni3c_guide_video,
+                    target_height=height,
+                    target_width=width,
+                    target_frames=frame_num,
+                    frame_policy=uni3c_frame_policy
+                )
             
             render_latent = self._encode_uni3c_guide(
                 guide_video_tensor,

@@ -3062,17 +3062,21 @@ def download_models(model_filename = None, model_type= None, module_type = False
 
 
 
-    shared_def = {
-        "repoId" : "DeepBeepMeep/Wan2.1",
-        "sourceFolderList" : [ "pose", "scribble", "flow", "depth", "mask", "wav2vec", "chinese-wav2vec2-base", "roformer", "pyannote", "det_align", "" ],
-        "fileList" : [ ["dw-ll_ucoco_384.onnx", "yolox_l.onnx"],["netG_A_latest.pth"],  ["raft-things.pth"], 
-                      ["depth_anything_v2_vitl.pth","depth_anything_v2_vitb.pth"], ["sam_vit_h_4b8939_fp16.safetensors", "model.safetensors", "config.json"], 
-                      ["config.json", "feature_extractor_config.json", "model.safetensors", "preprocessor_config.json", "special_tokens_map.json", "tokenizer_config.json", "vocab.json"],
-                      ["config.json", "pytorch_model.bin", "preprocessor_config.json"],
-                      ["model_bs_roformer_ep_317_sdr_12.9755.ckpt", "model_bs_roformer_ep_317_sdr_12.9755.yaml", "download_checks.json"],
-                      ["pyannote_model_wespeaker-voxceleb-resnet34-LM.bin", "pytorch_model_segmentation-3.0.bin"], ["detface.pt"], [ "flownet.pkl" ] ]
-    }
-    process_files_def(**shared_def)
+    # DISABLED: Preprocessing model downloads (~5GB)
+    # These are only needed for advanced control features (Scail pose, depth control, etc.)
+    # Basic i2v/t2v/Uni3C generation does NOT require these models
+    # Uncomment if you need: pose control, depth control, mask/segmentation, or audio processing
+    # shared_def = {
+    #     "repoId" : "DeepBeepMeep/Wan2.1",
+    #     "sourceFolderList" : [ "pose", "scribble", "flow", "depth", "mask", "wav2vec", "chinese-wav2vec2-base", "roformer", "pyannote", "det_align", "" ],
+    #     "fileList" : [ ["dw-ll_ucoco_384.onnx", "yolox_l.onnx"],["netG_A_latest.pth"],  ["raft-things.pth"],
+    #                   ["depth_anything_v2_vitl.pth","depth_anything_v2_vitb.pth"], ["sam_vit_h_4b8939_fp16.safetensors", "model.safetensors", "config.json"],
+    #                   ["config.json", "feature_extractor_config.json", "model.safetensors", "preprocessor_config.json", "special_tokens_map.json", "tokenizer_config.json", "vocab.json"],
+    #                   ["config.json", "pytorch_model.bin", "preprocessor_config.json"],
+    #                   ["model_bs_roformer_ep_317_sdr_12.9755.ckpt", "model_bs_roformer_ep_317_sdr_12.9755.yaml", "download_checks.json"],
+    #                   ["pyannote_model_wespeaker-voxceleb-resnet34-LM.bin", "pytorch_model_segmentation-3.0.bin"], ["detface.pt"], [ "flownet.pkl" ] ]
+    # }
+    # process_files_def(**shared_def)
 
 
     if server_config.get("enhancer_enabled", 0) == 1:
@@ -3091,7 +3095,8 @@ def download_models(model_filename = None, model_type= None, module_type = False
         }
         process_files_def(**enhancer_def)
 
-    download_mmaudio()
+    # DISABLED: MMAudio download (only needed for audio generation features)
+    # download_mmaudio()
     global download_shared_done
     download_shared_done = True
 
