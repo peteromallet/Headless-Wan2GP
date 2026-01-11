@@ -564,13 +564,18 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
 
             # For flow matching diffusion, noise factor directly matches denoising_strength
             # denoising_strength = 0.35 → 35% noise, 65% image
-            # This controls how much of the original image is preserved
             latent_noise_factor = denoising_strength
             total_steps = len(timesteps)
 
+            # Calculate step skipping with +1 bonus step for better quality
+            # Original formula: first_step = int(total_steps * (1.0 - denoising_strength))
+            # With +1: run one extra denoising step beyond the proportional amount
+            first_step = int(total_steps * (1.0 - denoising_strength)) - 1
+            first_step = max(0, first_step)  # Don't go below 0
+            steps_to_run = total_steps - first_step
+
             # Mix init image latents with noise
             print(f"[IMG2IMG] Mixing latents: {(1.0 - latent_noise_factor)*100:.1f}% image + {latent_noise_factor*100:.1f}% noise (strength={denoising_strength:.2f})")
-            print(f"[IMG2IMG] Running ALL {total_steps} denoising steps (no step skipping)")
             # Use torch.randn with explicit shape for PyTorch compatibility (randn_like doesn't accept generator in older versions)
             randn = torch.randn(
                 init_image_latents.shape,
@@ -579,7 +584,15 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                 dtype=init_image_latents.dtype
             )
             latents = init_image_latents * (1.0 - latent_noise_factor) + randn * latent_noise_factor
-            print(f"[IMG2IMG] ✓ Noised latents ready: {latents.shape}, denoising for {total_steps} steps")
+
+            # Skip early denoising steps (with +1 bonus step)
+            timesteps = timesteps[first_step:]
+            self.scheduler.timesteps = timesteps
+            num_inference_steps = len(timesteps)
+            self._num_timesteps = len(timesteps)
+
+            print(f"[IMG2IMG] ✓ Skipping first {first_step}/{total_steps} steps, denoising for {num_inference_steps} steps (+1 bonus)")
+            print(f"[IMG2IMG] ✓ Noised latents ready: {latents.shape}")
         elif init_image is not None and denoising_strength >= 1.0:
             print(f"[IMG2IMG] ⚠️  init_image provided but denoising_strength={denoising_strength:.2f} >= 1.0, treating as text-to-image")
         elif init_image is None:
