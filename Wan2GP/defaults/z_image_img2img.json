@@ -10,7 +10,7 @@
     },
     "resolution": "1024x1024",
     "batch_size": 1,
-    "num_inference_steps": 12,
+    "num_inference_steps": 8,
     "guidance_scale": 0,
     "denoising_strength": 0.7
 }
