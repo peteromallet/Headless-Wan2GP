@@ -298,11 +298,29 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         "style_reference_strength", "subject_strength", 
         "subject_description", "in_this_scene",
         "output_format", "enable_base64_output", "enable_sync_mode",
+        # Uni3C motion guidance parameters
+        "use_uni3c", "uni3c_guide_video", "uni3c_strength",
+        "uni3c_start_percent", "uni3c_end_percent",
+        "uni3c_keep_on_gpu", "uni3c_frame_policy",
     }
     
     for param in param_whitelist:
         if param in db_task_params:
             generation_params[param] = db_task_params[param]
+    
+    # Layer 1 Uni3C logging - detect whitelist failures early
+    if "use_uni3c" in generation_params:
+        headless_logger.info(
+            f"[UNI3C] Task {task_id}: use_uni3c={generation_params.get('use_uni3c')}, "
+            f"guide_video={generation_params.get('uni3c_guide_video', 'NOT_SET')}, "
+            f"strength={generation_params.get('uni3c_strength', 'NOT_SET')}"
+        )
+    elif db_task_params.get("use_uni3c"):
+        # CRITICAL: Detect when whitelist is missing the param
+        headless_logger.warning(
+            f"[UNI3C] Task {task_id}: ⚠️ use_uni3c was in db_task_params but NOT in generation_params! "
+            f"Check param_whitelist in task_conversion.py"
+        )
     
     # Extract orchestrator parameters
     # We use a lambda for dprint to match signature expected by extract_orchestrator_parameters if needed,

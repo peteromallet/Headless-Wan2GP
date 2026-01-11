@@ -11,13 +11,13 @@
 
 | Task | Status | Notes |
 |------|--------|-------|
-| Add Uni3C params to `task_conversion.py:param_whitelist` | 🔴 | **CRITICAL** - silent failure without this |
-| Add Layer 1 logging in `task_conversion.py` | 🔴 | Detect whitelist failures |
-| Add Uni3C resolution block in `task_registry.py` | 🔴 | Like SVI block |
-| Add Layer 2 logging in `task_registry.py` | 🔴 | |
-| Add params to `wgp.py:generate_video()` signature | 🔴 | **CRITICAL** - silent failure without this |
-| Add Layer 3 logging in `wgp.py` | 🔴 | |
-| Pass params through to `any2video.generate()` | 🔴 | |
+| Add Uni3C params to `task_conversion.py:param_whitelist` | ✅ Done | Added 7 params to whitelist |
+| Add Layer 1 logging in `task_conversion.py` | ✅ Done | Detects whitelist failures with warning log |
+| Add Uni3C resolution block in `task_registry.py` | ✅ Done | Like SVI block, with URL download support |
+| Add Layer 2 logging in `task_registry.py` | ✅ Done | Logs all Uni3C params |
+| Add params to `wgp.py:generate_video()` signature | ✅ Done | 7 params with defaults |
+| Add Layer 3 logging in `wgp.py` | ✅ Done | Logs ENABLED/DISABLED status |
+| Pass params through to `any2video.generate()` | ✅ Done | All 7 params passed via `wan_model.generate()` |
 
 ---
 
