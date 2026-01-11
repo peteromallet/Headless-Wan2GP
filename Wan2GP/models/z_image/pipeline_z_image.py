@@ -562,23 +562,15 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             init_image_latents = (init_image_latents - self.vae.config.shift_factor) * self.vae.config.scaling_factor
             print(f"[IMG2IMG] Encoded latents shape: {init_image_latents.shape}")
 
-            # Calculate how many steps to skip based on denoising_strength
-            # denoising_strength = 1.0 means full denoise (start from pure noise, 100% transformation)
-            # denoising_strength = 0.0 means no denoise (keep original image, 0% transformation)
-            total_steps = len(timesteps)
-            first_step = int(total_steps * (1.0 - denoising_strength))
-
-            # For flow matching diffusion, noise factor should directly match denoising_strength
+            # For flow matching diffusion, noise factor directly matches denoising_strength
             # denoising_strength = 0.35 → 35% noise, 65% image
-            # This is the semantically correct interpretation for img2img
+            # This controls how much of the original image is preserved
             latent_noise_factor = denoising_strength
-
-            # Get the timestep we'll start from (for logging and scheduler setup)
-            start_timestep = timesteps[first_step] if first_step < len(timesteps) else timesteps[0]
+            total_steps = len(timesteps)
 
             # Mix init image latents with noise
             print(f"[IMG2IMG] Mixing latents: {(1.0 - latent_noise_factor)*100:.1f}% image + {latent_noise_factor*100:.1f}% noise (strength={denoising_strength:.2f})")
-            print(f"[IMG2IMG] Starting from scheduler timestep {start_timestep:.1f}/1000 (step {first_step}/{total_steps})")
+            print(f"[IMG2IMG] Running ALL {total_steps} denoising steps (no step skipping)")
             # Use torch.randn with explicit shape for PyTorch compatibility (randn_like doesn't accept generator in older versions)
             randn = torch.randn(
                 init_image_latents.shape,
@@ -587,16 +579,7 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                 dtype=init_image_latents.dtype
             )
             latents = init_image_latents * (1.0 - latent_noise_factor) + randn * latent_noise_factor
-            print(f"[IMG2IMG] ✓ Noised latents ready: {latents.shape}")
-
-            # Skip early denoising steps
-            timesteps = timesteps[first_step:]
-            self.scheduler.timesteps = timesteps
-            num_inference_steps = len(timesteps)
-            self._num_timesteps = len(timesteps)
-
-            print(f"[IMG2IMG] ✓ Skipping first {first_step}/{total_steps} steps, denoising for {num_inference_steps} steps")
-            print(f"[IMG2IMG] Final latents shape: {latents.shape}, ready for denoising")
+            print(f"[IMG2IMG] ✓ Noised latents ready: {latents.shape}, denoising for {total_steps} steps")
         elif init_image is not None and denoising_strength >= 1.0:
             print(f"[IMG2IMG] ⚠️  init_image provided but denoising_strength={denoising_strength:.2f} >= 1.0, treating as text-to-image")
         elif init_image is None:
