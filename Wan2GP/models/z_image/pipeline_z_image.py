@@ -562,37 +562,45 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             init_image_latents = (init_image_latents - self.vae.config.shift_factor) * self.vae.config.scaling_factor
             print(f"[IMG2IMG] Encoded latents shape: {init_image_latents.shape}")
 
-            # For flow matching diffusion, noise factor directly matches denoising_strength
-            # denoising_strength = 0.35 → 35% noise, 65% image
-            latent_noise_factor = denoising_strength
+            # Calculate step skipping based on denoising_strength
+            # denoising_strength = 1.0 means start from pure noise (full transformation)
+            # denoising_strength = 0.0 means start from clean image (no transformation)
             total_steps = len(timesteps)
-
-            # Calculate step skipping with +1 bonus step for better quality
-            # Original formula: first_step = int(total_steps * (1.0 - denoising_strength))
-            # With +1: run one extra denoising step beyond the proportional amount
-            first_step = int(total_steps * (1.0 - denoising_strength)) - 1
+            first_step = int(total_steps * (1.0 - denoising_strength)) - 1  # +1 bonus step
             first_step = max(0, first_step)  # Don't go below 0
-            steps_to_run = total_steps - first_step
 
-            # Mix init image latents with noise
-            print(f"[IMG2IMG] Mixing latents: {(1.0 - latent_noise_factor)*100:.1f}% image + {latent_noise_factor*100:.1f}% noise (strength={denoising_strength:.2f})")
-            # Use torch.randn with explicit shape for PyTorch compatibility (randn_like doesn't accept generator in older versions)
-            randn = torch.randn(
+            # Get the timestep we'll start from for proper noise scaling
+            start_timestep = timesteps[first_step]
+
+            # Use scheduler's scale_noise for PROPER flow matching noise injection
+            # This uses the learned sigma schedule instead of simple linear interpolation
+            print(f"[IMG2IMG] Adding noise via scheduler.scale_noise (strength={denoising_strength:.2f})")
+            print(f"[IMG2IMG] Starting from timestep {start_timestep:.1f}/1000 (step {first_step}/{total_steps})")
+
+            # Generate noise using randn_tensor for consistency with text-to-image
+            from diffusers.utils.torch_utils import randn_tensor
+            noise = randn_tensor(
                 init_image_latents.shape,
                 generator=generator,
                 device=init_image_latents.device,
                 dtype=init_image_latents.dtype
             )
-            latents = init_image_latents * (1.0 - latent_noise_factor) + randn * latent_noise_factor
 
-            # Skip early denoising steps (with +1 bonus step)
+            # Use scheduler's proper forward process for flow matching
+            latents = self.scheduler.scale_noise(init_image_latents, start_timestep, noise)
+
+            # Get sigma for logging (shows actual noise mixing ratio)
+            sigma_idx = self.scheduler.index_for_timestep(start_timestep, self.scheduler.timesteps)
+            sigma = self.scheduler.sigmas[sigma_idx].item()
+            print(f"[IMG2IMG] ✓ Applied scheduler sigma={sigma:.3f} → {(1.0-sigma)*100:.1f}% image + {sigma*100:.1f}% noise")
+
+            # Skip early denoising steps
             timesteps = timesteps[first_step:]
             self.scheduler.timesteps = timesteps
             num_inference_steps = len(timesteps)
             self._num_timesteps = len(timesteps)
 
-            print(f"[IMG2IMG] ✓ Skipping first {first_step}/{total_steps} steps, denoising for {num_inference_steps} steps (+1 bonus)")
-            print(f"[IMG2IMG] ✓ Noised latents ready: {latents.shape}")
+            print(f"[IMG2IMG] ✓ Denoising for {num_inference_steps} steps (skipped first {first_step})")
         elif init_image is not None and denoising_strength >= 1.0:
             print(f"[IMG2IMG] ⚠️  init_image provided but denoising_strength={denoising_strength:.2f} >= 1.0, treating as text-to-image")
         elif init_image is None:
