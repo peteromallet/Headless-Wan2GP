@@ -24,6 +24,8 @@ venv_headless_wan2gp/
 !Wan2GP/defaults/*.json
 !Wan2GP/finetunes/*.json
 !Wan2GP/configs/*.json
+!Wan2GP/models/_settings.json
+!Wan2GP/models/wan/configs/*.json
 # *.txt
 *.backup
 *.pkl

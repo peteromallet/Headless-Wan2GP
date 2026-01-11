@@ -57,7 +57,9 @@ DIRECT_QUEUE_TASK_TYPES = {
     "i2v", "i2v_22", "hunyuan", "ltxv", "generate_video",
     "qwen_image_edit", "qwen_image_hires", "qwen_image_style", "image_inpaint", "annotated_image_edit",
     # Text-to-image tasks (no input image required)
-    "qwen_image", "qwen_image_2512", "z_image_turbo"
+    "qwen_image", "qwen_image_2512", "z_image_turbo",
+    # Image-to-image tasks
+    "z_image_turbo_i2i"
 }
 
 

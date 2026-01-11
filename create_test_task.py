@@ -15,9 +15,11 @@ import json
 import uuid
 import argparse
 from datetime import datetime
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not required if env vars are already set
 
 # Test task templates - these are real task configs that exercise the LoRA flow
 TEST_TASKS = {
@@ -30,42 +32,69 @@ TEST_TASKS = {
             "num_frames": 29,
             "parsed_resolution_wh": "902x508",
             "seed_to_use": 42,
-            
-            # Prompts
-            "base_prompt": "",
-            "negative_prompt": "",
-            
-            # Generation settings
-            "flow_shift": 5,
-            "sample_solver": "euler",
-            "guidance_scale": 1,
-            "guidance2_scale": 1,
-            "guidance_phases": 2,
-            "num_inference_steps": 6,
-            "switch_threshold": 826.0999755859375,
-            "model_switch_phase": 1,
-            "cfg_zero_step": -1,
-            "cfg_star_switch": 0,
-            
+
             # Segment info
             "segment_index": 0,
             "is_first_segment": True,
             "is_last_segment": True,
-            "amount_of_motion": 0.5,
             "debug_mode_enabled": False,
-            
-            # LoRAs (Lightning 2-phase)
+
+            # LoRAs (Lightning 2-phase) - top level for compatibility
             "lora_names": [
                 "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
                 "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"
             ],
             "lora_multipliers": ["1.0;0", "0;1.0"],
-            "additional_loras": {
-                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors": 1.0,
-                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors": 0
+
+            # Orchestrator details - REQUIRED for individual_travel_segment
+            "orchestrator_details": {
+                "steps": 6,
+                "shot_id": "8d36d4e2-4f57-4fd6-b1fc-581e5b5f6d62",
+                "seed_base": 42,
+                "model_name": "wan_2_2_i2v_lightning_baseline_2_2_2",
+                "model_type": "i2v",
+                "base_prompt": "",
+                "motion_mode": "basic",
+                "phase_config": {
+                    "phases": [
+                        {
+                            "loras": [
+                                {"url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors", "multiplier": "1.2"},
+                                {"url": "https://huggingface.co/peteromallet/random_junk/resolve/main/14b-i2v.safetensors", "multiplier": "0.50"}
+                            ],
+                            "phase": 1,
+                            "guidance_scale": 1
+                        },
+                        {
+                            "loras": [
+                                {"url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors", "multiplier": "1.0"},
+                                {"url": "https://huggingface.co/peteromallet/random_junk/resolve/main/14b-i2v.safetensors", "multiplier": "0.50"}
+                            ],
+                            "phase": 2,
+                            "guidance_scale": 1
+                        }
+                    ],
+                    "num_phases": 2,
+                    "steps_per_phase": [3, 3],
+                    "model_switch_phase": 1,
+                    "flow_shift": 5,
+                    "sample_solver": "euler"
+                },
+                "input_image_paths_resolved": [
+                    "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+                    "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/e2699835-35d2-4547-85f5-d59219341e4d-u1_3c8779e7-54b4-436c-bfce-9eee8872e370.jpeg"
+                ],
+                "parsed_resolution_wh": "902x508",
+                "advanced_mode": False,
+                "enhance_prompt": False,
+                "amount_of_motion": 0.5,
+                "debug_mode_enabled": False,
+                "chain_segments": False,
+                "after_first_post_generation_brightness": 0,
+                "after_first_post_generation_saturation": 1
             },
-            
-            # Input images
+
+            # Individual segment params
             "individual_segment_params": {
                 "num_frames": 29,
                 "base_prompt": "",
@@ -84,13 +113,7 @@ TEST_TASKS = {
                 "after_first_post_generation_brightness": 0,
                 "after_first_post_generation_saturation": 1
             },
-            "input_image_paths_resolved": [
-                "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
-                "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/e2699835-35d2-4547-85f5-d59219341e4d-u1_3c8779e7-54b4-436c-bfce-9eee8872e370.jpeg"
-            ],
-            "after_first_post_generation_brightness": 0,
-            "after_first_post_generation_saturation": 1,
-            
+
             # Uni3C parameters - THE NEW STUFF
             "use_uni3c": True,
             "uni3c_guide_video": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/guidance-videos/onboarding/structure_video_optimized.mp4",
@@ -106,36 +129,74 @@ TEST_TASKS = {
         "description": "Uni3C with strength=0 (should match non-Uni3C output)",
         "task_type": "individual_travel_segment",
         "params": {
+            # Model config
             "model_name": "wan_2_2_i2v_lightning_baseline_2_2_2",
             "num_frames": 29,
             "parsed_resolution_wh": "902x508",
             "seed_to_use": 42,
-            "base_prompt": "",
-            "negative_prompt": "",
-            "flow_shift": 5,
-            "sample_solver": "euler",
-            "guidance_scale": 1,
-            "guidance2_scale": 1,
-            "guidance_phases": 2,
-            "num_inference_steps": 6,
-            "switch_threshold": 826.0999755859375,
-            "model_switch_phase": 1,
-            "cfg_zero_step": -1,
-            "cfg_star_switch": 0,
+
+            # Segment info
             "segment_index": 0,
             "is_first_segment": True,
             "is_last_segment": True,
-            "amount_of_motion": 0.5,
             "debug_mode_enabled": False,
+
+            # LoRAs (Lightning 2-phase) - top level for compatibility
             "lora_names": [
                 "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
                 "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"
             ],
             "lora_multipliers": ["1.0;0", "0;1.0"],
-            "additional_loras": {
-                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors": 1.0,
-                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors": 0
+
+            # Orchestrator details - REQUIRED for individual_travel_segment
+            "orchestrator_details": {
+                "steps": 6,
+                "shot_id": "8d36d4e2-4f57-4fd6-b1fc-581e5b5f6d63",
+                "seed_base": 42,
+                "model_name": "wan_2_2_i2v_lightning_baseline_2_2_2",
+                "model_type": "i2v",
+                "base_prompt": "",
+                "motion_mode": "basic",
+                "phase_config": {
+                    "phases": [
+                        {
+                            "loras": [
+                                {"url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors", "multiplier": "1.2"},
+                                {"url": "https://huggingface.co/peteromallet/random_junk/resolve/main/14b-i2v.safetensors", "multiplier": "0.50"}
+                            ],
+                            "phase": 1,
+                            "guidance_scale": 1
+                        },
+                        {
+                            "loras": [
+                                {"url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors", "multiplier": "1.0"},
+                                {"url": "https://huggingface.co/peteromallet/random_junk/resolve/main/14b-i2v.safetensors", "multiplier": "0.50"}
+                            ],
+                            "phase": 2,
+                            "guidance_scale": 1
+                        }
+                    ],
+                    "num_phases": 2,
+                    "steps_per_phase": [3, 3],
+                    "model_switch_phase": 1,
+                    "flow_shift": 5,
+                    "sample_solver": "euler"
+                },
+                "input_image_paths_resolved": [
+                    "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+                    "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/e2699835-35d2-4547-85f5-d59219341e4d-u1_3c8779e7-54b4-436c-bfce-9eee8872e370.jpeg"
+                ],
+                "parsed_resolution_wh": "902x508",
+                "advanced_mode": False,
+                "enhance_prompt": False,
+                "amount_of_motion": 0.5,
+                "debug_mode_enabled": False,
+                "chain_segments": False,
+                "after_first_post_generation_brightness": 0,
+                "after_first_post_generation_saturation": 1
             },
+
+            # Individual segment params
             "individual_segment_params": {
                 "num_frames": 29,
                 "base_prompt": "",
@@ -154,13 +215,7 @@ TEST_TASKS = {
                 "after_first_post_generation_brightness": 0,
                 "after_first_post_generation_saturation": 1
             },
-            "input_image_paths_resolved": [
-                "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
-                "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/e2699835-35d2-4547-85f5-d59219341e4d-u1_3c8779e7-54b4-436c-bfce-9eee8872e370.jpeg"
-            ],
-            "after_first_post_generation_brightness": 0,
-            "after_first_post_generation_saturation": 1,
-            
+
             # Uni3C with strength=0 (effectively disabled)
             "use_uni3c": True,
             "uni3c_guide_video": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/guidance-videos/onboarding/structure_video_optimized.mp4",
@@ -173,36 +228,74 @@ TEST_TASKS = {
         "description": "Baseline without Uni3C (for comparison)",
         "task_type": "individual_travel_segment",
         "params": {
+            # Model config
             "model_name": "wan_2_2_i2v_lightning_baseline_2_2_2",
             "num_frames": 29,
             "parsed_resolution_wh": "902x508",
             "seed_to_use": 42,
-            "base_prompt": "",
-            "negative_prompt": "",
-            "flow_shift": 5,
-            "sample_solver": "euler",
-            "guidance_scale": 1,
-            "guidance2_scale": 1,
-            "guidance_phases": 2,
-            "num_inference_steps": 6,
-            "switch_threshold": 826.0999755859375,
-            "model_switch_phase": 1,
-            "cfg_zero_step": -1,
-            "cfg_star_switch": 0,
+
+            # Segment info
             "segment_index": 0,
             "is_first_segment": True,
             "is_last_segment": True,
-            "amount_of_motion": 0.5,
             "debug_mode_enabled": False,
+
+            # LoRAs (Lightning 2-phase) - top level for compatibility
             "lora_names": [
                 "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
                 "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"
             ],
             "lora_multipliers": ["1.0;0", "0;1.0"],
-            "additional_loras": {
-                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors": 1.0,
-                "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors": 0
+
+            # Orchestrator details - REQUIRED for individual_travel_segment
+            "orchestrator_details": {
+                "steps": 6,
+                "shot_id": "8d36d4e2-4f57-4fd6-b1fc-581e5b5f6d64",
+                "seed_base": 42,
+                "model_name": "wan_2_2_i2v_lightning_baseline_2_2_2",
+                "model_type": "i2v",
+                "base_prompt": "",
+                "motion_mode": "basic",
+                "phase_config": {
+                    "phases": [
+                        {
+                            "loras": [
+                                {"url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors", "multiplier": "1.2"},
+                                {"url": "https://huggingface.co/peteromallet/random_junk/resolve/main/14b-i2v.safetensors", "multiplier": "0.50"}
+                            ],
+                            "phase": 1,
+                            "guidance_scale": 1
+                        },
+                        {
+                            "loras": [
+                                {"url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors", "multiplier": "1.0"},
+                                {"url": "https://huggingface.co/peteromallet/random_junk/resolve/main/14b-i2v.safetensors", "multiplier": "0.50"}
+                            ],
+                            "phase": 2,
+                            "guidance_scale": 1
+                        }
+                    ],
+                    "num_phases": 2,
+                    "steps_per_phase": [3, 3],
+                    "model_switch_phase": 1,
+                    "flow_shift": 5,
+                    "sample_solver": "euler"
+                },
+                "input_image_paths_resolved": [
+                    "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
+                    "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/e2699835-35d2-4547-85f5-d59219341e4d-u1_3c8779e7-54b4-436c-bfce-9eee8872e370.jpeg"
+                ],
+                "parsed_resolution_wh": "902x508",
+                "advanced_mode": False,
+                "enhance_prompt": False,
+                "amount_of_motion": 0.5,
+                "debug_mode_enabled": False,
+                "chain_segments": False,
+                "after_first_post_generation_brightness": 0,
+                "after_first_post_generation_saturation": 1
             },
+
+            # Individual segment params
             "individual_segment_params": {
                 "num_frames": 29,
                 "base_prompt": "",
@@ -221,13 +314,7 @@ TEST_TASKS = {
                 "after_first_post_generation_brightness": 0,
                 "after_first_post_generation_saturation": 1
             },
-            "input_image_paths_resolved": [
-                "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/41V0rWGAaFwJ4Y9AOqcVC.jpg",
-                "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/e2699835-35d2-4547-85f5-d59219341e4d-u1_3c8779e7-54b4-436c-bfce-9eee8872e370.jpeg"
-            ],
-            "after_first_post_generation_brightness": 0,
-            "after_first_post_generation_saturation": 1,
-            
+
             # NO Uni3C - baseline for comparison
             "use_uni3c": False
         },
@@ -289,7 +376,7 @@ TEST_TASKS = {
                 "dimension_source": "project",
                 "show_input_images": False,
                 "debug_mode_enabled": False,
-                "independent_segments": True,
+                "chain_segments": False,
                 "orchestrator_task_id": "",  # Will be generated
                 "parsed_resolution_wh": "902x508",
                 "base_prompts_expanded": [""],
@@ -311,6 +398,77 @@ TEST_TASKS = {
         "project_id": "ea5709f3-4592-4d5b-b9a5-87ed2ecf07c9"
     },
     
+    "travel_orchestrator_uni3c": {
+        "description": "Travel orchestrator with Uni3C (structure_type=raw) - tests resolution fix",
+        "task_type": "travel_orchestrator",
+        "params": {
+            "tool_type": "travel-between-images",
+            "orchestrator_details": {
+                "run_id": "",  # Will be generated
+                "shot_id": "0105e495-ba3b-499c-a877-c89894a81647",
+                "model_name": "wan_2_2_i2v_lightning_baseline_2_2_2",
+                "model_type": "i2v",
+                "parsed_resolution_wh": "902x508",
+                "base_prompt": "the camera flies through the front of the bus",
+                "base_prompts_expanded": ["the camera flies through the front of the bus"],
+                "negative_prompts_expanded": ["cut, fade"],
+                "frame_overlap_expanded": [],
+                "main_output_dir_for_run": "./outputs/uni3c_test_output",
+                "input_image_paths_resolved": [
+                    "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/start.jpg",
+                    "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/8a9fdac5-ed89-482c-aeca-c3dd7922d53c/Yt-PiG-XbQ8rLVAd73js1.jpg"
+                ],
+                "segment_frames_expanded": [81],
+                "seed_base": 789,
+                "steps": 20,
+                "amount_of_motion": 0.5,
+                "generation_mode": "batch",
+                "dimension_source": "project",
+                "chain_segments": True,
+                "advanced_mode": False,
+                "enhance_prompt": False,
+                "debug_mode_enabled": False,
+                "show_input_images": False,
+                "structure_type": "raw",
+                "structure_video_path": "https://wczysqzxlwdndgxitrvc.supabase.co/storage/v1/object/public/image_uploads/guidance-videos/uni3c-tests/guide_5s_clip_5-10s.mp4",
+                "structure_video_treatment": "adjust",
+                "structure_video_motion_strength": 1.25,
+                "uni3c_start_percent": 0.0,
+                "uni3c_end_percent": 0.1,
+                "after_first_post_generation_brightness": 0,
+                "after_first_post_generation_saturation": 1,
+                "phase_config": {
+                    "num_phases": 2,
+                    "model_switch_phase": 1,
+                    "sample_solver": "euler",
+                    "flow_shift": 5,
+                    "steps_per_phase": [3, 3],
+                    "phases": [
+                        {
+                            "phase": 1,
+                            "guidance_scale": 1,
+                            "loras": [{
+                                "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
+                                "multiplier": "1.2"
+                            }]
+                        },
+                        {
+                            "phase": 2,
+                            "guidance_scale": 1,
+                            "loras": [{
+                                "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
+                                "multiplier": "1.0"
+                            }]
+                        }
+                    ]
+                },
+                "orchestrator_task_id": "",  # Will be generated
+                "num_new_segments_to_generate": 1
+            }
+        },
+        "project_id": "ea5709f3-4592-4d5b-b9a5-87ed2ecf07c9"
+    },
+
     "qwen_image_style": {
         "description": "Qwen image style with Lightning LoRA phases",
         "task_type": "qwen_image_style",
@@ -355,8 +513,8 @@ def create_task(task_type: str, dry_run: bool = False) -> str:
     params = json.loads(json.dumps(template["params"]))
 
     # Update task-specific fields with generated IDs
-    if task_type == "travel_orchestrator":
-        params["orchestrator_details"]["run_id"] = timestamp
+    if task_type == "travel_orchestrator" or task_type == "travel_orchestrator_uni3c":
+        params["orchestrator_details"]["run_id"] = f"20260111_uni3c_fix_{timestamp[:14]}" if task_type == "travel_orchestrator_uni3c" else timestamp
         params["orchestrator_details"]["orchestrator_task_id"] = f"test_travel_{timestamp[:14]}"
     elif task_type == "qwen_image_style":
         params["task_id"] = f"test_qwen_{timestamp[:14]}"
@@ -379,31 +537,46 @@ def create_task(task_type: str, dry_run: bool = False) -> str:
         print(json.dumps(params, indent=2)[:500] + "...")
         return task_id
     
-    # Connect to Supabase
-    from supabase import create_client
-    
+    # Connect to Supabase via REST API
+    import httpx
+
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-    
+
     if not url or not key:
         print("❌ SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
         print("   Add them to .env file or export them")
         sys.exit(1)
-    
-    client = create_client(url, key)
-    
-    # Insert task
-    result = client.table("tasks").insert(task_data).execute()
-    
-    if result.data:
-        print(f"\n✅ Created {task_type} task:")
-        print(f"   ID: {task_id}")
-        print(f"   Type: {template['task_type']}")
-        print(f"   Description: {template['description']}")
-        print(f"\n   Debug: python debug.py task {task_id}")
-        return task_id
-    else:
-        print(f"❌ Failed to create task")
+
+    # Insert task via REST API
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
+
+    try:
+        response = httpx.post(
+            f"{url}/rest/v1/tasks",
+            headers=headers,
+            json=task_data,
+            timeout=30.0
+        )
+
+        if response.status_code in [200, 201]:
+            print(f"\n✅ Created {task_type} task:")
+            print(f"   ID: {task_id}")
+            print(f"   Type: {template['task_type']}")
+            print(f"   Description: {template['description']}")
+            print(f"\n   Debug: python debug.py task {task_id}")
+            return task_id
+        else:
+            print(f"❌ Failed to create task: {response.status_code}")
+            print(f"   Response: {response.text}")
+            sys.exit(1)
+    except Exception as e:
+        print(f"❌ Error creating task: {e}")
         sys.exit(1)
 
 

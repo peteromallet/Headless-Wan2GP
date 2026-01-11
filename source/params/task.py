@@ -80,6 +80,8 @@ class TaskConfig(ParamGroup):
             'control_net_weight', 'control_net_weight2',
             'activated_loras', 'lora_names', 'loras_multipliers', 'lora_multipliers',
             'additional_loras', 'phase_config', 'model_name',
+            # Image-to-image parameter aliases
+            'image', 'image_url', 'strength',
         }
         extra_params = {k: v for k, v in params.items() if k not in handled_keys}
         

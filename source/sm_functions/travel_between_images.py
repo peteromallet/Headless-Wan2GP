@@ -286,6 +286,25 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         # Safe logging: Use safe_dict_repr for better performance than JSON serialization
         travel_logger.debug(f"Orchestrator payload: {safe_dict_repr(orchestrator_payload)}", task_id=orchestrator_task_id_str)
 
+        # Normalize chain_segments with backwards compatibility for independent_segments
+        # chain_segments (new): true = chain segments together (default), false = keep separate
+        # independent_segments (old): false = chain together (default), true = keep separate
+        # Logic is inverted: independent_segments=false → chain_segments=true
+        if "chain_segments" not in orchestrator_payload:
+            if "independent_segments" in orchestrator_payload:
+                # Convert old parameter to new parameter (inverted logic)
+                old_value = bool(orchestrator_payload.get("independent_segments", False))
+                orchestrator_payload["chain_segments"] = not old_value
+                dprint(f"[BACKWARDS_COMPAT] Converted independent_segments={old_value} to chain_segments={not old_value}")
+            else:
+                # Neither provided - use default
+                orchestrator_payload["chain_segments"] = True  # Default: chain segments together
+                dprint(f"[DEFAULT] Set chain_segments=True (default behavior)")
+        else:
+            # chain_segments explicitly provided - use it
+            orchestrator_payload["chain_segments"] = bool(orchestrator_payload["chain_segments"])
+            dprint(f"[EXPLICIT] Using provided chain_segments={orchestrator_payload['chain_segments']}")
+
         # Parse phase_config if present and add parsed values to orchestrator_payload
         if "phase_config" in orchestrator_payload:
             travel_logger.info(f"phase_config detected in orchestrator - parsing comprehensive phase configuration", task_id=orchestrator_task_id_str)
@@ -340,14 +359,14 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         existing_stitch = existing_child_tasks['stitch']
         
         expected_segments = orchestrator_payload.get("num_new_segments_to_generate", 0)
-        # Some runs intentionally do NOT create a stitch task (e.g. independent_segments=True, or i2v non-SVI).
+        # Some runs intentionally do NOT create a stitch task (e.g. chain_segments=False, or i2v non-SVI).
         # In those cases, the orchestrator should be considered complete once all segments complete.
         travel_mode = orchestrator_payload.get("model_type", "vace")
         use_svi = bool(orchestrator_payload.get("use_svi", False))
-        independent_segments = bool(orchestrator_payload.get("independent_segments", False))
+        chain_segments = bool(orchestrator_payload.get("chain_segments", True))
         should_create_stitch = bool(
             use_svi
-            or (travel_mode == "vace" and not independent_segments)
+            or (travel_mode == "vace" and chain_segments)
         )
         required_stitch_count = 1 if should_create_stitch else 0
         
@@ -505,7 +524,15 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         expanded_segment_frames = orchestrator_payload["segment_frames_expanded"]
         expanded_frame_overlap = orchestrator_payload["frame_overlap_expanded"]
         vace_refs_instructions_all = orchestrator_payload.get("vace_image_refs_to_prepare_by_worker", [])
-        
+
+        # Normalize single int frame_overlap to array
+        if isinstance(expanded_frame_overlap, int):
+            single_overlap_value = expanded_frame_overlap
+            # For N segments, we need N-1 overlap values (one for each transition)
+            expanded_frame_overlap = [single_overlap_value] * max(0, num_segments - 1)
+            orchestrator_payload["frame_overlap_expanded"] = expanded_frame_overlap
+            dprint(f"[NORMALIZE] Expanded single frame_overlap int {single_overlap_value} to array of {len(expanded_frame_overlap)} elements: {expanded_frame_overlap}")
+
         # [PAYLOAD_ORDER_DEBUG] Log the alignment of images and prompts from payload
         input_images_from_payload = orchestrator_payload.get("input_image_paths_resolved", [])
         dprint(f"[PAYLOAD_ORDER_DEBUG] Orchestrator received: {len(input_images_from_payload)} images, {len(expanded_base_prompts)} prompts, {num_segments} segments")
@@ -1045,8 +1072,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 raise ValueError(f"Invalid structure_video_treatment: {structure_video_treatment}. Must be 'adjust' or 'clip'")
             
             # Validate structure_type
-            if structure_type not in ["flow", "canny", "depth"]:
-                raise ValueError(f"Invalid structure_type: {structure_type}. Must be 'flow', 'canny', or 'depth'")
+            if structure_type not in ["flow", "canny", "depth", "raw"]:
+                raise ValueError(f"Invalid structure_type: {structure_type}. Must be 'flow', 'canny', 'depth', or 'raw'")
             
             # Warn about unused strength parameters
             if structure_type == "flow":
@@ -1064,12 +1091,20 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     dprint(f"[STRUCTURE_VIDEO] Warning: structure_video_motion_strength={motion_strength} ignored (structure_type is 'depth')")
                 if abs(canny_intensity - 1.0) > 1e-6:
                     dprint(f"[STRUCTURE_VIDEO] Warning: structure_canny_intensity={canny_intensity} ignored (structure_type is 'depth')")
-            
+            elif structure_type == "raw":
+                # Raw type: no preprocessing, used for Uni3C
+                # motion_strength will be mapped to uni3c_strength below
+                if abs(canny_intensity - 1.0) > 1e-6:
+                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_canny_intensity={canny_intensity} ignored (structure_type is 'raw')")
+                if abs(depth_contrast - 1.0) > 1e-6:
+                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_depth_contrast={depth_contrast} ignored (structure_type is 'raw')")
+
             # Log structure video configuration
             strength_param = {
                 "flow": f"motion_strength={motion_strength}",
                 "canny": f"canny_intensity={canny_intensity}",
-                "depth": f"depth_contrast={depth_contrast}"
+                "depth": f"depth_contrast={depth_contrast}",
+                "raw": f"uni3c_strength={motion_strength} (mapped from motion_strength)"
             }.get(structure_type, "unknown")
 
             travel_logger.info(
@@ -1127,6 +1162,9 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     if parsed_res is None:
                         raise ValueError(f"Invalid resolution format: {target_resolution_raw}")
                     target_resolution = snap_resolution_to_model_grid(parsed_res)
+                    # Update orchestrator payload with snapped resolution so segments match structure video
+                    orchestrator_payload["parsed_resolution_wh"] = f"{target_resolution[0]}x{target_resolution[1]}"
+                    dprint(f"[STRUCTURE_VIDEO] Resolution snapped: {target_resolution_raw} → {orchestrator_payload['parsed_resolution_wh']}")
                 else:
                     target_resolution = target_resolution_raw
                 
@@ -1611,14 +1649,14 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         for idx in range(num_segments):
             # Get travel mode for dependency logic
             travel_mode = orchestrator_payload.get("model_type", "vace")
-            independent_segments = orchestrator_payload.get("independent_segments", False)
+            chain_segments = orchestrator_payload.get("chain_segments", True)
             use_svi = orchestrator_payload.get("use_svi", False)
-            
+
             # Determine dependency strictly from previously resolved actual DB IDs
             # SVI MODE: Sequential segments (each depends on previous for end frame chaining)
             # I2V MODE (non-SVI): Independent segments (no dependency on previous task)
-            # VACE MODE: Sequential by default, independent if explicitly set
-            
+            # VACE MODE: Sequential by default (chain_segments=True), independent if chain_segments=False
+
             if use_svi:
                 # SVI mode: ALWAYS sequential - each segment needs previous output for start frame
                 previous_segment_task_id = actual_segment_db_id_by_index.get(idx - 1) if idx > 0 else None
@@ -1626,15 +1664,15 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             elif travel_mode == "i2v":
                 previous_segment_task_id = None
                 dprint(f"[DEBUG_DEPENDENCY_CHAIN] Segment {idx} (i2v mode): No dependency on previous segment")
-            elif travel_mode == "vace" and independent_segments:
+            elif travel_mode == "vace" and not chain_segments:
                 previous_segment_task_id = None
                 dprint(f"[DEBUG_DEPENDENCY_CHAIN] Segment {idx} (vace independent mode): No dependency on previous segment")
             else:
                 # VACE MODE (Sequential): Dependent on previous segment
                 previous_segment_task_id = actual_segment_db_id_by_index.get(idx - 1) if idx > 0 else None
 
-            # Defensive fallback for sequential modes (SVI or VACE non-independent)
-            if (use_svi or (travel_mode == "vace" and not independent_segments)):
+            # Defensive fallback for sequential modes (SVI or VACE with chaining)
+            if (use_svi or (travel_mode == "vace" and chain_segments)):
                 if idx > 0 and not previous_segment_task_id:
                     fallback_prev = existing_segment_task_ids.get(idx - 1)
                     if fallback_prev:
@@ -1749,7 +1787,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             # previous segment's VIDEO. For SVI chaining, we continue from the previous segment's
             # LAST FRAME as an image, so we should NOT inflate the frame count with overlap here.
             base_segment_frames = expanded_segment_frames[idx]
-            if idx > 0 and current_frame_overlap_from_previous > 0 and (not independent_segments) and (not use_svi):
+            if idx > 0 and current_frame_overlap_from_previous > 0 and chain_segments and (not use_svi):
                 # Sequential mode: add context frames for continuity with previous segment
                 segment_frames_target_with_context = base_segment_frames + current_frame_overlap_from_previous
                 dprint(f"[CONTEXT_FRAMES] Segment {idx}: base={base_segment_frames}, context={current_frame_overlap_from_previous}, total={segment_frames_target_with_context}")
@@ -1758,7 +1796,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 segment_frames_target_with_context = base_segment_frames
                 if use_svi and idx > 0:
                     dprint(f"[CONTEXT_FRAMES] Segment {idx}: base={base_segment_frames}, no context (SVI mode)")
-                elif independent_segments and idx > 0:
+                elif not chain_segments and idx > 0:
                     dprint(f"[CONTEXT_FRAMES] Segment {idx}: base={base_segment_frames}, no context (independent mode)")
                 else:
                     dprint(f"[CONTEXT_FRAMES] Segment {idx}: base={base_segment_frames}, no context needed")
@@ -1826,7 +1864,16 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 # Original and trimmed structure videos for reference
                 "structure_original_video_url": orchestrator_payload.get("structure_original_video_url"),
                 "structure_trimmed_video_url": orchestrator_payload.get("structure_trimmed_video_url"),
-                
+
+                # Uni3C parameters (enabled when structure_type="raw")
+                "use_uni3c": structure_type == "raw" if 'structure_type' in locals() else orchestrator_payload.get("use_uni3c", False),
+                "uni3c_guide_video": orchestrator_payload.get("structure_guidance_video_url") if ('structure_type' in locals() and structure_type == "raw") else orchestrator_payload.get("uni3c_guide_video"),
+                "uni3c_strength": motion_strength if ('structure_type' in locals() and structure_type == "raw") else orchestrator_payload.get("uni3c_strength", 1.0),
+                "uni3c_start_percent": orchestrator_payload.get("uni3c_start_percent", 0.0),
+                "uni3c_end_percent": orchestrator_payload.get("uni3c_end_percent", 1.0),
+                "uni3c_frame_policy": orchestrator_payload.get("uni3c_frame_policy", "fit"),
+                "uni3c_guidance_frame_offset": segment_flow_offsets[idx] if ('structure_type' in locals() and structure_type == "raw" and 'segment_flow_offsets' in locals()) else 0,
+
                 # SVI (Stable Video Infinity) end frame chaining
                 "use_svi": use_svi,
             }
@@ -1937,13 +1984,13 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             # For SVI, use the small overlap value
             stitch_overlap_settings = [SVI_STITCH_OVERLAP] * (num_segments - 1) if num_segments > 1 else []
             dprint(f"[STITCHING] SVI mode: Creating stitch task with overlap={SVI_STITCH_OVERLAP}")
-        elif travel_mode == "vace" and not independent_segments:
+        elif travel_mode == "vace" and chain_segments:
             # VACE sequential mode: Create stitch task with configured overlaps
             should_create_stitch = True
             stitch_overlap_settings = expanded_frame_overlap
             dprint(f"[STITCHING] VACE sequential mode: Creating stitch task with overlaps={expanded_frame_overlap}")
         else:
-            dprint(f"[STITCHING] Skipping stitch task creation (mode={travel_mode}, independent={independent_segments}, use_svi={use_svi})")
+            dprint(f"[STITCHING] Skipping stitch task creation (mode={travel_mode}, chain_segments={chain_segments}, use_svi={use_svi})")
         
         if should_create_stitch and not stitch_already_exists:
             final_stitched_video_name = f"travel_final_stitched_{run_id}.mp4"

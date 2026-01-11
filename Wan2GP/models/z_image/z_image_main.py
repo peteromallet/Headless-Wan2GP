@@ -222,8 +222,21 @@ class model_factory:
         NAG_tau: float = 3.5,
         NAG_alpha: float = 0.5,
         loras_slists=None,
+        denoising_strength: float = 1.0,
         **kwargs,
     ):
+        # Handle image_start parameter (WGP passes this for single-frame init images)
+        # Map it to input_frames if input_frames is not already set
+        image_start = kwargs.get('image_start')
+        image_end = kwargs.get('image_end')
+
+        if input_frames is None and image_start is not None:
+            print(f"[Z_IMAGE_MAIN] Mapping image_start → input_frames for img2img")
+            input_frames = image_start
+
+        if image_end is not None:
+            print(f"[Z_IMAGE_MAIN] Warning: image_end parameter not supported by z_image")
+
         generator = torch.Generator(device="cuda" if torch.cuda.is_available() else "cpu")
         if seed is None or seed < 0:
             generator.seed()
@@ -264,6 +277,9 @@ class model_factory:
                     print(f"   LoRA {i+1}: {name}")
 
             # === PASS 1: Generate at base resolution ===
+            # Determine if input_frames should be used for img2img or control
+            use_as_init_image = denoising_strength < 1.0 and input_frames is not None
+
             latents = self.pipeline(
                 prompt=input_prompt,
                 negative_prompt=n_prompt,
@@ -281,7 +297,7 @@ class model_factory:
                 cfg_truncation=cfg_truncation,
                 callback=callback,
                 pipeline=self.pipeline,
-                control_image=input_frames,
+                control_image=None if use_as_init_image else input_frames,
                 inpaint_mask=input_masks,
                 control_context_scale=None if context_scale is None else context_scale[0],
                 input_ref_images=input_ref_images,
@@ -289,6 +305,8 @@ class model_factory:
                 NAG_tau=NAG_tau,
                 NAG_alpha=NAG_alpha,
                 loras_slists=loras_slists,
+                init_image=input_frames if use_as_init_image else None,
+                denoising_strength=denoising_strength,
             )
 
             if latents is None:
@@ -374,6 +392,20 @@ class model_factory:
 
         else:
             # === STANDARD MODE (NO HIRES FIX) ===
+            # Determine if input_frames should be used for img2img or control
+            # If denoising_strength < 1.0, treat as img2img init image
+            # Otherwise, treat as control image (default behavior)
+            use_as_init_image = denoising_strength < 1.0 and input_frames is not None
+
+            if input_frames is not None:
+                print(f"[Z_IMAGE_MAIN] input_frames provided: shape={input_frames.shape}, denoising_strength={denoising_strength:.2f}")
+                if use_as_init_image:
+                    print(f"[Z_IMAGE_MAIN] → Routing to init_image (img2img mode)")
+                else:
+                    print(f"[Z_IMAGE_MAIN] → Routing to control_image (control mode)")
+            else:
+                print(f"[Z_IMAGE_MAIN] No input_frames provided, using text-to-image mode")
+
             images = self.pipeline(
                 prompt=input_prompt,
                 negative_prompt=n_prompt,
@@ -391,7 +423,7 @@ class model_factory:
                 cfg_truncation=cfg_truncation,
                 callback=callback,
                 pipeline=self.pipeline,
-                control_image=input_frames,
+                control_image=None if use_as_init_image else input_frames,
                 inpaint_mask=input_masks,
                 control_context_scale=None if context_scale is None else context_scale[0],
                 input_ref_images= input_ref_images,
@@ -399,6 +431,8 @@ class model_factory:
                 NAG_tau=NAG_tau,
                 NAG_alpha=NAG_alpha,
                 loras_slists=loras_slists,
+                init_image=input_frames if use_as_init_image else None,
+                denoising_strength=denoising_strength,
             )
 
         if images is None:
