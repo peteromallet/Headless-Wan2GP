@@ -563,24 +563,31 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             print(f"[IMG2IMG] Encoded latents shape: {init_image_latents.shape}")
 
             # Calculate how many steps to skip based on denoising_strength
-            # denoising_strength = 1.0 means full denoise (start from pure noise)
-            # denoising_strength = 0.0 means no denoise (keep original image)
+            # denoising_strength = 1.0 means full denoise (start from pure noise, 100% transformation)
+            # denoising_strength = 0.0 means no denoise (keep original image, 0% transformation)
             total_steps = len(timesteps)
             first_step = int(total_steps * (1.0 - denoising_strength))
 
-            # Add noise proportional to the starting timestep
-            # Z-image uses normalized timesteps: (1000 - t) / 1000
-            # So we need to get the actual timestep value for noise calculation
-            start_timestep = timesteps[first_step]
-            # For flow matching, noise factor is based on the timestep value
-            # timesteps range from ~1000 (pure noise) to ~0 (clean)
-            latent_noise_factor = start_timestep / 1000.0
+            # For flow matching diffusion, noise factor should directly match denoising_strength
+            # denoising_strength = 0.35 → 35% noise, 65% image
+            # This is the semantically correct interpretation for img2img
+            latent_noise_factor = denoising_strength
+
+            # Get the timestep we'll start from (for logging and scheduler setup)
+            start_timestep = timesteps[first_step] if first_step < len(timesteps) else timesteps[0]
 
             # Mix init image latents with noise
-            print(f"[IMG2IMG] Adding noise with factor {latent_noise_factor:.3f} (timestep {start_timestep:.1f}/1000)")
-            randn = torch.randn_like(init_image_latents, generator=generator)
+            print(f"[IMG2IMG] Mixing latents: {(1.0 - latent_noise_factor)*100:.1f}% image + {latent_noise_factor*100:.1f}% noise (strength={denoising_strength:.2f})")
+            print(f"[IMG2IMG] Starting from scheduler timestep {start_timestep:.1f}/1000 (step {first_step}/{total_steps})")
+            # Use torch.randn with explicit shape for PyTorch compatibility (randn_like doesn't accept generator in older versions)
+            randn = torch.randn(
+                init_image_latents.shape,
+                generator=generator,
+                device=init_image_latents.device,
+                dtype=init_image_latents.dtype
+            )
             latents = init_image_latents * (1.0 - latent_noise_factor) + randn * latent_noise_factor
-            print(f"[IMG2IMG] Mixed latents: {(1.0 - latent_noise_factor)*100:.1f}% image + {latent_noise_factor*100:.1f}% noise")
+            print(f"[IMG2IMG] ✓ Noised latents ready: {latents.shape}")
 
             # Skip early denoising steps
             timesteps = timesteps[first_step:]
