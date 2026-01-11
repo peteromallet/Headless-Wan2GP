@@ -1547,6 +1547,22 @@ class WanAny2V:
             # Determine expected in_channels from controlnet
             expected_channels = getattr(controlnet, "in_channels", 20)
             
+            # Download guide video if URL (handles non-travel mode tasks)
+            if uni3c_guide_video.startswith(("http://", "https://")):
+                import tempfile
+                import urllib.request
+                from pathlib import Path
+                print(f"[UNI3C] any2video: Downloading guide video from URL...")
+                url_filename = Path(uni3c_guide_video).name or "uni3c_guide.mp4"
+                temp_dir = tempfile.gettempdir()
+                local_path = os.path.join(temp_dir, f"uni3c_{url_filename}")
+                if not os.path.exists(local_path):
+                    urllib.request.urlretrieve(uni3c_guide_video, local_path)
+                    print(f"[UNI3C] any2video: Downloaded to {local_path}")
+                else:
+                    print(f"[UNI3C] any2video: Using cached {local_path}")
+                uni3c_guide_video = local_path
+            
             # Load and encode guide video
             guide_video_tensor = self._load_uni3c_guide_video(
                 uni3c_guide_video,
