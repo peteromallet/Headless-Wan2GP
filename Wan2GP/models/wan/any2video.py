@@ -365,6 +365,150 @@ class WanAny2V:
 
         return mocha_latents, (torch.cat(cos_parts, dim=0), torch.cat(sin_parts, dim=0))
 
+    # ========== UNI3C: Guide Video Loading & Encoding ==========
+    
+    def _load_uni3c_guide_video(
+        self,
+        guide_video_path: str,
+        target_height: int,
+        target_width: int,
+        target_frames: int,
+        frame_policy: str = "fit"
+    ) -> torch.Tensor:
+        """
+        Load and preprocess guide video for Uni3C.
+        
+        Args:
+            guide_video_path: Path to the guide video file
+            target_height: Target height in pixels
+            target_width: Target width in pixels
+            target_frames: Target number of frames (should match generation frame_num)
+            frame_policy: How to align frames - "fit", "trim", "loop", or "off"
+        
+        Returns:
+            Tensor of shape [C, F, H, W] ready for VAE encoding (values in [-1, 1])
+        """
+        import cv2
+        
+        print(f"[UNI3C] any2video: Loading guide video from {guide_video_path}")
+        
+        # Load video frames
+        cap = cv2.VideoCapture(guide_video_path)
+        if not cap.isOpened():
+            raise ValueError(f"[UNI3C] Could not open guide video: {guide_video_path}")
+        
+        frames = []
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            # BGR -> RGB
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # Resize to target resolution
+            frame = cv2.resize(frame, (target_width, target_height))
+            frames.append(frame)
+        cap.release()
+        
+        if len(frames) == 0:
+            raise ValueError(f"[UNI3C] No frames loaded from guide video: {guide_video_path}")
+        
+        print(f"[UNI3C] any2video: Loaded {len(frames)} frames from guide video")
+        
+        # Apply frame policy
+        frames = self._apply_uni3c_frame_policy(frames, target_frames, frame_policy)
+        print(f"[UNI3C] any2video: After frame policy '{frame_policy}': {len(frames)} frames (target: {target_frames})")
+        
+        # Stack and normalize: [F, H, W, C] -> [C, F, H, W], range [0,255] -> [-1, 1]
+        video = np.stack(frames, axis=0)  # [F, H, W, C]
+        video = video.astype(np.float32)
+        video = (video / 127.5) - 1.0  # [-1, 1] (Wan2GP convention)
+        video = torch.from_numpy(video).permute(3, 0, 1, 2)  # [C, F, H, W]
+        
+        print(f"[UNI3C] any2video: Guide video tensor shape: {tuple(video.shape)}, dtype: {video.dtype}")
+        print(f"[UNI3C] any2video:   value range: [{video.min().item():.2f}, {video.max().item():.2f}]")
+        
+        return video
+
+    def _apply_uni3c_frame_policy(
+        self,
+        frames: list,
+        target_frames: int,
+        policy: str
+    ) -> list:
+        """Apply frame alignment policy to match target frame count."""
+        current = len(frames)
+        
+        if policy == "off":
+            if current != target_frames:
+                raise ValueError(
+                    f"[UNI3C] Frame count mismatch: guide has {current} frames, "
+                    f"target is {target_frames}. Use a different frame_policy."
+                )
+            return frames
+        
+        elif policy == "fit":
+            # Resample to exact target count (linear interpolation of indices)
+            if current == target_frames:
+                return frames
+            indices = np.linspace(0, current - 1, target_frames).astype(int)
+            return [frames[i] for i in indices]
+        
+        elif policy == "trim":
+            if current >= target_frames:
+                return frames[:target_frames]
+            else:
+                # Hold last frame to fill
+                return frames + [frames[-1]] * (target_frames - current)
+        
+        elif policy == "loop":
+            if current >= target_frames:
+                return frames[:target_frames]
+            else:
+                # Loop until filled
+                result = []
+                while len(result) < target_frames:
+                    result.extend(frames)
+                return result[:target_frames]
+        
+        else:
+            raise ValueError(f"[UNI3C] Unknown frame_policy: {policy}")
+
+    def _encode_uni3c_guide(
+        self,
+        guide_video: torch.Tensor,
+        VAE_tile_size: int,
+        expected_channels: int = 20
+    ) -> torch.Tensor:
+        """
+        VAE-encode guide video and optionally pad channels.
+        
+        Args:
+            guide_video: Tensor [C, F, H, W] in [-1, 1]
+            VAE_tile_size: Tile size for VAE encoding
+            expected_channels: Expected channel count from ControlNet (16 or 20)
+        
+        Returns:
+            render_latent: Tensor [1, C_lat, F_lat, H_lat, W_lat]
+        """
+        # Move to device and encode
+        guide_video = guide_video.to(device=self.device, dtype=self.VAE_dtype)
+        latent = self.vae.encode([guide_video], tile_size=VAE_tile_size)[0]
+        render_latent = latent.unsqueeze(0).to(self.dtype)  # [1, C, F, H, W]
+        
+        print(f"[UNI3C] any2video: VAE encoded render_latent shape: {tuple(render_latent.shape)}")
+        print(f"[UNI3C] any2video:   Expected channels: {expected_channels}, actual: {render_latent.shape[1]}")
+        
+        # Pad 16 -> 20 if needed (Kijai "T2V workaround")
+        if render_latent.shape[1] == 16 and expected_channels == 20:
+            print(f"[UNI3C] any2video: Padding channels 16 -> 20")
+            padding = torch.zeros_like(render_latent[:, :4])
+            render_latent = torch.cat([render_latent, padding], dim=1)
+            print(f"[UNI3C] any2video:   After padding: {tuple(render_latent.shape)}")
+        
+        return render_latent
+
+    # ========== END UNI3C ==========
+
     def generate(self,
         input_prompt,
         input_frames= None,
@@ -444,6 +588,15 @@ class WanAny2V:
         latent_noise_mask_strength = 0.0,  # 0.0 = disabled, 1.0 = full latent noise masking
         vid2vid_init_video = None,  # Path to video for vid2vid initialization (gap frames)
         vid2vid_init_strength = 0.7,  # 0.0 = pure vid2vid (keep original), 1.0 = pure txt2vid (random noise)
+        # Uni3C ControlNet parameters
+        use_uni3c = False,  # Master enable flag
+        uni3c_guide_video = None,  # Path to guide video
+        uni3c_strength = 1.0,  # Strength multiplier (0.0 = no effect, 1.0 = full)
+        uni3c_start_percent = 0.0,  # Start applying at this % of denoising
+        uni3c_end_percent = 1.0,  # Stop applying at this % of denoising
+        uni3c_keep_on_gpu = False,  # If True, don't offload ControlNet between steps
+        uni3c_frame_policy = "fit",  # Frame alignment: "fit", "trim", "loop", "off"
+        uni3c_controlnet = None,  # Pre-loaded WanControlNet instance (optional)
         **bbargs
                 ):
         
@@ -1364,6 +1517,65 @@ class WanAny2V:
 
         kwargs["freqs"] = freqs
 
+        # ========== UNI3C: Build uni3c_data if enabled ==========
+        if use_uni3c:
+            if uni3c_guide_video is None:
+                raise ValueError("[UNI3C] use_uni3c=True but uni3c_guide_video not provided")
+            
+            print(f"[UNI3C] any2video: Initializing Uni3C ControlNet")
+            print(f"[UNI3C] any2video:   guide_video: {uni3c_guide_video}")
+            print(f"[UNI3C] any2video:   strength: {uni3c_strength}")
+            print(f"[UNI3C] any2video:   step window: {uni3c_start_percent*100:.0f}% - {uni3c_end_percent*100:.0f}%")
+            print(f"[UNI3C] any2video:   frame_policy: {uni3c_frame_policy}")
+            print(f"[UNI3C] any2video:   keep_on_gpu: {uni3c_keep_on_gpu}")
+            
+            # Load or use provided controlnet
+            if uni3c_controlnet is not None:
+                controlnet = uni3c_controlnet
+                print(f"[UNI3C] any2video: Using pre-loaded controlnet")
+            else:
+                # Load controlnet on demand
+                from .uni3c import load_uni3c_checkpoint, WanControlNet
+                import os
+                ckpts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "ckpts")
+                state_dict, config = load_uni3c_checkpoint(ckpts_dir=ckpts_dir)
+                controlnet = WanControlNet(**config)
+                controlnet.load_state_dict(state_dict, strict=False)
+                controlnet.eval()
+                print(f"[UNI3C] any2video: Loaded controlnet from checkpoint")
+            
+            # Determine expected in_channels from controlnet
+            expected_channels = getattr(controlnet, "in_channels", 20)
+            
+            # Load and encode guide video
+            guide_video_tensor = self._load_uni3c_guide_video(
+                uni3c_guide_video,
+                target_height=height,
+                target_width=width,
+                target_frames=frame_num,
+                frame_policy=uni3c_frame_policy
+            )
+            
+            render_latent = self._encode_uni3c_guide(
+                guide_video_tensor,
+                VAE_tile_size=VAE_tile_size,
+                expected_channels=expected_channels
+            )
+            
+            # Build uni3c_data dict
+            uni3c_data = {
+                "controlnet": controlnet,
+                "controlnet_weight": uni3c_strength,
+                "start": uni3c_start_percent,
+                "end": uni3c_end_percent,
+                "render_latent": render_latent,
+                "render_mask": None,  # Not implemented
+                "camera_embedding": None,  # Not implemented
+                "offload": not uni3c_keep_on_gpu,
+            }
+            kwargs["uni3c_data"] = uni3c_data
+            print(f"[UNI3C] any2video: uni3c_data ready, render_latent shape: {tuple(render_latent.shape)}")
+        # ========== END UNI3C ==========
 
         # Steps Skipping
         skip_steps_cache = self.model.cache

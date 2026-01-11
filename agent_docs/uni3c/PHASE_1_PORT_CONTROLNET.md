@@ -39,7 +39,8 @@ Wan2GP/models/wan/
 - **Size**: ~2 GB
 - **Location**: `Kijai/WanVideo_comfy` on HuggingFace
 - **Format**: safetensors (fp16)
-- **Storage**: `Wan2GP/ckpts/controlnets/`
+- **Storage**: `Wan2GP/ckpts/controlnets/`  
+  (i.e. your loader should typically be called with `ckpts_dir="Wan2GP/ckpts"` when run from repo root)
 
 ### ControlNet Architecture (from Kijai's impl)
 
@@ -51,6 +52,9 @@ Wan2GP/models/wan/
 | proj_out dimension | 5120 | `nn.Linear(self.dim, 5120)` |
 | Patch embedding | Conv3D(1,2,2) | `self.patch_size = (1, 2, 2)` |
 | num_heads | 16 | `"num_heads": 16` |
+
+**Important clarification**: Patch embedding produces `conv_out_dim = 5120`, but the transformer hidden `dim = 1024`.  
+So the port must include an explicit **projection into transformer space** (e.g. `proj_in: 5120 → 1024`) before entering the block stack.
 
 ---
 
@@ -202,6 +206,9 @@ def forward(self, render_latent, render_mask, camera_embedding, temb,
 
 For our MVP, `render_mask` and `camera_embedding` can remain `None` (not implemented).
 
+**Timestep embedding (`temb`) shape**: In Wan2GP, `e = self.time_embedding(sinusoidal_embedding_1d(...))` is **2D** and is documented in the Sense Check as matching Uni3C’s `time_embed_dim = 5120`.  
+So for Phase 1 (load + forward), treat `temb` as shape `[B, 5120]`.
+
 → See [Kijai Appendix](./_reference/KIJAI_APPENDIX.md) for full code snippets.
 
 ---
@@ -248,6 +255,9 @@ for i, state in enumerate(controlnet_states):
     
 print("✅ Phase 1 gate passed!")
 ```
+
+**Note (dev environment)**: Importing `Wan2GP.models.wan...` will pull in Wan2GP’s `shared/attention.py`, which assumes a CUDA-enabled PyTorch build.  
+If you’re running Phase 1 locally on CPU-only torch, run the test in a CUDA env (recommended) or load the Uni3C modules directly (via `importlib`) to avoid importing the broader Wan2GP package.
 
 > Note: The snippets in this doc are **implementation guidance**. You’ll need to adapt imports and utilities to match the repo’s final module locations and available dependencies (e.g. `huggingface_hub`, `safetensors`).
 

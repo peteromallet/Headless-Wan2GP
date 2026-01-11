@@ -55,6 +55,9 @@ uni3c_data = {
 
 This is NOT like VACE (which uses `vace_context`). Uni3C is per-block residual addition.
 
+**Wan2GP-specific nuance**: Wan2GP’s forward operates on an `x_list` (multi-stream) and calls `block(...)` inside an inner loop.  
+So the residual injection must happen **inside that inner loop**, right after `x_list[i] = block(...)`, not once outside.
+
 ---
 
 ## Code: Step-Percent Gating
@@ -70,7 +73,8 @@ if uni3c_data is not None:
     # (set in Wan2GP/models/wan/modules/model.py around line 1578-1579)
     current_step_no = offload.shared_state.get("step_no", 0)
     max_steps = offload.shared_state.get("max_steps", 1)
-    current_step_percentage = current_step_no / max_steps
+    # Use (max_steps - 1) so the last step maps to 1.0 when end_percent=1.0
+    current_step_percentage = current_step_no / max(1, (max_steps - 1))
     
     in_window = (uni3c_data["start"] <= current_step_percentage <= uni3c_data["end"])
     
@@ -113,20 +117,25 @@ def _compute_uni3c_states(self, uni3c_data: dict, temb: torch.Tensor) -> list:
         vram_before = torch.cuda.memory_allocated() / 1024**3
         print(f"[UNI3C] VRAM before controlnet forward: {vram_before:.2f} GB")
     
-    # Move controlnet to GPU if offloaded
+    # Wan2GP doesn't expose self.main_device/self.offload_device on the model.
+    # Use the model's device (patch embedding weights) as the "main" device.
+    main_device = self.patch_embedding.weight.device
+    offload_device = torch.device("cpu")
+
+    # Move controlnet to main device if offloaded
     if uni3c_data.get("offload", True):
-        controlnet = controlnet.to(self.main_device)
+        controlnet = controlnet.to(main_device)
     
     # Ensure render_latent matches hidden_states shape
     # (temporal resampling if needed - see Phase 2)
     
     # Run controlnet forward
     controlnet_states = controlnet(
-        render_latent=render_latent.to(self.main_device, controlnet.dtype),
+        render_latent=render_latent.to(main_device, controlnet.dtype),
         render_mask=uni3c_data.get("render_mask"),
         camera_embedding=uni3c_data.get("camera_embedding"),
-        temb=temb.to(self.main_device),
-        out_device=self.offload_device if uni3c_data.get("offload") else self.main_device
+        temb=temb.to(main_device),
+        out_device=offload_device if uni3c_data.get("offload") else main_device
     )
     
     # Log VRAM after controlnet forward
@@ -136,7 +145,7 @@ def _compute_uni3c_states(self, uni3c_data: dict, temb: torch.Tensor) -> list:
     
     # Offload controlnet back if configured
     if uni3c_data.get("offload", True):
-        controlnet.to(self.offload_device)
+        controlnet.to(offload_device)
         if torch.cuda.is_available():
             vram_offloaded = torch.cuda.memory_allocated() / 1024**3
             print(f"[UNI3C] VRAM after offload: {vram_offloaded:.2f} GB")
@@ -148,38 +157,58 @@ def _compute_uni3c_states(self, uni3c_data: dict, temb: torch.Tensor) -> list:
 
 ## Code: Per-Block Residual Injection (Inside Block Loop)
 
+**Wan2GP Reality**: The block loop operates on `x_list` (multi-stream) with an inner loop. See `model.py` ~lines 1759-1779.
+
+**Injection site**: After the inner stream loop completes (line ~1779), before skip-cache logic (line ~1781).
+
 ```python
-# Inside the main block loop, AFTER each block's forward pass
-for block_idx, block in enumerate(self.blocks):
-    # ... existing block forward code ...
-    x = block(x, ...)
-    
-    # ADD: Uni3C residual injection
-    if uni3c_controlnet_states is not None and block_idx < len(uni3c_controlnet_states):
-        residual = uni3c_controlnet_states[block_idx]
-        
-        # Log first block at key steps (first, 25%, 50%, 75%, last) to catch drift
-        if block_idx == 0:
-            current_step = offload.shared_state.get("step_no", 0)
-            first_active_step = int(uni3c_data["start"] * max_steps)
-            last_active_step = int(uni3c_data["end"] * max_steps) - 1
+# ACTUAL Wan2GP block loop structure (simplified for clarity):
+if any(x_should_calc):
+    for block_idx, block in enumerate(self.blocks):
+        offload.shared_state["layer"] = block_idx
+        # ... callback / interrupt checks ...
+
+        # SLG path (single stream)
+        if slg_layers is not None and block_idx in slg_layers:
+            x_list[0] = block(x_list[0], ...)
+        else:
+            # Multi-stream inner loop
+            for i, (x, context, ...) in enumerate(zip(x_list, context_list, ...)):
+                if should_calc:
+                    x_list[i] = block(x, context=context, ..., **kwargs)
+                    del x
+            context = hints = None
+
+        # ========== ADD UNI3C INJECTION HERE ==========
+        if uni3c_controlnet_states is not None and block_idx < len(uni3c_controlnet_states):
+            residual = uni3c_controlnet_states[block_idx]
+            ref_images_count = kwargs.get("ref_images_count", 0)
             
-            # Log at first step, every 25%, and last step
-            steps_to_log = {first_active_step}
-            for pct in [0.25, 0.5, 0.75]:
-                steps_to_log.add(int(first_active_step + pct * (last_active_step - first_active_step)))
-            steps_to_log.add(last_active_step)
+            # Apply to ALL streams in x_list
+            for i, x in enumerate(x_list):
+                x_start = ref_images_count
+                apply_len = min(x.shape[1] - x_start, residual.shape[1])
+                if apply_len > 0:
+                    x_list[i][:, x_start:x_start + apply_len] += (
+                        residual[:, :apply_len].to(x) * uni3c_data["controlnet_weight"]
+                    )
             
-            if current_step in steps_to_log:
-                pct_done = (current_step - first_active_step) / max(1, last_active_step - first_active_step) * 100
-                print(f"[UNI3C] Step {current_step}/{max_steps} ({pct_done:.0f}% of Uni3C window): Applying residual")
-                print(f"[UNI3C]   residual shape: {residual.shape}")
-                print(f"[UNI3C]   residual mean: {residual.mean().item():.6f}, std: {residual.std().item():.6f}")
-                print(f"[UNI3C]   residual min: {residual.min().item():.6f}, max: {residual.max().item():.6f}")
-        
-        # Apply residual (only to original sequence length)
-        x[:, :self.original_seq_len] += residual.to(x) * uni3c_data["controlnet_weight"]
+            # Log at first block of key steps
+            if block_idx == 0:
+                current_step = offload.shared_state.get("step_no", 0)
+                if current_step == 0 or current_step == max_steps - 1:
+                    print(f"[UNI3C] Step {current_step}/{max_steps}: Applying block {block_idx} residual")
+                    print(f"[UNI3C]   residual shape: {residual.shape}, mean: {residual.mean().item():.4f}")
+        # ========== END UNI3C INJECTION ==========
+
+    # (existing skip-cache logic follows at ~line 1781)
 ```
+
+**Key points**:
+1. Injection happens **after** all streams are updated by the block
+2. Must iterate over `x_list` to apply to ALL streams (not just stream 0)
+3. Use `ref_images_count` to skip prefix tokens
+4. Clamp by `min(x_len, residual_len)` to avoid shape crashes
 
 ---
 
@@ -242,11 +271,20 @@ assert temb.dim() == 2, f"Expected temb [B, 5120], got {temb.shape}"
 
 ### 2. `original_seq_len`
 
-The residual should only be applied to the original token sequence, not any padded/extended tokens. Check if `self.original_seq_len` exists; if not, you may need to track it.
+The residual should only be applied to the original token sequence, not any padded/extended tokens.
+
+**Wan2GP reality**: `model.py` does **not** define `self.original_seq_len`.  
+Instead, Wan2GP tracks prefix token counts via `ref_images_count` in kwargs and sometimes trims to `real_seq` in special paths (e.g. steadydancer).
+
+**Recommended MVP rule**:
+- Inject starting at `ref_images_count` (skip prefix tokens)
+- Clamp by `min(x_len, residual_len)` to avoid shape crashes
 
 ### 3. Offload Device
 
-Verify `self.main_device` and `self.offload_device` exist on the model. If not, use the device of the input tensor.
+Wan2GP doesn’t expose `self.main_device` / `self.offload_device` on the transformer. Use:
+- main device: `self.patch_embedding.weight.device`
+- offload device: `torch.device("cpu")` (or a configurable device if you add one)
 
 ### 4. Step counter source ✅ Verified
 

@@ -12,22 +12,22 @@
 
 ## 📊 Project Status Dashboard
 
-> **Last Updated**: _[DATE]_  
-> **Overall Status**: 🟡 Planning Complete / Implementation Not Started  
-> **Current Phase**: Phase 0 (Pre-Implementation)  
+> **Last Updated**: 2026-01-11  
+> **Overall Status**: 🟡 Implementation In Progress  
+> **Current Phase**: Phase 5 (Testing & Validation)  
 > **Blocking Issues**: None  
-> **Next Action**: Begin Phase 1 - Port ControlNet architecture
+> **Next Action**: Create test task with `use_uni3c=true` and verify logs at all 6 layers
 
 ### Progress Summary
 
 | Phase | Description | Status | Est. Days | Owner | Doc |
 |-------|-------------|--------|-----------|-------|-----|
 | 0 | Planning & Validation | ✅ Done | - | - | - |
-| 1 | Port Uni3C ControlNet | 🔴 Not Started | 2-3 | TBD | [→ Phase 1](./PHASE_1_PORT_CONTROLNET.md) |
-| 2 | Guide Video → Latents | 🔴 Not Started | 1 | TBD | [→ Phase 2](./PHASE_2_GUIDE_VIDEO_LATENTS.md) |
-| 3 | Model Integration | 🔴 Not Started | 1-2 | TBD | [→ Phase 3](./PHASE_3_MODEL_INTEGRATION.md) |
-| 4 | Headless Param Wiring | 🔴 Not Started | 0.5 | TBD | [→ Phase 4](./PHASE_4_HEADLESS_WIRING.md) |
-| 5 | Testing & Validation | 🔴 Not Started | 1-2 | TBD | [→ Phase 5](./PHASE_5_TESTING.md) |
+| 1 | Port Uni3C ControlNet | ✅ Done | 2-3 | - | [→ Phase 1](./PHASE_1_PORT_CONTROLNET.md) |
+| 2 | Guide Video → Latents | ✅ Done | 1 | - | [→ Phase 2](./PHASE_2_GUIDE_VIDEO_LATENTS.md) |
+| 3 | Model Integration | ✅ Done | 1-2 | - | [→ Phase 3](./PHASE_3_MODEL_INTEGRATION.md) |
+| 4 | Headless Param Wiring | ✅ Done | 0.5 | - | [→ Phase 4](./PHASE_4_HEADLESS_WIRING.md) |
+| 5 | Testing & Validation | 🟡 In Progress | 1-2 | - | [→ Phase 5](./PHASE_5_TESTING.md) |
 
 **Legend**: ✅ Done | 🟢 On Track | 🟡 In Progress | 🟠 Blocked | 🔴 Not Started
 
@@ -73,10 +73,12 @@ For Uni3C integration to be considered **complete**, ALL of the following must p
 | Risk | Severity | Status | Mitigation | Owner |
 |------|----------|--------|------------|-------|
 | Checkpoint weight mismatch | High | ✅ Mitigated | Using Kijai's verified fp16 checkpoint | - |
-| Silent param filtering | High | 🟡 Open | 6-layer logging strategy defined; must implement | TBD |
-| VRAM overflow | Medium | 🟡 Open | Offload flag; needs testing on target GPU | TBD |
-| temb shape mismatch (diffusion-forcing) | Medium | 🟡 Open | Guard for `_flag_df` case identified | TBD |
-| 16→20 channel padding needed | Low | 🟡 Open | Padding code pattern identified from Kijai | TBD |
+| Silent param filtering | High | ✅ Mitigated | 6-layer logging implemented (Layer 1-3 in Phase 4, Layer 4-6 in Phase 2-3) | - |
+| VRAM overflow | Medium | ✅ Mitigated | Offload flag implemented in `_compute_uni3c_states()` | - |
+| temb shape mismatch (diffusion-forcing) | Medium | ✅ Mitigated | Guard added in `_compute_uni3c_states()`: `if temb.dim() == 1: temb = temb.unsqueeze(0)` | - |
+| 16→20 channel padding needed | Low | ✅ Mitigated | Padding implemented in `_compute_uni3c_states()` as fallback | - |
+| Temporal/spatial grid mismatch | Medium | ✅ Mitigated | Trilinear interpolation of render_latent implemented | - |
+| Hidden-dim mismatch | Low | ✅ Mitigated | Guard added at injection site; logs warning and skips | - |
 
 ---
 

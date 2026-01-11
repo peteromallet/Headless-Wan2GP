@@ -53,8 +53,8 @@ Wan2GP models quantize frame count to `4N+1` style grids. The guide must match.
 Add to `any2video.py`:
 
 > **Existing utilities you should use:**
-> - `source/video_utils.py:extract_frames_from_video()` - extracts frames as numpy arrays
-> - `source/structure_video_guidance.py:load_structure_video_frames()` - uses `decord`, handles treatment modes
+> - `source/video_utils.py:extract_frames_from_video()` - extracts frames as numpy arrays (**BGR**, OpenCV order)
+> - `source/structure_video_guidance.py:load_structure_video_frames()` - uses `decord`, handles treatment modes (**returns RGB**, but also loads `target_frame_count + 1` frames for flow/RAFT reasons — be careful if you reuse it for Uni3C)
 >
 > The snippet below shows the **contract** (what inputs/outputs are expected). Adapt it to use the existing utilities above rather than raw OpenCV.
 
@@ -71,14 +71,14 @@ def _load_uni3c_guide_video(
     Load and preprocess guide video for Uni3C.
     
     Returns:
-        Tensor of shape [C, F, H, W] ready for VAE encoding
+        Tensor of shape [C, F, H, W] ready for VAE encoding (Wan2GP convention: values in [-1, 1])
     """
     import cv2
     import numpy as np
     
     print(f"[UNI3C] any2video: Loading guide video from {guide_video_path}")
     
-    # Load video frames
+    # Load video frames (OpenCV gives BGR; convert to RGB)
     cap = cv2.VideoCapture(guide_video_path)
     frames = []
     while True:
@@ -98,10 +98,12 @@ def _load_uni3c_guide_video(
     frames = self._apply_frame_policy(frames, target_frames, frame_policy)
     print(f"[UNI3C] any2video: After frame policy '{frame_policy}': {len(frames)} frames")
     
-    # Stack and normalize: [F, H, W, C] -> [C, F, H, W]
+    # Stack and normalize (match Wan2GP patterns like vid2vid init):
+    # [0,255] uint8 -> float in [-1, 1]
+    # Then permute: [F, H, W, C] -> [C, F, H, W]
     video = np.stack(frames, axis=0)  # [F, H, W, C]
-    video = video.astype(np.float32) / 255.0  # [0, 1]
-    video = video * 2.0 - 1.0  # [-1, 1]
+    video = video.astype(np.float32)
+    video = (video / 127.5) - 1.0  # [-1, 1]
     video = torch.from_numpy(video).permute(3, 0, 1, 2)  # [C, F, H, W]
     
     print(f"[UNI3C] any2video: Guide video tensor shape: {video.shape}")
@@ -160,7 +162,7 @@ def _apply_frame_policy(
 ```python
 def _encode_uni3c_guide(
     self,
-    guide_video: torch.Tensor,  # [C, F, H, W]
+    guide_video: torch.Tensor,  # [C, F, H, W] in [-1, 1]
     expected_channels: int = 20  # from checkpoint in_channels
 ) -> torch.Tensor:
     """
@@ -169,12 +171,11 @@ def _encode_uni3c_guide(
     Returns:
         render_latent: [B, C, F, H, W] ready for ControlNet
     """
-    # Add batch dim: [C, F, H, W] -> [1, C, F, H, W]
-    guide_video = guide_video.unsqueeze(0)
-    
-    # VAE encode
-    # Note: Check Wan2GP's VAE API - might be self.vae.encode()
-    render_latent = self.vae.encode([guide_video], tile_size=self.VAE_tile_size)[0]
+    # VAE encode (Wan2GP VAE API expects a *list* of videos, each [C, T, H, W])
+    # It does its own internal batch unsqueeze; it returns [C_lat, T_lat, H_lat, W_lat].
+    guide_video = guide_video.to(device=self.device, dtype=self.VAE_dtype)
+    latent = self.vae.encode([guide_video], tile_size=VAE_tile_size)[0].to(self.dtype)
+    render_latent = latent.unsqueeze(0)  # [1, C_lat, T_lat, H_lat, W_lat]
     
     print(f"[UNI3C] any2video: Encoded render_latent shape: {render_latent.shape}")
     print(f"[UNI3C] any2video:   Expected channels: {expected_channels}")
@@ -238,7 +239,9 @@ print("✅ Phase 2 gate passed!")
 
 ## Watchouts
 
-1. **Color space**: Wan2GP might expect a different normalization range than [-1, 1]. Check existing video loading code.
+1. **Color space + range**:
+   - `source/video_utils.py:extract_frames_from_video()` returns **BGR** frames.
+   - Wan2GP’s VAE paths (e.g. vid2vid init) normalize to **[-1, 1]** via `frame/127.5 - 1.0`.
 
 2. **Frame count quantization**: The target frame count should come from Wan2GP's internal calculation, not just from the task's `video_length` param.
 
