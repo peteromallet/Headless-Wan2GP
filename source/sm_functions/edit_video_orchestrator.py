@@ -533,6 +533,15 @@ def _handle_edit_video_orchestrator_task(
         dprint(f"[EDIT_VIDEO] Source: {source_video_url[:80]}...")
         dprint(f"[EDIT_VIDEO] Portions to regenerate: {len(portions_to_regenerate)}")
         
+        # === EARLY IDEMPOTENCY CHECK (before expensive preprocessing/VLM work) ===
+        # Each portion to regenerate = one join task
+        num_joins_expected = len(portions_to_regenerate)
+        idempotency_result, idempotency_message = _check_existing_join_tasks(
+            orchestrator_task_id_str, num_joins_expected, dprint
+        )
+        if idempotency_result is not None:
+            return idempotency_result, idempotency_message
+        
         # Extract join settings (same as join_clips_orchestrator)
         join_settings = _extract_join_settings_from_payload(orchestrator_payload)
         per_join_settings = orchestrator_payload.get("per_join_settings", [])
@@ -625,14 +634,7 @@ def _handle_edit_video_orchestrator_task(
                 traceback.print_exc()
                 vlm_enhanced_prompts = [None] * num_joins
         
-        # === 4. IDEMPOTENCY CHECK (using shared helper) ===
-        idempotency_result, idempotency_message = _check_existing_join_tasks(
-            orchestrator_task_id_str, num_joins, dprint
-        )
-        if idempotency_result is not None:
-            return idempotency_result, idempotency_message
-        
-        # === 5. CREATE JOIN CHAIN (using shared core function) ===
+        # === CREATE JOIN CHAIN (using shared core function) ===
         success, message = _create_join_chain_tasks(
             clip_list=clip_list,
             run_id=run_id,

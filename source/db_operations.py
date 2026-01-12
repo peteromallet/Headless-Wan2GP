@@ -415,6 +415,38 @@ def check_my_assigned_tasks(worker_id: str) -> dict | None:
         return None
 
 
+def _orchestrator_has_incomplete_children(orchestrator_task_id: str) -> bool:
+    """
+    Check if an orchestrator has child tasks that are not yet complete.
+    Used to prevent re-running orchestrators that are waiting for children.
+    """
+    if not SUPABASE_CLIENT:
+        return False  # Can't check, assume no children
+    
+    try:
+        # Query for child tasks referencing this orchestrator
+        response = SUPABASE_CLIENT.table(PG_TABLE_NAME)\
+            .select("id, status")\
+            .contains("params", {"orchestrator_task_id_ref": orchestrator_task_id})\
+            .execute()
+        
+        if not response.data:
+            return False  # No children found
+        
+        # Check if any child is not complete
+        for child in response.data:
+            status = (child.get("status") or "").lower()
+            if status not in ("complete", "failed", "cancelled", "canceled", "error"):
+                dprint(f"[RECOVERY_CHECK] Orchestrator {orchestrator_task_id} has incomplete child {child['id']} (status={status})")
+                return True
+        
+        return False  # All children are in terminal state
+        
+    except Exception as e:
+        dprint(f"[RECOVERY_CHECK] Failed to check orchestrator children: {e}")
+        return False  # Can't check, don't block
+
+
 def get_oldest_queued_task_supabase(worker_id: str = None):
     """Fetches the oldest task via Supabase Edge Function. First checks task counts to avoid unnecessary claim attempts."""
     if not SUPABASE_CLIENT:
@@ -482,9 +514,14 @@ def get_oldest_queued_task_supabase(worker_id: str = None):
             dprint(f"[CLAIM_DEBUG] Proceeding with claim attempt despite queued_only=0 because eligible_queued={eligible_queued}")
         elif available_tasks <= 0:
             dprint("No queued tasks according to task-counts, skipping claim attempt")
-            # If we deferred an orchestrator recovery, fall back to it when there
-            # are no queued tasks to claim.
+            # If we deferred an orchestrator recovery, check if it actually needs re-running.
+            # Orchestrators waiting for children should NOT be recovered - they'll complete
+            # when their children complete (via complete-task orchestrator check).
             if deferred_orchestrator_recovery:
+                orch_task_id = deferred_orchestrator_recovery.get("task_id")
+                if orch_task_id and _orchestrator_has_incomplete_children(orch_task_id):
+                    dprint(f"[RECOVERY] Skipping orchestrator {orch_task_id} - has incomplete children, will complete via child completion")
+                    return None
                 return deferred_orchestrator_recovery
             return None
         else:

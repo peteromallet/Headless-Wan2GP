@@ -1,2 +1,0 @@
-[functions."create-task"]
-verify_jwt = false 

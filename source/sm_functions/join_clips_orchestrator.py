@@ -775,6 +775,14 @@ def _handle_join_clips_orchestrator_task(
         num_joins = len(clip_list) - 1
         dprint(f"[JOIN_ORCHESTRATOR] Processing {len(clip_list)} clips = {num_joins} join tasks")
 
+        # === EARLY IDEMPOTENCY CHECK (before expensive VLM work) ===
+        # Check if children already exist - if so, skip all expensive processing
+        idempotency_result, idempotency_message = _check_existing_join_tasks(
+            orchestrator_task_id_str, num_joins, dprint
+        )
+        if idempotency_result is not None:
+            return idempotency_result, idempotency_message
+
         # Extract join settings using shared helper
         join_settings = _extract_join_settings_from_payload(orchestrator_payload)
         per_join_settings = orchestrator_payload.get("per_join_settings", [])
@@ -836,14 +844,7 @@ def _handle_join_clips_orchestrator_task(
         else:
             dprint(f"[JOIN_ORCHESTRATOR] enhance_prompt=False, using base prompt for all joins")
 
-        # === 2. IDEMPOTENCY CHECK (using shared helper) ===
-        idempotency_result, idempotency_message = _check_existing_join_tasks(
-            orchestrator_task_id_str, num_joins, dprint
-        )
-        if idempotency_result is not None:
-            return idempotency_result, idempotency_message
-
-        # === 3. CREATE JOIN CHAIN (using shared core function) ===
+        # === CREATE JOIN CHAIN (using shared core function) ===
         success, message = _create_join_chain_tasks(
             clip_list=clip_list,
             run_id=run_id,
