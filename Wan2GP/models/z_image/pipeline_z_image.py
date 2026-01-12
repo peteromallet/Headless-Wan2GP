@@ -586,8 +586,13 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                 dtype=init_image_latents.dtype
             )
 
+            # scale_noise expects timestep with batch dimension [batch_size]
+            # Convert scalar timestep to tensor with batch dimension
+            batch_size = init_image_latents.shape[0]
+            timestep_tensor = torch.tensor([start_timestep] * batch_size, device=init_image_latents.device)
+
             # Use scheduler's proper forward process for flow matching
-            latents = self.scheduler.scale_noise(init_image_latents, start_timestep, noise)
+            latents = self.scheduler.scale_noise(init_image_latents, timestep_tensor, noise)
 
             # Get sigma for logging (shows actual noise mixing ratio)
             sigma_idx = self.scheduler.index_for_timestep(start_timestep, self.scheduler.timesteps)
