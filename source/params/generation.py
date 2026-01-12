@@ -38,6 +38,12 @@ class GenerationConfig(ParamGroup):
     @classmethod
     def from_params(cls, params: Dict[str, Any], **context) -> 'GenerationConfig':
         """Parse generation config from parameters."""
+        # Handle image parameter aliases for img2img tasks
+        # If 'image' or 'image_url' is provided but not 'image_start', use it as image_start
+        image_start = params.get('image_start')
+        if not image_start:
+            image_start = params.get('image') or params.get('image_url')
+
         return cls(
             prompt=params.get('prompt', ''),
             negative_prompt=params.get('negative_prompt'),
@@ -48,11 +54,11 @@ class GenerationConfig(ParamGroup):
             seed=params.get('seed'),
             flow_shift=params.get('flow_shift'),
             sample_solver=params.get('sample_solver'),
-            image_start=params.get('image_start'),
+            image_start=image_start,
             image_end=params.get('image_end'),
             image_refs=params.get('image_refs'),
             embedded_guidance_scale=params.get('embedded_guidance_scale'),
-            denoising_strength=params.get('denoising_strength') or params.get('denoise_strength'),
+            denoising_strength=params.get('denoising_strength') or params.get('denoise_strength') or params.get('strength'),
         )
     
     def to_wgp_format(self) -> Dict[str, Any]:

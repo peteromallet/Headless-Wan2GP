@@ -106,7 +106,8 @@ def move_wgp_output_to_task_type_dir(output_path: str, task_type: str, task_id: 
         "ltxv",
         "qwen_image_edit", "qwen_image_style", "image_inpaint", "annotated_image_edit",
         "inpaint_frames",  # Specialized handler that enqueues WGP tasks
-        "generate_video"
+        "generate_video",
+        "z_image_turbo", "z_image_turbo_i2i"
     }
 
     # Only process WGP task types
@@ -225,11 +226,11 @@ def parse_args():
     parser.add_argument("--mask-active-frames", dest="mask_active_frames", action="store_true", default=True)
     parser.add_argument("--no-mask-active-frames", dest="mask_active_frames", action="store_false")
     parser.add_argument("--queue-workers", type=int, default=1)
-    parser.add_argument("--preload-model", type=str, default="wan_2_2_i2v_lightning_baseline_2_2_2")
+    parser.add_argument("--preload-model", type=str, default="")
     parser.add_argument("--db-type", type=str, default="supabase")
-    parser.add_argument("--supabase-url", type=str, required=True)
+    parser.add_argument("--supabase-url", type=str, default="https://wczysqzxlwdndgxitrvc.supabase.co")
     parser.add_argument("--supabase-access-token", type=str, required=True)
-    parser.add_argument("--supabase-anon-key", type=str, default=None)
+    parser.add_argument("--supabase-anon-key", type=str, default="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndjenlzcXp4bHdkbmRneGl0cnZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE1MDI4NjgsImV4cCI6MjA2NzA3ODg2OH0.r-4RyHZiDibUjgdgDDM2Vo6x3YpgIO5-BTwfkB2qyYA")
     
     # WGP Globals
     parser.add_argument("--wgp-attention-mode", type=str, default=None)

@@ -1424,6 +1424,108 @@ class WanModel(ModelMixin, ConfigMixin):
         # print(f"deltas:{best_deltas}")
         return best_threshold
 
+    def _compute_uni3c_states(self, uni3c_data: dict, temb: torch.Tensor, noisy_latent: torch.Tensor) -> list:
+        """
+        Run Uni3C ControlNet forward pass.
+
+        Args:
+            uni3c_data: Dict with controlnet, render_latent, controlnet_weight, start, end, offload
+            temb: Timestep embedding (pre-projection `e`)
+            noisy_latent: Current noisy latent tensor to concatenate with render_latent
+
+        Returns:
+            List of 20 residual tensors, one per block
+        """
+        if uni3c_data is None:
+            return None
+
+        if "controlnet" not in uni3c_data or uni3c_data["controlnet"] is None:
+            raise ValueError("[UNI3C] Missing required key uni3c_data['controlnet']")
+        if "render_latent" not in uni3c_data or uni3c_data["render_latent"] is None:
+            raise ValueError("[UNI3C] Missing required key uni3c_data['render_latent']")
+
+        controlnet = uni3c_data["controlnet"]
+        render_latent = uni3c_data["render_latent"]
+
+        # Wan2GP doesn't expose self.main_device/self.offload_device.
+        # Use model's device from patch embedding weights.
+        main_device = self.patch_embedding.weight.device
+        offload_device = torch.device("cpu")
+
+        # Ensure controlnet is on the same device as the main model for forward.
+        # If offload=True we will move it back to CPU after forward; if offload=False it stays on GPU.
+        controlnet = controlnet.to(main_device)
+
+        # Ensure temb has correct shape [B, dim]
+        if temb.dim() == 1:
+            temb = temb.unsqueeze(0)
+
+        # Move render_latent to main device first (we may need to resample it)
+        render_latent = render_latent.to(main_device)
+
+        # Kijai pattern: concatenate noisy latent (20ch) + guide latent (16ch) = 36ch
+        # Extract noisy latent (hidden_states in Kijai's code)
+        hidden_states = noisy_latent.unsqueeze(0).clone().float() if noisy_latent.dim() == 4 else noisy_latent.clone().float()
+
+        # Pad noisy latent from 16 -> 20 channels if needed (T2V models)
+        if hidden_states.shape[1] == 16:
+            padding = torch.zeros_like(hidden_states[:, :4])
+            hidden_states = torch.cat([hidden_states, padding], dim=1)
+
+        # Move to correct device and dtype
+        hidden_states = hidden_states.to(main_device)
+
+        # Temporal/spatial resampling to match current token grid (for BOTH tensors)
+        # Wan2GP stores patch-grid sizes in offload.shared_state["embed_sizes"] (F_patches, H_patches, W_patches).
+        embed_sizes = offload.shared_state.get("embed_sizes", None)
+        current_step = offload.shared_state.get("step_no", 0)
+
+        # Debug logs at step 0
+        if current_step == 0:
+            print(f"[UNI3C DEBUG] Shape alignment before concat:")
+            print(f"[UNI3C DEBUG]   hidden_states (noisy) shape: {tuple(hidden_states.shape)}")
+            print(f"[UNI3C DEBUG]   render_latent (guide) shape: {tuple(render_latent.shape)}")
+            print(f"[UNI3C DEBUG]   controlnet.in_channels: {getattr(controlnet, 'in_channels', 'N/A')}")
+
+        # Resample render_latent to match hidden_states temporal/spatial dimensions if needed
+        if hidden_states.shape[2:] != render_latent.shape[2:]:
+            if current_step == 0:
+                print(f"[UNI3C] Resampling render_latent from {tuple(render_latent.shape[2:])} -> {tuple(hidden_states.shape[2:])}")
+            render_latent = torch.nn.functional.interpolate(
+                render_latent.float(),
+                size=tuple(hidden_states.shape[2:]),
+                mode="trilinear",
+                align_corners=False,
+            ).to(render_latent.dtype)
+
+        # Concatenate: noisy_latent[:, :20] + render_latent (16ch) = 36 channels total
+        render_latent_input = torch.cat([hidden_states[:, :20], render_latent], dim=1)
+
+        # Run controlnet forward
+        if current_step == 0:
+            print(f"[UNI3C DEBUG]   final concatenated input shape: {tuple(render_latent_input.shape)}")
+
+        controlnet_states = controlnet(
+            render_latent=render_latent_input.to(main_device, controlnet.dtype),
+            render_mask=uni3c_data.get("render_mask"),
+            camera_embedding=uni3c_data.get("camera_embedding"),
+            temb=temb.to(main_device, controlnet.dtype),
+            out_device=offload_device if uni3c_data.get("offload") else main_device
+        )
+        
+        # Debug: log controlnet output shapes at step 0
+        if current_step == 0 and controlnet_states:
+            print(f"[UNI3C DEBUG] Controlnet output:")
+            print(f"[UNI3C DEBUG]   num states: {len(controlnet_states)}")
+            print(f"[UNI3C DEBUG]   state[0] shape: {tuple(controlnet_states[0].shape)}")
+            print(f"[UNI3C DEBUG]   state[-1] shape: {tuple(controlnet_states[-1].shape)}")
+        
+        # Offload controlnet back if configured
+        if uni3c_data.get("offload", True):
+            controlnet.to(offload_device)
+        
+        return controlnet_states
+
     
     def forward(
         self,
@@ -1466,6 +1568,7 @@ class WanModel(ModelMixin, ConfigMixin):
         steadydancer_ref_c = None,
         steadydancer_clip_fea_c = None,
         scail_pose_latents = None,
+        uni3c_data = None,  # Uni3C ControlNet data dict
     ):
         # patch_dtype =  self.patch_embedding.weight.dtype
         modulation_dtype = self.time_projection[1].weight.dtype
@@ -1493,6 +1596,9 @@ class WanModel(ModelMixin, ConfigMixin):
         else:
             y_list = [y] * len(x_list)
 
+        # Save raw noisy latent for Uni3C (before patch embedding)
+        raw_noisy_latent = x_list[0].clone() if uni3c_data is not None else None
+
         for i, (is_source, x, y) in enumerate(zip(is_source_x, x_list, y_list)):
             if is_source:
                 x_list[i] = x_list[0].clone()
@@ -1501,7 +1607,7 @@ class WanModel(ModelMixin, ConfigMixin):
                 # image source
                 bz = len(x)
                 if y is not None:
-                    y = y.unsqueeze(0)        
+                    y = y.unsqueeze(0)
                     if bz > 1: y = y.expand(bz, -1, -1, -1, -1)
                     x = torch.cat([x, y], dim=1)
                 # embeddings
@@ -1598,6 +1704,38 @@ class WanModel(ModelMixin, ConfigMixin):
             sinusoidal_embedding_1d(self.freq_dim, t.flatten()).to(modulation_dtype)  # self.patch_embedding.weight.dtype)
         )  # b, dim        
         e0 = self.time_projection(e).unflatten(1, (6, self.dim)).to(e.dtype)
+
+        # ========== UNI3C: Step-percent gating ==========
+        uni3c_controlnet_states = None
+        if uni3c_data is not None:
+            # Compute current step percentage (use max_steps-1 so last step maps to 1.0)
+            current_step_percentage = current_step_no / max(1, (max_steps - 1)) if max_steps > 1 else 0.0
+
+            uni3c_start = float(uni3c_data.get("start", 0.0))
+            uni3c_end = float(uni3c_data.get("end", 1.0))
+            uni3c_weight = float(uni3c_data.get("controlnet_weight", 1.0))
+
+            # If disabled via strength=0, skip all Uni3C work
+            if uni3c_weight == 0.0:
+                in_window = False
+            else:
+                in_window = (uni3c_start <= current_step_percentage <= uni3c_end)
+            # Edge case: step 0 with non-zero end
+            if uni3c_end > 0 and current_step_no == 0 and current_step_percentage >= uni3c_start:
+                in_window = True
+            
+            if in_window:
+                # Log on first step only
+                if current_step_no == 0:
+                    print(f"[UNI3C] model.forward: Uni3C active")
+                    print(f"[UNI3C]   render_latent shape: {uni3c_data['render_latent'].shape}")
+                    print(f"[UNI3C]   step window: {uni3c_start*100:.0f}% - {uni3c_end*100:.0f}%")
+                    print(f"[UNI3C]   strength: {uni3c_weight}")
+                
+                # Compute controlnet states for this step
+                # Pass raw_noisy_latent (saved before patch embedding) for channel concatenation
+                uni3c_controlnet_states = self._compute_uni3c_states(uni3c_data, e, raw_noisy_latent)
+        # ========== END UNI3C GATING ==========
 
         standin_x = None
         if standin_ref is not None:
@@ -1777,6 +1915,49 @@ class WanModel(ModelMixin, ConfigMixin):
                             x_list[i] = block(x, context = context, hints= hints, audio_scale= audio_scale, multitalk_audio = multitalk_audio, multitalk_masks =multitalk_masks, e= e0,  motion_vec = motion_vec, lynx_ip_embeds= lynx_ip_embeds, lynx_ref_buffer = lynx_ref_buffer, sub_x_no =i,  **kwargs)
                             del x
                     context = hints = None
+
+                # ========== UNI3C: Per-block residual injection ==========
+                if uni3c_controlnet_states is not None and block_idx < len(uni3c_controlnet_states):
+                    residual = uni3c_controlnet_states[block_idx]
+                    
+                    # Debug logs at block 0, step 0
+                    if block_idx == 0 and current_step_no == 0:
+                        print(f"[UNI3C DEBUG] Injection point info:")
+                        print(f"[UNI3C DEBUG]   num streams (x_list): {len(x_list)}")
+                        print(f"[UNI3C DEBUG]   x_list[0] shape: {tuple(x_list[0].shape)}")
+                        print(f"[UNI3C DEBUG]   residual shape: {tuple(residual.shape)}")
+                        print(f"[UNI3C DEBUG]   ref_images_count (skip prefix): {ref_images_count}")
+                        print(f"[UNI3C DEBUG]   controlnet_weight: {uni3c_data.get('controlnet_weight', 1.0)}")
+                    
+                    # Guard once (before injecting into any stream) to avoid partial injection
+                    if residual.shape[-1] != x_list[0].shape[-1]:
+                        if current_step_no == 0 and block_idx == 0:
+                            print(
+                                f"[UNI3C] WARNING: residual dim mismatch; "
+                                f"residual[-1]={residual.shape[-1]} vs x[-1]={x_list[0].shape[-1]}. Skipping Uni3C injection."
+                            )
+                        # Skip injecting into all streams for this block
+                        continue
+
+                    # Apply residual to ALL streams in x_list
+                    for i, x in enumerate(x_list):
+                        x_start = ref_images_count  # Skip prefix tokens
+                        apply_len = min(x.shape[1] - x_start, residual.shape[1])
+                        
+                        # Debug: log apply_len computation at block 0, step 0, stream 0
+                        if block_idx == 0 and current_step_no == 0 and i == 0:
+                            print(f"[UNI3C DEBUG]   x.shape[1]={x.shape[1]}, x_start={x_start}, residual.shape[1]={residual.shape[1]}")
+                            print(f"[UNI3C DEBUG]   apply_len={apply_len} (injecting into x[:, {x_start}:{x_start + apply_len}])")
+                        
+                        if apply_len > 0:
+                            x_list[i][:, x_start:x_start + apply_len] += (
+                                residual[:, :apply_len].to(x) * uni3c_data.get("controlnet_weight", 1.0)
+                            )
+                    
+                    # Log at first block of first/last steps
+                    if block_idx == 0 and (current_step_no == 0 or current_step_no == max_steps - 1):
+                        print(f"[UNI3C] Step {current_step_no}/{max_steps}: Injecting residuals (block 0 shape: {residual.shape})")
+                # ========== END UNI3C INJECTION ==========
 
         if skips_steps_cache != None:
             if joint_pass:

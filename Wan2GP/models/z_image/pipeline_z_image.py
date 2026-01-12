@@ -337,6 +337,8 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         NAG_tau: float = 3.5,
         NAG_alpha: float = 0.5,
         loras_slists = None,
+        init_image: Optional[torch.Tensor] = None,
+        denoising_strength: float = 1.0,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -532,6 +534,80 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
         self._num_timesteps = len(timesteps)
 
+        # ============================================================================
+        # IMG2IMG: Encode init image and add noise for denoising
+        # ============================================================================
+        init_image_latents = None
+        first_step = 0
+        if init_image is not None and denoising_strength < 1.0:
+            print(f"[IMG2IMG] ✓ Using img2img mode with denoising_strength={denoising_strength:.2f}")
+            print(f"[IMG2IMG] Input image shape: {init_image.shape}, dtype: {init_image.dtype}")
+
+            # Encode init image to latents
+            init_image_tensor = init_image.to(device=device, dtype=self.vae.dtype)
+
+            # Handle different input formats
+            if init_image_tensor.dim() == 4 and init_image_tensor.shape[1] == 1:
+                # Video format [C, F=1, H, W] - squeeze frame dim and add batch dim
+                init_image_tensor = init_image_tensor.squeeze(1).unsqueeze(0)
+                print(f"[IMG2IMG] Converted from video format to image: {init_image_tensor.shape}")
+            elif init_image_tensor.dim() == 3:
+                # [C, H, W] - add batch dim
+                init_image_tensor = init_image_tensor.unsqueeze(0)
+                print(f"[IMG2IMG] Added batch dimension: {init_image_tensor.shape}")
+
+            # Encode to latent space
+            print(f"[IMG2IMG] Encoding image to latent space...")
+            init_image_latents = self.vae.encode(init_image_tensor).latent_dist.mode()
+            init_image_latents = (init_image_latents - self.vae.config.shift_factor) * self.vae.config.scaling_factor
+            print(f"[IMG2IMG] Encoded latents shape: {init_image_latents.shape}")
+
+            # Find the timestep where sigma matches our desired strength
+            # This ensures the noise percentage matches strength while using scheduler's learned sigmas
+            total_steps = len(timesteps)
+            desired_sigma = denoising_strength
+
+            # Find closest sigma to our desired strength
+            sigmas = self.scheduler.sigmas.to(device=init_image_latents.device)
+            sigma_diffs = torch.abs(sigmas - desired_sigma)
+            closest_sigma_idx = torch.argmin(sigma_diffs).item()
+            actual_sigma = sigmas[closest_sigma_idx].item()
+
+            # Get the timestep that corresponds to this sigma
+            start_timestep = self.scheduler.timesteps[closest_sigma_idx]
+
+            print(f"[IMG2IMG] Target strength={denoising_strength:.2f}, matched sigma={actual_sigma:.3f} at timestep {start_timestep:.1f}/1000")
+            print(f"[IMG2IMG] Noise distribution: {(1.0-actual_sigma)*100:.1f}% image + {actual_sigma*100:.1f}% noise")
+
+            # Generate noise using randn_tensor for consistency
+            from diffusers.utils.torch_utils import randn_tensor
+            noise = randn_tensor(
+                init_image_latents.shape,
+                generator=generator,
+                device=init_image_latents.device,
+                dtype=init_image_latents.dtype
+            )
+
+            # Use scheduler's scale_noise with matched timestep for proper sigma distribution
+            batch_size = init_image_latents.shape[0]
+            timestep_tensor = torch.tensor([start_timestep] * batch_size, device=init_image_latents.device)
+            latents = self.scheduler.scale_noise(init_image_latents, timestep_tensor, noise)
+
+            # Start denoising from the matched timestep
+            first_step = closest_sigma_idx
+            timesteps = timesteps[first_step:]
+            self.scheduler.timesteps = timesteps
+            num_inference_steps = len(timesteps)
+            self._num_timesteps = len(timesteps)
+
+            print(f"[IMG2IMG] ✓ Denoising for {num_inference_steps}/{total_steps} steps (starting from step {first_step})")
+        elif init_image is not None and denoising_strength >= 1.0:
+            print(f"[IMG2IMG] ⚠️  init_image provided but denoising_strength={denoising_strength:.2f} >= 1.0, treating as text-to-image")
+        elif init_image is None:
+            print(f"[IMG2IMG] Using text-to-image mode (no init_image)")
+        else:
+            print(f"[IMG2IMG] Unexpected state: init_image={init_image is not None}, denoising_strength={denoising_strength}")
+
         # Encode control image if provided and transformer supports it
         control_latent = control_image_tensor = None
         control_in_dim = self.transformer.control_in_dim
@@ -601,8 +677,8 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         # 6. Denoising loop
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                # Set LoRA step number for dynamic weight updates
-                offload.set_step_no_for_lora(self.transformer, i)
+                # Set LoRA step number for dynamic weight updates (account for skipped steps in img2img)
+                offload.set_step_no_for_lora(self.transformer, first_step + i)
                 if self.interrupt:
                     break
 

@@ -3062,17 +3062,21 @@ def download_models(model_filename = None, model_type= None, module_type = False
 
 
 
-    shared_def = {
-        "repoId" : "DeepBeepMeep/Wan2.1",
-        "sourceFolderList" : [ "pose", "scribble", "flow", "depth", "mask", "wav2vec", "chinese-wav2vec2-base", "roformer", "pyannote", "det_align", "" ],
-        "fileList" : [ ["dw-ll_ucoco_384.onnx", "yolox_l.onnx"],["netG_A_latest.pth"],  ["raft-things.pth"], 
-                      ["depth_anything_v2_vitl.pth","depth_anything_v2_vitb.pth"], ["sam_vit_h_4b8939_fp16.safetensors", "model.safetensors", "config.json"], 
-                      ["config.json", "feature_extractor_config.json", "model.safetensors", "preprocessor_config.json", "special_tokens_map.json", "tokenizer_config.json", "vocab.json"],
-                      ["config.json", "pytorch_model.bin", "preprocessor_config.json"],
-                      ["model_bs_roformer_ep_317_sdr_12.9755.ckpt", "model_bs_roformer_ep_317_sdr_12.9755.yaml", "download_checks.json"],
-                      ["pyannote_model_wespeaker-voxceleb-resnet34-LM.bin", "pytorch_model_segmentation-3.0.bin"], ["detface.pt"], [ "flownet.pkl" ] ]
-    }
-    process_files_def(**shared_def)
+    # DISABLED: Preprocessing model downloads (~5GB)
+    # These are only needed for advanced control features (Scail pose, depth control, etc.)
+    # Basic i2v/t2v/Uni3C generation does NOT require these models
+    # Uncomment if you need: pose control, depth control, mask/segmentation, or audio processing
+    # shared_def = {
+    #     "repoId" : "DeepBeepMeep/Wan2.1",
+    #     "sourceFolderList" : [ "pose", "scribble", "flow", "depth", "mask", "wav2vec", "chinese-wav2vec2-base", "roformer", "pyannote", "det_align", "" ],
+    #     "fileList" : [ ["dw-ll_ucoco_384.onnx", "yolox_l.onnx"],["netG_A_latest.pth"],  ["raft-things.pth"],
+    #                   ["depth_anything_v2_vitl.pth","depth_anything_v2_vitb.pth"], ["sam_vit_h_4b8939_fp16.safetensors", "model.safetensors", "config.json"],
+    #                   ["config.json", "feature_extractor_config.json", "model.safetensors", "preprocessor_config.json", "special_tokens_map.json", "tokenizer_config.json", "vocab.json"],
+    #                   ["config.json", "pytorch_model.bin", "preprocessor_config.json"],
+    #                   ["model_bs_roformer_ep_317_sdr_12.9755.ckpt", "model_bs_roformer_ep_317_sdr_12.9755.yaml", "download_checks.json"],
+    #                   ["pyannote_model_wespeaker-voxceleb-resnet34-LM.bin", "pytorch_model_segmentation-3.0.bin"], ["detface.pt"], [ "flownet.pkl" ] ]
+    # }
+    # process_files_def(**shared_def)
 
 
     if server_config.get("enhancer_enabled", 0) == 1:
@@ -3091,7 +3095,8 @@ def download_models(model_filename = None, model_type= None, module_type = False
         }
         process_files_def(**enhancer_def)
 
-    download_mmaudio()
+    # DISABLED: MMAudio download (only needed for audio generation features)
+    # download_mmaudio()
     global download_shared_done
     download_shared_done = True
 
@@ -5241,9 +5246,26 @@ def generate_video(
     model_type,
     mode,
     plugin_data=None,
+    # Uni3C motion guidance parameters
+    use_uni3c=False,
+    uni3c_guide_video=None,
+    uni3c_strength=1.0,
+    uni3c_start_percent=0.0,
+    uni3c_end_percent=1.0,
+    uni3c_keep_on_gpu=False,
+    uni3c_frame_policy="fit",
 ):
-
-
+    # Layer 3 Uni3C logging - immediately at function entry
+    if use_uni3c:
+        print(f"[UNI3C] generate_video: Uni3C ENABLED")
+        print(f"[UNI3C]   guide_video: {uni3c_guide_video}")
+        print(f"[UNI3C]   strength: {uni3c_strength}")
+        print(f"[UNI3C]   step window: {uni3c_start_percent*100:.0f}% - {uni3c_end_percent*100:.0f}%")
+        print(f"[UNI3C]   frame_policy: {uni3c_frame_policy}")
+        print(f"[UNI3C]   keep_on_gpu: {uni3c_keep_on_gpu}")
+    else:
+        # Log when NOT using Uni3C (helps detect silent drops)
+        print(f"[UNI3C] generate_video: Uni3C DISABLED (use_uni3c={use_uni3c})")
 
     def remove_temp_filenames(temp_filenames_list):
         for temp_filename in temp_filenames_list: 
@@ -6113,6 +6135,14 @@ def generate_video(
                     window_start_frame_no = window_start_frame,
                     hires_config = hires_config,
                     system_prompt = system_prompt,
+                    # Uni3C motion guidance params
+                    use_uni3c = use_uni3c,
+                    uni3c_guide_video = uni3c_guide_video,
+                    uni3c_strength = uni3c_strength,
+                    uni3c_start_percent = uni3c_start_percent,
+                    uni3c_end_percent = uni3c_end_percent,
+                    uni3c_keep_on_gpu = uni3c_keep_on_gpu,
+                    uni3c_frame_policy = uni3c_frame_policy,
                 )
             except Exception as e:
                 if len(control_audio_tracks) > 0 or len(source_audio_tracks) > 0:

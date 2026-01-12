@@ -120,13 +120,13 @@ class TravelSegmentProcessor:
             # Determine segment positioning
             is_first_segment = ctx.segment_params.get("is_first_segment", ctx.segment_idx == 0)
             
-            # If independent segments (VACE only), force "from scratch" behavior
+            # If segments are not chained (VACE only), force "from scratch" behavior
             # This makes it ignore previous video context even if not the first segment
-            independent_segments = ctx.full_orchestrator_payload.get("independent_segments", False)
-            
-            if independent_segments:
+            chain_segments = ctx.full_orchestrator_payload.get("chain_segments", True)
+
+            if not chain_segments:
                  is_first_segment_from_scratch = True
-                 ctx.dprint(f"[INDEPENDENT_SEGMENTS] Forcing is_first_segment_from_scratch=True for segment {ctx.segment_idx}")
+                 ctx.dprint(f"[INDEPENDENT_SEGMENTS] chain_segments=False: Forcing is_first_segment_from_scratch=True for segment {ctx.segment_idx}")
             else:
                  is_first_segment_from_scratch = is_first_segment and not ctx.full_orchestrator_payload.get("continue_from_video_resolved_path")
             
@@ -248,25 +248,25 @@ class TravelSegmentProcessor:
             overlap_count = max(0, int(frame_overlap_from_previous))
             
             # 1) Frames reused from the previous segment (overlap)
-            # If independent_segments is True, treat overlap as 0 for masking purposes
-            independent_segments = ctx.full_orchestrator_payload.get("independent_segments", False)
-            
-            if independent_segments:
+            # If chain_segments is False, treat overlap as 0 for masking purposes
+            chain_segments = ctx.full_orchestrator_payload.get("chain_segments", True)
+
+            if not chain_segments:
                 overlap_count = 0
-                ctx.dprint(f"[INDEPENDENT_SEGMENTS] Seg {ctx.segment_idx}: Forcing mask overlap_count=0 (independent mode)")
+                ctx.dprint(f"[INDEPENDENT_SEGMENTS] Seg {ctx.segment_idx}: chain_segments=False: Forcing mask overlap_count=0 (independent mode)")
             elif overlap_count > 0:
                 overlap_indices = set(range(overlap_count))
                 inactive_indices.update(overlap_indices)
                 ctx.dprint(f"Seg {ctx.segment_idx}: Adding {len(overlap_indices)} overlap frames to inactive set: {sorted(overlap_indices)}")
             else:
                 ctx.dprint(f"Seg {ctx.segment_idx}: No overlap frames to mark as inactive")
-            
+
             # 2) First frame when this is the very first segment from scratch OR independent segments
-            # In independent mode, every segment starts from a fixed keyframe image, so frame 0 must be anchored.
+            # In independent mode (chain_segments=False), every segment starts from a fixed keyframe image, so frame 0 must be anchored.
             is_first_segment_val = ctx.segment_params.get("is_first_segment", False)
             is_continue_scenario = ctx.full_orchestrator_payload.get("continue_from_video_resolved_path") is not None
-            
-            if (is_first_segment_val and not is_continue_scenario) or independent_segments:
+
+            if (is_first_segment_val and not is_continue_scenario) or not chain_segments:
                 inactive_indices.add(0)
                 ctx.dprint(f"Seg {ctx.segment_idx}: Marking frame 0 as inactive (anchor start image)")
             
@@ -468,12 +468,12 @@ class TravelSegmentProcessor:
     def _get_previous_segment_video(self) -> Optional[str]:
         """Get previous segment video output for guide creation."""
         ctx = self.ctx
-        
-        independent_segments = ctx.full_orchestrator_payload.get("independent_segments", False)
-        if independent_segments:
-             ctx.dprint(f"[INDEPENDENT_SEGMENTS] Skipping previous segment video lookup for segment {ctx.segment_idx}")
+
+        chain_segments = ctx.full_orchestrator_payload.get("chain_segments", True)
+        if not chain_segments:
+             ctx.dprint(f"[INDEPENDENT_SEGMENTS] chain_segments=False: Skipping previous segment video lookup for segment {ctx.segment_idx}")
              return None
-             
+
         is_first_segment = ctx.segment_params.get("is_first_segment", ctx.segment_idx == 0)
         
         if is_first_segment and ctx.full_orchestrator_payload.get("continue_from_video_resolved_path"):

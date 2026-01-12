@@ -57,7 +57,9 @@ DIRECT_QUEUE_TASK_TYPES = {
     "i2v", "i2v_22", "hunyuan", "ltxv", "generate_video",
     "qwen_image_edit", "qwen_image_hires", "qwen_image_style", "image_inpaint", "annotated_image_edit",
     # Text-to-image tasks (no input image required)
-    "qwen_image", "qwen_image_2512", "z_image_turbo"
+    "qwen_image", "qwen_image_2512", "z_image_turbo",
+    # Image-to-image tasks
+    "z_image_turbo_i2i"
 }
 
 
@@ -694,6 +696,52 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Merged SVI LoRAs with svi_strength={svi_strength}")
             else:
                 dprint_func(f"[SVI_PAYLOAD] Task {task_id}: Merged {len(merged_urls)} SVI LoRAs into activated_loras")
+        
+        # =============================================================================
+        # UNI3C MODE: Motion guidance via Uni3C ControlNet
+        # =============================================================================
+        # Check use_uni3c with explicit False handling (False at segment level should override True at orchestrator)
+        use_uni3c = segment_params["use_uni3c"] if "use_uni3c" in segment_params else orchestrator_details.get("use_uni3c", False)
+        
+        if use_uni3c:
+            from source.common_utils import download_file as sm_download_file
+            
+            # Resolve other Uni3C params (using existing _get_param helper)
+            uni3c_guide = _get_param("uni3c_guide_video", individual_params, segment_params, orchestrator_details, prefer_truthy=True)
+            uni3c_strength = _get_param("uni3c_strength", individual_params, segment_params, orchestrator_details, default=1.0)
+            uni3c_start = _get_param("uni3c_start_percent", individual_params, segment_params, orchestrator_details, default=0.0)
+            uni3c_end = _get_param("uni3c_end_percent", individual_params, segment_params, orchestrator_details, default=1.0)
+            uni3c_keep_gpu = _get_param("uni3c_keep_on_gpu", individual_params, segment_params, orchestrator_details, default=False)
+            uni3c_frame_policy = _get_param("uni3c_frame_policy", individual_params, segment_params, orchestrator_details, default="fit")
+            
+            # Download guide video if URL (using existing download_file helper)
+            if uni3c_guide and uni3c_guide.startswith(("http://", "https://")):
+                local_filename = Path(uni3c_guide).name or "uni3c_guide_video.mp4"
+                local_download_path = segment_processing_dir / f"uni3c_{local_filename}"
+                if not local_download_path.exists():
+                    sm_download_file(uni3c_guide, segment_processing_dir, local_download_path.name)
+                    dprint_func(f"[UNI3C] Task {task_id}: Downloaded guide video to {local_download_path}")
+                else:
+                    dprint_func(f"[UNI3C] Task {task_id}: Guide video already exists at {local_download_path}")
+                uni3c_guide = str(local_download_path)
+            
+            # Layer 2 logging
+            dprint_func(f"[UNI3C] Task {task_id}: Uni3C ENABLED")
+            dprint_func(f"[UNI3C] Task {task_id}:   guide_video={uni3c_guide}")
+            dprint_func(f"[UNI3C] Task {task_id}:   strength={uni3c_strength}")
+            dprint_func(f"[UNI3C] Task {task_id}:   start_percent={uni3c_start}")
+            dprint_func(f"[UNI3C] Task {task_id}:   end_percent={uni3c_end}")
+            dprint_func(f"[UNI3C] Task {task_id}:   frame_policy={uni3c_frame_policy}")
+            dprint_func(f"[UNI3C] Task {task_id}:   keep_on_gpu={uni3c_keep_gpu}")
+            
+            # Inject into generation_params
+            generation_params["use_uni3c"] = True
+            generation_params["uni3c_guide_video"] = uni3c_guide
+            generation_params["uni3c_strength"] = uni3c_strength
+            generation_params["uni3c_start_percent"] = uni3c_start
+            generation_params["uni3c_end_percent"] = uni3c_end
+            generation_params["uni3c_keep_on_gpu"] = uni3c_keep_gpu
+            generation_params["uni3c_frame_policy"] = uni3c_frame_policy
         
         # === WGP SUBMISSION DIAGNOSTIC SUMMARY ===
         # Log key frame-related parameters before WGP submission

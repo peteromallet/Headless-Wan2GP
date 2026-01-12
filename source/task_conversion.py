@@ -231,10 +231,18 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
     Convert a database task row to a GenerationTask object for the queue system.
     """
     headless_logger.debug(f"Converting DB task to GenerationTask", task_id=task_id)
-    
+
     prompt = db_task_params.get("prompt", "")
+
+    # For img2img tasks, empty prompt is acceptable (will use minimal changes)
+    # Provide a minimal default prompt to avoid errors
+    img2img_task_types = {"z_image_turbo_i2i", "qwen_image_edit", "qwen_image_style", "image_inpaint"}
     if not prompt:
-        raise ValueError(f"Task {task_id}: prompt is required")
+        if task_type in img2img_task_types:
+            prompt = " "  # Minimal prompt for img2img
+            headless_logger.debug(f"Task {task_id}: Using minimal prompt for img2img task", task_id=task_id)
+        else:
+            raise ValueError(f"Task {task_id}: prompt is required")
     
     model = db_task_params.get("model")
     if not model:
@@ -261,26 +269,28 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
             # Text-to-image tasks
             "qwen_image": "qwen_image_edit_20B",
             "qwen_image_2512": "qwen_image_2512_20B",
-            "z_image_turbo": "z_image"
+            "z_image_turbo": "z_image",
+            # Image-to-image tasks
+            "z_image_turbo_i2i": "z_image_img2img"
         }
         model = task_type_to_model.get(task_type, "t2v")
     
     generation_params = {}
     
     param_whitelist = {
-        "negative_prompt", "resolution", "video_length", "num_inference_steps", 
+        "negative_prompt", "resolution", "video_length", "num_inference_steps",
         "guidance_scale", "seed", "embedded_guidance_scale", "flow_shift",
         "audio_guidance_scale", "repeat_generation", "multi_images_gen_type",
         "guidance2_scale", "guidance3_scale", "guidance_phases", "switch_threshold", "switch_threshold2", "model_switch_phase",
         "video_guide", "video_mask",
         "video_prompt_type", "control_net_weight", "control_net_weight2",
         "keep_frames_video_guide", "video_guide_outpainting", "mask_expand",
-        "image_prompt_type", "image_start", "image_end", "image_refs", 
+        "image_prompt_type", "image_start", "image_end", "image_refs",
         "frames_positions", "image_guide", "image_mask",
         "model_mode", "video_source", "keep_frames_video_source",
         "audio_guide", "audio_guide2", "audio_source", "audio_prompt_type", "speakers_locations",
         "activated_loras", "loras_multipliers", "additional_loras", "loras",
-        "tea_cache_setting", "tea_cache_start_step_perc", "RIFLEx_setting", 
+        "tea_cache_setting", "tea_cache_start_step_perc", "RIFLEx_setting",
         "slg_switch", "slg_layers", "slg_start_perc", "slg_end_perc",
         "cfg_star_switch", "cfg_zero_step", "prompt_enhancer",
         # Hires fix parameters
@@ -295,14 +305,34 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         "override_profile",
         "image", "image_url", "mask_url",
         "style_reference_image", "subject_reference_image",
-        "style_reference_strength", "subject_strength", 
+        "style_reference_strength", "subject_strength",
         "subject_description", "in_this_scene",
         "output_format", "enable_base64_output", "enable_sync_mode",
+        # Uni3C motion guidance parameters
+        "use_uni3c", "uni3c_guide_video", "uni3c_strength",
+        "uni3c_start_percent", "uni3c_end_percent",
+        "uni3c_keep_on_gpu", "uni3c_frame_policy",
+        # Image-to-image parameters
+        "denoising_strength",
     }
     
     for param in param_whitelist:
         if param in db_task_params:
             generation_params[param] = db_task_params[param]
+    
+    # Layer 1 Uni3C logging - detect whitelist failures early
+    if "use_uni3c" in generation_params:
+        headless_logger.info(
+            f"[UNI3C] Task {task_id}: use_uni3c={generation_params.get('use_uni3c')}, "
+            f"guide_video={generation_params.get('uni3c_guide_video', 'NOT_SET')}, "
+            f"strength={generation_params.get('uni3c_strength', 'NOT_SET')}"
+        )
+    elif db_task_params.get("use_uni3c"):
+        # CRITICAL: Detect when whitelist is missing the param
+        headless_logger.warning(
+            f"[UNI3C] Task {task_id}: ⚠️ use_uni3c was in db_task_params but NOT in generation_params! "
+            f"Check param_whitelist in task_conversion.py"
+        )
     
     # Extract orchestrator parameters
     # We use a lambda for dprint to match signature expected by extract_orchestrator_parameters if needed,
@@ -363,6 +393,104 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
 
         # Override model to use Z-Image (user might pass "z-image" with hyphen)
         model = "z_image"
+
+    elif task_type == "z_image_turbo_i2i":
+        # Z-Image turbo img2img - fast image-to-image generation
+        import tempfile
+        from PIL import Image
+
+        # Get image URL
+        image_url = db_task_params.get("image") or db_task_params.get("image_url")
+        if not image_url:
+            raise ValueError(f"Task {task_id}: 'image' or 'image_url' required for z_image_turbo_i2i")
+
+        # Download image to local file (required for WGP)
+        local_image_path = None
+        try:
+            import requests
+            import os
+            headless_logger.debug(f"Downloading image for img2img: {image_url}", task_id=task_id)
+            response = requests.get(image_url, timeout=30)
+            response.raise_for_status()
+
+            # Save to temp file and keep it for WGP to use
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                tmp_file.write(response.content)
+                local_image_path = tmp_file.name
+
+            headless_logger.info(f"[Z_IMAGE_I2I] Downloaded image to: {local_image_path}", task_id=task_id)
+
+            # Handle resolution - auto-detect from image or use provided
+            image_size = db_task_params.get("image_size", "auto")
+            if image_size == "auto" or not db_task_params.get("resolution"):
+                with Image.open(local_image_path) as img:
+                    width, height = img.size
+
+                    # Scale to approximately 1 megapixel (1024x1024) while preserving aspect ratio
+                    target_pixels = 1024 * 1024  # ~1 megapixel
+                    current_pixels = width * height
+
+                    if current_pixels > 0:
+                        # Calculate scale factor to reach target pixels
+                        import math
+                        scale = math.sqrt(target_pixels / current_pixels)
+
+                        # Apply scale to both dimensions
+                        scaled_width = int(round(width * scale))
+                        scaled_height = int(round(height * scale))
+
+                        # Round to nearest multiple of 8 (Z-Image requirement)
+                        scaled_width = (scaled_width // 8) * 8
+                        scaled_height = (scaled_height // 8) * 8
+
+                        # Ensure minimum size
+                        scaled_width = max(8, scaled_width)
+                        scaled_height = max(8, scaled_height)
+
+                        generation_params["resolution"] = f"{scaled_width}x{scaled_height}"
+                        headless_logger.info(
+                            f"Scaled resolution: {width}x{height} ({current_pixels:,} px) → "
+                            f"{scaled_width}x{scaled_height} ({scaled_width*scaled_height:,} px, scale={scale:.3f})",
+                            task_id=task_id
+                        )
+                    else:
+                        generation_params["resolution"] = "1024x1024"
+            elif "resolution" in db_task_params:
+                generation_params["resolution"] = db_task_params["resolution"]
+            else:
+                generation_params["resolution"] = "1024x1024"
+
+        except Exception as e:
+            # If download fails, clean up and raise error
+            if local_image_path:
+                import os
+                try:
+                    os.unlink(local_image_path)
+                except:
+                    pass
+            raise ValueError(f"Task {task_id}: Failed to download image for img2img: {e}")
+
+        # CRITICAL: Pass local file path (not URL) to WGP
+        generation_params["image_start"] = local_image_path
+
+        # Set img2img parameters
+        generation_params.setdefault("video_prompt_type", "")  # Image input handled via image_start
+        generation_params.setdefault("video_length", 1)  # Single image output
+        generation_params.setdefault("guidance_scale", 0)  # Z-Image uses guidance_scale=0
+        generation_params.setdefault("num_inference_steps", int(db_task_params.get("num_inference_steps", 12)))
+
+        # CRITICAL: Add denoising_strength to generation_params so it gets passed through
+        actual_strength = db_task_params.get("denoising_strength") or db_task_params.get("denoise_strength") or db_task_params.get("strength", 0.7)
+        generation_params["denoising_strength"] = actual_strength
+
+        headless_logger.info(
+            f"[Z_IMAGE_I2I] Setup complete - local_image={local_image_path}, resolution={generation_params['resolution']}, "
+            f"strength={actual_strength}, steps={generation_params['num_inference_steps']}",
+            task_id=task_id
+        )
+
+        # Override model to use Z-Image img2img
+        model = "z_image_img2img"
 
     # Defaults
     essential_defaults = {
