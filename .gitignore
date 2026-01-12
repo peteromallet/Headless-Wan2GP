@@ -58,7 +58,11 @@ _test*
 
 # Test outputs and generated test files
 test_outputs/
+test_results/
 test_results_comparison/
+Wan2GP/test_results/
+samples/
+.tmp_*/
 tests/
 tests_output/
 
