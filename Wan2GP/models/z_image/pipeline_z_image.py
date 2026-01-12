@@ -580,8 +580,8 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
 
             print(f"[IMG2IMG] Mixing latents: {(1.0-latent_noise_factor)*100:.1f}% image + {latent_noise_factor*100:.1f}% noise (strength={denoising_strength:.2f})")
 
-            # Calculate step skipping with +2 bonus steps
-            first_step = int(total_steps * (1.0 - denoising_strength)) - 2
+            # Calculate step skipping with +1 bonus step
+            first_step = int(total_steps * (1.0 - denoising_strength)) - 1
             first_step = max(0, first_step)  # Don't go negative
 
             # Cap at 8 total denoising steps
@@ -595,7 +595,7 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             self.scheduler.timesteps = timesteps
             self._num_timesteps = len(timesteps)
 
-            print(f"[IMG2IMG] ✓ Denoising for {num_inference_steps} steps (skipped first {first_step}, +2 bonus steps, capped at 8)")
+            print(f"[IMG2IMG] ✓ Denoising for {num_inference_steps} steps (skipped first {first_step}, +1 bonus step, capped at 8)")
         elif init_image is not None and denoising_strength >= 1.0:
             print(f"[IMG2IMG] ⚠️  init_image provided but denoising_strength={denoising_strength:.2f} >= 1.0, treating as text-to-image")
         elif init_image is None:
