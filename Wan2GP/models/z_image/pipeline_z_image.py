@@ -562,18 +562,22 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             init_image_latents = (init_image_latents - self.vae.config.shift_factor) * self.vae.config.scaling_factor
             print(f"[IMG2IMG] Encoded latents shape: {init_image_latents.shape}")
 
-            # Calculate step skipping based on denoising_strength with +1 bonus step
-            # denoising_strength = 1.0 means start from pure noise (full transformation)
-            # denoising_strength = 0.0 means start from clean image (no transformation)
+            # Find the timestep where sigma matches our desired strength
+            # This ensures the noise percentage matches strength while using scheduler's learned sigmas
             total_steps = len(timesteps)
-            first_step = int(total_steps * (1.0 - denoising_strength)) - 1  # +1 bonus step
-            first_step = max(0, first_step)  # Don't go below 0
+            desired_sigma = denoising_strength
 
-            # Simple linear interpolation for noise mixing
-            # denoising_strength directly controls the noise ratio
-            latent_noise_factor = denoising_strength
+            # Find closest sigma to our desired strength
+            sigmas = self.scheduler.sigmas.to(device=init_image_latents.device)
+            sigma_diffs = torch.abs(sigmas - desired_sigma)
+            closest_sigma_idx = torch.argmin(sigma_diffs).item()
+            actual_sigma = sigmas[closest_sigma_idx].item()
 
-            print(f"[IMG2IMG] Mixing latents: {(1.0 - latent_noise_factor)*100:.1f}% image + {latent_noise_factor*100:.1f}% noise (strength={denoising_strength:.2f})")
+            # Get the timestep that corresponds to this sigma
+            start_timestep = self.scheduler.timesteps[closest_sigma_idx]
+
+            print(f"[IMG2IMG] Target strength={denoising_strength:.2f}, matched sigma={actual_sigma:.3f} at timestep {start_timestep:.1f}/1000")
+            print(f"[IMG2IMG] Noise distribution: {(1.0-actual_sigma)*100:.1f}% image + {actual_sigma*100:.1f}% noise")
 
             # Generate noise using randn_tensor for consistency
             from diffusers.utils.torch_utils import randn_tensor
@@ -584,16 +588,19 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                 dtype=init_image_latents.dtype
             )
 
-            # Simple linear mixing: init_latents * (1-strength) + noise * strength
-            latents = init_image_latents * (1.0 - latent_noise_factor) + noise * latent_noise_factor
+            # Use scheduler's scale_noise with matched timestep for proper sigma distribution
+            batch_size = init_image_latents.shape[0]
+            timestep_tensor = torch.tensor([start_timestep] * batch_size, device=init_image_latents.device)
+            latents = self.scheduler.scale_noise(init_image_latents, timestep_tensor, noise)
 
-            # Skip early denoising steps
+            # Start denoising from the matched timestep
+            first_step = closest_sigma_idx
             timesteps = timesteps[first_step:]
             self.scheduler.timesteps = timesteps
             num_inference_steps = len(timesteps)
             self._num_timesteps = len(timesteps)
 
-            print(f"[IMG2IMG] ✓ Denoising for {num_inference_steps} steps (skipped first {first_step}, +1 bonus step)")
+            print(f"[IMG2IMG] ✓ Denoising for {num_inference_steps}/{total_steps} steps (starting from step {first_step})")
         elif init_image is not None and denoising_strength >= 1.0:
             print(f"[IMG2IMG] ⚠️  init_image provided but denoising_strength={denoising_strength:.2f} >= 1.0, treating as text-to-image")
         elif init_image is None:
