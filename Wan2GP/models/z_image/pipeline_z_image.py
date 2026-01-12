@@ -562,24 +562,10 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             init_image_latents = (init_image_latents - self.vae.config.shift_factor) * self.vae.config.scaling_factor
             print(f"[IMG2IMG] Encoded latents shape: {init_image_latents.shape}")
 
-            # Find the timestep where sigma matches our desired strength
-            # This ensures the noise percentage matches strength while using scheduler's learned sigmas
+            # Simple linear noise mixing for exact percentages
             total_steps = len(timesteps)
-            desired_sigma = denoising_strength
 
-            # Find closest sigma to our desired strength
-            sigmas = self.scheduler.sigmas.to(device=init_image_latents.device)
-            sigma_diffs = torch.abs(sigmas - desired_sigma)
-            closest_sigma_idx = torch.argmin(sigma_diffs).item()
-            actual_sigma = sigmas[closest_sigma_idx].item()
-
-            # Get the timestep that corresponds to this sigma
-            start_timestep = self.scheduler.timesteps[closest_sigma_idx]
-
-            print(f"[IMG2IMG] Target strength={denoising_strength:.2f}, matched sigma={actual_sigma:.3f} at timestep {start_timestep:.1f}/1000")
-            print(f"[IMG2IMG] Noise distribution: {(1.0-actual_sigma)*100:.1f}% image + {actual_sigma*100:.1f}% noise")
-
-            # Generate noise using randn_tensor for consistency
+            # Generate noise
             from diffusers.utils.torch_utils import randn_tensor
             noise = randn_tensor(
                 init_image_latents.shape,
@@ -588,19 +574,28 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                 dtype=init_image_latents.dtype
             )
 
-            # Use scheduler's scale_noise with matched timestep for proper sigma distribution
-            batch_size = init_image_latents.shape[0]
-            timestep_tensor = torch.tensor([start_timestep] * batch_size, device=init_image_latents.device)
-            latents = self.scheduler.scale_noise(init_image_latents, timestep_tensor, noise)
+            # Mix latents: exact percentage based on strength
+            latent_noise_factor = denoising_strength
+            latents = init_image_latents * (1.0 - latent_noise_factor) + noise * latent_noise_factor
 
-            # Start denoising from the matched timestep
-            first_step = closest_sigma_idx
+            print(f"[IMG2IMG] Mixing latents: {(1.0-latent_noise_factor)*100:.1f}% image + {latent_noise_factor*100:.1f}% noise (strength={denoising_strength:.2f})")
+
+            # Calculate step skipping with +2 bonus steps
+            first_step = int(total_steps * (1.0 - denoising_strength)) - 2
+            first_step = max(0, first_step)  # Don't go negative
+
+            # Cap at 8 total denoising steps
+            num_inference_steps = total_steps - first_step
+            if num_inference_steps > 8:
+                first_step = total_steps - 8
+                num_inference_steps = 8
+
+            # Adjust timesteps for partial denoising
             timesteps = timesteps[first_step:]
             self.scheduler.timesteps = timesteps
-            num_inference_steps = len(timesteps)
             self._num_timesteps = len(timesteps)
 
-            print(f"[IMG2IMG] ✓ Denoising for {num_inference_steps}/{total_steps} steps (starting from step {first_step})")
+            print(f"[IMG2IMG] ✓ Denoising for {num_inference_steps} steps (skipped first {first_step}, +2 bonus steps, capped at 8)")
         elif init_image is not None and denoising_strength >= 1.0:
             print(f"[IMG2IMG] ⚠️  init_image provided but denoising_strength={denoising_strength:.2f} >= 1.0, treating as text-to-image")
         elif init_image is None:
