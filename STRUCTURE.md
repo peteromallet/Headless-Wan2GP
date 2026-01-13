@@ -144,6 +144,10 @@ DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
 │       ├── get-completed-segments/ # Edge Function: fetches completed travel_segment outputs for a run_id, bypassing RLS
 │       ├── task-counts/            # Edge Function: returns task counts and worker statistics
 │       └── update-task-status/     # Edge Function: updates task status (use claim_next_task for proper claiming)
+├── scripts/
+│   ├── gpu_diag.sh              # Prints GPU/NVML diagnostics (helpful when nvidia-smi breaks in containers)
+│   ├── run_baseline_real.sh     # Runs the real baseline tests (requires GPU)
+│   └── run_baseline_smoke.sh    # Runs the smoke-mode baseline tests
 ├── logs/               # runtime logs (git-ignored)
 ├── outputs/            # generated videos/images (git-ignored)
 ├── samples/            # example inputs for docs & tests

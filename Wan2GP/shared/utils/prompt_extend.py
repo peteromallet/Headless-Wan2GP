@@ -345,22 +345,32 @@ class QwenPromptExpander(PromptExpander):
                 min_pixels=min_pixels,
                 max_pixels=max_pixels,
                 use_fast=True)
+            # Force bfloat16 to reduce RAM usage (~14GB vs ~28GB for float32)
+            # Also use low_cpu_mem_usage to reduce peak memory during loading
+            model_dtype = torch.bfloat16 if FLASH_VER == 2 else torch.float16
+            if "AWQ" in self.model_name:
+                model_dtype = torch.float16
             self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                 self.model_name,
-                torch_dtype=torch.bfloat16 if FLASH_VER == 2 else
-                torch.float16 if "AWQ" in self.model_name else "auto",
+                torch_dtype=model_dtype,
                 attn_implementation="flash_attention_2"
                 if FLASH_VER == 2 else None,
-                device_map="cpu")
+                device_map="cpu",
+                low_cpu_mem_usage=True)
         else:
             from transformers import AutoModelForCausalLM, AutoTokenizer
+            # Force bfloat16/float16 to reduce RAM usage
+            # Also use low_cpu_mem_usage to reduce peak memory during loading
+            model_dtype = torch.bfloat16 if FLASH_VER == 2 else torch.float16
+            if "AWQ" in self.model_name:
+                model_dtype = torch.float16
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
-                torch_dtype=torch.float16
-                if "AWQ" in self.model_name else "auto",
+                torch_dtype=model_dtype,
                 attn_implementation="flash_attention_2"
                 if FLASH_VER == 2 else None,
-                device_map="cpu")
+                device_map="cpu",
+                low_cpu_mem_usage=True)
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
 
     def extend(self, prompt, system_prompt, seed=-1, *args, **kwargs):

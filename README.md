@@ -22,31 +22,38 @@ This worker is built on top of [Wan2GP](https://github.com/deepbeepmeep/Wan2GP),
    - `python -m pip install --upgrade pip wheel setuptools`
    - `python -m pip install -r Wan2GP/requirements.txt`
    - `python -m pip install -r requirements.txt`
-3. Run baseline tests (real generation):
-   - `python test_model_comparison.py --output-dir outputs/baseline_real_$(date +%Y%m%d_%H%M%S)`
+3. Run the worker: `python worker.py`
 
-## Smoke Mode (CI/Headless)
+## Runpod / container notes (NVIDIA / NVML)
 
-When no GPU is available, you can validate the integration path and end‑to‑end flow without heavy generation.
+If `nvidia-smi` goes from working to:
 
-- Usage:
-  - `HEADLESS_WAN2GP_SMOKE=1 HEADLESS_WAN2GP_FORCE_CPU=1 python test_model_comparison.py --output-dir outputs/smoke_$(date +%Y%m%d_%H%M%S)`
-- Behavior:
-  - Skips Wan2GP import and model loading
-  - Produces placeholder outputs under `Wan2GP/outputs/` and returns those paths
-  - Leaves the upstream `Wan2GP/` code untouched
+- `Failed to initialize NVML: Unknown Error`
+
+…that almost always means **the container’s NVML user-space library no longer matches the host driver** (commonly caused by installing Ubuntu `nvidia-*` / `libnvidia-*` packages inside the container).
+
+- **Do not install NVIDIA drivers inside the container**: avoid `apt-get install nvidia-*`, `cuda-*`, `libnvidia-*`.
+- **Use `--no-install-recommends`** for system packages (to avoid pulling in GPU driver libraries as “recommended” deps).
+- **If it breaks**: the most reliable fix is to **restart the pod/container**, then re-run your install but keep `dpkg -l | grep -Ei '(^ii\\s+nvidia|^ii\\s+cuda|^ii\\s+libnvidia)'` empty.
+
+Quick debugging:
+
+- Run `./scripts/gpu_diag.sh` **before** and **after** each step to find the exact command that flips NVML.
 
 ## Helper Scripts
 
-- `scripts/run_baseline_smoke.sh` – Runs the smoke-mode baseline tests
-- `scripts/run_baseline_real.sh` – Runs the real baseline tests (requires GPU)
+- `scripts/gpu_diag.sh` – Prints GPU/NVML diagnostics to help debug `nvidia-smi` issues in containers
+- `debug.py` – Debug tool for investigating tasks and worker state
 
-## CI
+## Debugging
 
-- GitHub Actions workflow `Smoke Test` runs the smoke-mode baseline on push/PR to validate end-to-end integration without GPU.
-- `GPU Baseline` (workflow_dispatch) runs the real baseline on a self-hosted GPU runner. You can optionally set `frames` and `steps` inputs to avoid OOM.
+Use `python debug.py` to investigate tasks and worker state:
+
+```bash
+python debug.py task <task_id>          # Investigate a specific task
+python debug.py tasks --status Failed   # List recent failures
+```
 
 ## Notes
 
-- If you encounter CUDA OOM during baseline, reduce `video_length` in `test_model_comparison.py` (e.g., 65 → 33) and retry.
 - The wrapper prefers upstream‑first fixes to maintain clean Wan2GP updates.
