@@ -24,6 +24,8 @@ This worker is built on top of [Wan2GP](https://github.com/deepbeepmeep/Wan2GP),
    - `python -m pip install -r requirements.txt`
 3. Run the worker: `python worker.py`
 
+> **Note:** Running `worker.py` requires API credentials from [reigh.art](https://reigh.art/) to connect to the task queue. For standalone usage without credentials, see [Standalone Usage](#standalone-usage-without-workerpy) below.
+
 ## Runpod / container notes (NVIDIA / NVML)
 
 If `nvidia-smi` goes from working to:
