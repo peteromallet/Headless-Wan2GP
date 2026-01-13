@@ -15,7 +15,7 @@ This worker is built on top of [Wan2GP](https://github.com/deepbeepmeep/Wan2GP),
 
 ---
 
-## Quick Start (GPU)
+## Running With Reigh: Quick Start (GPU)
 
 1. Create venv: `python3 -m venv venv_headless_wan2gp && source venv_headless_wan2gp/bin/activate`
 2. Install deps:
