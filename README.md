@@ -11,7 +11,7 @@ This is a headless wrapper around the Wan2GP engine that enables programmatic vi
 
 ## Powered by Wan2GP
 
-This worker is built on top of [Wan2GP](https://github.com/deepbeepmeep/Wan2GP), a powerful video generation engine. The `Wan2GP/` directory contains the upstream engine code.
+This worker is built on top of [Wan2GP](https://github.com/deepbeepmeep/Wan2GP) by [deepbeepmeep](https://github.com/deepbeepmeep), a powerful video generation engine. The `Wan2GP/` directory contains the upstream engine code with some modificiations.
 
 ---
 
@@ -22,11 +22,17 @@ This worker is built on top of [Wan2GP](https://github.com/deepbeepmeep/Wan2GP),
    - `python -m pip install --upgrade pip wheel setuptools`
    - `python -m pip install -r Wan2GP/requirements.txt`
    - `python -m pip install -r requirements.txt`
-3. Run the worker: `python worker.py`
+3. Set credentials and run the worker:
 
-> **Note:** Running `worker.py` requires API credentials from [reigh.art](https://reigh.art/) to connect to the task queue. For standalone usage without credentials, see [Standalone Usage](#standalone-usage-without-workerpy) below.
+```bash
+SUPABASE_SERVICE_ROLE_KEY="your-service-role-key-from-reigh" python worker.py \
+    --supabase-url "https://your-project.supabase.co" \
+    --worker "my-worker-001"
+```
 
-## Standalone Usage (without worker.py)
+> **Note:** Get your credentials from [reigh.art](https://reigh.art/). For standalone usage without credentials, see [Running Without Reigh](#running-without-reigh-standalone-usage) below.
+
+## Running Without Reigh: Standalone Usage
 
 You can use the generation engine directly without connecting to Reigh's database. This is useful for local testing, scripting, or building custom pipelines.
 
