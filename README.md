@@ -26,22 +26,6 @@ This worker is built on top of [Wan2GP](https://github.com/deepbeepmeep/Wan2GP),
 
 > **Note:** Running `worker.py` requires API credentials from [reigh.art](https://reigh.art/) to connect to the task queue. For standalone usage without credentials, see [Standalone Usage](#standalone-usage-without-workerpy) below.
 
-## Runpod / container notes (NVIDIA / NVML)
-
-If `nvidia-smi` goes from working to:
-
-- `Failed to initialize NVML: Unknown Error`
-
-…that almost always means **the container’s NVML user-space library no longer matches the host driver** (commonly caused by installing Ubuntu `nvidia-*` / `libnvidia-*` packages inside the container).
-
-- **Do not install NVIDIA drivers inside the container**: avoid `apt-get install nvidia-*`, `cuda-*`, `libnvidia-*`.
-- **Use `--no-install-recommends`** for system packages (to avoid pulling in GPU driver libraries as “recommended” deps).
-- **If it breaks**: the most reliable fix is to **restart the pod/container**, then re-run your install but keep `dpkg -l | grep -Ei '(^ii\\s+nvidia|^ii\\s+cuda|^ii\\s+libnvidia)'` empty.
-
-Quick debugging:
-
-- Run `./scripts/gpu_diag.sh` **before** and **after** each step to find the exact command that flips NVML.
-
 ## Standalone Usage (without worker.py)
 
 You can use the generation engine directly without connecting to Reigh's database. This is useful for local testing, scripting, or building custom pipelines.
