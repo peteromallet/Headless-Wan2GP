@@ -610,7 +610,7 @@ def process_structure_frames(
 
     Args:
         frames: List of input frames to preprocess
-        structure_type: Type of preprocessing ("flow", "canny", "depth", or "raw")
+        structure_type: Type of preprocessing ("flow", "canny", "depth", "raw", or "uni3c")
         motion_strength: Strength parameter for flow
         canny_intensity: Intensity parameter for canny
         depth_contrast: Contrast parameter for depth
@@ -940,7 +940,7 @@ def create_neutral_frame(structure_type: str, resolution: Tuple[int, int]) -> np
         created here will be properly handled as "no guidance".
     
     Args:
-        structure_type: Type of structure preprocessing ("flow", "canny", "depth", "raw")
+        structure_type: Type of structure preprocessing ("flow", "canny", "depth", "raw", "uni3c")
         resolution: (width, height) tuple
         
     Returns:
@@ -1234,7 +1234,7 @@ def create_composite_guidance_video(
             - source_start_frame: Optional start frame in source video
             - source_end_frame: Optional end frame in source video
         total_frames: Total frames in the output timeline
-        structure_type: "flow", "canny", "depth", or "raw"
+        structure_type: "flow", "canny", "depth", "raw", or "uni3c"
         target_resolution: (width, height) tuple
         target_fps: Output video FPS
         motion_strength: Flow motion strength

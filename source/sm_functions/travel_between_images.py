@@ -1119,8 +1119,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 structure_type = structure_types_found.pop() if structure_types_found else "flow"
                 
                 # Validate structure_type
-                if structure_type not in ["flow", "canny", "depth", "raw"]:
-                    raise ValueError(f"Invalid structure_type: {structure_type}. Must be 'flow', 'canny', 'depth', or 'raw'")
+                if structure_type not in ["flow", "canny", "depth", "raw", "uni3c"]:
+                    raise ValueError(f"Invalid structure_type: {structure_type}. Must be 'flow', 'canny', 'depth', 'raw', or 'uni3c'")
                 
                 # Get global strength parameters (can be overridden per-config)
                 motion_strength = orchestrator_payload.get("structure_video_motion_strength", 1.0)
@@ -1235,8 +1235,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 raise ValueError(f"Structure video not found: {structure_video_path}")
             if structure_video_treatment not in ["adjust", "clip"]:
                 raise ValueError(f"Invalid structure_video_treatment: {structure_video_treatment}")
-            if structure_type not in ["flow", "canny", "depth", "raw"]:
-                raise ValueError(f"Invalid structure_type: {structure_type}")
+            if structure_type not in ["flow", "canny", "depth", "raw", "uni3c"]:
+                raise ValueError(f"Invalid structure_type: {structure_type}. Must be 'flow', 'canny', 'depth', 'raw', or 'uni3c'")
 
             travel_logger.info(f"Structure video processing: {total_flow_frames} total frames needed", task_id=orchestrator_task_id_str)
 
