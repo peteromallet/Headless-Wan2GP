@@ -584,9 +584,15 @@ def get_structure_preprocessor(
             return depth_frames
         
         return process_depth
-    
+
+    elif structure_type == "uni3c":
+        # Uni3C uses raw video frames as guidance - no preprocessing needed
+        # The frames are passed directly to WGP's uni3c encoder
+        dprint(f"[STRUCTURE_PREPROCESS] Uni3C type: returning frames without preprocessing")
+        return lambda frames: frames
+
     else:
-        raise ValueError(f"Unsupported structure_type: {structure_type}. Must be 'flow', 'canny', or 'depth'")
+        raise ValueError(f"Unsupported structure_type: {structure_type}. Must be 'flow', 'canny', 'depth', or 'uni3c'")
 
 
 def process_structure_frames(
