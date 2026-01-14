@@ -129,11 +129,19 @@ class TravelSegmentProcessor:
             else:
                  is_first_segment_from_scratch = is_first_segment and not ctx.full_orchestrator_payload.get("continue_from_video_resolved_path")
             
-            # Calculate end anchor image index - use consolidated end anchor if available
+            # Calculate end anchor image index
+            # Priority: consolidated_end_anchor > individual_segment detection > segment_idx + 1
             consolidated_end_anchor = ctx.segment_params.get("consolidated_end_anchor_idx")
+            individual_params = ctx.segment_params.get("individual_segment_params", {})
+            individual_images = individual_params.get("input_image_paths_resolved", [])
+
             if consolidated_end_anchor is not None:
                 end_anchor_img_path_str_idx = consolidated_end_anchor
                 ctx.dprint(f"[CONSOLIDATED_SEGMENT] Using consolidated end anchor index {consolidated_end_anchor} for segment {ctx.segment_idx}")
+            elif individual_images:
+                # Individual segment mode: images are [start, end], so end anchor is always index 1
+                end_anchor_img_path_str_idx = 1
+                ctx.dprint(f"[INDIVIDUAL_SEGMENT] Using end anchor index 1 for individual segment {ctx.segment_idx} (has {len(individual_images)} images)")
             else:
                 end_anchor_img_path_str_idx = ctx.segment_idx + 1
             
@@ -584,13 +592,22 @@ class TravelSegmentProcessor:
     def _prepare_input_images_for_guide(self) -> List[str]:
         """Prepare input images for guide video creation."""
         ctx = self.ctx
-        
-        # Start with original input images
-        input_images_resolved_original = ctx.full_orchestrator_payload["input_image_paths_resolved"]
-        input_images_resolved_for_guide = input_images_resolved_original.copy()
-        
-        ctx.dprint(f"[GUIDE_INPUT_DEBUG] Seg {ctx.segment_idx}: Using {len(input_images_resolved_for_guide)} input images for guide creation")
-        
+
+        # For individual segment tasks, prefer the segment-specific image list
+        # This contains just [start_image, end_image] for the specific segment
+        individual_params = ctx.segment_params.get("individual_segment_params", {})
+        individual_images = individual_params.get("input_image_paths_resolved", [])
+
+        if individual_images:
+            # Individual segment mode - use the 2-image list
+            input_images_resolved_for_guide = individual_images.copy()
+            ctx.dprint(f"[GUIDE_INPUT_DEBUG] Seg {ctx.segment_idx}: Using {len(input_images_resolved_for_guide)} images from individual_segment_params")
+        else:
+            # Full orchestrator mode - use all images
+            input_images_resolved_original = ctx.full_orchestrator_payload["input_image_paths_resolved"]
+            input_images_resolved_for_guide = input_images_resolved_original.copy()
+            ctx.dprint(f"[GUIDE_INPUT_DEBUG] Seg {ctx.segment_idx}: Using {len(input_images_resolved_for_guide)} images from orchestrator payload")
+
         return input_images_resolved_for_guide
     
     def _detect_single_image_journey(self) -> bool:
