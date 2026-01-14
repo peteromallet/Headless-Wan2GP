@@ -585,14 +585,14 @@ def get_structure_preprocessor(
         
         return process_depth
 
-    elif structure_type == "uni3c":
-        # Uni3C uses raw video frames as guidance - no preprocessing needed
+    elif structure_type == "raw":
+        # Raw type (uni3c) uses raw video frames as guidance - no preprocessing needed
         # The frames are passed directly to WGP's uni3c encoder
-        dprint(f"[STRUCTURE_PREPROCESS] Uni3C type: returning frames without preprocessing")
+        dprint(f"[STRUCTURE_PREPROCESS] Raw type: returning frames without preprocessing")
         return lambda frames: frames
 
     else:
-        raise ValueError(f"Unsupported structure_type: {structure_type}. Must be 'flow', 'canny', 'depth', or 'uni3c'")
+        raise ValueError(f"Unsupported structure_type: {structure_type}. Must be 'flow', 'canny', 'depth', or 'raw'")
 
 
 def process_structure_frames(
@@ -610,7 +610,7 @@ def process_structure_frames(
 
     Args:
         frames: List of input frames to preprocess
-        structure_type: Type of preprocessing ("flow", "canny", "depth", "raw", or "uni3c")
+        structure_type: Type of preprocessing ("flow", "canny", "depth", or "raw")
         motion_strength: Strength parameter for flow
         canny_intensity: Intensity parameter for canny
         depth_contrast: Contrast parameter for depth
@@ -940,7 +940,7 @@ def create_neutral_frame(structure_type: str, resolution: Tuple[int, int]) -> np
         created here will be properly handled as "no guidance".
     
     Args:
-        structure_type: Type of structure preprocessing ("flow", "canny", "depth", "raw", "uni3c")
+        structure_type: Type of structure preprocessing ("flow", "canny", "depth", or "raw")
         resolution: (width, height) tuple
         
     Returns:
@@ -1234,7 +1234,7 @@ def create_composite_guidance_video(
             - source_start_frame: Optional start frame in source video
             - source_end_frame: Optional end frame in source video
         total_frames: Total frames in the output timeline
-        structure_type: "flow", "canny", "depth", "raw", or "uni3c"
+        structure_type: "flow", "canny", "depth", or "raw" (note: "uni3c" is normalized to "raw")
         target_resolution: (width, height) tuple
         target_fps: Output video FPS
         motion_strength: Flow motion strength
@@ -1534,14 +1534,17 @@ def extract_segment_structure_guidance(
     dprint(f"[SEGMENT_GUIDANCE] Segment covers stitched frames [{seg_start}, {seg_end})")
     
     # Extract structure_type from configs (all must be same type)
+    # Normalize "uni3c" to "raw" - they're the same (raw frames to uni3c encoder)
     structure_types = set()
     for cfg in structure_videos:
         cfg_type = cfg.get("structure_type", cfg.get("type", "flow"))
+        if cfg_type == "uni3c":
+            cfg_type = "raw"
         structure_types.add(cfg_type)
-    
+
     if len(structure_types) > 1:
         raise ValueError(f"All structure_videos must have same type, found: {structure_types}")
-    
+
     structure_type = structure_types.pop() if structure_types else "flow"
     
     # Find configs that overlap with this segment's frame range
