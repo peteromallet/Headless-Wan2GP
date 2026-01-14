@@ -173,9 +173,6 @@ class TravelSegmentProcessor:
                 # All configs must have same type - extract from first config
                 structure_type_from_config = structure_videos[0].get("structure_type", structure_videos[0].get("type"))
                 if structure_type_from_config:
-                    # Normalize "uni3c" to "raw" - they're the same (raw frames to uni3c encoder)
-                    if structure_type_from_config == "uni3c":
-                        structure_type_from_config = "raw"
                     ctx.dprint(f"[STRUCTURE_VIDEO] Segment {ctx.segment_idx}: Using structure_type '{structure_type_from_config}' from structure_videos config (overriding top-level '{structure_type}')")
                     structure_type = structure_type_from_config
 
