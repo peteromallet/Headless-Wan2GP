@@ -265,6 +265,8 @@ class TravelSegmentProcessor:
                 structure_depth_contrast=structure_depth_contrast,
                 structure_guidance_video_url=structure_guidance_video_url,
                 structure_guidance_frame_offset=structure_guidance_frame_offset,
+                # For uni3c mode, black out end frame so i2v handles it alone (no conflicting guidance)
+                exclude_end_for_controlnet=(structure_type == "uni3c"),
                 dprint=ctx.dprint
             )
             
@@ -434,11 +436,20 @@ class TravelSegmentProcessor:
         if self.is_vace_model:
             ctx.dprint(f"[VPT_DEBUG] Seg {ctx.segment_idx}: ENTERING VACE MODEL PATH")
             vpt_components = []
-            
-            # Add video component (VACE always gets 'V' for video guide)
-            vpt_components.append("V")
-            ctx.dprint(f"[VPT_DEBUG] Seg {ctx.segment_idx}: Added video 'V', vpt_components = {vpt_components}")
-            ctx.dprint(f"[VACEActivated] Seg {ctx.segment_idx}: Using VACE with raw video guide (no preprocessing)")
+
+            # Check if uni3c is handling motion guidance - if so, skip VACE video guide
+            is_uni3c_mode = self._detected_structure_type == "uni3c"
+            ctx.dprint(f"[VPT_DEBUG] Seg {ctx.segment_idx}: structure_type={self._detected_structure_type}, is_uni3c_mode={is_uni3c_mode}")
+
+            if is_uni3c_mode:
+                # Uni3C provides motion guidance - don't double-feed with VACE video guide
+                ctx.dprint(f"[VPT_DEBUG] Seg {ctx.segment_idx}: SKIPPING 'V' - uni3c handles motion guidance")
+                ctx.dprint(f"[UNI3C_VPT] Seg {ctx.segment_idx}: Uni3C mode - video_guide will NOT be used by VACE")
+            else:
+                # Non-uni3c: use VACE video guide as normal
+                vpt_components.append("V")
+                ctx.dprint(f"[VPT_DEBUG] Seg {ctx.segment_idx}: Added video 'V', vpt_components = {vpt_components}")
+                ctx.dprint(f"[VACEActivated] Seg {ctx.segment_idx}: Using VACE with raw video guide (no preprocessing)")
             
             # Add mask component if mask video exists
             if mask_video_path:
