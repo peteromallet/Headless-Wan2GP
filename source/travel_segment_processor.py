@@ -22,7 +22,6 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Any, Tuple, Callable
 import traceback
-import uuid
 from datetime import datetime
 
 # Import shared utilities
@@ -171,7 +170,6 @@ class TravelSegmentProcessor:
                 frame_overlap_expanded = ctx.full_orchestrator_payload.get("frame_overlap_expanded", [0])
                 
                 # Generate path for segment's guidance video
-                import uuid
                 segment_guidance_filename = f"segment_guidance_{ctx.segment_idx}_{uuid.uuid4().hex[:6]}.mp4"
                 segment_guidance_path = ctx.segment_processing_dir / segment_guidance_filename
                 
