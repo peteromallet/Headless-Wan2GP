@@ -913,6 +913,711 @@ def create_structure_guidance_video(
         raise
 
 
+# =============================================================================
+# Multi-Structure Video Compositing
+# =============================================================================
+
+def create_neutral_frame(structure_type: str, resolution: Tuple[int, int]) -> np.ndarray:
+    """
+    Create a neutral frame for gaps in structure video coverage.
+    
+    These frames don't bias the generation - they represent "no guidance signal".
+    
+    IMPORTANT for Uni3C (structure_type="raw"):
+        Black pixel frames are detected by _encode_uni3c_guide() in any2video.py
+        and converted to zeros in latent space. This is critical because:
+        - VAE-encoded black pixels ≠ zero latents
+        - Zero latents = true "no control" 
+        - VAE-encoded black = "control toward black output"
+        
+        The detection happens automatically during VAE encoding, so black frames
+        created here will be properly handled as "no guidance".
+    
+    Args:
+        structure_type: Type of structure preprocessing ("flow", "canny", "depth", "raw")
+        resolution: (width, height) tuple
+        
+    Returns:
+        numpy array [H, W, C] uint8 RGB
+    """
+    w, h = resolution
+    
+    if structure_type == "flow":
+        # Gray = center of HSV color wheel = no motion
+        return np.full((h, w, 3), 128, dtype=np.uint8)
+    elif structure_type == "canny":
+        # Black = no edges detected
+        return np.zeros((h, w, 3), dtype=np.uint8)
+    elif structure_type == "depth":
+        # Mid-gray = neutral depth (not close, not far)
+        return np.full((h, w, 3), 128, dtype=np.uint8)
+    elif structure_type == "raw":
+        # Black = no structure signal for Uni3C
+        # NOTE: These black frames will be detected during VAE encoding and
+        # their latents will be zeroed for true "no control" behavior.
+        return np.zeros((h, w, 3), dtype=np.uint8)
+    else:
+        # Default to black
+        return np.zeros((h, w, 3), dtype=np.uint8)
+
+
+def load_structure_video_frames_with_range(
+    structure_video_path: str,
+    target_frame_count: int,
+    target_fps: int,
+    target_resolution: Tuple[int, int],
+    treatment: str = "adjust",
+    crop_to_fit: bool = True,
+    source_start_frame: int = 0,
+    source_end_frame: Optional[int] = None,
+    dprint: Callable = print
+) -> List[np.ndarray]:
+    """
+    Load structure video frames with optional source range extraction.
+    
+    Extended version of load_structure_video_frames that supports extracting
+    a specific range from the source video before applying treatment.
+    
+    Args:
+        structure_video_path: Path to structure video
+        target_frame_count: Number of output frames needed
+        target_fps: Target FPS (used for clip mode)
+        target_resolution: (width, height) tuple
+        treatment: "adjust" (stretch/compress) or "clip" (temporal sample)
+        crop_to_fit: Center-crop to match target aspect ratio
+        source_start_frame: First frame to extract from source (default: 0)
+        source_end_frame: Last frame (exclusive) to extract (default: None = end of video)
+        dprint: Debug print function
+        
+    Returns:
+        List of numpy uint8 arrays [H, W, C] in RGB format
+    """
+    import cv2
+    from PIL import Image
+    
+    # Try decord first (faster), fall back to cv2
+    use_decord = False
+    try:
+        import decord
+        decord.bridge.set_bridge('torch')
+        use_decord = True
+    except ImportError:
+        dprint("[STRUCTURE_VIDEO_RANGE] decord not available, using cv2 fallback")
+    
+    if use_decord:
+        reader = decord.VideoReader(structure_video_path)
+        video_fps = round(reader.get_avg_fps())
+        total_video_frames = len(reader)
+    else:
+        cap = cv2.VideoCapture(structure_video_path)
+        video_fps = round(cap.get(cv2.CAP_PROP_FPS))
+        total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    # Resolve source range
+    actual_start = source_start_frame
+    actual_end = source_end_frame if source_end_frame is not None else total_video_frames
+    
+    # Clamp to valid range
+    actual_start = max(0, min(actual_start, total_video_frames - 1))
+    actual_end = max(actual_start + 1, min(actual_end, total_video_frames))
+    
+    effective_source_frames = actual_end - actual_start
+    
+    dprint(f"[STRUCTURE_VIDEO_RANGE] Loading from source video:")
+    dprint(f"  Total source frames: {total_video_frames} @ {video_fps}fps")
+    dprint(f"  Source range: [{actual_start}, {actual_end}) = {effective_source_frames} frames")
+    dprint(f"  Target frames needed: {target_frame_count}")
+    dprint(f"  Treatment: {treatment}")
+    
+    # Load N+1 frames for flow processing (RAFT needs N frames to produce N-1 flows)
+    frames_to_load = target_frame_count + 1
+    
+    # Calculate frame indices based on treatment mode
+    if treatment == "adjust":
+        # ADJUST: Stretch/compress source range to match needed count
+        if effective_source_frames >= frames_to_load:
+            # Compress: sample evenly
+            frame_indices = [
+                actual_start + int(i * (effective_source_frames - 1) / (frames_to_load - 1))
+                for i in range(frames_to_load)
+            ]
+            dprint(f"  Adjust: Compressing {effective_source_frames} → {frames_to_load} frames")
+        else:
+            # Stretch: repeat frames
+            frame_indices = [
+                actual_start + int(i * (effective_source_frames - 1) / (frames_to_load - 1))
+                for i in range(frames_to_load)
+            ]
+            dprint(f"  Adjust: Stretching {effective_source_frames} → {frames_to_load} frames")
+    else:
+        # CLIP: Temporal sampling from the source range
+        # Calculate indices relative to source range
+        frame_indices = _resample_frame_indices(
+            video_fps=video_fps,
+            video_frames_count=effective_source_frames,
+            max_target_frames_count=frames_to_load,
+            target_fps=target_fps,
+            start_target_frame=0
+        )
+        # Offset to actual source positions
+        frame_indices = [actual_start + idx for idx in frame_indices]
+        
+        # Handle if source range is too short
+        if len(frame_indices) < frames_to_load:
+            dprint(f"  Clip: Source range too short, looping to fill {frames_to_load} frames")
+            while len(frame_indices) < frames_to_load:
+                remaining = frames_to_load - len(frame_indices)
+                frame_indices.extend(frame_indices[:remaining])
+        
+        dprint(f"  Clip: Extracted {len(frame_indices)} frame indices")
+    
+    if not frame_indices:
+        raise ValueError(f"No frames could be extracted from range [{actual_start}, {actual_end})")
+    
+    # Extract frames
+    if use_decord:
+        frames = reader.get_batch(frame_indices)
+        raw_frames = []
+        for frame in frames:
+            if hasattr(frame, 'cpu'):
+                frame_np = frame.cpu().numpy()
+            else:
+                frame_np = np.array(frame)
+            raw_frames.append(frame_np)
+    else:
+        # cv2 fallback - read frames sequentially
+        raw_frames = []
+        for idx in frame_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame_bgr = cap.read()
+            if ret:
+                # Convert BGR to RGB
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                raw_frames.append(frame_rgb)
+            else:
+                # Fallback: use last frame or black
+                if raw_frames:
+                    raw_frames.append(raw_frames[-1].copy())
+                else:
+                    h_src = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    w_src = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    raw_frames.append(np.zeros((h_src, w_src, 3), dtype=np.uint8))
+        cap.release()
+    
+    # Process frames to target resolution
+    w, h = target_resolution
+    target_aspect = w / h
+    processed_frames = []
+    
+    for i, frame_np in enumerate(raw_frames):
+        if frame_np.dtype != np.uint8:
+            frame_np = np.clip(frame_np, 0, 255).astype(np.uint8)
+        
+        frame_pil = Image.fromarray(frame_np)
+        
+        # Center crop if needed
+        if crop_to_fit:
+            src_w, src_h = frame_pil.size
+            src_aspect = src_w / src_h
+            
+            if abs(src_aspect - target_aspect) > 0.01:
+                if src_aspect > target_aspect:
+                    new_w = int(src_h * target_aspect)
+                    left = (src_w - new_w) // 2
+                    frame_pil = frame_pil.crop((left, 0, left + new_w, src_h))
+                else:
+                    new_h = int(src_w / target_aspect)
+                    top = (src_h - new_h) // 2
+                    frame_pil = frame_pil.crop((0, top, src_w, top + new_h))
+        
+        frame_resized = frame_pil.resize((w, h), resample=Image.Resampling.LANCZOS)
+        processed_frames.append(np.array(frame_resized))
+    
+    dprint(f"[STRUCTURE_VIDEO_RANGE] Loaded {len(processed_frames)} frames at {w}x{h}")
+    
+    return processed_frames
+
+
+def validate_structure_video_configs(
+    configs: List[dict],
+    total_frames: int,
+    dprint: Callable = print
+) -> List[dict]:
+    """
+    Validate and normalize structure video configurations.
+    
+    Args:
+        configs: List of structure video config dicts
+        total_frames: Total frames in the output timeline
+        dprint: Debug print function
+        
+    Returns:
+        Sorted and validated configs
+        
+    Raises:
+        ValueError: If configs are invalid or overlap
+    """
+    if not configs:
+        return []
+    
+    # Sort by start_frame
+    sorted_configs = sorted(configs, key=lambda c: c.get("start_frame", 0))
+    
+    prev_end = -1
+    for i, config in enumerate(sorted_configs):
+        # Check required fields
+        if "path" not in config:
+            raise ValueError(f"Structure video config {i} missing 'path'")
+        if "start_frame" not in config:
+            raise ValueError(f"Structure video config {i} missing 'start_frame'")
+        if "end_frame" not in config:
+            raise ValueError(f"Structure video config {i} missing 'end_frame'")
+        
+        start = config["start_frame"]
+        end = config["end_frame"]
+        
+        # Validate range
+        if start < 0:
+            raise ValueError(f"Config {i}: start_frame {start} < 0")
+        if end > total_frames:
+            raise ValueError(f"Config {i}: end_frame {end} > total_frames {total_frames}")
+        if start >= end:
+            raise ValueError(f"Config {i}: start_frame {start} >= end_frame {end}")
+        
+        # Check for overlap
+        if start < prev_end:
+            raise ValueError(f"Config {i}: frame range [{start}, {end}) overlaps with previous config ending at {prev_end}")
+        
+        prev_end = end
+    
+    dprint(f"[COMPOSITE] Validated {len(sorted_configs)} structure video configs")
+    for i, cfg in enumerate(sorted_configs):
+        dprint(f"  Config {i}: frames [{cfg['start_frame']}, {cfg['end_frame']}) from {Path(cfg['path']).name}")
+    
+    return sorted_configs
+
+
+def create_composite_guidance_video(
+    structure_configs: List[dict],
+    total_frames: int,
+    structure_type: str,
+    target_resolution: Tuple[int, int],
+    target_fps: int,
+    output_path: Path,
+    motion_strength: float = 1.0,
+    canny_intensity: float = 1.0,
+    depth_contrast: float = 1.0,
+    download_dir: Optional[Path] = None,
+    dprint: Callable = print
+) -> Path:
+    """
+    Create a single composite guidance video from multiple structure video sources.
+    
+    This function:
+    1. Creates a timeline filled with neutral frames
+    2. For each config, loads and processes source frames
+    3. Places processed frames at the correct timeline positions
+    4. Encodes everything as a single video
+    
+    Args:
+        structure_configs: List of config dicts, each with:
+            - path: Source video path/URL
+            - start_frame: Start position in output timeline
+            - end_frame: End position (exclusive) in output timeline
+            - treatment: Optional "adjust" or "clip" (default: "adjust")
+            - source_start_frame: Optional start frame in source video
+            - source_end_frame: Optional end frame in source video
+        total_frames: Total frames in the output timeline
+        structure_type: "flow", "canny", "depth", or "raw"
+        target_resolution: (width, height) tuple
+        target_fps: Output video FPS
+        motion_strength: Flow motion strength
+        canny_intensity: Canny edge intensity
+        depth_contrast: Depth map contrast
+        download_dir: Directory for downloading source videos
+        dprint: Debug print function
+        
+    Returns:
+        Path to the created composite guidance video
+    """
+    dprint(f"[COMPOSITE] Creating composite guidance video...")
+    dprint(f"  Total frames: {total_frames}")
+    dprint(f"  Structure type: {structure_type}")
+    dprint(f"  Resolution: {target_resolution[0]}x{target_resolution[1]}")
+    dprint(f"  Configs: {len(structure_configs)}")
+    
+    # Validate configs
+    sorted_configs = validate_structure_video_configs(structure_configs, total_frames, dprint)
+    
+    if not sorted_configs:
+        raise ValueError("No valid structure video configs provided")
+    
+    # Initialize timeline with neutral frames
+    dprint(f"[COMPOSITE] Initializing {total_frames} neutral frames...")
+    neutral_frame = create_neutral_frame(structure_type, target_resolution)
+    composite_frames = [neutral_frame.copy() for _ in range(total_frames)]
+    
+    # Track which frame ranges are filled
+    filled_ranges = []
+    
+    # Process each config
+    for config_idx, config in enumerate(sorted_configs):
+        source_path = config["path"]
+        start_frame = config["start_frame"]
+        end_frame = config["end_frame"]
+        frames_needed = end_frame - start_frame
+        treatment = config.get("treatment", "adjust")
+        
+        dprint(f"[COMPOSITE] Processing config {config_idx}: {Path(source_path).name}")
+        dprint(f"  Timeline range: [{start_frame}, {end_frame}) = {frames_needed} frames")
+        
+        # Download if URL
+        if source_path.startswith(("http://", "https://")):
+            if download_dir is None:
+                download_dir = Path("./temp_structure_downloads")
+            download_dir.mkdir(parents=True, exist_ok=True)
+            
+            import requests
+            local_filename = f"structure_src_{config_idx}_{Path(source_path).name}"
+            local_path = download_dir / local_filename
+            
+            if not local_path.exists():
+                dprint(f"  Downloading: {source_path}")
+                response = requests.get(source_path, timeout=120)
+                response.raise_for_status()
+                with open(local_path, 'wb') as f:
+                    f.write(response.content)
+                dprint(f"  Downloaded: {local_path.name} ({len(response.content) / 1024 / 1024:.2f} MB)")
+            else:
+                dprint(f"  Using cached: {local_path.name}")
+            
+            source_path = str(local_path)
+        
+        # Load source frames with optional range extraction
+        source_frames = load_structure_video_frames_with_range(
+            structure_video_path=source_path,
+            target_frame_count=frames_needed,
+            target_fps=target_fps,
+            target_resolution=target_resolution,
+            treatment=treatment,
+            crop_to_fit=True,
+            source_start_frame=config.get("source_start_frame", 0),
+            source_end_frame=config.get("source_end_frame"),
+            dprint=dprint
+        )
+        
+        # Process frames with chosen preprocessor
+        dprint(f"  Processing with '{structure_type}' preprocessor...")
+        processed_frames = process_structure_frames(
+            source_frames,
+            structure_type,
+            motion_strength,
+            canny_intensity,
+            depth_contrast,
+            dprint
+        )
+        
+        # Ensure we have exactly the frames needed
+        if len(processed_frames) > frames_needed:
+            processed_frames = processed_frames[:frames_needed]
+            dprint(f"  Trimmed to {frames_needed} frames")
+        elif len(processed_frames) < frames_needed:
+            # Pad with last frame if short
+            while len(processed_frames) < frames_needed:
+                processed_frames.append(processed_frames[-1].copy())
+            dprint(f"  Padded to {frames_needed} frames")
+        
+        # Place processed frames into composite
+        for i, frame in enumerate(processed_frames):
+            frame_idx = start_frame + i
+            if 0 <= frame_idx < total_frames:
+                composite_frames[frame_idx] = frame
+        
+        filled_ranges.append((start_frame, end_frame))
+        dprint(f"  Placed {len(processed_frames)} frames at positions {start_frame}-{end_frame-1}")
+    
+    # Log coverage summary
+    total_filled = sum(end - start for start, end in filled_ranges)
+    total_neutral = total_frames - total_filled
+    dprint(f"[COMPOSITE] Coverage summary:")
+    dprint(f"  Filled frames: {total_filled} ({100*total_filled/total_frames:.1f}%)")
+    dprint(f"  Neutral frames: {total_neutral} ({100*total_neutral/total_frames:.1f}%)")
+    
+    # Encode as video
+    dprint(f"[COMPOSITE] Encoding composite video to {output_path}...")
+    
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Try WGP's save_video first, fall back to cv2
+    try:
+        wan_dir = Path(__file__).parent.parent / "Wan2GP"
+        if str(wan_dir) not in sys.path:
+            sys.path.insert(0, str(wan_dir))
+        
+        from shared.utils.audio_video import save_video
+        
+        video_tensor = np.stack(composite_frames, axis=0)  # [T, H, W, C]
+        
+        save_video(
+            video_tensor,
+            save_file=str(output_path),
+            fps=target_fps,
+            codec_type='libx264_8',
+            normalize=False,
+            value_range=(0, 255)
+        )
+    except ImportError:
+        # cv2 fallback for encoding
+        import cv2
+        dprint("[COMPOSITE] Using cv2 fallback for video encoding")
+        
+        w, h = target_resolution
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        writer = cv2.VideoWriter(str(output_path), fourcc, target_fps, (w, h))
+        
+        for frame_rgb in composite_frames:
+            # Convert RGB to BGR for cv2
+            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+            writer.write(frame_bgr)
+        
+        writer.release()
+    
+    if not output_path.exists():
+        raise ValueError(f"Failed to create composite video at {output_path}")
+    
+    file_size_mb = output_path.stat().st_size / (1024 * 1024)
+    dprint(f"[COMPOSITE] Created composite video: {output_path.name} ({file_size_mb:.2f} MB)")
+    
+    # Clean up GPU memory
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    return output_path
+
+
+def segment_has_structure_overlap(
+    segment_index: int,
+    segment_frames_expanded: List[int],
+    frame_overlap_expanded: List[int],
+    structure_videos: List[dict]
+) -> bool:
+    """
+    Check if a segment overlaps with any structure video config.
+    
+    Useful for orchestrators to skip structure guidance for segments with no overlap,
+    avoiding unnecessary neutral guidance video creation.
+    
+    Args:
+        segment_index: Index of the segment (0-based)
+        segment_frames_expanded: List of frame counts per segment
+        frame_overlap_expanded: List of overlap values between segments
+        structure_videos: List of structure video configs
+        
+    Returns:
+        True if segment overlaps with at least one config, False otherwise
+    """
+    if not structure_videos:
+        return False
+    
+    seg_start, seg_frames = calculate_segment_stitched_position(
+        segment_index, segment_frames_expanded, frame_overlap_expanded, lambda x: None
+    )
+    seg_end = seg_start + seg_frames
+    
+    for cfg in structure_videos:
+        cfg_start = cfg.get("start_frame", 0)
+        cfg_end = cfg.get("end_frame", 0)
+        
+        # Check overlap
+        if cfg_start < seg_end and cfg_end > seg_start:
+            return True
+    
+    return False
+
+
+def calculate_segment_stitched_position(
+    segment_index: int,
+    segment_frames_expanded: List[int],
+    frame_overlap_expanded: List[int],
+    dprint: Callable = print
+) -> Tuple[int, int]:
+    """
+    Calculate a segment's start position and frame count in the stitched timeline.
+    
+    Args:
+        segment_index: Index of the segment (0-based)
+        segment_frames_expanded: List of frame counts per segment
+        frame_overlap_expanded: List of overlap values between segments
+        dprint: Debug print function
+        
+    Returns:
+        Tuple of (stitched_start, frame_count) for this segment
+    """
+    stitched_start = 0
+    for idx in range(segment_index):
+        segment_frames = segment_frames_expanded[idx]
+        if idx == 0:
+            stitched_start = segment_frames
+        else:
+            overlap = frame_overlap_expanded[idx - 1] if idx > 0 and idx - 1 < len(frame_overlap_expanded) else 0
+            stitched_start += segment_frames - overlap
+    
+    # Adjust for the first segment's contribution
+    if segment_index > 0:
+        overlap = frame_overlap_expanded[segment_index - 1] if segment_index - 1 < len(frame_overlap_expanded) else 0
+        stitched_start -= overlap
+    else:
+        stitched_start = 0
+    
+    frame_count = segment_frames_expanded[segment_index] if segment_index < len(segment_frames_expanded) else 81
+    
+    dprint(f"[SEGMENT_POS] Segment {segment_index}: stitched_start={stitched_start}, frame_count={frame_count}")
+    return stitched_start, frame_count
+
+
+def extract_segment_structure_guidance(
+    structure_videos: List[dict],
+    segment_index: int,
+    segment_frames_expanded: List[int],
+    frame_overlap_expanded: List[int],
+    target_resolution: Tuple[int, int],
+    target_fps: int,
+    output_path: Path,
+    motion_strength: float = 1.0,
+    canny_intensity: float = 1.0,
+    depth_contrast: float = 1.0,
+    download_dir: Optional[Path] = None,
+    dprint: Callable = print
+) -> Optional[Path]:
+    """
+    Extract structure guidance for a single segment from the full structure_videos config.
+    
+    This is the segment-level function that allows standalone segments to compute
+    their own portion of structure guidance without needing the orchestrator to
+    pre-compute a full composite video.
+    
+    Args:
+        structure_videos: Full array of structure video configs (same format as orchestrator)
+        segment_index: Index of this segment (0-based)
+        segment_frames_expanded: List of frame counts per segment
+        frame_overlap_expanded: List of overlap values between segments
+        target_resolution: (width, height) tuple
+        target_fps: Target FPS
+        output_path: Where to save the segment's guidance video
+        motion_strength: Flow motion strength
+        canny_intensity: Canny edge intensity
+        depth_contrast: Depth map contrast
+        download_dir: Directory for downloading source videos
+        dprint: Debug print function
+        
+    Returns:
+        Path to the created segment guidance video, or None if no configs apply
+    """
+    dprint(f"[SEGMENT_GUIDANCE] Extracting guidance for segment {segment_index}")
+    
+    if not structure_videos:
+        dprint(f"[SEGMENT_GUIDANCE] No structure_videos provided, skipping")
+        return None
+    
+    # Calculate this segment's position in the stitched timeline
+    seg_start, seg_frames = calculate_segment_stitched_position(
+        segment_index, segment_frames_expanded, frame_overlap_expanded, dprint
+    )
+    seg_end = seg_start + seg_frames
+    
+    dprint(f"[SEGMENT_GUIDANCE] Segment covers stitched frames [{seg_start}, {seg_end})")
+    
+    # Extract structure_type from configs (all must be same type)
+    structure_types = set()
+    for cfg in structure_videos:
+        cfg_type = cfg.get("structure_type", cfg.get("type", "flow"))
+        structure_types.add(cfg_type)
+    
+    if len(structure_types) > 1:
+        raise ValueError(f"All structure_videos must have same type, found: {structure_types}")
+    
+    structure_type = structure_types.pop() if structure_types else "flow"
+    
+    # Find configs that overlap with this segment's frame range
+    relevant_configs = []
+    for cfg in structure_videos:
+        cfg_start = cfg["start_frame"]
+        cfg_end = cfg["end_frame"]
+        
+        # Check if this config overlaps with the segment's range
+        if cfg_start < seg_end and cfg_end > seg_start:
+            # Calculate overlap region in stitched timeline
+            overlap_start = max(cfg_start, seg_start)
+            overlap_end = min(cfg_end, seg_end)
+            overlap_frames = overlap_end - overlap_start
+            
+            # Transform to segment-local coordinates
+            local_start = overlap_start - seg_start
+            local_end = overlap_end - seg_start
+            
+            # Calculate which portion of SOURCE video to use
+            # The original config maps source range to stitched range [cfg_start, cfg_end)
+            # We need the portion that corresponds to [overlap_start, overlap_end)
+            cfg_duration = cfg_end - cfg_start
+            src_start_orig = cfg.get("source_start_frame", 0)
+            src_end_orig = cfg.get("source_end_frame")
+            
+            # If source_end not specified, we'll let the loader handle it
+            # For proportional mapping, we need source video length
+            if src_end_orig is not None:
+                src_duration = src_end_orig - src_start_orig
+                # Proportional mapping into source video
+                overlap_start_in_cfg = overlap_start - cfg_start
+                overlap_end_in_cfg = overlap_end - cfg_start
+                
+                new_src_start = src_start_orig + (overlap_start_in_cfg / cfg_duration) * src_duration
+                new_src_end = src_start_orig + (overlap_end_in_cfg / cfg_duration) * src_duration
+            else:
+                # Can't do proportional without knowing source length
+                # Let the loader handle the full source range
+                new_src_start = src_start_orig
+                new_src_end = src_end_orig
+            
+            transformed_cfg = {
+                "path": cfg["path"],
+                "start_frame": local_start,
+                "end_frame": local_end,
+                "treatment": cfg.get("treatment", "adjust"),
+                "source_start_frame": int(new_src_start) if new_src_start is not None else 0,
+                "source_end_frame": int(new_src_end) if new_src_end is not None else None,
+                "structure_type": structure_type,
+                "motion_strength": cfg.get("motion_strength", motion_strength),
+            }
+            
+            dprint(f"[SEGMENT_GUIDANCE] Config overlaps: stitched [{cfg_start},{cfg_end}) -> local [{local_start},{local_end})")
+            dprint(f"  Source frames: [{new_src_start}, {new_src_end})")
+            relevant_configs.append(transformed_cfg)
+    
+    if not relevant_configs:
+        # No overlap = no structure guidance needed for this segment
+        # Return None so the segment proceeds without structure guidance entirely
+        # This is cleaner than creating an all-neutral video that gets zeroed anyway
+        dprint(f"[SEGMENT_GUIDANCE] No configs overlap with segment {segment_index}, skipping structure guidance")
+        return None
+    
+    dprint(f"[SEGMENT_GUIDANCE] Found {len(relevant_configs)} overlapping configs")
+    
+    # Create mini-composite using the transformed configs
+    return create_composite_guidance_video(
+        structure_configs=relevant_configs,
+        total_frames=seg_frames,
+        structure_type=structure_type,
+        target_resolution=target_resolution,
+        target_fps=target_fps,
+        output_path=output_path,
+        motion_strength=motion_strength,
+        canny_intensity=canny_intensity,
+        depth_contrast=depth_contrast,
+        download_dir=download_dir,
+        dprint=dprint
+    )
+
+
 def download_and_extract_motion_frames(
     structure_motion_video_url: str,
     frame_start: int,
@@ -939,8 +1644,8 @@ def download_and_extract_motion_frames(
     Raises:
         ValueError: If video cannot be downloaded or frames extracted
     """
-    import requests
     from urllib.parse import urlparse
+    import requests
     
     dprint(f"[STRUCTURE_MOTION] Extracting frames from pre-warped video")
     dprint(f"  URL/Path: {structure_motion_video_url}")
@@ -967,53 +1672,83 @@ def download_and_extract_motion_frames(
             file_size_mb = len(response.content) / (1024 * 1024)
             dprint(f"[STRUCTURE_MOTION] Downloaded {file_size_mb:.2f} MB to {local_video_path.name}")
         else:
-            # Use local path
-            local_video_path = Path(structure_motion_video_url)
+            # Use local path (support plain paths and file:// URLs)
+            if parsed.scheme == "file":
+                local_video_path = Path(parsed.path)
+            else:
+                local_video_path = Path(structure_motion_video_url)
             if not local_video_path.exists():
                 raise ValueError(f"Structure motion video not found: {local_video_path}")
             dprint(f"[STRUCTURE_MOTION] Using local video: {local_video_path}")
         
-        # Extract frames using decord
+        # Extract frames (prefer decord, fall back to cv2)
         dprint(f"[STRUCTURE_MOTION] Extracting frames...")
-        
-        # Add Wan2GP to path
-        wan_dir = Path(__file__).parent.parent / "Wan2GP"
-        if str(wan_dir) not in sys.path:
-            sys.path.insert(0, str(wan_dir))
-        
-        import decord
-        decord.bridge.set_bridge('torch')
-        
-        vr = decord.VideoReader(str(local_video_path))
-        total_frames = len(vr)
-        
-        # Validate frame range
-        if frame_start >= total_frames:
-            raise ValueError(f"frame_start {frame_start} >= total frames {total_frames}")
-        
-        # Adjust frame_count if it would exceed video length
-        actual_frame_count = min(frame_count, total_frames - frame_start)
-        if actual_frame_count < frame_count:
-            dprint(f"[STRUCTURE_MOTION] Warning: Only {actual_frame_count} frames available (requested {frame_count})")
-        
-        # Extract frames
-        frame_indices = list(range(frame_start, frame_start + actual_frame_count))
-        frames_tensor = vr.get_batch(frame_indices)  # Returns torch tensor [T, H, W, C]
-        
-        # Convert to list of numpy arrays
-        frames_list = []
-        for i in range(len(frames_tensor)):
-            frame_np = frames_tensor[i].cpu().numpy()
-            
-            # Ensure uint8
-            if frame_np.dtype != np.uint8:
-                frame_np = np.clip(frame_np, 0, 255).astype(np.uint8)
-            
-            frames_list.append(frame_np)
-        
-        dprint(f"[STRUCTURE_MOTION] Extracted {len(frames_list)} frames")
-        
-        return frames_list
+
+        try:
+            # Add Wan2GP to path (decord often installed alongside this stack)
+            wan_dir = Path(__file__).parent.parent / "Wan2GP"
+            if str(wan_dir) not in sys.path:
+                sys.path.insert(0, str(wan_dir))
+
+            import decord  # type: ignore
+            decord.bridge.set_bridge('torch')
+
+            vr = decord.VideoReader(str(local_video_path))
+            total_frames = len(vr)
+
+            if frame_start >= total_frames:
+                raise ValueError(f"frame_start {frame_start} >= total frames {total_frames}")
+
+            actual_frame_count = min(frame_count, total_frames - frame_start)
+            if actual_frame_count < frame_count:
+                dprint(f"[STRUCTURE_MOTION] Warning: Only {actual_frame_count} frames available (requested {frame_count})")
+
+            frame_indices = list(range(frame_start, frame_start + actual_frame_count))
+            frames_tensor = vr.get_batch(frame_indices)  # torch tensor [T, H, W, C]
+
+            frames_list: List[np.ndarray] = []
+            for i in range(len(frames_tensor)):
+                frame_np = frames_tensor[i].cpu().numpy()
+                if frame_np.dtype != np.uint8:
+                    frame_np = np.clip(frame_np, 0, 255).astype(np.uint8)
+                frames_list.append(frame_np)
+
+            dprint(f"[STRUCTURE_MOTION] Extracted {len(frames_list)} frames (decord)")
+            return frames_list
+
+        except ModuleNotFoundError:
+            import cv2
+            dprint("[STRUCTURE_MOTION] decord not available, falling back to cv2")
+
+            cap = cv2.VideoCapture(str(local_video_path))
+            if not cap.isOpened():
+                raise ValueError(f"cv2 failed to open video: {local_video_path}")
+
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+            if total_frames <= 0:
+                # Some codecs don't report frame count; we'll read until EOF.
+                total_frames = 10**9
+
+            if frame_start >= total_frames:
+                cap.release()
+                raise ValueError(f"frame_start {frame_start} >= total frames {total_frames}")
+
+            # Seek to frame_start
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_start)
+
+            frames_list: List[np.ndarray] = []
+            for _ in range(frame_count):
+                ok, frame_bgr = cap.read()
+                if not ok:
+                    break
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                if frame_rgb.dtype != np.uint8:
+                    frame_rgb = np.clip(frame_rgb, 0, 255).astype(np.uint8)
+                frames_list.append(frame_rgb)
+
+            cap.release()
+            dprint(f"[STRUCTURE_MOTION] Extracted {len(frames_list)} frames (cv2)")
+            return frames_list
         
     except Exception as e:
         dprint(f"[ERROR] Failed to extract motion frames: {e}")

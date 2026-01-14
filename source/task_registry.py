@@ -713,6 +713,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             uni3c_end = _get_param("uni3c_end_percent", individual_params, segment_params, orchestrator_details, default=1.0)
             uni3c_keep_gpu = _get_param("uni3c_keep_on_gpu", individual_params, segment_params, orchestrator_details, default=False)
             uni3c_frame_policy = _get_param("uni3c_frame_policy", individual_params, segment_params, orchestrator_details, default="fit")
+            uni3c_zero_empty = _get_param("uni3c_zero_empty_frames", individual_params, segment_params, orchestrator_details, default=True)
             
             # Download guide video if URL (using existing download_file helper)
             if uni3c_guide and uni3c_guide.startswith(("http://", "https://")):
@@ -733,6 +734,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             dprint_func(f"[UNI3C] Task {task_id}:   end_percent={uni3c_end}")
             dprint_func(f"[UNI3C] Task {task_id}:   frame_policy={uni3c_frame_policy}")
             dprint_func(f"[UNI3C] Task {task_id}:   keep_on_gpu={uni3c_keep_gpu}")
+            dprint_func(f"[UNI3C] Task {task_id}:   zero_empty_frames={uni3c_zero_empty}")
             
             # Inject into generation_params
             generation_params["use_uni3c"] = True
@@ -742,6 +744,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             generation_params["uni3c_end_percent"] = uni3c_end
             generation_params["uni3c_keep_on_gpu"] = uni3c_keep_gpu
             generation_params["uni3c_frame_policy"] = uni3c_frame_policy
+            generation_params["uni3c_zero_empty_frames"] = uni3c_zero_empty
         
         # === WGP SUBMISSION DIAGNOSTIC SUMMARY ===
         # Log key frame-related parameters before WGP submission

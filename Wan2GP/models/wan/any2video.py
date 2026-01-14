@@ -473,30 +473,126 @@ class WanAny2V:
         else:
             raise ValueError(f"[UNI3C] Unknown frame_policy: {policy}")
 
+    def _detect_empty_frames(
+        self,
+        guide_video: torch.Tensor,
+        threshold: float = 0.02
+    ) -> list:
+        """
+        Detect which frames in the guide video are "empty" (black/near-black).
+        
+        Empty frames should become zeros in latent space for true "no control"
+        rather than VAE-encoded black which would bias toward black output.
+        
+        Args:
+            guide_video: Tensor [C, F, H, W] in [-1, 1] range
+            threshold: Threshold in *normalized space* for “close to black”.
+                For the expected [-1, 1] range, black is -1.0. We treat a frame as empty if
+                mean(|frame - (-1)|) < threshold (default 0.02).
+        
+        Returns:
+            List of booleans, True = frame is empty
+        """
+        # Expected guide_video range for Wan2GP is [-1, 1] where black == -1.
+        # We detect “emptiness” as closeness to -1, not “low brightness”, to avoid
+        # accidentally treating dark-but-valid motion as empty.
+        #
+        # Vectorized: per-frame mean over (C,H,W) of |frame - (-1)|.
+        with torch.no_grad():
+            delta_from_black = (guide_video + 1.0).abs()  # black -> 0
+            per_frame_delta = delta_from_black.mean(dim=(0, 2, 3))  # [F]
+            empty = (per_frame_delta < threshold)
+        return [bool(x) for x in empty.tolist()]
+    
+    def _map_pixel_frames_to_latent_frames(
+        self,
+        num_pixel_frames: int,
+        num_latent_frames: int
+    ) -> list:
+        """
+        Map pixel frame indices to latent frame indices.
+        
+        VAE uses 4:1 temporal compression, so pixel frames 0-3 → latent frame 0, etc.
+        
+        Returns:
+            List where index is latent frame, value is list of corresponding pixel frames
+        """
+        # Simple 4:1 mapping
+        mapping = []
+        for lat_f in range(num_latent_frames):
+            # Which pixel frames map to this latent frame?
+            start_pix = lat_f * 4
+            end_pix = min(start_pix + 4, num_pixel_frames)
+            mapping.append(list(range(start_pix, end_pix)))
+        return mapping
+    
     def _encode_uni3c_guide(
         self,
         guide_video: torch.Tensor,
         VAE_tile_size: int,
-        expected_channels: int = 20
+        expected_channels: int = 20,
+        zero_empty_frames: bool = True
     ) -> torch.Tensor:
         """
         VAE-encode guide video and optionally pad channels.
+        
+        Detects "empty" (black) frames and replaces their latents with zeros,
+        ensuring true "no control" rather than "control toward black".
         
         Args:
             guide_video: Tensor [C, F, H, W] in [-1, 1]
             VAE_tile_size: Tile size for VAE encoding
             expected_channels: Expected channel count from ControlNet (16 or 20)
+            zero_empty_frames: If True, detect black frames and zero their latents
         
         Returns:
             render_latent: Tensor [1, C_lat, F_lat, H_lat, W_lat]
         """
-        # Move to device and encode
+        num_pixel_frames = guide_video.shape[1]
+        
+        # Step 1: Detect empty frames BEFORE encoding
+        empty_pixel_mask = []
+        if zero_empty_frames:
+            empty_pixel_mask = self._detect_empty_frames(guide_video)
+            num_empty = sum(empty_pixel_mask)
+            if num_empty > 0:
+                print(f"[UNI3C] any2video: Detected {num_empty}/{num_pixel_frames} empty pixel frames")
+                # Log ranges for debugging
+                ranges = []
+                start = None
+                for i, is_empty in enumerate(empty_pixel_mask):
+                    if is_empty and start is None:
+                        start = i
+                    elif not is_empty and start is not None:
+                        ranges.append(f"{start}-{i-1}" if i-1 > start else str(start))
+                        start = None
+                if start is not None:
+                    ranges.append(f"{start}-{num_pixel_frames-1}" if num_pixel_frames-1 > start else str(start))
+                if ranges:
+                    print(f"[UNI3C] any2video:   Empty frame ranges: {', '.join(ranges)}")
+        
+        # Step 2: VAE encode the whole video (VAE needs temporal context)
         guide_video = guide_video.to(device=self.device, dtype=self.VAE_dtype)
         latent = self.vae.encode([guide_video], tile_size=VAE_tile_size)[0]
         render_latent = latent.unsqueeze(0).to(self.dtype)  # [1, C, F, H, W]
         
         print(f"[UNI3C] any2video: VAE encoded render_latent shape: {tuple(render_latent.shape)}")
         print(f"[UNI3C] any2video:   Expected channels: {expected_channels}, actual: {render_latent.shape[1]}")
+        
+        # Step 3: Zero out latent frames that correspond to empty pixel frames
+        if zero_empty_frames and any(empty_pixel_mask):
+            num_latent_frames = render_latent.shape[2]
+            pixel_to_latent = self._map_pixel_frames_to_latent_frames(num_pixel_frames, num_latent_frames)
+            
+            zeroed_count = 0
+            for lat_f, pixel_indices in enumerate(pixel_to_latent):
+                # Zero this latent frame if ALL its corresponding pixel frames are empty
+                if all(empty_pixel_mask[p] for p in pixel_indices if p < len(empty_pixel_mask)):
+                    render_latent[:, :, lat_f, :, :] = 0.0
+                    zeroed_count += 1
+            
+            if zeroed_count > 0:
+                print(f"[UNI3C] any2video: Zeroed {zeroed_count}/{num_latent_frames} latent frames (no control signal)")
         
         # Pad 16 -> 20 if needed (Kijai "T2V workaround")
         if render_latent.shape[1] == 16 and expected_channels == 20:
@@ -598,6 +694,7 @@ class WanAny2V:
         uni3c_frame_policy = "fit",  # Frame alignment: "fit", "trim", "loop", "off"
         uni3c_guidance_frame_offset = 0,  # Frame offset for orchestrator-preprocessed video (travel_orchestrator only)
         uni3c_controlnet = None,  # Pre-loaded WanControlNet instance (optional)
+        uni3c_zero_empty_frames = True,  # Zero latents for black guide frames (true "no control")
         **bbargs
                 ):
         
@@ -1529,6 +1626,7 @@ class WanAny2V:
             print(f"[UNI3C] any2video:   step window: {uni3c_start_percent*100:.0f}% - {uni3c_end_percent*100:.0f}%")
             print(f"[UNI3C] any2video:   frame_policy: {uni3c_frame_policy}")
             print(f"[UNI3C] any2video:   keep_on_gpu: {uni3c_keep_on_gpu}")
+            print(f"[UNI3C] any2video:   zero_empty_frames: {uni3c_zero_empty_frames}")
             
             # Load or use provided controlnet
             if uni3c_controlnet is not None:
@@ -1625,7 +1723,8 @@ class WanAny2V:
             render_latent = self._encode_uni3c_guide(
                 guide_video_tensor,
                 VAE_tile_size=VAE_tile_size,
-                expected_channels=expected_channels
+                expected_channels=expected_channels,
+                zero_empty_frames=uni3c_zero_empty_frames
             )
             
             # Build uni3c_data dict

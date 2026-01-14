@@ -157,6 +157,50 @@ class TravelSegmentProcessor:
             structure_guidance_frame_offset = ctx.segment_params.get("structure_guidance_frame_offset", 
                                                                      ctx.segment_params.get("structure_motion_frame_offset", 0))
             
+            # Check for multi-structure video config (structure_videos array)
+            # If present and no pre-computed guidance URL, compute segment's portion locally
+            structure_videos = ctx.segment_params.get("structure_videos") or ctx.full_orchestrator_payload.get("structure_videos")
+            
+            if structure_videos and not structure_guidance_video_url:
+                ctx.dprint(f"[STRUCTURE_VIDEO] Segment {ctx.segment_idx}: Found structure_videos array, computing segment guidance locally")
+                
+                from source.structure_video_guidance import extract_segment_structure_guidance
+                
+                # Get segment layout from orchestrator payload
+                segment_frames_expanded = ctx.full_orchestrator_payload.get("segment_frames_expanded", [ctx.total_frames_for_segment])
+                frame_overlap_expanded = ctx.full_orchestrator_payload.get("frame_overlap_expanded", [0])
+                
+                # Generate path for segment's guidance video
+                import uuid
+                segment_guidance_filename = f"segment_guidance_{ctx.segment_idx}_{uuid.uuid4().hex[:6]}.mp4"
+                segment_guidance_path = ctx.segment_processing_dir / segment_guidance_filename
+                
+                # Extract this segment's guidance
+                local_guidance_path = extract_segment_structure_guidance(
+                    structure_videos=structure_videos,
+                    segment_index=ctx.segment_idx,
+                    segment_frames_expanded=segment_frames_expanded,
+                    frame_overlap_expanded=frame_overlap_expanded,
+                    target_resolution=ctx.parsed_res_wh,
+                    target_fps=ctx.full_orchestrator_payload.get("fps_helpers", 16),
+                    output_path=segment_guidance_path,
+                    motion_strength=structure_video_motion_strength,
+                    canny_intensity=structure_canny_intensity,
+                    depth_contrast=structure_depth_contrast,
+                    download_dir=ctx.segment_processing_dir,
+                    dprint=ctx.dprint
+                )
+                
+                if local_guidance_path and Path(local_guidance_path).exists():
+                    ctx.dprint(f"[STRUCTURE_VIDEO] Created local segment guidance: {local_guidance_path}")
+                    # Use as a local path string (NOT file://). The downstream extractor expects a filesystem path.
+                    structure_guidance_video_url = str(local_guidance_path)
+                    structure_guidance_frame_offset = 0  # Local guidance starts at frame 0
+                else:
+                    # No overlap with any structure_videos config = no guidance for this segment
+                    # This is intentional, not a failure - segment proceeds without structure guidance
+                    ctx.dprint(f"[STRUCTURE_VIDEO] Segment {ctx.segment_idx}: No overlap with structure_videos, proceeding without structure guidance")
+            
             # Download structure video if it's a URL (defensive fallback if orchestrator didn't download)
             # Note: If structure_guidance_video_url is provided, this is not strictly needed as segments will use the pre-warped video
             if structure_video_path:
