@@ -167,7 +167,15 @@ class TravelSegmentProcessor:
             # Check for multi-structure video config (structure_videos array)
             # If present and no pre-computed guidance URL, compute segment's portion locally
             structure_videos = ctx.segment_params.get("structure_videos") or ctx.full_orchestrator_payload.get("structure_videos")
-            
+
+            # If structure_videos is present, extract structure_type from configs (overrides top-level)
+            if structure_videos:
+                # All configs must have same type - extract from first config
+                structure_type_from_config = structure_videos[0].get("structure_type", structure_videos[0].get("type"))
+                if structure_type_from_config:
+                    ctx.dprint(f"[STRUCTURE_VIDEO] Segment {ctx.segment_idx}: Using structure_type '{structure_type_from_config}' from structure_videos config (overriding top-level '{structure_type}')")
+                    structure_type = structure_type_from_config
+
             if structure_videos and not structure_guidance_video_url:
                 ctx.dprint(f"[STRUCTURE_VIDEO] Segment {ctx.segment_idx}: Found structure_videos array, computing segment guidance locally")
                 
