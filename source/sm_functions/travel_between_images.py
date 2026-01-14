@@ -1980,15 +1980,17 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 segment_has_guidance = False
             
             # Set structure guidance URL and Uni3C params based on overlap
+            # Note: "uni3c" and "raw" both trigger uni3c behavior (raw frames passed to uni3c encoder)
+            is_uni3c_type = structure_type in ("raw", "uni3c") if structure_type else False
             if segment_has_guidance:
                 segment_payload["structure_guidance_video_url"] = orchestrator_payload.get("structure_guidance_video_url")
-                segment_payload["use_uni3c"] = structure_type == "raw" if structure_type else orchestrator_payload.get("use_uni3c", False)
-                segment_payload["uni3c_guide_video"] = orchestrator_payload.get("structure_guidance_video_url") if structure_type == "raw" else orchestrator_payload.get("uni3c_guide_video")
-                segment_payload["uni3c_strength"] = motion_strength if structure_type == "raw" else orchestrator_payload.get("uni3c_strength", 1.0)
+                segment_payload["use_uni3c"] = is_uni3c_type if structure_type else orchestrator_payload.get("use_uni3c", False)
+                segment_payload["uni3c_guide_video"] = orchestrator_payload.get("structure_guidance_video_url") if is_uni3c_type else orchestrator_payload.get("uni3c_guide_video")
+                segment_payload["uni3c_strength"] = motion_strength if is_uni3c_type else orchestrator_payload.get("uni3c_strength", 1.0)
                 segment_payload["uni3c_start_percent"] = orchestrator_payload.get("uni3c_start_percent", 0.0)
                 segment_payload["uni3c_end_percent"] = orchestrator_payload.get("uni3c_end_percent", 1.0)
                 segment_payload["uni3c_frame_policy"] = orchestrator_payload.get("uni3c_frame_policy", "fit")
-                segment_payload["uni3c_guidance_frame_offset"] = (segment_stitched_offsets[idx] if use_stitched_offsets else segment_flow_offsets[idx]) if (structure_type == "raw" and segment_flow_offsets) else 0
+                segment_payload["uni3c_guidance_frame_offset"] = (segment_stitched_offsets[idx] if use_stitched_offsets else segment_flow_offsets[idx]) if (is_uni3c_type and segment_flow_offsets) else 0
             else:
                 # No guidance for this segment
                 segment_payload["structure_guidance_video_url"] = None
