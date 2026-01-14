@@ -202,9 +202,15 @@ class QwenHandler:
                 lightning_phase2 = float(db_task_params.get("lightning_lora_strength_phase_2", 0.0))
 
                 generation_params["lora_names"].append(selected_lightning_path.name)
-                # Lightning LoRA with phase-specific strengths
-                generation_params["lora_multipliers"].append(f"{lightning_phase1};{lightning_phase2}")
-                self._log_info(f"Added Lightning LoRA with strength Phase1={lightning_phase1}, Phase2={lightning_phase2}")
+
+                # Only use phase format if hires is enabled (2-pass workflow)
+                # For single-pass, use only pass 1 value to avoid WGP parsing error
+                if db_task_params.get("hires_scale") is not None:
+                    generation_params["lora_multipliers"].append(f"{lightning_phase1};{lightning_phase2}")
+                    self._log_info(f"Added Lightning LoRA with strength Phase1={lightning_phase1}, Phase2={lightning_phase2}")
+                else:
+                    generation_params["lora_multipliers"].append(lightning_phase1)
+                    self._log_info(f"Added Lightning LoRA with strength {lightning_phase1}")
 
         # Optional hires fix - can be enabled on any qwen_image_edit task
         self._maybe_add_hires_config(db_task_params, generation_params)
@@ -333,8 +339,18 @@ class QwenHandler:
             generation_params["lora_multipliers"] = []
 
         if selected_lightning not in generation_params["lora_names"]:
+            # Get Lightning LoRA strength per phase from task params or use defaults
+            lightning_phase1 = float(db_task_params.get("lightning_lora_strength_phase_1", 0.75))
+            lightning_phase2 = float(db_task_params.get("lightning_lora_strength_phase_2", 0.0))
+
             generation_params["lora_names"].append(selected_lightning)
-            generation_params["lora_multipliers"].append(0.75)
+            # Only use phase format if hires is enabled (2-pass workflow)
+            if db_task_params.get("hires_scale") is not None:
+                generation_params["lora_multipliers"].append(f"{lightning_phase1};{lightning_phase2}")
+                self._log_info(f"Added Lightning LoRA with strength Phase1={lightning_phase1}, Phase2={lightning_phase2}")
+            else:
+                generation_params["lora_multipliers"].append(lightning_phase1)
+                self._log_info(f"Added Lightning LoRA with strength {lightning_phase1}")
 
         if inpaint_fname not in generation_params["lora_names"]:
             generation_params["lora_names"].append(inpaint_fname)
@@ -388,8 +404,18 @@ class QwenHandler:
             generation_params["lora_multipliers"] = []
 
         if selected_lightning not in generation_params["lora_names"]:
+            # Get Lightning LoRA strength per phase from task params or use defaults
+            lightning_phase1 = float(db_task_params.get("lightning_lora_strength_phase_1", 0.75))
+            lightning_phase2 = float(db_task_params.get("lightning_lora_strength_phase_2", 0.0))
+
             generation_params["lora_names"].append(selected_lightning)
-            generation_params["lora_multipliers"].append(0.75)
+            # Only use phase format if hires is enabled (2-pass workflow)
+            if db_task_params.get("hires_scale") is not None:
+                generation_params["lora_multipliers"].append(f"{lightning_phase1};{lightning_phase2}")
+                self._log_info(f"Added Lightning LoRA with strength Phase1={lightning_phase1}, Phase2={lightning_phase2}")
+            else:
+                generation_params["lora_multipliers"].append(lightning_phase1)
+                self._log_info(f"Added Lightning LoRA with strength {lightning_phase1}")
 
         if annotate_fname not in generation_params["lora_names"]:
             generation_params["lora_names"].append(annotate_fname)
@@ -500,8 +526,11 @@ class QwenHandler:
             lightning_phase2 = float(db_task_params.get("lightning_lora_strength_phase_2", 0.0))
 
             generation_params["lora_names"].append(lightning_fname)
-            # Lightning LoRA with phase-specific strengths
-            generation_params["lora_multipliers"].append(f"{lightning_phase1};{lightning_phase2}")
+            # Only use phase format if hires is enabled (2-pass workflow)
+            if db_task_params.get("hires_scale") is not None:
+                generation_params["lora_multipliers"].append(f"{lightning_phase1};{lightning_phase2}")
+            else:
+                generation_params["lora_multipliers"].append(lightning_phase1)
 
         if style_strength > 0.0 and style_fname not in generation_params["lora_names"]:
             generation_params["lora_names"].append(style_fname)
@@ -649,9 +678,13 @@ class QwenHandler:
                 lightning_phase2 = float(db_task_params.get("lightning_lora_strength_phase_2", 1.0))
 
                 generation_params["lora_names"].append(selected_lightning_path.name)
-                # Lightning LoRA with phase-specific strengths
-                generation_params["lora_multipliers"].append(f"{lightning_phase1};{lightning_phase2}")
-                self._log_info(f"Added Lightning LoRA with strength Phase1={lightning_phase1}, Phase2={lightning_phase2}")
+                # Only use phase format if hires is enabled (2-pass workflow)
+                if db_task_params.get("hires_scale") is not None:
+                    generation_params["lora_multipliers"].append(f"{lightning_phase1};{lightning_phase2}")
+                    self._log_info(f"Added Lightning LoRA with strength Phase1={lightning_phase1}, Phase2={lightning_phase2}")
+                else:
+                    generation_params["lora_multipliers"].append(lightning_phase1)
+                    self._log_info(f"Added Lightning LoRA with strength {lightning_phase1}")
 
         # Handle additional LoRAs from task params
         self._apply_additional_loras(db_task_params, generation_params)
@@ -719,9 +752,13 @@ class QwenHandler:
                 lightning_phase2 = float(db_task_params.get("lightning_lora_strength_phase_2", 1.0))
 
                 generation_params["lora_names"].append(selected_lightning_path.name)
-                # Lightning LoRA with phase-specific strengths
-                generation_params["lora_multipliers"].append(f"{lightning_phase1};{lightning_phase2}")
-                self._log_info(f"Added Lightning LoRA with strength Phase1={lightning_phase1}, Phase2={lightning_phase2}")
+                # Only use phase format if hires is enabled (2-pass workflow)
+                if db_task_params.get("hires_scale") is not None:
+                    generation_params["lora_multipliers"].append(f"{lightning_phase1};{lightning_phase2}")
+                    self._log_info(f"Added Lightning LoRA with strength Phase1={lightning_phase1}, Phase2={lightning_phase2}")
+                else:
+                    generation_params["lora_multipliers"].append(lightning_phase1)
+                    self._log_info(f"Added Lightning LoRA with strength {lightning_phase1}")
 
         # Handle additional LoRAs
         self._apply_additional_loras(db_task_params, generation_params)

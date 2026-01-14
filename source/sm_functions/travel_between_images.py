@@ -1901,6 +1901,12 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "orchestrator_task_id_ref": orchestrator_task_id_str,
                 "orchestrator_run_id": run_id,
                 "project_id": orchestrator_project_id, # Added project_id
+                # Parent generation ID for linking to shot_generations
+                "parent_generation_id": (
+                    task_params_from_db.get("parent_generation_id")
+                    or orchestrator_payload.get("parent_generation_id")
+                    or orchestrator_payload.get("orchestrator_details", {}).get("parent_generation_id")
+                ),
                 "segment_index": idx,
                 "is_first_segment": (idx == 0),
                 "is_last_segment": (idx == num_segments - 1),

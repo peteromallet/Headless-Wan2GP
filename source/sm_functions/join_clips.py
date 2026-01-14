@@ -48,6 +48,7 @@ from ..vace_frame_utils import (
     prepare_vace_generation_params
 )
 from .. import db_operations as db_ops
+from ..logging_utils import headless_logger
 
 
 def _calculate_vace_quantization(
@@ -453,16 +454,17 @@ def _handle_join_clips_task(
             dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
             return False, error_msg
 
-        # Validate context frame counts
-        if context_frame_count > start_frame_count:
-            error_msg = f"context_frame_count ({context_frame_count}) exceeds starting video frame count ({start_frame_count})"
-            dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
-            return False, error_msg
+        # Auto-adjust context frame count if it exceeds available frames
+        original_context_frame_count = context_frame_count
+        max_available_context = min(start_frame_count, end_frame_count)
 
-        if context_frame_count > end_frame_count:
-            error_msg = f"context_frame_count ({context_frame_count}) exceeds ending video frame count ({end_frame_count})"
-            dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
-            return False, error_msg
+        if context_frame_count > max_available_context:
+            context_frame_count = max_available_context
+            dprint(f"[JOIN_CLIPS] Task {task_id}: ⚠️ Auto-adjusted context_frame_count from {original_context_frame_count} to {context_frame_count} (limited by shortest video: start={start_frame_count}, end={end_frame_count})")
+            headless_logger.warning(
+                f"[JOIN_CLIPS] Task {task_id}: context_frame_count reduced from {original_context_frame_count} to {context_frame_count} to fit available frames",
+                task_id=task_id
+            )
 
         # Set target FPS based on use_input_video_fps setting
         if use_input_video_fps:
@@ -483,12 +485,47 @@ def _handle_join_clips_task(
         quantization_shift = quantization_result['quantization_shift']
         
         # Calculate gap split for REPLACE mode
+        # Start with even split, then adjust if one clip is too short
         gap_from_clip1 = gap_for_guide // 2 if replace_mode else 0
         gap_from_clip2 = (gap_for_guide - gap_from_clip1) if replace_mode else 0
-        
+
         dprint(f"[JOIN_CLIPS] Task {task_id}: Mode={'REPLACE' if replace_mode else 'INSERT'}, gap_for_guide={gap_for_guide}")
         if replace_mode:
             dprint(f"[JOIN_CLIPS] Task {task_id}: REPLACE initial split: {gap_from_clip1} from clip1, {gap_from_clip2} from clip2")
+
+            # Dynamically adjust gap split if one clip is too short
+            # Each clip needs: gap_from_clip + at least 1 frame for context
+            min_frames_needed_clip1 = gap_from_clip1 + 1
+            min_frames_needed_clip2 = gap_from_clip2 + 1
+
+            if start_frame_count < min_frames_needed_clip1:
+                # Clip1 too short - shift gap frames to clip2
+                max_gap_from_clip1 = max(0, start_frame_count - 1)  # Leave at least 1 frame for context
+                shift_amount = gap_from_clip1 - max_gap_from_clip1
+                gap_from_clip1 = max_gap_from_clip1
+                gap_from_clip2 = gap_from_clip2 + shift_amount
+                dprint(f"[JOIN_CLIPS] Task {task_id}: ⚠️ Clip1 too short ({start_frame_count} frames) - shifted {shift_amount} gap frames to clip2")
+                dprint(f"[JOIN_CLIPS] Task {task_id}: Adjusted split: {gap_from_clip1} from clip1, {gap_from_clip2} from clip2")
+
+            if end_frame_count < gap_from_clip2 + 1:
+                # Clip2 too short - shift gap frames to clip1
+                max_gap_from_clip2 = max(0, end_frame_count - 1)
+                shift_amount = gap_from_clip2 - max_gap_from_clip2
+                gap_from_clip2 = max_gap_from_clip2
+                gap_from_clip1 = gap_from_clip1 + shift_amount
+                dprint(f"[JOIN_CLIPS] Task {task_id}: ⚠️ Clip2 too short ({end_frame_count} frames) - shifted {shift_amount} gap frames to clip1")
+                dprint(f"[JOIN_CLIPS] Task {task_id}: Adjusted split: {gap_from_clip1} from clip1, {gap_from_clip2} from clip2")
+
+            # Final validation - check if total gap is still achievable
+            total_available = (start_frame_count - 1) + (end_frame_count - 1)  # -1 for minimum 1 context frame each
+            if gap_for_guide > total_available:
+                error_msg = (
+                    f"Videos too short for requested gap: need {gap_for_guide} gap frames but only "
+                    f"{total_available} available (start: {start_frame_count}, end: {end_frame_count}). "
+                    f"Try reducing gap_frame_count or using longer source clips."
+                )
+                dprint(f"[JOIN_CLIPS_ERROR] Task {task_id}: {error_msg}")
+                return False, error_msg
         dprint(
             f"{DEBUG_TAG} [JOIN_CLIPS] Task {task_id}: gap split summary: "
             f"requested_gap={gap_frame_count}, gap_for_guide={gap_for_guide}, "
