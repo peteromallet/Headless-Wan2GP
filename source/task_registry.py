@@ -440,7 +440,25 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 guide_video_path = segment_outputs.get("video_guide")
                 mask_video_path_for_wgp = Path(segment_outputs["video_mask"]) if segment_outputs.get("video_mask") else None
                 video_prompt_type_str = segment_outputs["video_prompt_type"]
-                
+                detected_structure_type = segment_outputs.get("structure_type")
+
+                # If structure_type is "uni3c", automatically enable uni3c mode
+                if detected_structure_type == "uni3c" and guide_video_path:
+                    dprint_func(f"[UNI3C_AUTO] Task {task_id}: Auto-enabling uni3c mode (structure_type='uni3c' detected)")
+                    # Set use_uni3c in orchestrator_details so the UNI3C MODE section picks it up
+                    orchestrator_details["use_uni3c"] = True
+                    orchestrator_details["uni3c_guide_video"] = guide_video_path
+                    # Extract uni3c-specific params from structure_videos config if present
+                    structure_videos = segment_params.get("structure_videos") or full_orchestrator_payload.get("structure_videos", [])
+                    if structure_videos:
+                        first_config = structure_videos[0]
+                        if "uni3c_strength" not in orchestrator_details:
+                            orchestrator_details["uni3c_strength"] = first_config.get("motion_strength", 1.0)
+                        if "uni3c_end_percent" not in orchestrator_details:
+                            orchestrator_details["uni3c_end_percent"] = first_config.get("uni3c_end_percent", 1.0)
+                        if "uni3c_start_percent" not in orchestrator_details:
+                            orchestrator_details["uni3c_start_percent"] = first_config.get("uni3c_start_percent", 0.0)
+
             except Exception as e_shared_processor:
                 traceback.print_exc()
                 return False, f"Shared processor failed: {e_shared_processor}"

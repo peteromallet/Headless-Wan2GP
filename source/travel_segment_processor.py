@@ -85,7 +85,10 @@ class TravelSegmentProcessor:
             Path to created guide video, or None if not created/failed
         """
         ctx = self.ctx
-        
+
+        # Initialize structure_type tracking (will be set later if applicable)
+        self._detected_structure_type = None
+
         # Always create guide video for VACE models (required for functionality)
         # For non-VACE models, only create in debug mode
         if not ctx.debug_enabled and not self.is_vace_model:
@@ -175,6 +178,9 @@ class TravelSegmentProcessor:
                 if structure_type_from_config:
                     ctx.dprint(f"[STRUCTURE_VIDEO] Segment {ctx.segment_idx}: Using structure_type '{structure_type_from_config}' from structure_videos config (overriding top-level '{structure_type}')")
                     structure_type = structure_type_from_config
+
+            # Store the detected structure_type for use in process_segment return
+            self._detected_structure_type = structure_type
 
             if structure_videos and not structure_guidance_video_url:
                 ctx.dprint(f"[STRUCTURE_VIDEO] Segment {ctx.segment_idx}: Found structure_videos array, computing segment guidance locally")
@@ -520,7 +526,8 @@ class TravelSegmentProcessor:
         return {
             "video_guide": str(guide_video_path) if guide_video_path else None,
             "video_mask": str(mask_video_path) if mask_video_path else None,
-            "video_prompt_type": video_prompt_type
+            "video_prompt_type": video_prompt_type,
+            "structure_type": self._detected_structure_type  # Pass through for uni3c handling
         }
     
     def _get_previous_segment_video(self) -> Optional[str]:
