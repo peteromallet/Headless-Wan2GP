@@ -410,7 +410,15 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         mask_video_path_for_wgp = None
         video_prompt_type_str = None
 
-        if travel_mode == "vace":
+        # Check if structure_videos array is present (enables structure guidance for any model type)
+        has_structure_videos = bool(full_orchestrator_payload.get("structure_videos"))
+
+        # Run TravelSegmentProcessor for:
+        # 1. VACE mode (always - requires masks and guides)
+        # 2. Any mode with structure_videos configured (enables uni3c/flow guidance for i2v, etc.)
+        if travel_mode == "vace" or has_structure_videos:
+            if has_structure_videos and travel_mode != "vace":
+                dprint_func(f"[STRUCTURE_VIDEO] Task {task_id}: Running TravelSegmentProcessor for {travel_mode} mode (structure_videos present)")
             try:
                 processor_context = TravelSegmentContext(
                     task_id=task_id,
