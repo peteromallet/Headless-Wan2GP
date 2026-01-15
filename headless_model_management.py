@@ -663,8 +663,17 @@ class HeadlessTaskQueue:
         try:
             # 1. Ensure correct model is loaded (orchestrator checks WGP's ground truth)
             self._switch_model(task.model, worker_name)
-            
-            # 2. Delegate actual generation to orchestrator
+
+            # 2. Reset billing start time now that model is loaded
+            # This ensures users aren't charged for model loading time
+            try:
+                from source.db_operations import reset_generation_started_at
+                reset_generation_started_at(task.id)
+            except Exception as e_billing:
+                # Don't fail the task if billing reset fails - just log it
+                self.logger.warning(f"[BILLING] Failed to reset generation_started_at for task {task.id}: {e_billing}")
+
+            # 3. Delegate actual generation to orchestrator
             # The orchestrator handles the heavy lifting while we manage the queue
             result_path = self._execute_generation(task, worker_name)
 
