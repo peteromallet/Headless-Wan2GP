@@ -5254,6 +5254,7 @@ def generate_video(
     uni3c_end_percent=1.0,
     uni3c_keep_on_gpu=False,
     uni3c_frame_policy="fit",
+    uni3c_zero_empty_frames=True,
 ):
     # Layer 3 Uni3C logging - immediately at function entry
     if use_uni3c:
@@ -5263,6 +5264,7 @@ def generate_video(
         print(f"[UNI3C]   step window: {uni3c_start_percent*100:.0f}% - {uni3c_end_percent*100:.0f}%")
         print(f"[UNI3C]   frame_policy: {uni3c_frame_policy}")
         print(f"[UNI3C]   keep_on_gpu: {uni3c_keep_on_gpu}")
+        print(f"[UNI3C]   zero_empty_frames: {uni3c_zero_empty_frames}")
     else:
         # Log when NOT using Uni3C (helps detect silent drops)
         print(f"[UNI3C] generate_video: Uni3C DISABLED (use_uni3c={use_uni3c})")
@@ -6143,6 +6145,7 @@ def generate_video(
                     uni3c_end_percent = uni3c_end_percent,
                     uni3c_keep_on_gpu = uni3c_keep_on_gpu,
                     uni3c_frame_policy = uni3c_frame_policy,
+                    uni3c_zero_empty_frames = uni3c_zero_empty_frames,
                 )
             except Exception as e:
                 if len(control_audio_tracks) > 0 or len(source_audio_tracks) > 0:

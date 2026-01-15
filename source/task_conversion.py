@@ -312,6 +312,7 @@ def db_task_to_generation_task(db_task_params: dict, task_id: str, task_type: st
         "use_uni3c", "uni3c_guide_video", "uni3c_strength",
         "uni3c_start_percent", "uni3c_end_percent",
         "uni3c_keep_on_gpu", "uni3c_frame_policy",
+        "uni3c_zero_empty_frames",
         # Image-to-image parameters
         "denoising_strength",
     }

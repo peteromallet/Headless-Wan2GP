@@ -22,7 +22,6 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Any, Tuple, Callable
 import traceback
-import uuid
 from datetime import datetime
 
 # Import shared utilities
@@ -86,7 +85,10 @@ class TravelSegmentProcessor:
             Path to created guide video, or None if not created/failed
         """
         ctx = self.ctx
-        
+
+        # Initialize structure_type tracking (will be set later if applicable)
+        self._detected_structure_type = None
+
         # Always create guide video for VACE models (required for functionality)
         # For non-VACE models, only create in debug mode
         if not ctx.debug_enabled and not self.is_vace_model:
@@ -130,11 +132,19 @@ class TravelSegmentProcessor:
             else:
                  is_first_segment_from_scratch = is_first_segment and not ctx.full_orchestrator_payload.get("continue_from_video_resolved_path")
             
-            # Calculate end anchor image index - use consolidated end anchor if available
+            # Calculate end anchor image index
+            # Priority: consolidated_end_anchor > individual_segment detection > segment_idx + 1
             consolidated_end_anchor = ctx.segment_params.get("consolidated_end_anchor_idx")
+            individual_params = ctx.segment_params.get("individual_segment_params", {})
+            individual_images = individual_params.get("input_image_paths_resolved", [])
+
             if consolidated_end_anchor is not None:
                 end_anchor_img_path_str_idx = consolidated_end_anchor
                 ctx.dprint(f"[CONSOLIDATED_SEGMENT] Using consolidated end anchor index {consolidated_end_anchor} for segment {ctx.segment_idx}")
+            elif individual_images:
+                # Individual segment mode: images are [start, end], so end anchor is always index 1
+                end_anchor_img_path_str_idx = 1
+                ctx.dprint(f"[INDIVIDUAL_SEGMENT] Using end anchor index 1 for individual segment {ctx.segment_idx} (has {len(individual_images)} images)")
             else:
                 end_anchor_img_path_str_idx = ctx.segment_idx + 1
             
@@ -156,6 +166,60 @@ class TravelSegmentProcessor:
                                            ctx.full_orchestrator_payload.get("structure_motion_video_url"))
             structure_guidance_frame_offset = ctx.segment_params.get("structure_guidance_frame_offset", 
                                                                      ctx.segment_params.get("structure_motion_frame_offset", 0))
+            
+            # Check for multi-structure video config (structure_videos array)
+            # If present and no pre-computed guidance URL, compute segment's portion locally
+            structure_videos = ctx.segment_params.get("structure_videos") or ctx.full_orchestrator_payload.get("structure_videos")
+
+            # If structure_videos is present, extract structure_type from configs (overrides top-level)
+            if structure_videos:
+                # All configs must have same type - extract from first config
+                structure_type_from_config = structure_videos[0].get("structure_type", structure_videos[0].get("type"))
+                if structure_type_from_config:
+                    ctx.dprint(f"[STRUCTURE_VIDEO] Segment {ctx.segment_idx}: Using structure_type '{structure_type_from_config}' from structure_videos config (overriding top-level '{structure_type}')")
+                    structure_type = structure_type_from_config
+
+            # Store the detected structure_type for use in process_segment return
+            self._detected_structure_type = structure_type
+
+            if structure_videos and not structure_guidance_video_url:
+                ctx.dprint(f"[STRUCTURE_VIDEO] Segment {ctx.segment_idx}: Found structure_videos array, computing segment guidance locally")
+                
+                from source.structure_video_guidance import extract_segment_structure_guidance
+                
+                # Get segment layout from orchestrator payload
+                segment_frames_expanded = ctx.full_orchestrator_payload.get("segment_frames_expanded", [ctx.total_frames_for_segment])
+                frame_overlap_expanded = ctx.full_orchestrator_payload.get("frame_overlap_expanded", [0])
+                
+                # Generate path for segment's guidance video
+                segment_guidance_filename = f"segment_guidance_{ctx.segment_idx}_{uuid.uuid4().hex[:6]}.mp4"
+                segment_guidance_path = ctx.segment_processing_dir / segment_guidance_filename
+                
+                # Extract this segment's guidance
+                local_guidance_path = extract_segment_structure_guidance(
+                    structure_videos=structure_videos,
+                    segment_index=ctx.segment_idx,
+                    segment_frames_expanded=segment_frames_expanded,
+                    frame_overlap_expanded=frame_overlap_expanded,
+                    target_resolution=ctx.parsed_res_wh,
+                    target_fps=ctx.full_orchestrator_payload.get("fps_helpers", 16),
+                    output_path=segment_guidance_path,
+                    motion_strength=structure_video_motion_strength,
+                    canny_intensity=structure_canny_intensity,
+                    depth_contrast=structure_depth_contrast,
+                    download_dir=ctx.segment_processing_dir,
+                    dprint=ctx.dprint
+                )
+                
+                if local_guidance_path and Path(local_guidance_path).exists():
+                    ctx.dprint(f"[STRUCTURE_VIDEO] Created local segment guidance: {local_guidance_path}")
+                    # Use as a local path string (NOT file://). The downstream extractor expects a filesystem path.
+                    structure_guidance_video_url = str(local_guidance_path)
+                    structure_guidance_frame_offset = 0  # Local guidance starts at frame 0
+                else:
+                    # No overlap with any structure_videos config = no guidance for this segment
+                    # This is intentional, not a failure - segment proceeds without structure guidance
+                    ctx.dprint(f"[STRUCTURE_VIDEO] Segment {ctx.segment_idx}: No overlap with structure_videos, proceeding without structure guidance")
             
             # Download structure video if it's a URL (defensive fallback if orchestrator didn't download)
             # Note: If structure_guidance_video_url is provided, this is not strictly needed as segments will use the pre-warped video
@@ -201,6 +265,8 @@ class TravelSegmentProcessor:
                 structure_depth_contrast=structure_depth_contrast,
                 structure_guidance_video_url=structure_guidance_video_url,
                 structure_guidance_frame_offset=structure_guidance_frame_offset,
+                # For uni3c mode, black out end frame so i2v handles it alone (no conflicting guidance)
+                exclude_end_for_controlnet=(structure_type == "uni3c"),
                 dprint=ctx.dprint
             )
             
@@ -370,11 +436,20 @@ class TravelSegmentProcessor:
         if self.is_vace_model:
             ctx.dprint(f"[VPT_DEBUG] Seg {ctx.segment_idx}: ENTERING VACE MODEL PATH")
             vpt_components = []
-            
-            # Add video component (VACE always gets 'V' for video guide)
-            vpt_components.append("V")
-            ctx.dprint(f"[VPT_DEBUG] Seg {ctx.segment_idx}: Added video 'V', vpt_components = {vpt_components}")
-            ctx.dprint(f"[VACEActivated] Seg {ctx.segment_idx}: Using VACE with raw video guide (no preprocessing)")
+
+            # Check if uni3c is handling motion guidance - if so, skip VACE video guide
+            is_uni3c_mode = self._detected_structure_type == "uni3c"
+            ctx.dprint(f"[VPT_DEBUG] Seg {ctx.segment_idx}: structure_type={self._detected_structure_type}, is_uni3c_mode={is_uni3c_mode}")
+
+            if is_uni3c_mode:
+                # Uni3C provides motion guidance - don't double-feed with VACE video guide
+                ctx.dprint(f"[VPT_DEBUG] Seg {ctx.segment_idx}: SKIPPING 'V' - uni3c handles motion guidance")
+                ctx.dprint(f"[UNI3C_VPT] Seg {ctx.segment_idx}: Uni3C mode - video_guide will NOT be used by VACE")
+            else:
+                # Non-uni3c: use VACE video guide as normal
+                vpt_components.append("V")
+                ctx.dprint(f"[VPT_DEBUG] Seg {ctx.segment_idx}: Added video 'V', vpt_components = {vpt_components}")
+                ctx.dprint(f"[VACEActivated] Seg {ctx.segment_idx}: Using VACE with raw video guide (no preprocessing)")
             
             # Add mask component if mask video exists
             if mask_video_path:
@@ -462,7 +537,8 @@ class TravelSegmentProcessor:
         return {
             "video_guide": str(guide_video_path) if guide_video_path else None,
             "video_mask": str(mask_video_path) if mask_video_path else None,
-            "video_prompt_type": video_prompt_type
+            "video_prompt_type": video_prompt_type,
+            "structure_type": self._detected_structure_type  # Pass through for uni3c handling
         }
     
     def _get_previous_segment_video(self) -> Optional[str]:
@@ -542,13 +618,22 @@ class TravelSegmentProcessor:
     def _prepare_input_images_for_guide(self) -> List[str]:
         """Prepare input images for guide video creation."""
         ctx = self.ctx
-        
-        # Start with original input images
-        input_images_resolved_original = ctx.full_orchestrator_payload["input_image_paths_resolved"]
-        input_images_resolved_for_guide = input_images_resolved_original.copy()
-        
-        ctx.dprint(f"[GUIDE_INPUT_DEBUG] Seg {ctx.segment_idx}: Using {len(input_images_resolved_for_guide)} input images for guide creation")
-        
+
+        # For individual segment tasks, prefer the segment-specific image list
+        # This contains just [start_image, end_image] for the specific segment
+        individual_params = ctx.segment_params.get("individual_segment_params", {})
+        individual_images = individual_params.get("input_image_paths_resolved", [])
+
+        if individual_images:
+            # Individual segment mode - use the 2-image list
+            input_images_resolved_for_guide = individual_images.copy()
+            ctx.dprint(f"[GUIDE_INPUT_DEBUG] Seg {ctx.segment_idx}: Using {len(input_images_resolved_for_guide)} images from individual_segment_params")
+        else:
+            # Full orchestrator mode - use all images
+            input_images_resolved_original = ctx.full_orchestrator_payload["input_image_paths_resolved"]
+            input_images_resolved_for_guide = input_images_resolved_original.copy()
+            ctx.dprint(f"[GUIDE_INPUT_DEBUG] Seg {ctx.segment_idx}: Using {len(input_images_resolved_for_guide)} images from orchestrator payload")
+
         return input_images_resolved_for_guide
     
     def _detect_single_image_journey(self) -> bool:

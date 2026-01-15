@@ -410,7 +410,15 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         mask_video_path_for_wgp = None
         video_prompt_type_str = None
 
-        if travel_mode == "vace":
+        # Check if structure_videos array is present (enables structure guidance for any model type)
+        has_structure_videos = bool(full_orchestrator_payload.get("structure_videos"))
+
+        # Run TravelSegmentProcessor for:
+        # 1. VACE mode (always - requires masks and guides)
+        # 2. Any mode with structure_videos configured (enables uni3c/flow guidance for i2v, etc.)
+        if travel_mode == "vace" or has_structure_videos:
+            if has_structure_videos and travel_mode != "vace":
+                dprint_func(f"[STRUCTURE_VIDEO] Task {task_id}: Running TravelSegmentProcessor for {travel_mode} mode (structure_videos present)")
             try:
                 processor_context = TravelSegmentContext(
                     task_id=task_id,
@@ -432,7 +440,29 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 guide_video_path = segment_outputs.get("video_guide")
                 mask_video_path_for_wgp = Path(segment_outputs["video_mask"]) if segment_outputs.get("video_mask") else None
                 video_prompt_type_str = segment_outputs["video_prompt_type"]
-                
+                detected_structure_type = segment_outputs.get("structure_type")
+
+                # Debug: Log segment_outputs keys and structure_type
+                dprint_func(f"[UNI3C_DEBUG] Task {task_id}: segment_outputs keys: {list(segment_outputs.keys())}")
+                dprint_func(f"[UNI3C_DEBUG] Task {task_id}: detected_structure_type={repr(detected_structure_type)}, guide_video_path={bool(guide_video_path)}")
+
+                # If structure_type is "uni3c", automatically enable uni3c mode
+                if detected_structure_type == "uni3c" and guide_video_path:
+                    dprint_func(f"[UNI3C_AUTO] Task {task_id}: Auto-enabling uni3c mode (structure_type='uni3c' detected)")
+                    # Set use_uni3c in orchestrator_details so the UNI3C MODE section picks it up
+                    orchestrator_details["use_uni3c"] = True
+                    orchestrator_details["uni3c_guide_video"] = guide_video_path
+                    # Extract uni3c-specific params from structure_videos config if present
+                    structure_videos = segment_params.get("structure_videos") or full_orchestrator_payload.get("structure_videos", [])
+                    if structure_videos:
+                        first_config = structure_videos[0]
+                        if "uni3c_strength" not in orchestrator_details:
+                            orchestrator_details["uni3c_strength"] = first_config.get("motion_strength", 1.0)
+                        if "uni3c_end_percent" not in orchestrator_details:
+                            orchestrator_details["uni3c_end_percent"] = first_config.get("uni3c_end_percent", 1.0)
+                        if "uni3c_start_percent" not in orchestrator_details:
+                            orchestrator_details["uni3c_start_percent"] = first_config.get("uni3c_start_percent", 0.0)
+
             except Exception as e_shared_processor:
                 traceback.print_exc()
                 return False, f"Shared processor failed: {e_shared_processor}"
@@ -455,6 +485,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             generation_params["image_end"] = str(Path(end_ref_path).resolve())
             
         dprint_func(f"[IMG_RESOLVE] Task {task_id}: generation_params image_start: {generation_params.get('image_start')}")
+        dprint_func(f"[IMG_RESOLVE] Task {task_id}: generation_params image_end: {generation_params.get('image_end')}")
         
         # ═══════════════════════════════════════════════════════════════════════════
         # Parameter extraction with precedence: individual > segment > orchestrator
@@ -565,6 +596,21 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         if guide_video_path: generation_params["video_guide"] = str(guide_video_path)
         if mask_video_path_for_wgp: generation_params["video_mask"] = str(mask_video_path_for_wgp.resolve())
         generation_params["video_prompt_type"] = video_prompt_type_str
+
+        # Diagnostic: Log guidance configuration when uni3c is enabled
+        if orchestrator_details.get("use_uni3c") and guide_video_path:
+            uni3c_guide = orchestrator_details.get("uni3c_guide_video")
+            dprint_func(f"[UNI3C_GUIDANCE_CHECK] Task {task_id}: Checking guidance configuration...")
+            dprint_func(f"[UNI3C_GUIDANCE_CHECK]   video_guide path: {guide_video_path}")
+            dprint_func(f"[UNI3C_GUIDANCE_CHECK]   uni3c_guide_video: {uni3c_guide}")
+            dprint_func(f"[UNI3C_GUIDANCE_CHECK]   image_end (i2v): {generation_params.get('image_end', 'None')}")
+            dprint_func(f"[UNI3C_GUIDANCE_CHECK]   video_prompt_type: '{video_prompt_type_str}'")
+            if "V" in video_prompt_type_str:
+                dprint_func(f"[UNI3C_GUIDANCE_CHECK]   🔴 WARNING: video_prompt_type has 'V' - VACE will ALSO use video_guide!")
+                dprint_func(f"[UNI3C_GUIDANCE_CHECK]   This causes double-feeding: both VACE and Uni3C use same guide")
+            else:
+                dprint_func(f"[UNI3C_GUIDANCE_CHECK]   ✅ OK: video_prompt_type='{video_prompt_type_str}' (no 'V')")
+                dprint_func(f"[UNI3C_GUIDANCE_CHECK]   Uni3C handles motion guidance, VACE only uses mask for frame preservation")
         
         # =============================================================================
         # SVI MODE: Add SVI-specific generation parameters
@@ -701,8 +747,24 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         # UNI3C MODE: Motion guidance via Uni3C ControlNet
         # =============================================================================
         # Check use_uni3c with explicit False handling (False at segment level should override True at orchestrator)
-        use_uni3c = segment_params["use_uni3c"] if "use_uni3c" in segment_params else orchestrator_details.get("use_uni3c", False)
-        
+        # HOWEVER: If auto-enable set orchestrator_details["use_uni3c"] = True (from structure_type="uni3c"),
+        # that should take precedence over segment_params (which may have been set before structure detection)
+        segment_use_uni3c = segment_params.get("use_uni3c")
+        orchestrator_use_uni3c = orchestrator_details.get("use_uni3c", False)
+
+        # Debug logging
+        dprint_func(f"[UNI3C_DEBUG] Task {task_id}: segment_params use_uni3c={segment_use_uni3c}, orchestrator_details use_uni3c={orchestrator_use_uni3c}")
+
+        # If orchestrator_details has use_uni3c=True (from auto-enable), use that
+        # Otherwise fall back to segment_params value
+        if orchestrator_use_uni3c:
+            use_uni3c = True
+            dprint_func(f"[UNI3C_DEBUG] Task {task_id}: Using orchestrator_details use_uni3c=True (auto-enabled)")
+        elif segment_use_uni3c is not None:
+            use_uni3c = segment_use_uni3c
+        else:
+            use_uni3c = False
+
         if use_uni3c:
             from source.common_utils import download_file as sm_download_file
             
@@ -713,6 +775,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             uni3c_end = _get_param("uni3c_end_percent", individual_params, segment_params, orchestrator_details, default=1.0)
             uni3c_keep_gpu = _get_param("uni3c_keep_on_gpu", individual_params, segment_params, orchestrator_details, default=False)
             uni3c_frame_policy = _get_param("uni3c_frame_policy", individual_params, segment_params, orchestrator_details, default="fit")
+            uni3c_zero_empty = _get_param("uni3c_zero_empty_frames", individual_params, segment_params, orchestrator_details, default=True)
             
             # Download guide video if URL (using existing download_file helper)
             if uni3c_guide and uni3c_guide.startswith(("http://", "https://")):
@@ -733,6 +796,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             dprint_func(f"[UNI3C] Task {task_id}:   end_percent={uni3c_end}")
             dprint_func(f"[UNI3C] Task {task_id}:   frame_policy={uni3c_frame_policy}")
             dprint_func(f"[UNI3C] Task {task_id}:   keep_on_gpu={uni3c_keep_gpu}")
+            dprint_func(f"[UNI3C] Task {task_id}:   zero_empty_frames={uni3c_zero_empty}")
             
             # Inject into generation_params
             generation_params["use_uni3c"] = True
@@ -742,6 +806,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
             generation_params["uni3c_end_percent"] = uni3c_end
             generation_params["uni3c_keep_on_gpu"] = uni3c_keep_gpu
             generation_params["uni3c_frame_policy"] = uni3c_frame_policy
+            generation_params["uni3c_zero_empty_frames"] = uni3c_zero_empty
         
         # === WGP SUBMISSION DIAGNOSTIC SUMMARY ===
         # Log key frame-related parameters before WGP submission

@@ -229,7 +229,8 @@ def parse_args():
     parser.add_argument("--preload-model", type=str, default="")
     parser.add_argument("--db-type", type=str, default="supabase")
     parser.add_argument("--supabase-url", type=str, default="https://wczysqzxlwdndgxitrvc.supabase.co")
-    parser.add_argument("--supabase-access-token", type=str, required=True)
+    parser.add_argument("--reigh-access-token", type=str, default=None, help="Access token for Reigh API (preferred)")
+    parser.add_argument("--supabase-access-token", type=str, default=None, help="Legacy alias for --reigh-access-token")
     parser.add_argument("--supabase-anon-key", type=str, default="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndjenlzcXp4bHdkbmRneGl0cnZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE1MDI4NjgsImV4cCI6MjA2NzA3ODg2OH0.r-4RyHZiDibUjgdgDDM2Vo6x3YpgIO5-BTwfkB2qyYA")
     
     # WGP Globals
@@ -252,7 +253,13 @@ def main():
     load_dotenv()
 
     cli_args = parse_args()
-    
+
+    # Resolve access token: prefer --reigh-access-token, fall back to --supabase-access-token
+    access_token = cli_args.reigh_access_token or cli_args.supabase_access_token
+    if not access_token:
+        print("Error: Either --reigh-access-token or --supabase-access-token is required", file=sys.stderr)
+        sys.exit(1)
+
     if cli_args.worker:
         os.environ["WORKER_ID"] = cli_args.worker
         os.environ["WAN2GP_WORKER_MODE"] = "true"
@@ -292,7 +299,7 @@ def main():
         db_ops.SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
         db_ops.SUPABASE_VIDEO_BUCKET = os.getenv("SUPABASE_VIDEO_BUCKET", "image_uploads")
         db_ops.SUPABASE_CLIENT = create_client(cli_args.supabase_url, client_key)
-        db_ops.SUPABASE_ACCESS_TOKEN = cli_args.supabase_access_token
+        db_ops.SUPABASE_ACCESS_TOKEN = access_token
         db_ops.debug_mode = debug_mode
 
     except Exception as e:

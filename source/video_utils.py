@@ -1197,6 +1197,8 @@ def create_guide_video_for_travel_segment(
     # Legacy parameters for backward compatibility
     structure_motion_video_url: str | None = None,
     structure_motion_frame_offset: int = 0,
+    # Uni3C end frame exclusion - black out end frame so i2v handles it alone
+    exclude_end_for_controlnet: bool = False,
     *,
     dprint=print
 ) -> Path | None:
@@ -1599,6 +1601,13 @@ def create_guide_video_for_travel_segment(
             
             dprint(f"[GUIDANCE_TRACK] Post-structure guidance summary:")
             dprint(guidance_tracker.debug_summary())
+
+        # Uni3C end frame exclusion: black out end frame so uni3c_zero_empty_frames=True
+        # will zero the latent, letting i2v's native image_end handle the end frame alone
+        if exclude_end_for_controlnet and frames_for_guide_list and len(frames_for_guide_list) > 0:
+            black_frame = np.zeros((parsed_res_wh[1], parsed_res_wh[0], 3), dtype=np.uint8)
+            frames_for_guide_list[-1] = black_frame
+            dprint(f"[UNI3C_END_EXCLUDE] Seg {segment_idx_for_logging}: Blacked out end frame (idx {len(frames_for_guide_list)-1}) for controlnet - i2v will handle end anchor")
 
         if frames_for_guide_list:
             guide_video_file_path = create_video_from_frames_list(frames_for_guide_list, actual_guide_video_path, fps_helpers, parsed_res_wh)

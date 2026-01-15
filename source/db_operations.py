@@ -1635,6 +1635,65 @@ def mark_task_failed_supabase(task_id_str, error_message):
     if not SUPABASE_CLIENT:
         print("[ERROR] Supabase client not initialized. Cannot mark task failed.")
         return
-    
+
     # Use the standard update function which now uses direct database updates for non-COMPLETE statuses
-    update_task_status_supabase(task_id_str, STATUS_FAILED, error_message) 
+    update_task_status_supabase(task_id_str, STATUS_FAILED, error_message)
+
+
+def reset_generation_started_at(task_id_str: str) -> bool:
+    """
+    Resets the generation_started_at timestamp to NOW for a task.
+
+    This should be called after model loading completes, so users are not
+    charged for model loading time. The billing period starts from this
+    reset timestamp instead of the original claim time.
+
+    Args:
+        task_id_str: Task ID to reset timestamp for
+
+    Returns:
+        True if successful, False otherwise
+    """
+    edge_url = (
+        os.getenv("SUPABASE_EDGE_UPDATE_TASK_URL")
+        or (f"{SUPABASE_URL.rstrip('/')}/functions/v1/update-task-status" if SUPABASE_URL else None)
+    )
+
+    if not edge_url:
+        print(f"[ERROR] No update-task-status edge function URL available for resetting generation_started_at")
+        return False
+
+    headers = {"Content-Type": "application/json"}
+    if SUPABASE_ACCESS_TOKEN:
+        headers["Authorization"] = f"Bearer {SUPABASE_ACCESS_TOKEN}"
+
+    # Send current status with reset flag - the task is already "In Progress"
+    payload = {
+        "task_id": task_id_str,
+        "status": STATUS_IN_PROGRESS,
+        "reset_generation_started_at": True
+    }
+
+    dprint(f"[BILLING] Resetting generation_started_at for task {task_id_str} (model loading complete)")
+
+    resp, edge_error = _call_edge_function_with_retry(
+        edge_url=edge_url,
+        payload=payload,
+        headers=headers,
+        function_name="update-task-status",
+        context_id=task_id_str,
+        timeout=30,
+        max_retries=3,
+    )
+
+    if resp and resp.status_code == 200:
+        dprint(f"[BILLING] Successfully reset generation_started_at for task {task_id_str}")
+        return True
+    elif edge_error:
+        print(f"[ERROR] Failed to reset generation_started_at for task {task_id_str}: {edge_error}")
+        return False
+    elif resp:
+        print(f"[ERROR] Failed to reset generation_started_at for task {task_id_str}: {resp.status_code} - {resp.text}")
+        return False
+
+    return False 

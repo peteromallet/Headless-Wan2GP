@@ -1038,19 +1038,186 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         dprint(f"[FRAME_CONSOLIDATION] Consolidation disabled - using original {num_segments} segments as specified")
         # --- END FRAME CONSOLIDATION OPTIMIZATION ---
 
-        # Extract and validate structure video parameters
+        # =============================================================================
+        # STRUCTURE VIDEO PROCESSING (Single or Multi-Source Composite)
+        # =============================================================================
+        # Check for new multi-structure-video format first, then fall back to legacy single video
+        structure_videos = orchestrator_payload.get("structure_videos", [])
         structure_video_path = orchestrator_payload.get("structure_video_path")
-        structure_video_treatment = orchestrator_payload.get("structure_video_treatment", "adjust")
-        structure_type = orchestrator_payload.get("structure_video_type", orchestrator_payload.get("structure_type", "flow"))  # Check both keys
-        travel_logger.info(f"Structure video config: type={structure_type}, treatment={structure_video_treatment}, path={'YES' if structure_video_path else 'NO'}", task_id=orchestrator_task_id_str)
-
-        # Extract strength parameters for each type
-        motion_strength = orchestrator_payload.get("structure_video_motion_strength", 1.0)
-        canny_intensity = orchestrator_payload.get("structure_canny_intensity", 1.0)
-        depth_contrast = orchestrator_payload.get("structure_depth_contrast", 1.0)
         
-        if structure_video_path:
-            # Capture original URL if it's a remote path
+        # Initialize variables that will be set by either path
+        structure_type = None
+        motion_strength = 1.0
+        canny_intensity = 1.0
+        depth_contrast = 1.0
+        segment_flow_offsets = []
+        total_flow_frames = 0
+        
+        # =============================================================================
+        # Calculate TWO different timelines:
+        # 1. STITCHED TIMELINE: Final output length after overlaps removed (what user sees)
+        #    - Used for multi-structure-video (start_frame/end_frame are in this space)
+        # 2. GUIDANCE TIMELINE: Internal length where overlaps are "reused" 
+        #    - Used for legacy single structure video (backwards compat)
+        # =============================================================================
+        
+        # STITCHED TIMELINE: sum(frames) - sum(overlaps)
+        # This is what the user sees and where image keyframes are positioned
+        total_stitched_frames = 0
+        segment_stitched_offsets = []  # Where each segment STARTS in stitched output
+        for idx in range(num_segments):
+            segment_total_frames = expanded_segment_frames[idx]
+            if idx == 0:
+                segment_stitched_offsets.append(0)
+                total_stitched_frames = segment_total_frames
+            else:
+                # Segment starts where previous segment ended minus overlap
+                overlap = expanded_frame_overlap[idx - 1] if idx > 0 else 0
+                segment_start = total_stitched_frames - overlap
+                segment_stitched_offsets.append(segment_start)
+                total_stitched_frames = segment_start + segment_total_frames
+        
+        # GUIDANCE TIMELINE: Legacy calculation for backwards compatibility
+        # This has overlapping regions that segments "reuse"
+        for idx in range(num_segments):
+            segment_total_frames = expanded_segment_frames[idx]
+            if idx == 0 and not orchestrator_payload.get("continue_from_video_resolved_path"):
+                segment_flow_offsets.append(0)
+                total_flow_frames = segment_total_frames
+            else:
+                overlap = expanded_frame_overlap[idx - 1] if idx > 0 else 0
+                segment_offset = total_flow_frames - overlap
+                segment_flow_offsets.append(segment_offset)
+                total_flow_frames += segment_total_frames
+        
+        dprint(f"[STRUCTURE_VIDEO] Stitched timeline: {total_stitched_frames} frames")
+        dprint(f"[STRUCTURE_VIDEO] Stitched segment offsets: {segment_stitched_offsets}")
+        dprint(f"[STRUCTURE_VIDEO] Guidance timeline (legacy): {total_flow_frames} frames")
+        dprint(f"[STRUCTURE_VIDEO] Guidance segment offsets (legacy): {segment_flow_offsets}")
+        
+        # =============================================================================
+        # PATH A: Multi-Structure Video (new format with structure_videos array)
+        # =============================================================================
+        if structure_videos and len(structure_videos) > 0:
+            travel_logger.info(f"Multi-structure video mode: {len(structure_videos)} configs", task_id=orchestrator_task_id_str)
+            
+            try:
+                from source.structure_video_guidance import (
+                    create_composite_guidance_video,
+                    validate_structure_video_configs
+                )
+                
+                # Validate and extract structure_type from configs (must all match)
+                structure_types_found = set()
+                for cfg in structure_videos:
+                    cfg_type = cfg.get("structure_type", cfg.get("type", "flow"))
+                    structure_types_found.add(cfg_type)
+
+                if len(structure_types_found) > 1:
+                    raise ValueError(f"All structure_videos must have same type, found: {structure_types_found}")
+
+                structure_type = structure_types_found.pop() if structure_types_found else "flow"
+
+                # Validate structure_type
+                if structure_type not in ["flow", "canny", "depth", "raw", "uni3c"]:
+                    raise ValueError(f"Invalid structure_type: {structure_type}. Must be 'flow', 'canny', 'depth', 'raw', or 'uni3c'")
+                
+                # Get global strength parameters (can be overridden per-config)
+                motion_strength = orchestrator_payload.get("structure_video_motion_strength", 1.0)
+                canny_intensity = orchestrator_payload.get("structure_canny_intensity", 1.0)
+                depth_contrast = orchestrator_payload.get("structure_depth_contrast", 1.0)
+                
+                # Log configs
+                for i, cfg in enumerate(structure_videos):
+                    cfg_motion = cfg.get("motion_strength", motion_strength)
+                    dprint(f"[STRUCTURE_VIDEO] Config {i}: frames [{cfg.get('start_frame')}, {cfg.get('end_frame')}) "
+                           f"from {Path(cfg.get('path', 'unknown')).name}, "
+                           f"source_range=[{cfg.get('source_start_frame', 0)}, {cfg.get('source_end_frame', 'end')}), "
+                           f"treatment={cfg.get('treatment', 'adjust')}, motion_strength={cfg_motion}")
+                
+                # Get resolution and FPS
+                target_resolution_raw = orchestrator_payload["parsed_resolution_wh"]
+                target_fps = orchestrator_payload.get("fps_helpers", 16)
+                
+                if isinstance(target_resolution_raw, str):
+                    parsed_res = sm_parse_resolution(target_resolution_raw)
+                    if parsed_res is None:
+                        raise ValueError(f"Invalid resolution format: {target_resolution_raw}")
+                    target_resolution = snap_resolution_to_model_grid(parsed_res)
+                    orchestrator_payload["parsed_resolution_wh"] = f"{target_resolution[0]}x{target_resolution[1]}"
+                    dprint(f"[STRUCTURE_VIDEO] Resolution snapped: {target_resolution_raw} → {orchestrator_payload['parsed_resolution_wh']}")
+                else:
+                    target_resolution = target_resolution_raw
+                
+                # Generate unique filename
+                timestamp_short = datetime.now().strftime("%H%M%S")
+                unique_suffix = uuid.uuid4().hex[:6]
+                composite_filename = f"structure_composite_{structure_type}_{timestamp_short}_{unique_suffix}.mp4"
+                
+                travel_logger.info(f"Creating composite guidance video ({structure_type})...", task_id=orchestrator_task_id_str)
+                
+                # Create composite guidance video
+                # Use STITCHED timeline for multi-structure video
+                # This ensures start_frame/end_frame match user's mental model (image positions)
+                composite_guidance_path = create_composite_guidance_video(
+                    structure_configs=structure_videos,
+                    total_frames=total_stitched_frames,  # Stitched timeline, not guidance timeline!
+                    structure_type=structure_type,
+                    target_resolution=target_resolution,
+                    target_fps=target_fps,
+                    output_path=current_run_output_dir / composite_filename,
+                    motion_strength=motion_strength,
+                    canny_intensity=canny_intensity,
+                    depth_contrast=depth_contrast,
+                    download_dir=current_run_output_dir,
+                    dprint=dprint
+                )
+                
+                # Flag to use stitched offsets for segment payloads
+                use_stitched_offsets = True
+                
+                # Upload composite
+                structure_guidance_video_url = upload_and_get_final_output_location(
+                    local_file_path=composite_guidance_path,
+                    supabase_object_name=composite_filename,
+                    initial_db_location=str(composite_guidance_path),
+                    dprint=dprint
+                )
+                
+                # Get frame count for logging
+                guidance_frame_count, _ = sm_get_video_frame_count_and_fps(composite_guidance_path)
+                travel_logger.success(
+                    f"Composite guidance video created: {guidance_frame_count} frames, {len(structure_videos)} sources",
+                    task_id=orchestrator_task_id_str
+                )
+                
+                # Store in orchestrator payload for segments
+                orchestrator_payload["structure_guidance_video_url"] = structure_guidance_video_url
+                orchestrator_payload["structure_type"] = structure_type
+                
+            except Exception as e:
+                travel_logger.error(f"Failed to create composite guidance video: {e}", task_id=orchestrator_task_id_str)
+                traceback.print_exc()
+                travel_logger.warning("Structure guidance will not be available for this generation", task_id=orchestrator_task_id_str)
+                orchestrator_payload["structure_guidance_video_url"] = None
+                orchestrator_payload["structure_type"] = structure_type
+        
+        # =============================================================================
+        # PATH B: Legacy Single Structure Video (structure_video_path)
+        # =============================================================================
+        elif structure_video_path:
+            # Legacy single structure video - uses guidance timeline (not stitched)
+            use_stitched_offsets = False
+            structure_video_treatment = orchestrator_payload.get("structure_video_treatment", "adjust")
+            structure_type = orchestrator_payload.get("structure_video_type", orchestrator_payload.get("structure_type", "flow"))
+            travel_logger.info(f"Single structure video mode: type={structure_type}, treatment={structure_video_treatment}", task_id=orchestrator_task_id_str)
+
+            # Extract strength parameters
+            motion_strength = orchestrator_payload.get("structure_video_motion_strength", 1.0)
+            canny_intensity = orchestrator_payload.get("structure_canny_intensity", 1.0)
+            depth_contrast = orchestrator_payload.get("structure_depth_contrast", 1.0)
+            
+            # Capture original URL if remote
             if isinstance(structure_video_path, str) and structure_video_path.startswith(("http://", "https://")):
                  orchestrator_payload["structure_original_video_url"] = structure_video_path
 
@@ -1063,119 +1230,37 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 descriptive_name="structure_video"
             )
             
-            # Validate structure video exists (after potential download)
+            # Validate
             if not Path(structure_video_path).exists():
                 raise ValueError(f"Structure video not found: {structure_video_path}")
-            
-            # Validate treatment mode
             if structure_video_treatment not in ["adjust", "clip"]:
-                raise ValueError(f"Invalid structure_video_treatment: {structure_video_treatment}. Must be 'adjust' or 'clip'")
-            
-            # Validate structure_type
-            if structure_type not in ["flow", "canny", "depth", "raw"]:
-                raise ValueError(f"Invalid structure_type: {structure_type}. Must be 'flow', 'canny', 'depth', or 'raw'")
-            
-            # Warn about unused strength parameters
-            if structure_type == "flow":
-                if abs(canny_intensity - 1.0) > 1e-6:
-                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_canny_intensity={canny_intensity} ignored (structure_type is 'flow')")
-                if abs(depth_contrast - 1.0) > 1e-6:
-                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_depth_contrast={depth_contrast} ignored (structure_type is 'flow')")
-            elif structure_type == "canny":
-                if abs(motion_strength - 1.0) > 1e-6:
-                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_video_motion_strength={motion_strength} ignored (structure_type is 'canny')")
-                if abs(depth_contrast - 1.0) > 1e-6:
-                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_depth_contrast={depth_contrast} ignored (structure_type is 'canny')")
-            elif structure_type == "depth":
-                if abs(motion_strength - 1.0) > 1e-6:
-                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_video_motion_strength={motion_strength} ignored (structure_type is 'depth')")
-                if abs(canny_intensity - 1.0) > 1e-6:
-                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_canny_intensity={canny_intensity} ignored (structure_type is 'depth')")
-            elif structure_type == "raw":
-                # Raw type: no preprocessing, used for Uni3C
-                # motion_strength will be mapped to uni3c_strength below
-                if abs(canny_intensity - 1.0) > 1e-6:
-                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_canny_intensity={canny_intensity} ignored (structure_type is 'raw')")
-                if abs(depth_contrast - 1.0) > 1e-6:
-                    dprint(f"[STRUCTURE_VIDEO] Warning: structure_depth_contrast={depth_contrast} ignored (structure_type is 'raw')")
+                raise ValueError(f"Invalid structure_video_treatment: {structure_video_treatment}")
+            if structure_type not in ["flow", "canny", "depth", "raw", "uni3c"]:
+                raise ValueError(f"Invalid structure_type: {structure_type}. Must be 'flow', 'canny', 'depth', 'raw', or 'uni3c'")
 
-            # Log structure video configuration
-            strength_param = {
-                "flow": f"motion_strength={motion_strength}",
-                "canny": f"canny_intensity={canny_intensity}",
-                "depth": f"depth_contrast={depth_contrast}",
-                "raw": f"uni3c_strength={motion_strength} (mapped from motion_strength)"
-            }.get(structure_type, "unknown")
+            travel_logger.info(f"Structure video processing: {total_flow_frames} total frames needed", task_id=orchestrator_task_id_str)
 
-            travel_logger.info(
-                f"Structure video enabled: type={structure_type}, treatment={structure_video_treatment}, {strength_param}",
-                task_id=orchestrator_task_id_str
-            )
-            travel_logger.info(f"Structure video file: {structure_video_path}", task_id=orchestrator_task_id_str)
-
-            # Calculate TOTAL flow frames needed across ALL segments
-            # Flow visualizations are created for ALL frames INCLUDING anchors (even though anchors
-            # will be replaced by keyframes), but EXCLUDING overlap frames (reused from previous segment)
-            #
-            # Example: 3 segments × 61 frames, 8 frame overlap
-            # Segment 0: 61 flows (frames 0-60, including both anchor frames)
-            # Segment 1: 53 flows (frames 8-60, excluding 8 overlap frames)
-            # Segment 2: 53 flows (frames 8-60, excluding 8 overlap frames)
-            # Total: 61 + 53 + 53 = 167 flows
-
-            total_flow_frames = 0
-            segment_flow_offsets = []  # Track where each segment's flows start
-
-            for idx in range(num_segments):
-                segment_total_frames = expanded_segment_frames[idx]
-
-                if idx == 0 and not orchestrator_payload.get("continue_from_video_resolved_path"):
-                    # First segment: all frames
-                    segment_flow_offsets.append(0)
-                    total_flow_frames = segment_total_frames
-                    dprint(f"[STRUCTURE_VIDEO] Segment {idx}: offset=0, adds {segment_total_frames} frames, total={total_flow_frames}")
-                else:
-                    # Subsequent segments: Structure frames are REUSED in overlap region
-                    # Segment generates (segment_total_frames + overlap) frames but reads structure
-                    # starting from (current_position - overlap) to reuse overlap structure frames
-                    overlap = expanded_frame_overlap[idx - 1] if idx > 0 else 0
-                    segment_offset = total_flow_frames - overlap
-                    segment_flow_offsets.append(segment_offset)
-                    # Add only non-overlapping frames to total structure length
-                    total_flow_frames += segment_total_frames
-                    dprint(f"[STRUCTURE_VIDEO] Segment {idx}: offset={segment_offset}, overlap={overlap}, adds {segment_total_frames} new frames, total={total_flow_frames}")
-
-            travel_logger.info(f"Structure video processing: {total_flow_frames} total frames needed across {num_segments} segments", task_id=orchestrator_task_id_str)
-
-            # Create and upload pre-warped guidance video for segments to download
-            travel_logger.info("Creating structure guidance video...", task_id=orchestrator_task_id_str)
+            # Create guidance video
             try:
                 from source.structure_video_guidance import create_structure_guidance_video, create_trimmed_structure_video
                 
-                # Get resolution and FPS from orchestrator payload
                 target_resolution_raw = orchestrator_payload["parsed_resolution_wh"]
                 target_fps = orchestrator_payload.get("fps_helpers", 16)
                 
-                # Parse resolution if it's a string (e.g., "768x576" -> (768, 576))
                 if isinstance(target_resolution_raw, str):
                     parsed_res = sm_parse_resolution(target_resolution_raw)
                     if parsed_res is None:
                         raise ValueError(f"Invalid resolution format: {target_resolution_raw}")
                     target_resolution = snap_resolution_to_model_grid(parsed_res)
-                    # Update orchestrator payload with snapped resolution so segments match structure video
                     orchestrator_payload["parsed_resolution_wh"] = f"{target_resolution[0]}x{target_resolution[1]}"
-                    dprint(f"[STRUCTURE_VIDEO] Resolution snapped: {target_resolution_raw} → {orchestrator_payload['parsed_resolution_wh']}")
                 else:
                     target_resolution = target_resolution_raw
                 
-                # Generate unique filename to avoid race conditions and enable idempotency
                 timestamp_short = datetime.now().strftime("%H%M%S")
                 unique_suffix = uuid.uuid4().hex[:6]
                 
-                # 1. Create trimmed video (original content adjusted to timeline)
-                travel_logger.info("Creating trimmed structure video (original content adjusted to timeline)...", task_id=orchestrator_task_id_str)
+                # Create trimmed video
                 trimmed_filename = f"structure_trimmed_{timestamp_short}_{unique_suffix}.mp4"
-                
                 trimmed_video_path = create_trimmed_structure_video(
                     structure_video_path=structure_video_path,
                     max_frames_needed=total_flow_frames,
@@ -1186,7 +1271,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     dprint=dprint
                 )
                 
-                # Upload trimmed video
                 trimmed_video_url = upload_and_get_final_output_location(
                     local_file_path=trimmed_video_path,
                     supabase_object_name=trimmed_filename,
@@ -1194,11 +1278,9 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     dprint=dprint
                 )
                 orchestrator_payload["structure_trimmed_video_url"] = trimmed_video_url
-                travel_logger.success(f"Trimmed structure video created: {trimmed_video_url}", task_id=orchestrator_task_id_str)
 
-                # 2. Create pre-warped guidance video (processed with flow/canny/depth)
+                # Create guidance video
                 structure_guidance_filename = f"structure_{structure_type}_{timestamp_short}_{unique_suffix}.mp4"
-
                 structure_guidance_video_path = create_structure_guidance_video(
                     structure_video_path=structure_video_path,
                     max_frames_needed=total_flow_frames,
@@ -1213,30 +1295,34 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     dprint=dprint
                 )
                 
-                # Store path for segments (edge function will handle upload)
                 structure_guidance_video_url = upload_and_get_final_output_location(
                     local_file_path=structure_guidance_video_path,
-                    supabase_object_name=structure_guidance_filename,  # Unused but required for signature
+                    supabase_object_name=structure_guidance_filename,
                     initial_db_location=str(structure_guidance_video_path),
                     dprint=dprint
                 )
 
-                travel_logger.success(f"Structure guidance video created: {structure_guidance_video_url}", task_id=orchestrator_task_id_str)
-
-                # Get frame count for logging
                 guidance_frame_count, _ = sm_get_video_frame_count_and_fps(structure_guidance_video_path)
-                travel_logger.info(f"Structure guidance frames: {guidance_frame_count} (treatment: {structure_video_treatment})", task_id=orchestrator_task_id_str)
+                travel_logger.success(f"Structure guidance video created: {guidance_frame_count} frames", task_id=orchestrator_task_id_str)
 
-                # Store URL and type in orchestrator payload for segments to use
                 orchestrator_payload["structure_guidance_video_url"] = structure_guidance_video_url
                 orchestrator_payload["structure_type"] = structure_type
 
             except Exception as e:
                 travel_logger.error(f"Failed to create structure guidance video: {e}", task_id=orchestrator_task_id_str)
                 traceback.print_exc()
-                travel_logger.warning("Structure guidance will not be available for this generation", task_id=orchestrator_task_id_str)
+                travel_logger.warning("Structure guidance will not be available", task_id=orchestrator_task_id_str)
                 orchestrator_payload["structure_guidance_video_url"] = None
-                orchestrator_payload["structure_type"] = structure_type  # Still pass the type
+                orchestrator_payload["structure_type"] = structure_type
+        
+        # =============================================================================
+        # PATH C: No Structure Video
+        # =============================================================================
+        else:
+            use_stitched_offsets = False  # Doesn't matter, but initialize for consistency
+            travel_logger.info("No structure video configured", task_id=orchestrator_task_id_str)
+            orchestrator_payload["structure_guidance_video_url"] = None
+            orchestrator_payload["structure_type"] = None
 
         # --- VLM BATCH PROCESSING (if enhance_prompt enabled) ---
         # Generate all transition prompts upfront to reuse the VLM model across segments
@@ -1815,6 +1901,12 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "orchestrator_task_id_ref": orchestrator_task_id_str,
                 "orchestrator_run_id": run_id,
                 "project_id": orchestrator_project_id, # Added project_id
+                # Parent generation ID for linking to shot_generations
+                "parent_generation_id": (
+                    task_params_from_db.get("parent_generation_id")
+                    or orchestrator_payload.get("parent_generation_id")
+                    or orchestrator_payload.get("orchestrator_details", {}).get("parent_generation_id")
+                ),
                 "segment_index": idx,
                 "is_first_segment": (idx == 0),
                 "is_last_segment": (idx == num_segments - 1),
@@ -1852,31 +1944,69 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "orchestrator_details": orchestrator_payload, # Canonical name for full orchestrator payload
                 
                 # Structure video guidance parameters
-                "structure_video_path": structure_video_path,
-                "structure_video_treatment": structure_video_treatment,
-                "structure_type": orchestrator_payload.get("structure_type", "flow"),  # Default to flow
-                "structure_video_motion_strength": motion_strength if 'motion_strength' in locals() else orchestrator_payload.get("structure_video_motion_strength", 1.0),
-                "structure_canny_intensity": canny_intensity if 'canny_intensity' in locals() else orchestrator_payload.get("structure_canny_intensity", 1.0),
-                "structure_depth_contrast": depth_contrast if 'depth_contrast' in locals() else orchestrator_payload.get("structure_depth_contrast", 1.0),
-                "structure_guidance_video_url": orchestrator_payload.get("structure_guidance_video_url"),  # Pre-warped video URL
-                "structure_guidance_frame_offset": segment_flow_offsets[idx] if 'segment_flow_offsets' in locals() else 0,  # Starting frame in structure_guidance video
+                # Note: structure_video_path may be None for multi-structure-video mode (uses structure_guidance_video_url instead)
+                "structure_video_path": orchestrator_payload.get("structure_video_path"),
+                "structure_video_treatment": orchestrator_payload.get("structure_video_treatment", "adjust"),
+                "structure_type": structure_type if structure_type else orchestrator_payload.get("structure_type"),
+                "structure_video_motion_strength": motion_strength,
+                "structure_canny_intensity": canny_intensity,
+                "structure_depth_contrast": depth_contrast,
+                # Use stitched offsets for multi-structure video (user's frame numbers), legacy offsets otherwise
+                "structure_guidance_frame_offset": (segment_stitched_offsets[idx] if use_stitched_offsets else segment_flow_offsets[idx]) if segment_flow_offsets else 0,
                 
                 # Original and trimmed structure videos for reference
                 "structure_original_video_url": orchestrator_payload.get("structure_original_video_url"),
                 "structure_trimmed_video_url": orchestrator_payload.get("structure_trimmed_video_url"),
 
-                # Uni3C parameters (enabled when structure_type="raw")
-                "use_uni3c": structure_type == "raw" if 'structure_type' in locals() else orchestrator_payload.get("use_uni3c", False),
-                "uni3c_guide_video": orchestrator_payload.get("structure_guidance_video_url") if ('structure_type' in locals() and structure_type == "raw") else orchestrator_payload.get("uni3c_guide_video"),
-                "uni3c_strength": motion_strength if ('structure_type' in locals() and structure_type == "raw") else orchestrator_payload.get("uni3c_strength", 1.0),
-                "uni3c_start_percent": orchestrator_payload.get("uni3c_start_percent", 0.0),
-                "uni3c_end_percent": orchestrator_payload.get("uni3c_end_percent", 1.0),
-                "uni3c_frame_policy": orchestrator_payload.get("uni3c_frame_policy", "fit"),
-                "uni3c_guidance_frame_offset": segment_flow_offsets[idx] if ('structure_type' in locals() and structure_type == "raw" and 'segment_flow_offsets' in locals()) else 0,
-
                 # SVI (Stable Video Infinity) end frame chaining
                 "use_svi": use_svi,
             }
+            
+            # =============================================================================
+            # Per-segment structure guidance: Check overlap for multi-structure-video mode
+            # If segment has no overlap with any structure_videos config, skip guidance entirely
+            # This avoids unnecessary neutral guidance processing (especially for Uni3C)
+            # =============================================================================
+            segment_has_guidance = True  # Default: assume guidance is active
+            
+            if structure_videos:
+                # Multi-structure-video mode: check per-segment overlap
+                from source.structure_video_guidance import segment_has_structure_overlap
+                segment_has_guidance = segment_has_structure_overlap(
+                    segment_index=idx,
+                    segment_frames_expanded=expanded_segment_frames,
+                    frame_overlap_expanded=expanded_frame_overlap,
+                    structure_videos=structure_videos
+                )
+                
+                if not segment_has_guidance:
+                    dprint(f"[STRUCTURE_VIDEO] Segment {idx}: No overlap with structure_videos, skipping structure guidance")
+            elif not orchestrator_payload.get("structure_guidance_video_url") and not orchestrator_payload.get("structure_video_path"):
+                # No structure video at all
+                segment_has_guidance = False
+            
+            # Set structure guidance URL and Uni3C params based on overlap
+            # "uni3c" type enables uni3c control in WGP; "raw" is just passthrough preprocessing
+            is_uni3c_type = structure_type == "uni3c"
+            if segment_has_guidance:
+                segment_payload["structure_guidance_video_url"] = orchestrator_payload.get("structure_guidance_video_url")
+                segment_payload["use_uni3c"] = is_uni3c_type if structure_type else orchestrator_payload.get("use_uni3c", False)
+                segment_payload["uni3c_guide_video"] = orchestrator_payload.get("structure_guidance_video_url") if is_uni3c_type else orchestrator_payload.get("uni3c_guide_video")
+                segment_payload["uni3c_strength"] = motion_strength if is_uni3c_type else orchestrator_payload.get("uni3c_strength", 1.0)
+                segment_payload["uni3c_start_percent"] = orchestrator_payload.get("uni3c_start_percent", 0.0)
+                segment_payload["uni3c_end_percent"] = orchestrator_payload.get("uni3c_end_percent", 1.0)
+                segment_payload["uni3c_frame_policy"] = orchestrator_payload.get("uni3c_frame_policy", "fit")
+                segment_payload["uni3c_guidance_frame_offset"] = (segment_stitched_offsets[idx] if use_stitched_offsets else segment_flow_offsets[idx]) if (is_uni3c_type and segment_flow_offsets) else 0
+            else:
+                # No guidance for this segment
+                segment_payload["structure_guidance_video_url"] = None
+                segment_payload["use_uni3c"] = False
+                segment_payload["uni3c_guide_video"] = None
+                segment_payload["uni3c_strength"] = 0.0
+                segment_payload["uni3c_start_percent"] = 0.0
+                segment_payload["uni3c_end_percent"] = 0.0
+                segment_payload["uni3c_frame_policy"] = "fit"
+                segment_payload["uni3c_guidance_frame_offset"] = 0
             
             # Add extracted parameters at top level for queue processing
             segment_payload.update(extracted_params)

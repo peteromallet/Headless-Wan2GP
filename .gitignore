@@ -26,6 +26,12 @@ venv_headless_wan2gp/
 !Wan2GP/configs/*.json
 !Wan2GP/models/_settings.json
 !Wan2GP/models/wan/configs/*.json
+!Wan2GP/models/z_image/configs/*.json
+!Wan2GP/models/qwen/configs/*.json
+!Wan2GP/models/flux/configs/*.json
+!Wan2GP/models/hyvideo/configs/*.json
+!Wan2GP/models/longcat/configs/*.json
+!Wan2GP/models/chatterbox/configs/*.json
 # *.txt
 *.backup
 *.pkl
