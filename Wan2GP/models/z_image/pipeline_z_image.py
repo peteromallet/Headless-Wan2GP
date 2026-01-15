@@ -537,6 +537,7 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         # ============================================================================
         # IMG2IMG: Encode init image and add noise for denoising
         # ============================================================================
+        # Following diffusers FluxImg2ImgPipeline approach exactly
         init_image_latents = None
         first_step = 0
         if init_image is not None and denoising_strength < 1.0:
@@ -560,12 +561,29 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             print(f"[IMG2IMG] Encoding image to latent space...")
             init_image_latents = self.vae.encode(init_image_tensor).latent_dist.mode()
             init_image_latents = (init_image_latents - self.vae.config.shift_factor) * self.vae.config.scaling_factor
-            print(f"[IMG2IMG] Encoded latents shape: {init_image_latents.shape}")
+            batch_size = init_image_latents.shape[0]
+            print(f"[IMG2IMG] Encoded latents shape: {init_image_latents.shape}, batch_size: {batch_size}")
 
-            # Simple linear noise mixing for exact percentages
+            # ─── Step 1: get_timesteps (matches diffusers exactly) ───
             total_steps = len(timesteps)
+            init_timestep = min(total_steps * denoising_strength, total_steps)
+            t_start = int(max(total_steps - init_timestep, 0))
 
-            # Generate noise
+            # Truncate timesteps
+            timesteps = timesteps[t_start * self.scheduler.order:]
+
+            # Set begin index (diffusers does this in get_timesteps)
+            if hasattr(self.scheduler, "set_begin_index"):
+                self.scheduler.set_begin_index(t_start * self.scheduler.order)
+
+            num_steps_to_run = len(timesteps)
+            first_step = t_start  # For LoRA step tracking
+
+            # ─── Step 2: Get latent_timestep (matches diffusers exactly) ───
+            # diffusers: latent_timestep = timesteps[:1].repeat(batch_size * num_images_per_prompt)
+            latent_timestep = timesteps[:1].repeat(batch_size)
+
+            # ─── Step 3: Generate noise ───
             from diffusers.utils.torch_utils import randn_tensor
             noise = randn_tensor(
                 init_image_latents.shape,
@@ -574,28 +592,21 @@ class ZImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                 dtype=init_image_latents.dtype
             )
 
-            # Mix latents: exact percentage based on strength
-            latent_noise_factor = denoising_strength
-            latents = init_image_latents * (1.0 - latent_noise_factor) + noise * latent_noise_factor
+            # ─── Step 4: scale_noise (matches diffusers prepare_latents) ───
+            # diffusers: latents = self.scheduler.scale_noise(image_latents, timestep, noise)
+            latents = self.scheduler.scale_noise(init_image_latents, latent_timestep, noise)
 
-            print(f"[IMG2IMG] Mixing latents: {(1.0-latent_noise_factor)*100:.1f}% image + {latent_noise_factor*100:.1f}% noise (strength={denoising_strength:.2f})")
-
-            # Calculate step skipping with +1 bonus step
-            first_step = int(total_steps * (1.0 - denoising_strength)) - 1
-            first_step = max(0, first_step)  # Don't go negative
-
-            # Cap at 8 total denoising steps
-            num_inference_steps = total_steps - first_step
-            if num_inference_steps > 8:
-                first_step = total_steps - 8
-                num_inference_steps = 8
-
-            # Adjust timesteps for partial denoising
-            timesteps = timesteps[first_step:]
-            self.scheduler.timesteps = timesteps
-            self._num_timesteps = len(timesteps)
-
-            print(f"[IMG2IMG] ✓ Denoising for {num_inference_steps} steps (skipped first {first_step}, +1 bonus step, capped at 8)")
+            # ─── Logging ───
+            print(f"[IMG2IMG] ═══════════════════════════════════════════════════════════════")
+            print(f"[IMG2IMG] Diffusers-style img2img:")
+            print(f"[IMG2IMG]   denoising_strength: {denoising_strength}")
+            print(f"[IMG2IMG]   total_steps: {total_steps}")
+            print(f"[IMG2IMG]   init_timestep: {init_timestep:.2f}")
+            print(f"[IMG2IMG]   t_start: {t_start}")
+            print(f"[IMG2IMG]   Steps to run: {num_steps_to_run} (from step {t_start})")
+            print(f"[IMG2IMG]   latent_timestep shape: {latent_timestep.shape}, value: {latent_timestep[0].item():.1f}")
+            print(f"[IMG2IMG]   Truncated timesteps: {[t.item() for t in timesteps[:5]]}{'...' if len(timesteps) > 5 else ''}")
+            print(f"[IMG2IMG] ═══════════════════════════════════════════════════════════════")
         elif init_image is not None and denoising_strength >= 1.0:
             print(f"[IMG2IMG] ⚠️  init_image provided but denoising_strength={denoising_strength:.2f} >= 1.0, treating as text-to-image")
         elif init_image is None:

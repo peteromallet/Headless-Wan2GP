@@ -34,6 +34,8 @@ SUPABASE_SERVICE_ROLE_KEY="your-service-role-key-from-reigh" python worker.py \
 
 ## Running Without Reigh: Standalone Usage
 
+> **Note:** The standalone/headless mode in this repo is primarily for internal testing. For general standalone usage, we recommend using [Wan2GP's built-in headless mode](https://github.com/deepbeepmeep/Wan2GP) directly, which is more feature-complete and actively maintained.
+
 You can use the generation engine directly without connecting to Reigh's database. This is useful for local testing, scripting, or building custom pipelines.
 
 ### Using the Examples

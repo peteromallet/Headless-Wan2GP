@@ -1077,23 +1077,36 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 segment_stitched_offsets.append(segment_start)
                 total_stitched_frames = segment_start + segment_total_frames
         
-        # GUIDANCE TIMELINE: Legacy calculation for backwards compatibility
+        # GUIDANCE TIMELINE: Simple cumulative sum for multi-structure video composite
+        # This is the raw total of all segment frames - what the UX shows and what the composite video uses
+        # NO overlap subtraction - each segment starts where the previous one ends (frame-wise)
+        segment_guidance_offsets = []  # Simple cumulative sums for guidance timeline
+        total_flow_frames = 0
+        for idx in range(num_segments):
+            segment_total_frames = expanded_segment_frames[idx]
+            segment_guidance_offsets.append(total_flow_frames)
+            total_flow_frames += segment_total_frames
+
+        # FLOW TIMELINE: Legacy calculation for backwards compatibility (single structure video)
         # This has overlapping regions that segments "reuse"
         for idx in range(num_segments):
             segment_total_frames = expanded_segment_frames[idx]
             if idx == 0 and not orchestrator_payload.get("continue_from_video_resolved_path"):
                 segment_flow_offsets.append(0)
-                total_flow_frames = segment_total_frames
             else:
                 overlap = expanded_frame_overlap[idx - 1] if idx > 0 else 0
-                segment_offset = total_flow_frames - overlap
+                # Calculate where this segment starts in the flow (subtracting overlap)
+                prev_end = segment_flow_offsets[-1] + expanded_segment_frames[idx - 1] if idx > 0 else 0
+                segment_offset = prev_end - overlap
                 segment_flow_offsets.append(segment_offset)
-                total_flow_frames += segment_total_frames
         
-        dprint(f"[STRUCTURE_VIDEO] Stitched timeline: {total_stitched_frames} frames")
+        dprint(f"[STRUCTURE_VIDEO] ========== TIMELINE SUMMARY ==========")
+        dprint(f"[STRUCTURE_VIDEO] Guidance timeline (UX): {total_flow_frames} frames (raw segment total)")
+        dprint(f"[STRUCTURE_VIDEO] Stitched timeline (final): {total_stitched_frames} frames (after overlaps removed)")
+        dprint(f"[STRUCTURE_VIDEO] Guidance segment offsets (simple cumulative): {segment_guidance_offsets}")
+        dprint(f"[STRUCTURE_VIDEO] Flow segment offsets (with overlap subtract): {segment_flow_offsets}")
         dprint(f"[STRUCTURE_VIDEO] Stitched segment offsets: {segment_stitched_offsets}")
-        dprint(f"[STRUCTURE_VIDEO] Guidance timeline (legacy): {total_flow_frames} frames")
-        dprint(f"[STRUCTURE_VIDEO] Guidance segment offsets (legacy): {segment_flow_offsets}")
+        dprint(f"[STRUCTURE_VIDEO] ======================================")
         
         # =============================================================================
         # PATH A: Multi-Structure Video (new format with structure_videos array)
@@ -1127,10 +1140,15 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 canny_intensity = orchestrator_payload.get("structure_canny_intensity", 1.0)
                 depth_contrast = orchestrator_payload.get("structure_depth_contrast", 1.0)
                 
-                # Log configs
+                # Log configs with timeline context
+                dprint(f"[STRUCTURE_VIDEO] Validating {len(structure_videos)} configs against GUIDANCE timeline ({total_flow_frames} frames)")
                 for i, cfg in enumerate(structure_videos):
                     cfg_motion = cfg.get("motion_strength", motion_strength)
-                    dprint(f"[STRUCTURE_VIDEO] Config {i}: frames [{cfg.get('start_frame')}, {cfg.get('end_frame')}) "
+                    cfg_start = cfg.get('start_frame', 0)
+                    cfg_end = cfg.get('end_frame', 0)
+                    in_range = cfg_start < total_flow_frames and cfg_end <= total_flow_frames
+                    range_status = "✓" if in_range else f"⚠️ EXCEEDS {total_flow_frames}"
+                    dprint(f"[STRUCTURE_VIDEO] Config {i}: frames [{cfg_start}, {cfg_end}) {range_status} "
                            f"from {Path(cfg.get('path', 'unknown')).name}, "
                            f"source_range=[{cfg.get('source_start_frame', 0)}, {cfg.get('source_end_frame', 'end')}), "
                            f"treatment={cfg.get('treatment', 'adjust')}, motion_strength={cfg_motion}")
@@ -1157,11 +1175,11 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 travel_logger.info(f"Creating composite guidance video ({structure_type})...", task_id=orchestrator_task_id_str)
                 
                 # Create composite guidance video
-                # Use STITCHED timeline for multi-structure video
-                # This ensures start_frame/end_frame match user's mental model (image positions)
+                # Use GUIDANCE timeline (total_flow_frames) for multi-structure video
+                # This matches the UX timeline where users set start_frame/end_frame
                 composite_guidance_path = create_composite_guidance_video(
                     structure_configs=structure_videos,
-                    total_frames=total_stitched_frames,  # Stitched timeline, not guidance timeline!
+                    total_frames=total_flow_frames,  # Guidance timeline matches UX
                     structure_type=structure_type,
                     target_resolution=target_resolution,
                     target_fps=target_fps,
@@ -1172,10 +1190,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     download_dir=current_run_output_dir,
                     dprint=dprint
                 )
-                
-                # Flag to use stitched offsets for segment payloads
-                use_stitched_offsets = True
-                
+
+                # Flag to use flow offsets for segment payloads (matches guidance timeline)
+                use_stitched_offsets = False
+
                 # Upload composite
                 structure_guidance_video_url = upload_and_get_final_output_location(
                     local_file_path=composite_guidance_path,
@@ -1200,7 +1218,12 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 traceback.print_exc()
                 travel_logger.warning("Structure guidance will not be available for this generation", task_id=orchestrator_task_id_str)
                 orchestrator_payload["structure_guidance_video_url"] = None
-                orchestrator_payload["structure_type"] = structure_type
+                # structure_type may not be defined if exception happened early (e.g., during import)
+                try:
+                    orchestrator_payload["structure_type"] = structure_type
+                except NameError:
+                    orchestrator_payload["structure_type"] = None
+                use_stitched_offsets = False  # Fallback when composite creation fails
         
         # =============================================================================
         # PATH B: Legacy Single Structure Video (structure_video_path)
@@ -1908,6 +1931,12 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     or orchestrator_payload.get("orchestrator_details", {}).get("parent_generation_id")
                 ),
                 "segment_index": idx,
+                # Extract pair_shot_generation_id from pair_shot_generation_ids using segment_index
+                "pair_shot_generation_id": (
+                    orchestrator_payload.get("pair_shot_generation_ids", [])[idx]
+                    if idx < len(orchestrator_payload.get("pair_shot_generation_ids", []))
+                    else None
+                ),
                 "is_first_segment": (idx == 0),
                 "is_last_segment": (idx == num_segments - 1),
 
@@ -1951,8 +1980,8 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "structure_video_motion_strength": motion_strength,
                 "structure_canny_intensity": canny_intensity,
                 "structure_depth_contrast": depth_contrast,
-                # Use stitched offsets for multi-structure video (user's frame numbers), legacy offsets otherwise
-                "structure_guidance_frame_offset": (segment_stitched_offsets[idx] if use_stitched_offsets else segment_flow_offsets[idx]) if segment_flow_offsets else 0,
+                # Use guidance offsets for multi-structure video (matches UX guidance timeline), stitched offsets otherwise
+                "structure_guidance_frame_offset": (segment_stitched_offsets[idx] if use_stitched_offsets else segment_guidance_offsets[idx]) if segment_guidance_offsets else 0,
                 
                 # Original and trimmed structure videos for reference
                 "structure_original_video_url": orchestrator_payload.get("structure_original_video_url"),
@@ -1970,17 +1999,21 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
             segment_has_guidance = True  # Default: assume guidance is active
             
             if structure_videos:
-                # Multi-structure-video mode: check per-segment overlap
+                # Multi-structure-video mode: check per-segment overlap using GUIDANCE timeline
                 from source.structure_video_guidance import segment_has_structure_overlap
                 segment_has_guidance = segment_has_structure_overlap(
                     segment_index=idx,
                     segment_frames_expanded=expanded_segment_frames,
                     frame_overlap_expanded=expanded_frame_overlap,
-                    structure_videos=structure_videos
+                    structure_videos=structure_videos,
+                    dprint=dprint  # Pass dprint for timeline debugging
                 )
-                
-                if not segment_has_guidance:
-                    dprint(f"[STRUCTURE_VIDEO] Segment {idx}: No overlap with structure_videos, skipping structure guidance")
+
+                # Log segment's guidance offset for debugging timeline issues
+                seg_offset = segment_guidance_offsets[idx] if segment_guidance_offsets and idx < len(segment_guidance_offsets) else 0
+                seg_frames = expanded_segment_frames[idx] if idx < len(expanded_segment_frames) else 0
+                dprint(f"[STRUCTURE_VIDEO] Segment {idx}: guidance_offset={seg_offset}, frames={seg_frames}, "
+                       f"range=[{seg_offset}, {seg_offset + seg_frames}), has_guidance={segment_has_guidance}")
             elif not orchestrator_payload.get("structure_guidance_video_url") and not orchestrator_payload.get("structure_video_path"):
                 # No structure video at all
                 segment_has_guidance = False
@@ -1996,7 +2029,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 segment_payload["uni3c_start_percent"] = orchestrator_payload.get("uni3c_start_percent", 0.0)
                 segment_payload["uni3c_end_percent"] = orchestrator_payload.get("uni3c_end_percent", 1.0)
                 segment_payload["uni3c_frame_policy"] = orchestrator_payload.get("uni3c_frame_policy", "fit")
-                segment_payload["uni3c_guidance_frame_offset"] = (segment_stitched_offsets[idx] if use_stitched_offsets else segment_flow_offsets[idx]) if (is_uni3c_type and segment_flow_offsets) else 0
+                segment_payload["uni3c_guidance_frame_offset"] = (segment_stitched_offsets[idx] if use_stitched_offsets else segment_guidance_offsets[idx]) if (is_uni3c_type and segment_guidance_offsets) else 0
             else:
                 # No guidance for this segment
                 segment_payload["structure_guidance_video_url"] = None

@@ -1165,11 +1165,12 @@ def validate_structure_video_configs(
     """
     if not configs:
         return []
-    
+
     # Sort by start_frame
     sorted_configs = sorted(configs, key=lambda c: c.get("start_frame", 0))
-    
-    prev_end = -1
+
+    # First pass: validate required fields and clip/filter configs
+    valid_configs = []
     for i, config in enumerate(sorted_configs):
         # Check required fields
         if "path" not in config:
@@ -1178,29 +1179,46 @@ def validate_structure_video_configs(
             raise ValueError(f"Structure video config {i} missing 'start_frame'")
         if "end_frame" not in config:
             raise ValueError(f"Structure video config {i} missing 'end_frame'")
-        
+
         start = config["start_frame"]
         end = config["end_frame"]
-        
+
         # Validate range
         if start < 0:
             raise ValueError(f"Config {i}: start_frame {start} < 0")
+
+        # Skip configs that start beyond video length
+        if start >= total_frames:
+            dprint(f"[COMPOSITE] ⚠️ Config {i}: start_frame {start} >= total_frames {total_frames}, skipping this config")
+            continue
+
+        # Auto-clip end_frame to total_frames instead of failing
         if end > total_frames:
-            raise ValueError(f"Config {i}: end_frame {end} > total_frames {total_frames}")
+            dprint(f"[COMPOSITE] ⚠️ Config {i}: end_frame {end} > total_frames {total_frames}, clipping to {total_frames}")
+            end = total_frames
+            config["end_frame"] = end
+
         if start >= end:
             raise ValueError(f"Config {i}: start_frame {start} >= end_frame {end}")
-        
-        # Check for overlap
+
+        valid_configs.append(config)
+
+    # Second pass: check for overlaps on valid configs
+    prev_end = -1
+    for i, config in enumerate(valid_configs):
+        start = config["start_frame"]
+        end = config["end_frame"]
+
         if start < prev_end:
             raise ValueError(f"Config {i}: frame range [{start}, {end}) overlaps with previous config ending at {prev_end}")
-        
+
         prev_end = end
-    
-    dprint(f"[COMPOSITE] Validated {len(sorted_configs)} structure video configs")
-    for i, cfg in enumerate(sorted_configs):
+
+    dprint(f"[COMPOSITE] Validated {len(valid_configs)} structure video configs (from {len(sorted_configs)} input)")
+    for i, cfg in enumerate(valid_configs):
         dprint(f"  Config {i}: frames [{cfg['start_frame']}, {cfg['end_frame']}) from {Path(cfg['path']).name}")
-    
-    return sorted_configs
+
+    return valid_configs
 
 
 def create_composite_guidance_video(
@@ -1405,40 +1423,71 @@ def segment_has_structure_overlap(
     segment_index: int,
     segment_frames_expanded: List[int],
     frame_overlap_expanded: List[int],
-    structure_videos: List[dict]
+    structure_videos: List[dict],
+    dprint: Callable = lambda x: None
 ) -> bool:
     """
     Check if a segment overlaps with any structure video config.
-    
-    Useful for orchestrators to skip structure guidance for segments with no overlap,
-    avoiding unnecessary neutral guidance video creation.
-    
+
+    Uses GUIDANCE timeline (not stitched) because structure_videos start_frame/end_frame
+    are specified in the guidance timeline by the UX.
+
     Args:
         segment_index: Index of the segment (0-based)
         segment_frames_expanded: List of frame counts per segment
-        frame_overlap_expanded: List of overlap values between segments
+        frame_overlap_expanded: List of overlap values between segments (unused, kept for API compat)
         structure_videos: List of structure video configs
-        
+        dprint: Debug print function
+
     Returns:
         True if segment overlaps with at least one config, False otherwise
     """
     if not structure_videos:
         return False
-    
-    seg_start, seg_frames = calculate_segment_stitched_position(
-        segment_index, segment_frames_expanded, frame_overlap_expanded, lambda x: None
+
+    # Use GUIDANCE timeline (matches UX) - not stitched timeline
+    seg_start, seg_frames = calculate_segment_guidance_position(
+        segment_index, segment_frames_expanded, dprint
     )
     seg_end = seg_start + seg_frames
-    
+
     for cfg in structure_videos:
         cfg_start = cfg.get("start_frame", 0)
         cfg_end = cfg.get("end_frame", 0)
-        
+
         # Check overlap
         if cfg_start < seg_end and cfg_end > seg_start:
+            dprint(f"[OVERLAP_CHECK] Segment {segment_index} [{seg_start}, {seg_end}) overlaps with config [{cfg_start}, {cfg_end})")
             return True
-    
+
+    dprint(f"[OVERLAP_CHECK] Segment {segment_index} [{seg_start}, {seg_end}) has NO overlap with any config")
     return False
+
+
+def calculate_segment_guidance_position(
+    segment_index: int,
+    segment_frames_expanded: List[int],
+    dprint: Callable = print
+) -> Tuple[int, int]:
+    """
+    Calculate a segment's start position and frame count in the GUIDANCE timeline.
+
+    The guidance timeline is the raw total of all segment frames (no overlaps removed).
+    This matches the UX timeline where users set structure video start_frame/end_frame.
+
+    Args:
+        segment_index: Index of the segment (0-based)
+        segment_frames_expanded: List of frame counts per segment
+        dprint: Debug print function
+
+    Returns:
+        Tuple of (guidance_start, frame_count) for this segment
+    """
+    guidance_start = sum(segment_frames_expanded[:segment_index])
+    frame_count = segment_frames_expanded[segment_index] if segment_index < len(segment_frames_expanded) else 81
+
+    dprint(f"[SEGMENT_POS] Segment {segment_index}: guidance_start={guidance_start}, frame_count={frame_count} (guidance timeline)")
+    return guidance_start, frame_count
 
 
 def calculate_segment_stitched_position(
@@ -1448,14 +1497,18 @@ def calculate_segment_stitched_position(
     dprint: Callable = print
 ) -> Tuple[int, int]:
     """
-    Calculate a segment's start position and frame count in the stitched timeline.
-    
+    Calculate a segment's start position and frame count in the STITCHED timeline.
+
+    The stitched timeline has overlaps removed - this is the final video length.
+    NOTE: For structure video overlap checking, use calculate_segment_guidance_position instead,
+    as the UX shows structure configs in the guidance timeline.
+
     Args:
         segment_index: Index of the segment (0-based)
         segment_frames_expanded: List of frame counts per segment
         frame_overlap_expanded: List of overlap values between segments
         dprint: Debug print function
-        
+
     Returns:
         Tuple of (stitched_start, frame_count) for this segment
     """
@@ -1467,17 +1520,17 @@ def calculate_segment_stitched_position(
         else:
             overlap = frame_overlap_expanded[idx - 1] if idx > 0 and idx - 1 < len(frame_overlap_expanded) else 0
             stitched_start += segment_frames - overlap
-    
+
     # Adjust for the first segment's contribution
     if segment_index > 0:
         overlap = frame_overlap_expanded[segment_index - 1] if segment_index - 1 < len(frame_overlap_expanded) else 0
         stitched_start -= overlap
     else:
         stitched_start = 0
-    
+
     frame_count = segment_frames_expanded[segment_index] if segment_index < len(segment_frames_expanded) else 81
-    
-    dprint(f"[SEGMENT_POS] Segment {segment_index}: stitched_start={stitched_start}, frame_count={frame_count}")
+
+    dprint(f"[SEGMENT_POS] Segment {segment_index}: stitched_start={stitched_start}, frame_count={frame_count} (stitched timeline)")
     return stitched_start, frame_count
 
 
@@ -1519,20 +1572,33 @@ def extract_segment_structure_guidance(
     Returns:
         Path to the created segment guidance video, or None if no configs apply
     """
-    dprint(f"[SEGMENT_GUIDANCE] Extracting guidance for segment {segment_index}")
-    
+    # Calculate total guidance timeline for context
+    total_guidance_frames = sum(segment_frames_expanded)
+    dprint(f"[SEGMENT_GUIDANCE] ========== SEGMENT {segment_index} GUIDANCE EXTRACTION ==========")
+    dprint(f"[SEGMENT_GUIDANCE] Total guidance timeline: {total_guidance_frames} frames")
+    dprint(f"[SEGMENT_GUIDANCE] Segment frames: {segment_frames_expanded}")
+
     if not structure_videos:
         dprint(f"[SEGMENT_GUIDANCE] No structure_videos provided, skipping")
         return None
-    
-    # Calculate this segment's position in the stitched timeline
-    seg_start, seg_frames = calculate_segment_stitched_position(
-        segment_index, segment_frames_expanded, frame_overlap_expanded, dprint
+
+    # Calculate this segment's position in the GUIDANCE timeline (matches UX)
+    seg_start, seg_frames = calculate_segment_guidance_position(
+        segment_index, segment_frames_expanded, dprint
     )
     seg_end = seg_start + seg_frames
-    
-    dprint(f"[SEGMENT_GUIDANCE] Segment covers stitched frames [{seg_start}, {seg_end})")
-    
+
+    dprint(f"[SEGMENT_GUIDANCE] Segment {segment_index} covers GUIDANCE frames [{seg_start}, {seg_end})")
+
+    # Log structure video configs for debugging
+    dprint(f"[SEGMENT_GUIDANCE] Checking {len(structure_videos)} structure_videos configs:")
+    for i, cfg in enumerate(structure_videos):
+        cfg_start = cfg.get("start_frame", 0)
+        cfg_end = cfg.get("end_frame", 0)
+        overlaps = cfg_start < seg_end and cfg_end > seg_start
+        status = "✓ OVERLAPS" if overlaps else "✗ no overlap"
+        dprint(f"[SEGMENT_GUIDANCE]   Config {i}: [{cfg_start}, {cfg_end}) {status}")
+
     # Extract structure_type from configs (all must be same type)
     structure_types = set()
     for cfg in structure_videos:
