@@ -9,6 +9,7 @@ from .controlnet import WanControlNet
 from .load import (
     load_uni3c_checkpoint,
     load_uni3c_controlnet,
+    clear_uni3c_cache,
     download_uni3c_checkpoint_if_missing,
     get_uni3c_checkpoint_path,
     infer_config_from_checkpoint,
@@ -20,6 +21,7 @@ __all__ = [
     "WanControlNet",
     "load_uni3c_checkpoint",
     "load_uni3c_controlnet",
+    "clear_uni3c_cache",
     "download_uni3c_checkpoint_if_missing",
     "get_uni3c_checkpoint_path",
     "infer_config_from_checkpoint",

@@ -12,6 +12,13 @@ from typing import Optional, Tuple, Dict, Any
 import torch
 from safetensors.torch import load_file
 
+# Module-level cache for controlnet (avoids reloading from disk each generation)
+_controlnet_cache = {
+    "model": None,
+    "device": None,
+    "dtype": None,
+}
+
 # HuggingFace repo and filename
 UNI3C_REPO_ID = "Kijai/WanVideo_comfy"
 UNI3C_CHECKPOINT_FILENAME = "Wan21_Uni3C_controlnet_fp16.safetensors"
@@ -154,7 +161,8 @@ def load_uni3c_checkpoint(
 def load_uni3c_controlnet(
     ckpts_dir: str = "ckpts",
     device: str = "cuda",
-    dtype: torch.dtype = torch.float16
+    dtype: torch.dtype = torch.float16,
+    use_cache: bool = True
 ):
     """
     Load and initialize Uni3C ControlNet model in one step.
@@ -164,15 +172,30 @@ def load_uni3c_controlnet(
     - Loads checkpoint directly to target device
     - Per-layer dtype control (patch embeddings stay float32)
     - Minimal peak memory usage
+    - Caches model between calls to avoid reloading from disk
 
     Args:
         ckpts_dir: Base checkpoints directory
         device: Target device (default: cuda)
         dtype: Target dtype (default: float16)
+        use_cache: If True, return cached model if available (default: True)
 
     Returns:
         Initialized WanControlNet model ready for inference
     """
+    global _controlnet_cache
+
+    # Check cache first
+    if use_cache and _controlnet_cache["model"] is not None:
+        cached = _controlnet_cache["model"]
+        # Move to requested device if needed (handles offload/reload)
+        current_device = next(cached.parameters()).device
+        if str(current_device) != str(device):
+            print(f"[UNI3C] Moving cached controlnet from {current_device} to {device}")
+            cached = cached.to(device)
+        print(f"[UNI3C] Using cached controlnet (skipping disk load)")
+        return cached
+
     from accelerate import init_empty_weights
     from accelerate.utils import set_module_tensor_to_device
     from .controlnet import WanControlNet
@@ -216,6 +239,26 @@ def load_uni3c_controlnet(
     del state_dict
 
     controlnet.eval()
+
+    # Cache the model
+    if use_cache:
+        _controlnet_cache["model"] = controlnet
+        _controlnet_cache["device"] = device
+        _controlnet_cache["dtype"] = dtype
+        print(f"[UNI3C] ControlNet cached for future use")
+
     print(f"[UNI3C] ControlNet ready on {device} with base dtype {dtype}")
     return controlnet
+
+
+def clear_uni3c_cache():
+    """Clear the cached controlnet to free memory."""
+    global _controlnet_cache
+    if _controlnet_cache["model"] is not None:
+        del _controlnet_cache["model"]
+        _controlnet_cache["model"] = None
+        _controlnet_cache["device"] = None
+        _controlnet_cache["dtype"] = None
+        torch.cuda.empty_cache()
+        print("[UNI3C] Cache cleared")
 
