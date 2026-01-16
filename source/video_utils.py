@@ -28,14 +28,15 @@ try:
     from Wan2GP.postprocessing.rife.inference import temporal_interpolation
     from source.common_utils import (
         dprint, get_video_frame_count_and_fps,
-        download_image_if_url, sm_get_unique_target_path, 
+        download_image_if_url, sm_get_unique_target_path,
         _apply_strength_to_image as sm_apply_strength_to_image,
-        create_color_frame as sm_create_color_frame, 
-        image_to_frame as sm_image_to_frame, 
+        create_color_frame as sm_create_color_frame,
+        image_to_frame as sm_image_to_frame,
         _adjust_frame_brightness as sm_adjust_frame_brightness,
         get_easing_function as sm_get_easing_function,
         wait_for_file_stable as sm_wait_for_file_stable
     )
+    from source.params.structure_guidance import StructureGuidanceConfig
 except ImportError as e_import:
     print(f"Critical import error in video_utils.py: {e_import}")
     traceback.print_exc()
@@ -1186,6 +1187,8 @@ def create_guide_video_for_travel_segment(
     segment_params: dict,
     single_image_journey: bool = False,
     predefined_output_path: Path | None = None,
+    # Structure guidance - prefer unified config, fall back to individual params
+    structure_config: 'StructureGuidanceConfig | None' = None,
     structure_video_path: str | None = None,
     structure_video_treatment: str = "adjust",
     structure_type: str = "flow",
@@ -1202,8 +1205,28 @@ def create_guide_video_for_travel_segment(
     *,
     dprint=print
 ) -> Path | None:
-    """Creates the guide video for a travel segment with all fading and adjustments."""
+    """Creates the guide video for a travel segment with all fading and adjustments.
+
+    Args:
+        structure_config: Unified StructureGuidanceConfig object (preferred).
+            If provided, overrides individual structure_* parameters.
+        structure_video_path: Legacy - use structure_config instead
+        ... (other params remain for backward compat)
+    """
     try:
+        # If unified config provided, extract values from it
+        if structure_config is not None:
+            dprint(f"[GUIDE_VIDEO] Using unified StructureGuidanceConfig: {structure_config}")
+            structure_video_path = structure_config.videos[0].path if structure_config.videos else None
+            structure_video_treatment = structure_config.videos[0].treatment if structure_config.videos else "adjust"
+            structure_type = structure_config.legacy_structure_type
+            structure_video_motion_strength = structure_config.strength
+            structure_canny_intensity = structure_config.canny_intensity
+            structure_depth_contrast = structure_config.depth_contrast
+            structure_guidance_video_url = structure_config.guidance_video_url
+            structure_guidance_frame_offset = structure_config._frame_offset
+            exclude_end_for_controlnet = structure_config.is_uni3c
+
         # Backward compatibility: merge old and new parameter names
         if structure_guidance_video_url is None and structure_motion_video_url is not None:
             structure_guidance_video_url = structure_motion_video_url

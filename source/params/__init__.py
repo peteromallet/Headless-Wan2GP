@@ -17,12 +17,14 @@ from .vace import VACEConfig
 from .generation import GenerationConfig
 from .phase import PhaseConfig
 from .task import TaskConfig
+from .structure_guidance import StructureGuidanceConfig, StructureVideoEntry
 
 __all__ = [
     'ParamGroup',
     'LoRAConfig', 'LoRAEntry', 'LoRAStatus',
     'VACEConfig',
-    'GenerationConfig', 
+    'GenerationConfig',
     'PhaseConfig',
     'TaskConfig',
+    'StructureGuidanceConfig', 'StructureVideoEntry',
 ]

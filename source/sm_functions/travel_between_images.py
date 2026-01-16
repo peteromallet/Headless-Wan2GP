@@ -44,6 +44,7 @@ from ..common_utils import (
     ensure_valid_negative_prompt,
     wait_for_file_stable as sm_wait_for_file_stable,
 )
+from ..params.structure_guidance import StructureGuidanceConfig
 from ..video_utils import (
     extract_frames_from_video as sm_extract_frames_from_video,
     create_video_from_frames_list as sm_create_video_from_frames_list,
@@ -1041,15 +1042,21 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         # =============================================================================
         # STRUCTURE VIDEO PROCESSING (Single or Multi-Source Composite)
         # =============================================================================
-        # Check for new multi-structure-video format first, then fall back to legacy single video
+        # Parse unified structure guidance config (handles both new and legacy formats)
+        structure_config = StructureGuidanceConfig.from_params(orchestrator_payload)
+
+        # Log parsed config
+        dprint(f"[STRUCTURE_CONFIG] Parsed: {structure_config}")
+
+        # Extract values for backward compatibility with existing code paths
         structure_videos = orchestrator_payload.get("structure_videos", [])
         structure_video_path = orchestrator_payload.get("structure_video_path")
-        
-        # Initialize variables that will be set by either path
-        structure_type = None
-        motion_strength = 1.0
-        canny_intensity = 1.0
-        depth_contrast = 1.0
+
+        # Use config values (these handle all the legacy param name variations)
+        structure_type = structure_config.legacy_structure_type if structure_config.has_guidance else None
+        motion_strength = structure_config.strength
+        canny_intensity = structure_config.canny_intensity
+        depth_contrast = structure_config.depth_contrast
         segment_flow_offsets = []
         total_flow_frames = 0
         
@@ -1943,34 +1950,19 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 "consolidated_keyframe_positions": orchestrator_payload.get("_consolidated_keyframe_positions", [None] * num_segments)[idx] if orchestrator_payload.get("_consolidated_end_anchors") else None,
                 "orchestrator_details": orchestrator_payload, # Canonical name for full orchestrator payload
                 
-                # Structure video guidance parameters
-                # Note: structure_video_path may be None for multi-structure-video mode (uses structure_guidance_video_url instead)
-                "structure_video_path": orchestrator_payload.get("structure_video_path"),
-                "structure_video_treatment": orchestrator_payload.get("structure_video_treatment", "adjust"),
-                "structure_type": structure_type if structure_type else orchestrator_payload.get("structure_type"),
-                "structure_video_motion_strength": motion_strength,
-                "structure_canny_intensity": canny_intensity,
-                "structure_depth_contrast": depth_contrast,
-                # Use stitched offsets for multi-structure video (user's frame numbers), legacy offsets otherwise
-                "structure_guidance_frame_offset": (segment_stitched_offsets[idx] if use_stitched_offsets else segment_flow_offsets[idx]) if segment_flow_offsets else 0,
-                
-                # Original and trimmed structure videos for reference
-                "structure_original_video_url": orchestrator_payload.get("structure_original_video_url"),
-                "structure_trimmed_video_url": orchestrator_payload.get("structure_trimmed_video_url"),
-
                 # SVI (Stable Video Infinity) end frame chaining
                 "use_svi": use_svi,
             }
-            
+
             # =============================================================================
-            # Per-segment structure guidance: Check overlap for multi-structure-video mode
-            # If segment has no overlap with any structure_videos config, skip guidance entirely
-            # This avoids unnecessary neutral guidance processing (especially for Uni3C)
+            # Structure Guidance: Use unified config for cleaner param handling
             # =============================================================================
-            segment_has_guidance = True  # Default: assume guidance is active
-            
-            if structure_videos:
-                # Multi-structure-video mode: check per-segment overlap
+            # Calculate frame offset for this segment
+            segment_frame_offset = (segment_stitched_offsets[idx] if use_stitched_offsets else segment_flow_offsets[idx]) if segment_flow_offsets else 0
+
+            # Check if this segment has guidance overlap (for multi-structure-video mode)
+            segment_has_guidance = structure_config.has_guidance
+            if structure_videos and segment_has_guidance:
                 from source.structure_video_guidance import segment_has_structure_overlap
                 segment_has_guidance = segment_has_structure_overlap(
                     segment_index=idx,
@@ -1978,28 +1970,60 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     frame_overlap_expanded=expanded_frame_overlap,
                     structure_videos=structure_videos
                 )
-                
                 if not segment_has_guidance:
                     dprint(f"[STRUCTURE_VIDEO] Segment {idx}: No overlap with structure_videos, skipping structure guidance")
-            elif not orchestrator_payload.get("structure_guidance_video_url") and not orchestrator_payload.get("structure_video_path"):
-                # No structure video at all
-                segment_has_guidance = False
-            
-            # Set structure guidance URL and Uni3C params based on overlap
-            # "uni3c" type enables uni3c control in WGP; "raw" is just passthrough preprocessing
-            is_uni3c_type = structure_type == "uni3c"
+
+            # Set structure guidance params using config (emits legacy param names for worker compat)
             if segment_has_guidance:
-                segment_payload["structure_guidance_video_url"] = orchestrator_payload.get("structure_guidance_video_url")
-                segment_payload["use_uni3c"] = is_uni3c_type if structure_type else orchestrator_payload.get("use_uni3c", False)
-                segment_payload["uni3c_guide_video"] = orchestrator_payload.get("structure_guidance_video_url") if is_uni3c_type else orchestrator_payload.get("uni3c_guide_video")
-                segment_payload["uni3c_strength"] = motion_strength if is_uni3c_type else orchestrator_payload.get("uni3c_strength", 1.0)
-                segment_payload["uni3c_start_percent"] = orchestrator_payload.get("uni3c_start_percent", 0.0)
-                segment_payload["uni3c_end_percent"] = orchestrator_payload.get("uni3c_end_percent", 1.0)
-                segment_payload["uni3c_frame_policy"] = orchestrator_payload.get("uni3c_frame_policy", "fit")
-                segment_payload["uni3c_guidance_frame_offset"] = (segment_stitched_offsets[idx] if use_stitched_offsets else segment_flow_offsets[idx]) if (is_uni3c_type and segment_flow_offsets) else 0
+                # Update config with segment-specific computed values
+                segment_guidance_url = structure_config.guidance_video_url or orchestrator_payload.get("structure_guidance_video_url")
+
+                # VACE structure params (legacy names for backward compat)
+                segment_payload["structure_video_path"] = orchestrator_payload.get("structure_video_path")
+                segment_payload["structure_video_treatment"] = structure_config.videos[0].treatment if structure_config.videos else "adjust"
+                segment_payload["structure_type"] = structure_config.legacy_structure_type
+                segment_payload["structure_video_motion_strength"] = structure_config.strength
+                segment_payload["structure_canny_intensity"] = structure_config.canny_intensity
+                segment_payload["structure_depth_contrast"] = structure_config.depth_contrast
+                segment_payload["structure_guidance_frame_offset"] = segment_frame_offset
+                segment_payload["structure_guidance_video_url"] = segment_guidance_url
+                segment_payload["structure_original_video_url"] = orchestrator_payload.get("structure_original_video_url")
+                segment_payload["structure_trimmed_video_url"] = orchestrator_payload.get("structure_trimmed_video_url")
+
+                # Uni3C params (only active when target is uni3c)
+                segment_payload["use_uni3c"] = structure_config.is_uni3c
+                segment_payload["uni3c_guide_video"] = segment_guidance_url if structure_config.is_uni3c else None
+                segment_payload["uni3c_strength"] = structure_config.strength
+                segment_payload["uni3c_start_percent"] = structure_config.step_window[0]
+                segment_payload["uni3c_end_percent"] = structure_config.step_window[1]
+                segment_payload["uni3c_frame_policy"] = structure_config.frame_policy
+                segment_payload["uni3c_guidance_frame_offset"] = segment_frame_offset if structure_config.is_uni3c else 0
+
+                # Include unified config for future-proof workers
+                segment_payload["structure_guidance"] = {
+                    "target": structure_config.target,
+                    "preprocessing": structure_config.preprocessing,
+                    "strength": structure_config.strength,
+                    "canny_intensity": structure_config.canny_intensity,
+                    "depth_contrast": structure_config.depth_contrast,
+                    "step_window": list(structure_config.step_window),
+                    "frame_policy": structure_config.frame_policy,
+                    "zero_empty_frames": structure_config.zero_empty_frames,
+                    "_guidance_video_url": segment_guidance_url,
+                    "_frame_offset": segment_frame_offset,
+                }
             else:
-                # No guidance for this segment
+                # No guidance for this segment - set all to disabled/null
+                segment_payload["structure_video_path"] = None
+                segment_payload["structure_video_treatment"] = "adjust"
+                segment_payload["structure_type"] = None
+                segment_payload["structure_video_motion_strength"] = 1.0
+                segment_payload["structure_canny_intensity"] = 1.0
+                segment_payload["structure_depth_contrast"] = 1.0
+                segment_payload["structure_guidance_frame_offset"] = 0
                 segment_payload["structure_guidance_video_url"] = None
+                segment_payload["structure_original_video_url"] = None
+                segment_payload["structure_trimmed_video_url"] = None
                 segment_payload["use_uni3c"] = False
                 segment_payload["uni3c_guide_video"] = None
                 segment_payload["uni3c_strength"] = 0.0
@@ -2007,6 +2031,7 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 segment_payload["uni3c_end_percent"] = 0.0
                 segment_payload["uni3c_frame_policy"] = "fit"
                 segment_payload["uni3c_guidance_frame_offset"] = 0
+                segment_payload["structure_guidance"] = None
             
             # Add extracted parameters at top level for queue processing
             segment_payload.update(extracted_params)

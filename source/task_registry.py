@@ -17,6 +17,7 @@ from source.worker_utils import make_task_dprint, log_ram_usage, cleanup_generat
 from source.task_conversion import db_task_to_generation_task, parse_phase_config
 from source.phase_config import apply_phase_config_patch
 from source.params.lora import LoRAConfig
+from source.params.structure_guidance import StructureGuidanceConfig
 from source.lora_utils import _download_lora_from_url
 
 # Import task handlers
@@ -413,6 +414,13 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         # Check if structure_videos array is present (enables structure guidance for any model type)
         has_structure_videos = bool(full_orchestrator_payload.get("structure_videos"))
 
+        # Always parse unified structure guidance config up-front so later logic can rely on it.
+        # This handles both new format (structure_guidance) and legacy params.
+        structure_config = StructureGuidanceConfig.from_params({
+            **full_orchestrator_payload,
+            **segment_params
+        })
+
         # Run TravelSegmentProcessor for:
         # 1. VACE mode (always - requires masks and guides)
         # 2. Any mode with structure_videos configured (enables uni3c/flow guidance for i2v, etc.)
@@ -446,22 +454,19 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 dprint_func(f"[UNI3C_DEBUG] Task {task_id}: segment_outputs keys: {list(segment_outputs.keys())}")
                 dprint_func(f"[UNI3C_DEBUG] Task {task_id}: detected_structure_type={repr(detected_structure_type)}, guide_video_path={bool(guide_video_path)}")
 
-                # If structure_type is "uni3c", automatically enable uni3c mode
-                if detected_structure_type == "uni3c" and guide_video_path:
-                    dprint_func(f"[UNI3C_AUTO] Task {task_id}: Auto-enabling uni3c mode (structure_type='uni3c' detected)")
+                # If config targets uni3c and we have a guide video, set up uni3c mode
+                if structure_config.is_uni3c and guide_video_path:
+                    dprint_func(f"[UNI3C_AUTO] Task {task_id}: Auto-enabling uni3c mode (structure_config.target='uni3c')")
                     # Set use_uni3c in orchestrator_details so the UNI3C MODE section picks it up
                     orchestrator_details["use_uni3c"] = True
                     orchestrator_details["uni3c_guide_video"] = guide_video_path
-                    # Extract uni3c-specific params from structure_videos config if present
-                    structure_videos = segment_params.get("structure_videos") or full_orchestrator_payload.get("structure_videos", [])
-                    if structure_videos:
-                        first_config = structure_videos[0]
-                        if "uni3c_strength" not in orchestrator_details:
-                            orchestrator_details["uni3c_strength"] = first_config.get("motion_strength", 1.0)
-                        if "uni3c_end_percent" not in orchestrator_details:
-                            orchestrator_details["uni3c_end_percent"] = first_config.get("uni3c_end_percent", 1.0)
-                        if "uni3c_start_percent" not in orchestrator_details:
-                            orchestrator_details["uni3c_start_percent"] = first_config.get("uni3c_start_percent", 0.0)
+                    # Use config values (already parsed from structure_videos or legacy params)
+                    if "uni3c_strength" not in orchestrator_details:
+                        orchestrator_details["uni3c_strength"] = structure_config.strength
+                    if "uni3c_end_percent" not in orchestrator_details:
+                        orchestrator_details["uni3c_end_percent"] = structure_config.step_window[1]
+                    if "uni3c_start_percent" not in orchestrator_details:
+                        orchestrator_details["uni3c_start_percent"] = structure_config.step_window[0]
 
             except Exception as e_shared_processor:
                 traceback.print_exc()
@@ -746,67 +751,61 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         # =============================================================================
         # UNI3C MODE: Motion guidance via Uni3C ControlNet
         # =============================================================================
-        # Check use_uni3c with explicit False handling (False at segment level should override True at orchestrator)
-        # HOWEVER: If auto-enable set orchestrator_details["use_uni3c"] = True (from structure_type="uni3c"),
-        # that should take precedence over segment_params (which may have been set before structure detection)
-        segment_use_uni3c = segment_params.get("use_uni3c")
+        # Use unified structure_config which was parsed earlier
+        # Check if uni3c is enabled via config or legacy params
         orchestrator_use_uni3c = orchestrator_details.get("use_uni3c", False)
+        use_uni3c = structure_config.is_uni3c or orchestrator_use_uni3c
 
-        # Debug logging
-        dprint_func(f"[UNI3C_DEBUG] Task {task_id}: segment_params use_uni3c={segment_use_uni3c}, orchestrator_details use_uni3c={orchestrator_use_uni3c}")
-
-        # If orchestrator_details has use_uni3c=True (from auto-enable), use that
-        # Otherwise fall back to segment_params value
-        if orchestrator_use_uni3c:
-            use_uni3c = True
-            dprint_func(f"[UNI3C_DEBUG] Task {task_id}: Using orchestrator_details use_uni3c=True (auto-enabled)")
-        elif segment_use_uni3c is not None:
-            use_uni3c = segment_use_uni3c
-        else:
-            use_uni3c = False
+        dprint_func(f"[UNI3C_DEBUG] Task {task_id}: structure_config.is_uni3c={structure_config.is_uni3c}, orchestrator_use_uni3c={orchestrator_use_uni3c}, use_uni3c={use_uni3c}")
 
         if use_uni3c:
             from source.common_utils import download_file as sm_download_file
-            
-            # Resolve other Uni3C params (using existing _get_param helper)
-            uni3c_guide = _get_param("uni3c_guide_video", individual_params, segment_params, orchestrator_details, prefer_truthy=True)
-            uni3c_strength = _get_param("uni3c_strength", individual_params, segment_params, orchestrator_details, default=1.0)
-            uni3c_start = _get_param("uni3c_start_percent", individual_params, segment_params, orchestrator_details, default=0.0)
-            uni3c_end = _get_param("uni3c_end_percent", individual_params, segment_params, orchestrator_details, default=1.0)
-            uni3c_keep_gpu = _get_param("uni3c_keep_on_gpu", individual_params, segment_params, orchestrator_details, default=False)
-            uni3c_frame_policy = _get_param("uni3c_frame_policy", individual_params, segment_params, orchestrator_details, default="fit")
-            uni3c_zero_empty = _get_param("uni3c_zero_empty_frames", individual_params, segment_params, orchestrator_details, default=True)
-            
-            # Download guide video if URL (using existing download_file helper)
-            if uni3c_guide and uni3c_guide.startswith(("http://", "https://")):
-                local_filename = Path(uni3c_guide).name or "uni3c_guide_video.mp4"
-                local_download_path = segment_processing_dir / f"uni3c_{local_filename}"
-                if not local_download_path.exists():
-                    sm_download_file(uni3c_guide, segment_processing_dir, local_download_path.name)
-                    dprint_func(f"[UNI3C] Task {task_id}: Downloaded guide video to {local_download_path}")
-                else:
-                    dprint_func(f"[UNI3C] Task {task_id}: Guide video already exists at {local_download_path}")
-                uni3c_guide = str(local_download_path)
-            
-            # Layer 2 logging
-            dprint_func(f"[UNI3C] Task {task_id}: Uni3C ENABLED")
-            dprint_func(f"[UNI3C] Task {task_id}:   guide_video={uni3c_guide}")
-            dprint_func(f"[UNI3C] Task {task_id}:   strength={uni3c_strength}")
-            dprint_func(f"[UNI3C] Task {task_id}:   start_percent={uni3c_start}")
-            dprint_func(f"[UNI3C] Task {task_id}:   end_percent={uni3c_end}")
-            dprint_func(f"[UNI3C] Task {task_id}:   frame_policy={uni3c_frame_policy}")
-            dprint_func(f"[UNI3C] Task {task_id}:   keep_on_gpu={uni3c_keep_gpu}")
-            dprint_func(f"[UNI3C] Task {task_id}:   zero_empty_frames={uni3c_zero_empty}")
-            
-            # Inject into generation_params
-            generation_params["use_uni3c"] = True
-            generation_params["uni3c_guide_video"] = uni3c_guide
-            generation_params["uni3c_strength"] = uni3c_strength
-            generation_params["uni3c_start_percent"] = uni3c_start
-            generation_params["uni3c_end_percent"] = uni3c_end
-            generation_params["uni3c_keep_on_gpu"] = uni3c_keep_gpu
-            generation_params["uni3c_frame_policy"] = uni3c_frame_policy
-            generation_params["uni3c_zero_empty_frames"] = uni3c_zero_empty
+
+            # Get guide video from config or orchestrator_details (set by auto-enable)
+            uni3c_guide = structure_config.guidance_video_url or orchestrator_details.get("uni3c_guide_video")
+
+            # If Uni3C is enabled but there's no guide video, skip to avoid downstream crashes.
+            if not uni3c_guide:
+                dprint_func(f"[UNI3C] Task {task_id}: Uni3C requested but no guide video provided; skipping Uni3C injection")
+            else:
+                # Use config values (already handles legacy param fallback)
+                uni3c_strength = structure_config.strength
+                uni3c_start = structure_config.step_window[0]
+                uni3c_end = structure_config.step_window[1]
+                uni3c_keep_gpu = structure_config.keep_on_gpu
+                uni3c_frame_policy = structure_config.frame_policy
+                uni3c_zero_empty = structure_config.zero_empty_frames
+
+                # Download guide video if URL
+                if uni3c_guide.startswith(("http://", "https://")):
+                    local_filename = Path(uni3c_guide).name or "uni3c_guide_video.mp4"
+                    local_download_path = segment_processing_dir / f"uni3c_{local_filename}"
+                    if not local_download_path.exists():
+                        sm_download_file(uni3c_guide, segment_processing_dir, local_download_path.name)
+                        dprint_func(f"[UNI3C] Task {task_id}: Downloaded guide video to {local_download_path}")
+                    else:
+                        dprint_func(f"[UNI3C] Task {task_id}: Guide video already exists at {local_download_path}")
+                    uni3c_guide = str(local_download_path)
+
+                # Layer 2 logging
+                dprint_func(f"[UNI3C] Task {task_id}: Uni3C ENABLED (via {'structure_config' if structure_config.is_uni3c else 'orchestrator_details'})")
+                dprint_func(f"[UNI3C] Task {task_id}:   guide_video={uni3c_guide}")
+                dprint_func(f"[UNI3C] Task {task_id}:   strength={uni3c_strength}")
+                dprint_func(f"[UNI3C] Task {task_id}:   start_percent={uni3c_start}")
+                dprint_func(f"[UNI3C] Task {task_id}:   end_percent={uni3c_end}")
+                dprint_func(f"[UNI3C] Task {task_id}:   frame_policy={uni3c_frame_policy}")
+                dprint_func(f"[UNI3C] Task {task_id}:   keep_on_gpu={uni3c_keep_gpu}")
+                dprint_func(f"[UNI3C] Task {task_id}:   zero_empty_frames={uni3c_zero_empty}")
+
+                # Inject into generation_params
+                generation_params["use_uni3c"] = True
+                generation_params["uni3c_guide_video"] = uni3c_guide
+                generation_params["uni3c_strength"] = uni3c_strength
+                generation_params["uni3c_start_percent"] = uni3c_start
+                generation_params["uni3c_end_percent"] = uni3c_end
+                generation_params["uni3c_keep_on_gpu"] = uni3c_keep_gpu
+                generation_params["uni3c_frame_policy"] = uni3c_frame_policy
+                generation_params["uni3c_zero_empty_frames"] = uni3c_zero_empty
         
         # === WGP SUBMISSION DIAGNOSTIC SUMMARY ===
         # Log key frame-related parameters before WGP submission

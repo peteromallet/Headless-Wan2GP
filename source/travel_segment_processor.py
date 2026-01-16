@@ -33,6 +33,7 @@ from .common_utils import (
     prepare_output_path
 )
 from .video_utils import create_guide_video_for_travel_segment as sm_create_guide_video_for_travel_segment
+from .params.structure_guidance import StructureGuidanceConfig
 from . import db_operations as db_ops
 
 
@@ -148,36 +149,29 @@ class TravelSegmentProcessor:
             else:
                 end_anchor_img_path_str_idx = ctx.segment_idx + 1
             
-            # Extract structure video parameters from segment params or orchestrator payload
-            structure_video_path = ctx.segment_params.get("structure_video_path") or ctx.full_orchestrator_payload.get("structure_video_path")
-            structure_video_treatment = ctx.segment_params.get("structure_video_treatment", ctx.full_orchestrator_payload.get("structure_video_treatment", "adjust"))
-            # Check both structure_video_type and structure_type for backward compatibility
-            structure_type = (ctx.segment_params.get("structure_video_type") or
-                            ctx.segment_params.get("structure_type") or
-                            ctx.full_orchestrator_payload.get("structure_video_type") or
-                            ctx.full_orchestrator_payload.get("structure_type", "flow"))
-            structure_video_motion_strength = ctx.segment_params.get("structure_video_motion_strength", ctx.full_orchestrator_payload.get("structure_video_motion_strength", 1.0))
-            structure_canny_intensity = ctx.segment_params.get("structure_canny_intensity", ctx.full_orchestrator_payload.get("structure_canny_intensity", 1.0))
-            structure_depth_contrast = ctx.segment_params.get("structure_depth_contrast", ctx.full_orchestrator_payload.get("structure_depth_contrast", 1.0))
-            # Support both old (motion) and new (guidance) naming for backward compatibility
-            structure_guidance_video_url = (ctx.segment_params.get("structure_guidance_video_url") or 
-                                           ctx.full_orchestrator_payload.get("structure_guidance_video_url") or
-                                           ctx.segment_params.get("structure_motion_video_url") or 
-                                           ctx.full_orchestrator_payload.get("structure_motion_video_url"))
-            structure_guidance_frame_offset = ctx.segment_params.get("structure_guidance_frame_offset", 
-                                                                     ctx.segment_params.get("structure_motion_frame_offset", 0))
-            
+            # Parse unified structure guidance config (handles all legacy param variations)
+            structure_config = StructureGuidanceConfig.from_params({
+                **ctx.full_orchestrator_payload,
+                **ctx.segment_params
+            })
+            ctx.dprint(f"[STRUCTURE_CONFIG] Segment {ctx.segment_idx}: {structure_config}")
+
+            # Store config for use throughout this method
+            self._structure_config = structure_config
+
+            # Extract values from config for backward compatibility with existing code
+            structure_video_path = structure_config.videos[0].path if structure_config.videos else None
+            structure_video_treatment = structure_config.videos[0].treatment if structure_config.videos else "adjust"
+            structure_type = structure_config.legacy_structure_type
+            structure_video_motion_strength = structure_config.strength
+            structure_canny_intensity = structure_config.canny_intensity
+            structure_depth_contrast = structure_config.depth_contrast
+            structure_guidance_video_url = structure_config.guidance_video_url
+            structure_guidance_frame_offset = structure_config._frame_offset
+
             # Check for multi-structure video config (structure_videos array)
             # If present and no pre-computed guidance URL, compute segment's portion locally
             structure_videos = ctx.segment_params.get("structure_videos") or ctx.full_orchestrator_payload.get("structure_videos")
-
-            # If structure_videos is present, extract structure_type from configs (overrides top-level)
-            if structure_videos:
-                # All configs must have same type - extract from first config
-                structure_type_from_config = structure_videos[0].get("structure_type", structure_videos[0].get("type"))
-                if structure_type_from_config:
-                    ctx.dprint(f"[STRUCTURE_VIDEO] Segment {ctx.segment_idx}: Using structure_type '{structure_type_from_config}' from structure_videos config (overriding top-level '{structure_type}')")
-                    structure_type = structure_type_from_config
 
             # Store the detected structure_type for use in process_segment return
             self._detected_structure_type = structure_type
@@ -438,7 +432,8 @@ class TravelSegmentProcessor:
             vpt_components = []
 
             # Check if uni3c is handling motion guidance - if so, skip VACE video guide
-            is_uni3c_mode = self._detected_structure_type == "uni3c"
+            # Use config if available, fallback to legacy detection
+            is_uni3c_mode = getattr(self, '_structure_config', None) and self._structure_config.is_uni3c or self._detected_structure_type == "uni3c"
             ctx.dprint(f"[VPT_DEBUG] Seg {ctx.segment_idx}: structure_type={self._detected_structure_type}, is_uni3c_mode={is_uni3c_mode}")
 
             if is_uni3c_mode:
