@@ -1511,12 +1511,13 @@ class WanModel(ModelMixin, ConfigMixin):
             print(f"[UNI3C_DIAG] Guide latent (ch20-35): mean={guide_part.mean().item():.4f}, std={guide_part.std().item():.4f}, range=[{guide_part.min().item():.4f}, {guide_part.max().item():.4f}]")
 
         # Use autocast for quantized controlnets (matches Kijai's implementation)
-        with torch.autocast(device_type='cuda', dtype=controlnet.dtype, enabled=getattr(controlnet, 'quantized', False)):
+        controlnet_dtype = getattr(controlnet, 'base_dtype', torch.float16)
+        with torch.autocast(device_type='cuda', dtype=controlnet_dtype, enabled=getattr(controlnet, 'quantized', False)):
             controlnet_states = controlnet(
-                render_latent=render_latent_input.to(main_device, controlnet.dtype),
+                render_latent=render_latent_input.to(main_device, controlnet_dtype),
                 render_mask=uni3c_data.get("render_mask"),
                 camera_embedding=uni3c_data.get("camera_embedding"),
-                temb=temb.to(main_device, controlnet.dtype),
+                temb=temb.to(main_device, controlnet_dtype),
                 out_device=offload_device if uni3c_data.get("offload") else main_device
             )
         
