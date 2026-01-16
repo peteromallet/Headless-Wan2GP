@@ -1643,7 +1643,7 @@ class WanAny2V:
                 import os
                 ckpts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "ckpts")
                 state_dict, config = load_uni3c_checkpoint(ckpts_dir=ckpts_dir)
-                controlnet = WanControlNet(**config)
+                controlnet = WanControlNet(config)
                 controlnet.load_state_dict(state_dict, strict=False)
                 # Convert entire model to fp16 (including biases not in checkpoint)
                 controlnet = controlnet.to(torch.float16)
