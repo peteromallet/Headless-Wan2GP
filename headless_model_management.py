@@ -420,10 +420,14 @@ class HeadlessTaskQueue:
                     f"reserved: {vram_reserved_before:.2f}GB"
                 )
 
+            # Clear uni3c cache if it wasn't used this task (preserves cache for consecutive uni3c tasks)
+            try:
+                from Wan2GP.models.wan.uni3c import clear_uni3c_cache_if_unused
+                clear_uni3c_cache_if_unused()
+            except ImportError:
+                pass  # uni3c module not available
+
             # Clear PyTorch's CUDA cache (frees unused reserved memory, keeps models)
-            # Note: uni3c controlnet cache is intentionally NOT cleared here - it stays
-            # cached on CPU (~1GB) for fast reload. Call clear_uni3c_cache() explicitly
-            # if memory is needed.
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 self.logger.info(f"[MEMORY_CLEANUP] Task {task_id}: Cleared CUDA cache")

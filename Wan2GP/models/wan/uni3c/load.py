@@ -17,6 +17,7 @@ _controlnet_cache = {
     "model": None,
     "device": None,
     "dtype": None,
+    "used_this_task": False,  # Track if cache was used in current task
 }
 
 # HuggingFace repo and filename
@@ -193,6 +194,7 @@ def load_uni3c_controlnet(
         if str(current_device) != str(device):
             print(f"[UNI3C] Moving cached controlnet from {current_device} to {device}")
             cached = cached.to(device)
+        _controlnet_cache["used_this_task"] = True
         print(f"[UNI3C] Using cached controlnet (skipping disk load)")
         return cached
 
@@ -245,6 +247,7 @@ def load_uni3c_controlnet(
         _controlnet_cache["model"] = controlnet
         _controlnet_cache["device"] = device
         _controlnet_cache["dtype"] = dtype
+        _controlnet_cache["used_this_task"] = True
         print(f"[UNI3C] ControlNet cached for future use")
 
     print(f"[UNI3C] ControlNet ready on {device} with base dtype {dtype}")
@@ -259,6 +262,27 @@ def clear_uni3c_cache():
         _controlnet_cache["model"] = None
         _controlnet_cache["device"] = None
         _controlnet_cache["dtype"] = None
+        _controlnet_cache["used_this_task"] = False
         torch.cuda.empty_cache()
         print("[UNI3C] Cache cleared")
+
+
+def reset_uni3c_task_flag():
+    """Reset the used_this_task flag at the start of a new task."""
+    global _controlnet_cache
+    _controlnet_cache["used_this_task"] = False
+
+
+def clear_uni3c_cache_if_unused():
+    """Clear cache only if it wasn't used in the current task.
+
+    Call this during task cleanup to free memory when uni3c wasn't used,
+    while preserving cache for consecutive uni3c tasks.
+    """
+    global _controlnet_cache
+    if _controlnet_cache["model"] is not None and not _controlnet_cache["used_this_task"]:
+        print("[UNI3C] Cache not used this task, clearing to free memory")
+        clear_uni3c_cache()
+    # Reset flag for next task
+    _controlnet_cache["used_this_task"] = False
 
