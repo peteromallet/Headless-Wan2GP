@@ -421,6 +421,9 @@ class HeadlessTaskQueue:
                 )
 
             # Clear PyTorch's CUDA cache (frees unused reserved memory, keeps models)
+            # Note: uni3c controlnet cache is intentionally NOT cleared here - it stays
+            # cached on CPU (~1GB) for fast reload. Call clear_uni3c_cache() explicitly
+            # if memory is needed.
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 self.logger.info(f"[MEMORY_CLEANUP] Task {task_id}: Cleared CUDA cache")
