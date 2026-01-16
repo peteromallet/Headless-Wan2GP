@@ -159,10 +159,11 @@ def load_uni3c_controlnet(
     """
     Load and initialize Uni3C ControlNet model in one step.
 
-    This is the optimized loading path that:
-    - Loads checkpoint directly to GPU
-    - Converts to fp16 during load (not after)
-    - Creates model on target device
+    This is the optimized loading path (matching Kijai's approach):
+    - Creates model with empty weights (no random init allocation)
+    - Loads checkpoint directly to target device
+    - Per-layer dtype control (patch embeddings stay float32)
+    - Minimal peak memory usage
 
     Args:
         ckpts_dir: Base checkpoints directory
@@ -172,29 +173,49 @@ def load_uni3c_controlnet(
     Returns:
         Initialized WanControlNet model ready for inference
     """
+    from accelerate import init_empty_weights
+    from accelerate.utils import set_module_tensor_to_device
     from .controlnet import WanControlNet
 
-    # Load checkpoint directly to GPU with target dtype
+    # Load checkpoint to target device (don't convert dtype yet - we'll do per-layer)
     state_dict, config = load_uni3c_checkpoint(
         ckpts_dir=ckpts_dir,
         device=device,
-        dtype=dtype
+        dtype=None  # Keep original dtype, we'll convert per-layer
     )
 
     # Add dtype to config so model knows its precision
     config["base_dtype"] = dtype
 
-    # Create model and move to device FIRST (with random weights)
-    controlnet = WanControlNet(config)
-    controlnet = controlnet.to(device=device, dtype=dtype)
+    # Create model with empty weights - no memory allocated for parameters
+    print(f"[UNI3C] Creating model with empty weights...")
+    with init_empty_weights():
+        controlnet = WanControlNet(config)
 
-    # Now load state_dict - GPU→GPU copy since both are on same device
-    controlnet.load_state_dict(state_dict, strict=False)
-    controlnet.eval()
+    # Load each parameter individually with per-layer dtype control
+    # Matching Kijai's strategy: patch embeddings stay float32, others use base dtype
+    for name, param in state_dict.items():
+        # Patch embeddings need float32 for precision
+        if "patch_embedding" in name:
+            param_dtype = torch.float32
+        # Normalization layers benefit from higher precision
+        elif "norm" in name:
+            param_dtype = dtype
+        else:
+            param_dtype = dtype
+
+        set_module_tensor_to_device(
+            controlnet,
+            name,
+            device=device,
+            dtype=param_dtype,
+            value=param
+        )
 
     # Free the state dict
     del state_dict
 
-    print(f"[UNI3C] ControlNet ready on {device} with dtype {dtype}")
+    controlnet.eval()
+    print(f"[UNI3C] ControlNet ready on {device} with base dtype {dtype}")
     return controlnet
 

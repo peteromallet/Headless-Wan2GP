@@ -396,13 +396,13 @@ class WanControlNet(nn.Module):
             List of 20 tensors, one per block, each shape [B, seq_len, 5120]
         """
         controlnet_rotary_emb = self.controlnet_rope(render_latent)
-        # For quantized models, use float32 for patch embedding then convert back
-        # For non-quantized models, use native dtype throughout
-        if self.quantized:
-            controlnet_inputs = self.controlnet_patch_embedding(render_latent.to(torch.float32))
-            controlnet_inputs = controlnet_inputs.to(self.base_dtype)
+        # Patch embedding is always float32 for precision (matching Kijai)
+        # Convert input to float32, run through embedding, convert back to working dtype
+        controlnet_inputs = self.controlnet_patch_embedding(render_latent.to(torch.float32))
+        if not self.quantized:
+            controlnet_inputs = controlnet_inputs.to(render_latent.dtype)
         else:
-            controlnet_inputs = self.controlnet_patch_embedding(render_latent)
+            controlnet_inputs = controlnet_inputs.to(self.base_dtype)
 
         controlnet_inputs = controlnet_inputs.flatten(2).transpose(1, 2)
 
