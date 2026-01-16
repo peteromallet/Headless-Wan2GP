@@ -82,6 +82,3 @@ PY
 else
   echo "${TAG}   (python not found in PATH)"
 fi
-
-
-

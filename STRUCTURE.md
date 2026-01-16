@@ -145,9 +145,7 @@ DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
 │       ├── task-counts/            # Edge Function: returns task counts and worker statistics
 │       └── update-task-status/     # Edge Function: updates task status (use claim_next_task for proper claiming)
 ├── scripts/
-│   ├── gpu_diag.sh              # Prints GPU/NVML diagnostics (helpful when nvidia-smi breaks in containers)
-│   ├── run_baseline_real.sh     # Runs the real baseline tests (requires GPU)
-│   └── run_baseline_smoke.sh    # Runs the smoke-mode baseline tests
+│   └── gpu_diag.sh              # Prints GPU/NVML diagnostics (helpful when nvidia-smi breaks in containers)
 ├── logs/               # runtime logs (git-ignored)
 ├── outputs/            # generated videos/images (git-ignored)
 ├── samples/            # example inputs for docs & tests
@@ -170,6 +168,7 @@ DB → worker.py → HeadlessTaskQueue → WanOrchestrator → wgp.py
 * **AI_AGENT_MAINTENANCE_GUIDE.md** – Guide for AI agents working on this codebase
 * **WORKER_LOGGING_IMPLEMENTATION.md** – Centralized logging implementation guide for GPU workers integrating with orchestrator logging system
 * **HEADLESS_SYSTEM_ARCHITECTURE.md** – Detailed component interactions and system architecture
+* **agent_docs/MULTI_STRUCTURE_VIDEO.md** – Multi-structure-video support (composite guidance + standalone segment support, timeline semantics)
 * **agent_docs/uni3c/** – Uni3C integration docs:
   * `STARTING_POINT_AND_STATUS.md` – **Entry point**: dashboard, DoD, risks, phase links
   * `PHASE_1_*.md` through `PHASE_5_*.md` – Phase-by-phase implementation guides
