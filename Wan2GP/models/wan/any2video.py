@@ -574,10 +574,14 @@ class WanAny2V:
         # Step 2: VAE encode the whole video (VAE needs temporal context)
         guide_video = guide_video.to(device=self.device, dtype=self.VAE_dtype)
         latent = self.vae.encode([guide_video], tile_size=VAE_tile_size)[0]
-        render_latent = latent.unsqueeze(0).to(self.dtype)  # [1, C, F, H, W]
-        
+        # Keep as float32 to preserve precision - dtype conversion happens later in controlnet
+        render_latent = latent.unsqueeze(0)  # [1, C, F, H, W] - stays float32
+
         print(f"[UNI3C] any2video: VAE encoded render_latent shape: {tuple(render_latent.shape)}")
         print(f"[UNI3C] any2video:   Expected channels: {expected_channels}, actual: {render_latent.shape[1]}")
+        # Diagnostic: log latent statistics to detect encoding issues
+        print(f"[UNI3C_DIAG] Latent stats: mean={render_latent.mean().item():.4f}, std={render_latent.std().item():.4f}")
+        print(f"[UNI3C_DIAG] Latent range: min={render_latent.min().item():.4f}, max={render_latent.max().item():.4f}")
         
         # Step 3: Zero out latent frames that correspond to empty pixel frames
         if zero_empty_frames and any(empty_pixel_mask):
@@ -695,6 +699,7 @@ class WanAny2V:
         uni3c_guidance_frame_offset = 0,  # Frame offset for orchestrator-preprocessed video (travel_orchestrator only)
         uni3c_controlnet = None,  # Pre-loaded WanControlNet instance (optional)
         uni3c_zero_empty_frames = True,  # Zero latents for black guide frames (true "no control")
+        uni3c_blackout_last_frame = False,  # Blackout last frame for i2v end anchor (last segment only)
         **bbargs
                 ):
         
@@ -1648,8 +1653,10 @@ class WanAny2V:
             # Determine expected in_channels from controlnet
             expected_channels = getattr(controlnet, "in_channels", 20)
             
-            # Check if using orchestrator-preprocessed video (structure_type="raw")
-            if uni3c_guidance_frame_offset > 0 or (uni3c_guide_video.startswith(("http://", "https://")) and "structure_" in uni3c_guide_video):
+            # Check if using orchestrator-preprocessed video (composite from travel_orchestrator)
+            # Triggers when: frame_offset > 0, OR path contains "structure_composite" (local or URL)
+            is_orchestrator_composite = "structure_composite" in uni3c_guide_video
+            if uni3c_guidance_frame_offset > 0 or is_orchestrator_composite:
                 # Orchestrator mode: extract this segment's portion from pre-computed video
                 print(f"[UNI3C] any2video: Using orchestrator-preprocessed guide video")
                 print(f"[UNI3C] any2video:   Frame offset: {uni3c_guidance_frame_offset}")
@@ -1677,6 +1684,11 @@ class WanAny2V:
                 )
 
                 print(f"[UNI3C] any2video: Extracted {len(guidance_frames)} frames from orchestrator video")
+
+                # Blackout last frame if requested (for i2v end anchor - last segment only)
+                if uni3c_blackout_last_frame and len(guidance_frames) > 0:
+                    guidance_frames[-1] = np.zeros_like(guidance_frames[-1])
+                    print(f"[UNI3C] any2video: Blacked out last frame (idx {len(guidance_frames)-1}) for i2v end anchor")
 
                 # Convert frames to tensor: [F, H, W, C] -> [C, F, H, W], range [0,255] -> [-1, 1]
                 # Resize if needed

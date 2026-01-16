@@ -411,22 +411,22 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         mask_video_path_for_wgp = None
         video_prompt_type_str = None
 
-        # Check if structure_videos array is present (enables structure guidance for any model type)
-        has_structure_videos = bool(full_orchestrator_payload.get("structure_videos"))
-
         # Always parse unified structure guidance config up-front so later logic can rely on it.
-        # This handles both new format (structure_guidance) and legacy params.
+        # This handles both new format (structure_guidance.videos) and legacy params (structure_videos).
         structure_config = StructureGuidanceConfig.from_params({
             **full_orchestrator_payload,
             **segment_params
         })
 
+        # Check if structure guidance is configured (uses unified config)
+        has_structure_guidance = structure_config.has_guidance
+
         # Run TravelSegmentProcessor for:
         # 1. VACE mode (always - requires masks and guides)
-        # 2. Any mode with structure_videos configured (enables uni3c/flow guidance for i2v, etc.)
-        if travel_mode == "vace" or has_structure_videos:
-            if has_structure_videos and travel_mode != "vace":
-                dprint_func(f"[STRUCTURE_VIDEO] Task {task_id}: Running TravelSegmentProcessor for {travel_mode} mode (structure_videos present)")
+        # 2. Any mode with structure guidance configured (enables uni3c/flow guidance for i2v, etc.)
+        if travel_mode == "vace" or has_structure_guidance:
+            if has_structure_guidance and travel_mode != "vace":
+                dprint_func(f"[STRUCTURE_GUIDANCE] Task {task_id}: Running TravelSegmentProcessor for {travel_mode} mode (structure_guidance configured)")
             try:
                 processor_context = TravelSegmentContext(
                     task_id=task_id,
@@ -454,19 +454,12 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 dprint_func(f"[UNI3C_DEBUG] Task {task_id}: segment_outputs keys: {list(segment_outputs.keys())}")
                 dprint_func(f"[UNI3C_DEBUG] Task {task_id}: detected_structure_type={repr(detected_structure_type)}, guide_video_path={bool(guide_video_path)}")
 
-                # If config targets uni3c and we have a guide video, set up uni3c mode
+                # If config targets uni3c and we have a guide video, update the config's guidance URL
+                # This is used later by the UNI3C MODE section
                 if structure_config.is_uni3c and guide_video_path:
-                    dprint_func(f"[UNI3C_AUTO] Task {task_id}: Auto-enabling uni3c mode (structure_config.target='uni3c')")
-                    # Set use_uni3c in orchestrator_details so the UNI3C MODE section picks it up
-                    orchestrator_details["use_uni3c"] = True
-                    orchestrator_details["uni3c_guide_video"] = guide_video_path
-                    # Use config values (already parsed from structure_videos or legacy params)
-                    if "uni3c_strength" not in orchestrator_details:
-                        orchestrator_details["uni3c_strength"] = structure_config.strength
-                    if "uni3c_end_percent" not in orchestrator_details:
-                        orchestrator_details["uni3c_end_percent"] = structure_config.step_window[1]
-                    if "uni3c_start_percent" not in orchestrator_details:
-                        orchestrator_details["uni3c_start_percent"] = structure_config.step_window[0]
+                    dprint_func(f"[UNI3C_AUTO] Task {task_id}: Uni3C mode with guide from processor: {guide_video_path}")
+                    # Store the processor's guide video path in the config
+                    structure_config._guidance_video_url = guide_video_path
 
             except Exception as e_shared_processor:
                 traceback.print_exc()
@@ -603,11 +596,10 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         generation_params["video_prompt_type"] = video_prompt_type_str
 
         # Diagnostic: Log guidance configuration when uni3c is enabled
-        if orchestrator_details.get("use_uni3c") and guide_video_path:
-            uni3c_guide = orchestrator_details.get("uni3c_guide_video")
+        if structure_config.is_uni3c and guide_video_path:
             dprint_func(f"[UNI3C_GUIDANCE_CHECK] Task {task_id}: Checking guidance configuration...")
             dprint_func(f"[UNI3C_GUIDANCE_CHECK]   video_guide path: {guide_video_path}")
-            dprint_func(f"[UNI3C_GUIDANCE_CHECK]   uni3c_guide_video: {uni3c_guide}")
+            dprint_func(f"[UNI3C_GUIDANCE_CHECK]   structure_config.guidance_video_url: {structure_config.guidance_video_url}")
             dprint_func(f"[UNI3C_GUIDANCE_CHECK]   image_end (i2v): {generation_params.get('image_end', 'None')}")
             dprint_func(f"[UNI3C_GUIDANCE_CHECK]   video_prompt_type: '{video_prompt_type_str}'")
             if "V" in video_prompt_type_str:
@@ -751,18 +743,16 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
         # =============================================================================
         # UNI3C MODE: Motion guidance via Uni3C ControlNet
         # =============================================================================
-        # Use unified structure_config which was parsed earlier
-        # Check if uni3c is enabled via config or legacy params
-        orchestrator_use_uni3c = orchestrator_details.get("use_uni3c", False)
-        use_uni3c = structure_config.is_uni3c or orchestrator_use_uni3c
+        # Use unified structure_config exclusively
+        use_uni3c = structure_config.is_uni3c
 
-        dprint_func(f"[UNI3C_DEBUG] Task {task_id}: structure_config.is_uni3c={structure_config.is_uni3c}, orchestrator_use_uni3c={orchestrator_use_uni3c}, use_uni3c={use_uni3c}")
+        dprint_func(f"[UNI3C_DEBUG] Task {task_id}: structure_config.is_uni3c={structure_config.is_uni3c}, use_uni3c={use_uni3c}")
 
         if use_uni3c:
             from source.common_utils import download_file as sm_download_file
 
-            # Get guide video from config or orchestrator_details (set by auto-enable)
-            uni3c_guide = structure_config.guidance_video_url or orchestrator_details.get("uni3c_guide_video")
+            # Get guide video from config (may have been set by processor)
+            uni3c_guide = structure_config.guidance_video_url
 
             # If Uni3C is enabled but there's no guide video, skip to avoid downstream crashes.
             if not uni3c_guide:
@@ -788,7 +778,7 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                     uni3c_guide = str(local_download_path)
 
                 # Layer 2 logging
-                dprint_func(f"[UNI3C] Task {task_id}: Uni3C ENABLED (via {'structure_config' if structure_config.is_uni3c else 'orchestrator_details'})")
+                dprint_func(f"[UNI3C] Task {task_id}: Uni3C ENABLED (via structure_guidance config)")
                 dprint_func(f"[UNI3C] Task {task_id}:   guide_video={uni3c_guide}")
                 dprint_func(f"[UNI3C] Task {task_id}:   strength={uni3c_strength}")
                 dprint_func(f"[UNI3C] Task {task_id}:   start_percent={uni3c_start}")
@@ -806,6 +796,14 @@ def _handle_travel_segment_via_queue(task_params_dict, main_output_dir_base: Pat
                 generation_params["uni3c_keep_on_gpu"] = uni3c_keep_gpu
                 generation_params["uni3c_frame_policy"] = uni3c_frame_policy
                 generation_params["uni3c_zero_empty_frames"] = uni3c_zero_empty
+
+                # For i2v with end anchor: blackout last uni3c frame so i2v handles it alone
+                # This prevents uni3c from "overcooking" the final frame
+                is_last_segment = segment_params.get("is_last_segment", True)
+                has_end_anchor = end_ref_path is not None
+                if is_last_segment and has_end_anchor:
+                    generation_params["uni3c_blackout_last_frame"] = True
+                    dprint_func(f"[UNI3C] Task {task_id}: Will blackout last frame (is_last_segment + has end anchor)")
         
         # === WGP SUBMISSION DIAGNOSTIC SUMMARY ===
         # Log key frame-related parameters before WGP submission

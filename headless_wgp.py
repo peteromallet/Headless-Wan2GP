@@ -509,6 +509,7 @@ class WanOrchestrator:
         self.current_model = None
         self.offloadobj = None  # Store WGP's offload object
         self.passthrough_mode = False  # Flag for explicit passthrough mode
+        self._cached_uni3c_controlnet = None  # Cached Uni3C ControlNet to avoid reloading from disk
 
         orchestrator_logger.success(f"WanOrchestrator initialized with WGP at {wan_root}")
 
@@ -668,6 +669,7 @@ class WanOrchestrator:
             self.current_model = None
             self.offloadobj = None
             self.state["model_type"] = None
+            self._cached_uni3c_controlnet = None
             return
         import wgp
         
@@ -686,7 +688,8 @@ class WanOrchestrator:
                 self.current_model = None
                 self.offloadobj = None
                 self.state["model_type"] = None
-                
+                self._cached_uni3c_controlnet = None  # Clear Uni3C cache on model unload
+
             except Exception as e:
                 model_logger.error(f"WGP unload_model_if_needed failed: {e}")
                 raise
@@ -788,6 +791,46 @@ class WanOrchestrator:
             pass
         base_type = (self._get_base_model_type(self.current_model) or "").lower()
         return base_type.startswith("qwen")
+
+    def _get_or_load_uni3c_controlnet(self):
+        """Get cached Uni3C controlnet or load it from disk.
+
+        This caches the controlnet across generations to avoid the ~2 minute
+        disk load time for the 1.9GB checkpoint on each generation.
+
+        Returns:
+            WanControlNet instance or None if loading fails
+        """
+        if self._cached_uni3c_controlnet is not None:
+            generation_logger.info("[UNI3C_CACHE] Using cached Uni3C controlnet (skipping disk load)")
+            return self._cached_uni3c_controlnet
+
+        try:
+            import torch
+            import os
+
+            # Use the same loading logic as any2video.py
+            from models.wan.uni3c import load_uni3c_checkpoint, WanControlNet
+
+            ckpts_dir = os.path.join(self.wan_root, "ckpts")
+            generation_logger.info(f"[UNI3C_CACHE] Loading Uni3C controlnet from disk (first use)...")
+
+            state_dict, config = load_uni3c_checkpoint(ckpts_dir=ckpts_dir)
+            controlnet = WanControlNet(**config)
+            controlnet.load_state_dict(state_dict, strict=False)
+            controlnet = controlnet.to(torch.float16)
+            controlnet.eval()
+
+            # Cache for future generations
+            self._cached_uni3c_controlnet = controlnet
+            generation_logger.info(f"[UNI3C_CACHE] Uni3C controlnet loaded and cached for future generations")
+
+            return controlnet
+
+        except Exception as e:
+            generation_logger.warning(f"[UNI3C_CACHE] Failed to pre-load Uni3C controlnet: {e}")
+            generation_logger.warning("[UNI3C_CACHE] Falling back to on-demand loading in any2video")
+            return None
 
     def _load_image(self, path: Optional[str], mask: bool = False):
         if not path:
@@ -1721,6 +1764,13 @@ class WanOrchestrator:
                         wgp_params['image_refs'] = None
                 except Exception:
                     pass
+
+                # Inject cached Uni3C controlnet if use_uni3c is enabled
+                # This avoids the ~2 minute disk load time for the 1.9GB checkpoint on each generation
+                if wgp_params.get('use_uni3c') and not wgp_params.get('uni3c_controlnet'):
+                    cached_controlnet = self._get_or_load_uni3c_controlnet()
+                    if cached_controlnet is not None:
+                        wgp_params['uni3c_controlnet'] = cached_controlnet
 
                 # Filter out unsupported parameters to match upstream signature exactly
                 try:

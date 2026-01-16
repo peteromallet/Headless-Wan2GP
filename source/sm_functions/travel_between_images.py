@@ -1049,7 +1049,12 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
         dprint(f"[STRUCTURE_CONFIG] Parsed: {structure_config}")
 
         # Extract values for backward compatibility with existing code paths
+        # Check both legacy top-level structure_videos AND new structure_guidance.videos via config
         structure_videos = orchestrator_payload.get("structure_videos", [])
+        if not structure_videos and structure_config.videos:
+            # New format: videos are in structure_guidance.videos, convert to legacy format
+            structure_videos = [v.to_dict() for v in structure_config.videos]
+            dprint(f"[STRUCTURE_CONFIG] Extracted {len(structure_videos)} videos from structure_guidance.videos")
         structure_video_path = orchestrator_payload.get("structure_video_path")
 
         # Use config values (these handle all the legacy param name variations)
@@ -1115,24 +1120,29 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 )
                 
                 # Validate and extract structure_type from configs (must all match)
-                structure_types_found = set()
-                for cfg in structure_videos:
-                    cfg_type = cfg.get("structure_type", cfg.get("type", "flow"))
-                    structure_types_found.add(cfg_type)
+                # Prefer structure_config.legacy_structure_type (set earlier), then check per-video configs
+                if structure_type:
+                    # Already have structure_type from structure_config (new format)
+                    dprint(f"[STRUCTURE_VIDEO] Using structure_type from config: {structure_type}")
+                else:
+                    # Legacy format: extract from per-video configs
+                    structure_types_found = set()
+                    for cfg in structure_videos:
+                        cfg_type = cfg.get("structure_type", cfg.get("type", "flow"))
+                        structure_types_found.add(cfg_type)
 
-                if len(structure_types_found) > 1:
-                    raise ValueError(f"All structure_videos must have same type, found: {structure_types_found}")
+                    if len(structure_types_found) > 1:
+                        raise ValueError(f"All structure_videos must have same type, found: {structure_types_found}")
 
-                structure_type = structure_types_found.pop() if structure_types_found else "flow"
+                    structure_type = structure_types_found.pop() if structure_types_found else "flow"
 
                 # Validate structure_type
                 if structure_type not in ["flow", "canny", "depth", "raw", "uni3c"]:
                     raise ValueError(f"Invalid structure_type: {structure_type}. Must be 'flow', 'canny', 'depth', 'raw', or 'uni3c'")
                 
-                # Get global strength parameters (can be overridden per-config)
-                motion_strength = orchestrator_payload.get("structure_video_motion_strength", 1.0)
-                canny_intensity = orchestrator_payload.get("structure_canny_intensity", 1.0)
-                depth_contrast = orchestrator_payload.get("structure_depth_contrast", 1.0)
+                # Use strength parameters from structure_config (already extracted earlier)
+                # These handle both new format (structure_guidance.strength) and legacy formats
+                dprint(f"[STRUCTURE_VIDEO] Using strength params: motion={motion_strength}, canny={canny_intensity}, depth={depth_contrast}")
                 
                 # Log configs
                 for i, cfg in enumerate(structure_videos):
@@ -1198,16 +1208,14 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     task_id=orchestrator_task_id_str
                 )
                 
-                # Store in orchestrator payload for segments
-                orchestrator_payload["structure_guidance_video_url"] = structure_guidance_video_url
-                orchestrator_payload["structure_type"] = structure_type
+                # Store guidance URL in config (unified format)
+                structure_config._guidance_video_url = structure_guidance_video_url
                 
             except Exception as e:
                 travel_logger.error(f"Failed to create composite guidance video: {e}", task_id=orchestrator_task_id_str)
                 traceback.print_exc()
                 travel_logger.warning("Structure guidance will not be available for this generation", task_id=orchestrator_task_id_str)
-                orchestrator_payload["structure_guidance_video_url"] = None
-                orchestrator_payload["structure_type"] = structure_type
+                structure_config._guidance_video_url = None
         
         # =============================================================================
         # PATH B: Legacy Single Structure Video (structure_video_path)
@@ -1312,190 +1320,81 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 guidance_frame_count, _ = sm_get_video_frame_count_and_fps(structure_guidance_video_path)
                 travel_logger.success(f"Structure guidance video created: {guidance_frame_count} frames", task_id=orchestrator_task_id_str)
 
-                orchestrator_payload["structure_guidance_video_url"] = structure_guidance_video_url
-                orchestrator_payload["structure_type"] = structure_type
+                # Store guidance URL in config (unified format)
+                structure_config._guidance_video_url = structure_guidance_video_url
 
             except Exception as e:
                 travel_logger.error(f"Failed to create structure guidance video: {e}", task_id=orchestrator_task_id_str)
                 traceback.print_exc()
                 travel_logger.warning("Structure guidance will not be available", task_id=orchestrator_task_id_str)
-                orchestrator_payload["structure_guidance_video_url"] = None
-                orchestrator_payload["structure_type"] = structure_type
-        
+                structure_config._guidance_video_url = None
+
         # =============================================================================
         # PATH C: No Structure Video
         # =============================================================================
         else:
             use_stitched_offsets = False  # Doesn't matter, but initialize for consistency
             travel_logger.info("No structure video configured", task_id=orchestrator_task_id_str)
-            orchestrator_payload["structure_guidance_video_url"] = None
-            orchestrator_payload["structure_type"] = None
 
-        # --- VLM BATCH PROCESSING (if enhance_prompt enabled) ---
-        # Generate all transition prompts upfront to reuse the VLM model across segments
+        # --- ENHANCED PROMPTS HANDLING ---
+        # First, load any pre-existing enhanced prompts from the payload (regardless of enhance_prompt flag)
+        # Then, if enhance_prompt=True, run VLM only for segments that don't have prompts yet
         vlm_enhanced_prompts = {}  # Dict: segment_idx -> enhanced_prompt
-        if orchestrator_payload.get("enhance_prompt", False):
-            dprint(f"[VLM_BATCH] enhance_prompt enabled - generating transition prompts for all segments...")
+
+        # Always use pre-existing enhanced prompts from payload if available
+        payload_enhanced_prompts = orchestrator_payload.get("enhanced_prompts_expanded", []) or []
+        if payload_enhanced_prompts:
+            for idx, prompt in enumerate(payload_enhanced_prompts):
+                if prompt and prompt.strip():
+                    vlm_enhanced_prompts[idx] = prompt
+            if vlm_enhanced_prompts:
+                dprint(f"[ENHANCED_PROMPTS] Loaded {len(vlm_enhanced_prompts)} pre-existing enhanced prompts from payload")
+                for idx, prompt in vlm_enhanced_prompts.items():
+                    dprint(f"[ENHANCED_PROMPTS]   Segment {idx}: '{prompt[:80]}...'")
+
+        # Run VLM for segments that still need prompts (only if enhance_prompt is enabled)
+        segments_needing_vlm = [idx for idx in range(num_segments) if idx not in vlm_enhanced_prompts]
+        if orchestrator_payload.get("enhance_prompt", False) and not segments_needing_vlm:
+            dprint(f"[VLM_BATCH] enhance_prompt enabled but all {num_segments} segments already have prompts - skipping VLM")
+        elif orchestrator_payload.get("enhance_prompt", False) and segments_needing_vlm:
+            dprint(f"[VLM_BATCH] enhance_prompt enabled - {len(segments_needing_vlm)} segments need VLM enrichment")
             log_ram_usage("Before VLM loading", task_id=orchestrator_task_id_str)
             try:
                 # Import VLM helper
                 from ..vlm_utils import generate_transition_prompts_batch
                 from ..common_utils import download_image_if_url
-                
-                # [VLM_DB_CHECK] Check if enhanced prompts already exist in database BEFORE running VLM
-                # This prevents re-runs from overwriting good prompts with potentially hallucinated ones
-                vlm_skipped_due_to_existing_db_prompts = False
-                shot_id = orchestrator_payload.get("shot_id")
-                if shot_id and db_ops.SUPABASE_URL:
-                    try:
-                        import httpx
-                        # Query shot_generations to check for existing enhanced_prompts
-                        query_url = f"{db_ops.SUPABASE_URL.rstrip('/')}/rest/v1/shot_generations"
-                        headers = {
-                            "apikey": db_ops.SUPABASE_SERVICE_KEY or db_ops.SUPABASE_ACCESS_TOKEN or "",
-                            "Authorization": f"Bearer {db_ops.SUPABASE_SERVICE_KEY or db_ops.SUPABASE_ACCESS_TOKEN or ''}",
-                        }
-                        params = {
-                            "shot_id": f"eq.{shot_id}",
-                            "select": "id,timeline_frame,metadata",
-                            "timeline_frame": "not.is.null",
-                            "order": "timeline_frame.asc"
-                        }
-                        resp = httpx.get(query_url, headers=headers, params=params, timeout=10)
-                        if resp.status_code == 200:
-                            shot_gens = resp.json()
-                            # Check for enhanced_prompt in metadata for each shot_generation
-                            existing_prompts = []
-                            for sg in shot_gens:
-                                metadata = sg.get("metadata") or {}
-                                enhanced_prompt = metadata.get("enhanced_prompt", "")
-                                if enhanced_prompt and enhanced_prompt.strip():
-                                    existing_prompts.append(enhanced_prompt)
-                            
-                            # We need num_segments prompts (one per transition, excluding last image)
-                            expected_prompt_count = max(0, len(shot_gens) - 1)
-                            
-                            dprint(f"[VLM_DB_CHECK] Found {len(existing_prompts)}/{expected_prompt_count} enhanced prompts in database for shot {shot_id[:8]}...")
-                            
-                            if len(existing_prompts) >= expected_prompt_count and expected_prompt_count > 0:
-                                dprint(f"[VLM_DB_CHECK] ✅ All enhanced prompts already exist in database - SKIPPING VLM to prevent overwrites")
-                                # Use existing prompts from database
-                                for idx, prompt in enumerate(existing_prompts[:num_segments]):
-                                    vlm_enhanced_prompts[idx] = prompt
-                                    dprint(f"[VLM_DB_CHECK]   Segment {idx}: '{prompt[:60]}...'")
-                                vlm_skipped_due_to_existing_db_prompts = True
-                            else:
-                                dprint(f"[VLM_DB_CHECK] Enhanced prompts incomplete or missing - will run VLM")
-                        else:
-                            dprint(f"[VLM_DB_CHECK] Failed to query database: {resp.status_code} - will run VLM")
-                    except Exception as e_db_check:
-                        dprint(f"[VLM_DB_CHECK] Database check failed: {e_db_check} - will run VLM")
-                
-                # Skip VLM processing if we already have prompts from database
-                if vlm_skipped_due_to_existing_db_prompts:
-                    dprint(f"[VLM_BATCH] Skipping VLM model loading - using {len(vlm_enhanced_prompts)} prompts from database")
-                    # Jump to the end of VLM processing (will still update orchestrator_payload)
-                    raise StopIteration("VLM skipped - using DB prompts")
 
                 # Get input images
                 input_images_resolved = orchestrator_payload.get("input_image_paths_resolved", [])
                 vlm_device = orchestrator_payload.get("vlm_device", "cuda")
-                
+                base_prompt = orchestrator_payload.get("base_prompt", "")
+                fps_helpers = orchestrator_payload.get("fps_helpers", 16)
+
                 # [VLM_INPUT_DEBUG] Log the source images array to verify ordering
                 dprint(f"[VLM_INPUT_DEBUG] input_images_resolved from payload ({len(input_images_resolved)} images):")
                 for i, img in enumerate(input_images_resolved):
                     img_name = Path(img).name if img else 'NONE'
                     dprint(f"[VLM_INPUT_DEBUG]   [{i}]: {img_name}")
 
-                # Get pre-existing enhanced prompts if available.
-                #
-                # IMPORTANT:
-                # We do NOT trust pre-existing enhanced prompts by default because they can be stale/misaligned
-                # if the image ordering (or the set of images) changed upstream. That exact scenario produces
-                # "prompts that make no sense" because the prompt was generated for a different image pair.
-                #
-                # To explicitly reuse pre-existing enhanced prompts (e.g., if the client guarantees alignment),
-                # set orchestrator_payload["use_preexisting_enhanced_prompts"] = True.
-                use_preexisting_enhanced_prompts = orchestrator_payload.get("use_preexisting_enhanced_prompts", False)
-                expanded_enhanced_prompts = (
-                    orchestrator_payload.get("enhanced_prompts_expanded", [])
-                    if use_preexisting_enhanced_prompts
-                    else []
-                )
-                base_prompt = orchestrator_payload.get("base_prompt", "")
-
                 if base_prompt:
                     dprint(f"[VLM_BATCH] Base prompt from payload: '{base_prompt[:80]}...'")
-                else:
-                    dprint(f"[VLM_BATCH] No base_prompt found in payload")
-
-                if use_preexisting_enhanced_prompts:
-                    if expanded_enhanced_prompts:
-                        dprint(f"[VLM_BATCH] Found {len(expanded_enhanced_prompts)} pre-existing enhanced prompts in payload (reuse enabled)")
-                        for idx, prompt in enumerate(expanded_enhanced_prompts):
-                            if prompt and prompt.strip():
-                                dprint(f"[VLM_BATCH]   Segment {idx}: '{prompt[:80]}...'")
-                    else:
-                        dprint(f"[VLM_BATCH] No pre-existing enhanced prompts found in payload (reuse enabled)")
-                else:
-                    # Still log whether the payload *had* something, but we're ignoring it.
-                    payload_enhanced_len = len(orchestrator_payload.get("enhanced_prompts_expanded", []) or [])
-                    if payload_enhanced_len:
-                        dprint(f"[VLM_BATCH] Ignoring {payload_enhanced_len} pre-existing enhanced prompts in payload (reuse disabled; will regenerate)")
-                    else:
-                        dprint(f"[VLM_BATCH] No pre-existing enhanced prompts in payload (will generate)")
-
-                # CRITICAL FIX: Detect and handle mismatched array sizes
-                # This can happen when:
-                # 1. Consolidation reduced segments but enhanced_prompts wasn't remapped (handled by consolidation fix)
-                # 2. Payload arrived with inconsistent data from frontend (handled here)
-                if use_preexisting_enhanced_prompts and expanded_enhanced_prompts and len(expanded_enhanced_prompts) != num_segments:
-                    dprint(f"[VLM_BATCH] ⚠️ SIZE MISMATCH: enhanced_prompts has {len(expanded_enhanced_prompts)} items but num_segments={num_segments}")
-                    
-                    # Build a remapped version: map first/last segments to first/last prompts
-                    # This handles the common case where prompts are set for first and last segments
-                    remapped_enhanced_prompts = [""] * num_segments
-                    
-                    # First segment always maps to first prompt
-                    if expanded_enhanced_prompts[0] and expanded_enhanced_prompts[0].strip():
-                        remapped_enhanced_prompts[0] = expanded_enhanced_prompts[0]
-                        dprint(f"[VLM_BATCH] Remapped: segment 0 ← original prompt[0]")
-                    
-                    # Last segment maps to last prompt (if we have multiple segments)
-                    if num_segments > 1 and len(expanded_enhanced_prompts) > 1:
-                        last_prompt = expanded_enhanced_prompts[-1]
-                        if last_prompt and last_prompt.strip():
-                            remapped_enhanced_prompts[-1] = last_prompt
-                            dprint(f"[VLM_BATCH] Remapped: segment {num_segments-1} ← original prompt[{len(expanded_enhanced_prompts)-1}]")
-                    
-                    # Use remapped prompts for the rest of the processing
-                    expanded_enhanced_prompts = remapped_enhanced_prompts
-                    dprint(f"[VLM_BATCH] Using remapped enhanced_prompts (first/last preserved, middle will use VLM)")
 
                 # Detect single-image mode: only 1 image, no transition to describe
                 is_single_image_mode = len(input_images_resolved) == 1
-                
-                # Get FPS early for single-image mode (also used later for transitions)
-                fps_helpers = orchestrator_payload.get("fps_helpers", 16)
-                
+
                 if is_single_image_mode:
                     dprint(f"[VLM_SINGLE] Detected single-image mode - using single-image VLM prompt generation")
-                    
+
                     # Import single-image VLM helper
                     from ..vlm_utils import generate_single_image_prompts_batch
-                    
+
                     # Build lists for single-image batch processing
                     single_images = []
                     single_base_prompts = []
                     single_frame_counts = []
                     single_indices = []
-                    
-                    for idx in range(num_segments):
-                        # Check if enhanced prompt already exists for this segment
-                        if idx < len(expanded_enhanced_prompts) and expanded_enhanced_prompts[idx] and expanded_enhanced_prompts[idx].strip():
-                            vlm_enhanced_prompts[idx] = expanded_enhanced_prompts[idx]
-                            dprint(f"[VLM_SINGLE] Segment {idx}: Using pre-existing enhanced prompt: {expanded_enhanced_prompts[idx][:80]}...")
-                            continue
+
+                    for idx in segments_needing_vlm:
                         
                         # For single-image mode, use the only image we have
                         image_path = input_images_resolved[0]
@@ -1540,20 +1439,12 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 
                 else:
                     # Multi-image mode: build lists of image pairs for transitions
-                    # Build lists of image pairs, base prompts, and frame counts
                     image_pairs = []
                     base_prompts_for_batch = []
                     segment_frame_counts = []  # Frame count for each segment
                     segment_indices = []  # Track which segment each pair belongs to
 
-                    for idx in range(num_segments):
-                        # Check if enhanced prompt already exists for this segment
-                        if idx < len(expanded_enhanced_prompts) and expanded_enhanced_prompts[idx] and expanded_enhanced_prompts[idx].strip():
-                            # Use existing enhanced prompt, skip VLM enrichment
-                            vlm_enhanced_prompts[idx] = expanded_enhanced_prompts[idx]
-                            dprint(f"[VLM_BATCH] Segment {idx}: Using pre-existing enhanced prompt: {expanded_enhanced_prompts[idx][:80]}...")
-                            continue
-
+                    for idx in segments_needing_vlm:
                         # Determine which images this segment transitions between
                         if orchestrator_payload.get("_consolidated_end_anchors"):
                             consolidated_end_anchors = orchestrator_payload["_consolidated_end_anchors"]
@@ -1712,10 +1603,6 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     traceback.print_exc()
                     # Non-fatal - continue with task creation
 
-            except StopIteration:
-                # This is our signal that VLM was skipped due to existing DB prompts
-                # vlm_enhanced_prompts is already populated with DB values, so just continue
-                dprint(f"[VLM_BATCH] VLM processing skipped - using existing database prompts")
             except Exception as e_vlm_batch:
                 dprint(f"[VLM_BATCH] ERROR during batch VLM processing: {e_vlm_batch}")
                 traceback.print_exc()
@@ -1973,33 +1860,10 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                 if not segment_has_guidance:
                     dprint(f"[STRUCTURE_VIDEO] Segment {idx}: No overlap with structure_videos, skipping structure guidance")
 
-            # Set structure guidance params using config (emits legacy param names for worker compat)
+            # Set structure guidance using unified format only
             if segment_has_guidance:
-                # Update config with segment-specific computed values
-                segment_guidance_url = structure_config.guidance_video_url or orchestrator_payload.get("structure_guidance_video_url")
+                segment_guidance_url = structure_config.guidance_video_url
 
-                # VACE structure params (legacy names for backward compat)
-                segment_payload["structure_video_path"] = orchestrator_payload.get("structure_video_path")
-                segment_payload["structure_video_treatment"] = structure_config.videos[0].treatment if structure_config.videos else "adjust"
-                segment_payload["structure_type"] = structure_config.legacy_structure_type
-                segment_payload["structure_video_motion_strength"] = structure_config.strength
-                segment_payload["structure_canny_intensity"] = structure_config.canny_intensity
-                segment_payload["structure_depth_contrast"] = structure_config.depth_contrast
-                segment_payload["structure_guidance_frame_offset"] = segment_frame_offset
-                segment_payload["structure_guidance_video_url"] = segment_guidance_url
-                segment_payload["structure_original_video_url"] = orchestrator_payload.get("structure_original_video_url")
-                segment_payload["structure_trimmed_video_url"] = orchestrator_payload.get("structure_trimmed_video_url")
-
-                # Uni3C params (only active when target is uni3c)
-                segment_payload["use_uni3c"] = structure_config.is_uni3c
-                segment_payload["uni3c_guide_video"] = segment_guidance_url if structure_config.is_uni3c else None
-                segment_payload["uni3c_strength"] = structure_config.strength
-                segment_payload["uni3c_start_percent"] = structure_config.step_window[0]
-                segment_payload["uni3c_end_percent"] = structure_config.step_window[1]
-                segment_payload["uni3c_frame_policy"] = structure_config.frame_policy
-                segment_payload["uni3c_guidance_frame_offset"] = segment_frame_offset if structure_config.is_uni3c else 0
-
-                # Include unified config for future-proof workers
                 segment_payload["structure_guidance"] = {
                     "target": structure_config.target,
                     "preprocessing": structure_config.preprocessing,
@@ -2009,28 +1873,13 @@ def _handle_travel_orchestrator_task(task_params_from_db: dict, main_output_dir_
                     "step_window": list(structure_config.step_window),
                     "frame_policy": structure_config.frame_policy,
                     "zero_empty_frames": structure_config.zero_empty_frames,
+                    "keep_on_gpu": structure_config.keep_on_gpu,
+                    "videos": [v.to_dict() for v in structure_config.videos],
                     "_guidance_video_url": segment_guidance_url,
                     "_frame_offset": segment_frame_offset,
                 }
             else:
-                # No guidance for this segment - set all to disabled/null
-                segment_payload["structure_video_path"] = None
-                segment_payload["structure_video_treatment"] = "adjust"
-                segment_payload["structure_type"] = None
-                segment_payload["structure_video_motion_strength"] = 1.0
-                segment_payload["structure_canny_intensity"] = 1.0
-                segment_payload["structure_depth_contrast"] = 1.0
-                segment_payload["structure_guidance_frame_offset"] = 0
-                segment_payload["structure_guidance_video_url"] = None
-                segment_payload["structure_original_video_url"] = None
-                segment_payload["structure_trimmed_video_url"] = None
-                segment_payload["use_uni3c"] = False
-                segment_payload["uni3c_guide_video"] = None
-                segment_payload["uni3c_strength"] = 0.0
-                segment_payload["uni3c_start_percent"] = 0.0
-                segment_payload["uni3c_end_percent"] = 0.0
-                segment_payload["uni3c_frame_policy"] = "fit"
-                segment_payload["uni3c_guidance_frame_offset"] = 0
+                # No guidance for this segment
                 segment_payload["structure_guidance"] = None
             
             # Add extracted parameters at top level for queue processing

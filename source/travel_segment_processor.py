@@ -169,9 +169,9 @@ class TravelSegmentProcessor:
             structure_guidance_video_url = structure_config.guidance_video_url
             structure_guidance_frame_offset = structure_config._frame_offset
 
-            # Check for multi-structure video config (structure_videos array)
+            # Check for multi-structure video config
             # If present and no pre-computed guidance URL, compute segment's portion locally
-            structure_videos = ctx.segment_params.get("structure_videos") or ctx.full_orchestrator_payload.get("structure_videos")
+            structure_videos = [v.to_dict() for v in structure_config.videos] if structure_config.videos else None
 
             # Store the detected structure_type for use in process_segment return
             self._detected_structure_type = structure_type
@@ -433,7 +433,7 @@ class TravelSegmentProcessor:
 
             # Check if uni3c is handling motion guidance - if so, skip VACE video guide
             # Use config if available, fallback to legacy detection
-            is_uni3c_mode = getattr(self, '_structure_config', None) and self._structure_config.is_uni3c or self._detected_structure_type == "uni3c"
+            is_uni3c_mode = self._structure_config.is_uni3c
             ctx.dprint(f"[VPT_DEBUG] Seg {ctx.segment_idx}: structure_type={self._detected_structure_type}, is_uni3c_mode={is_uni3c_mode}")
 
             if is_uni3c_mode:

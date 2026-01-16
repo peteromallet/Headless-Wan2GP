@@ -1504,14 +1504,21 @@ class WanModel(ModelMixin, ConfigMixin):
         # Run controlnet forward
         if current_step == 0:
             print(f"[UNI3C DEBUG]   final concatenated input shape: {tuple(render_latent_input.shape)}")
+            # Diagnostic: compare noisy vs guide latent statistics to detect mismatches
+            noisy_part = hidden_states[:, :20]
+            guide_part = render_latent
+            print(f"[UNI3C_DIAG] Noisy latent (ch0-19): mean={noisy_part.mean().item():.4f}, std={noisy_part.std().item():.4f}, range=[{noisy_part.min().item():.4f}, {noisy_part.max().item():.4f}]")
+            print(f"[UNI3C_DIAG] Guide latent (ch20-35): mean={guide_part.mean().item():.4f}, std={guide_part.std().item():.4f}, range=[{guide_part.min().item():.4f}, {guide_part.max().item():.4f}]")
 
-        controlnet_states = controlnet(
-            render_latent=render_latent_input.to(main_device, controlnet.dtype),
-            render_mask=uni3c_data.get("render_mask"),
-            camera_embedding=uni3c_data.get("camera_embedding"),
-            temb=temb.to(main_device, controlnet.dtype),
-            out_device=offload_device if uni3c_data.get("offload") else main_device
-        )
+        # Use autocast for quantized controlnets (matches Kijai's implementation)
+        with torch.autocast(device_type='cuda', dtype=controlnet.dtype, enabled=getattr(controlnet, 'quantized', False)):
+            controlnet_states = controlnet(
+                render_latent=render_latent_input.to(main_device, controlnet.dtype),
+                render_mask=uni3c_data.get("render_mask"),
+                camera_embedding=uni3c_data.get("camera_embedding"),
+                temb=temb.to(main_device, controlnet.dtype),
+                out_device=offload_device if uni3c_data.get("offload") else main_device
+            )
         
         # Debug: log controlnet output shapes at step 0
         if current_step == 0 and controlnet_states:
@@ -1946,8 +1953,10 @@ class WanModel(ModelMixin, ConfigMixin):
                         
                         # Debug: log apply_len computation at block 0, step 0, stream 0
                         if block_idx == 0 and current_step_no == 0 and i == 0:
-                            print(f"[UNI3C DEBUG]   x.shape[1]={x.shape[1]}, x_start={x_start}, residual.shape[1]={residual.shape[1]}")
+                            print(f"[UNI3C DEBUG]   ref_images_count={ref_images_count}, x_start={x_start}")
+                            print(f"[UNI3C DEBUG]   x.shape[1]={x.shape[1]}, residual.shape[1]={residual.shape[1]}")
                             print(f"[UNI3C DEBUG]   apply_len={apply_len} (injecting into x[:, {x_start}:{x_start + apply_len}])")
+                            print(f"[UNI3C DEBUG]   NOTE: Kijai injects into x[:, :original_seq_len] (from 0, not {x_start})")
                         
                         if apply_len > 0:
                             x_list[i][:, x_start:x_start + apply_len] += (
