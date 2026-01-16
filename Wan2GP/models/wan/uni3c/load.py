@@ -184,12 +184,12 @@ def load_uni3c_controlnet(
     # Add dtype to config so model knows its precision
     config["base_dtype"] = dtype
 
-    # Create model and load weights
+    # Create model and move to device FIRST (with random weights)
     controlnet = WanControlNet(config)
-    controlnet.load_state_dict(state_dict, strict=False)
-
-    # Move to device (weights already there, this handles buffers)
     controlnet = controlnet.to(device=device, dtype=dtype)
+
+    # Now load state_dict - GPU→GPU copy since both are on same device
+    controlnet.load_state_dict(state_dict, strict=False)
     controlnet.eval()
 
     # Free the state dict
