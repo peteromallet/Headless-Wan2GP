@@ -1638,17 +1638,11 @@ class WanAny2V:
                 controlnet = uni3c_controlnet
                 print(f"[UNI3C] any2video: Using pre-loaded controlnet")
             else:
-                # Load controlnet on demand
-                from .uni3c import load_uni3c_checkpoint, WanControlNet
+                # Load controlnet on demand - optimized path loads directly to GPU as fp16
+                from .uni3c import load_uni3c_controlnet
                 import os
                 ckpts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "ckpts")
-                state_dict, config = load_uni3c_checkpoint(ckpts_dir=ckpts_dir)
-                controlnet = WanControlNet(config)
-                controlnet.load_state_dict(state_dict, strict=False)
-                # Convert entire model to fp16 (including biases not in checkpoint)
-                controlnet = controlnet.to(torch.float16)
-                controlnet.eval()
-                print(f"[UNI3C] any2video: Loaded controlnet from checkpoint")
+                controlnet = load_uni3c_controlnet(ckpts_dir=ckpts_dir, device="cuda", dtype=torch.float16)
             
             # Determine expected in_channels from controlnet
             expected_channels = getattr(controlnet, "in_channels", 20)
